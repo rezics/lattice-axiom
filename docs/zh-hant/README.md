@@ -14,19 +14,23 @@ updated: 2026-08-09
 
 1. [專案願景與設計支柱](foundations/project-vision.md)
 2. [模組核心與宣告式組合](architecture/module-composition.md)
-3. [渲染架構與擴充邊界](architecture/rendering.md)
-4. [實體、物理與表現層](architecture/entity-physics-presentation.md)
-5. [資產管線與模型語義](architecture/asset-semantics.md)
-6. [物理資產與局部形變創作](architecture/physical-authoring.md)
-7. [待決問題](planning/open-questions.md)
+3. [版本、相依性與相容性架構](architecture/versioning-and-compatibility.md)
+4. [可組合世界生成架構](architecture/world-generation.md)
+5. [可組合洞穴生成架構](architecture/cave-generation.md)
+6. [渲染架構與擴充邊界](architecture/rendering.md)
+7. [實體、物理與表現層](architecture/entity-physics-presentation.md)
+8. [資產管線與模型語義](architecture/asset-semantics.md)
+9. [物理資產與局部形變創作](architecture/physical-authoring.md)
+10. [待決問題](planning/open-questions.md)
 
 ## 文件地圖
 
 | 分類 | 用途 | 現有內容 |
 | --- | --- | --- |
 | 基礎 | 說明遊戲目前想成為什麼，以及詞彙如何使用 | [專案願景](foundations/project-vision.md)、[詞彙表](foundations/glossary.md) |
-| 架構 | 整理可被驗證的設計假說與責任邊界 | [模組組合](architecture/module-composition.md)、[渲染](architecture/rendering.md)、[實體與表現](architecture/entity-physics-presentation.md)、[資產語義](architecture/asset-semantics.md)、[物理創作](architecture/physical-authoring.md) |
-| 調查 | 比較外部做法與候選技術，不代表已選用 | [渲染與物理技術地圖](research/renderer-physics-landscape.md) |
+| 架構 | 整理可被驗證的設計假說與責任邊界 | [模組組合](architecture/module-composition.md)、[版本與相容性](architecture/versioning-and-compatibility.md)、[世界生成](architecture/world-generation.md)、[洞穴生成](architecture/cave-generation.md)、[渲染](architecture/rendering.md)、[實體與表現](architecture/entity-physics-presentation.md)、[資產語義](architecture/asset-semantics.md)、[物理創作](architecture/physical-authoring.md) |
+| 決策 | 保存已明確採納的重大方向、理由與後果 | [0001：領地優先的世界生成](decisions/0001-territory-first-biome-driven-world-generation.md)、[0002：混合洞穴組合](decisions/0002-hybrid-cave-generation-composition.md)、[0003：無全域大版本](decisions/0003-no-global-version-package-scoped-compatibility.md)、[0004：空間生成領地委派](decisions/0004-territorial-delegation-for-spatial-generation.md) |
+| 調查 | 比較外部做法與候選技術，不代表已選用 | [渲染與物理技術地圖](research/renderer-physics-landscape.md)、[Minecraft 世界生成與洞穴模組教訓](research/minecraft-world-generation-lessons.md)、[現代地形與洞穴生成](research/modern-terrain-and-cave-generation.md) |
 | 規劃 | 集中尚待回答、原型化或量測的問題 | [待決問題](planning/open-questions.md) |
 | 元文件 | 說明文件本身如何整理與演進 | [文件組織方式](meta/documentation-organization.md) |
 | 來源 | 保存討論與整理頁之間的追溯關係 | [2026-08-09 對話索引](sources/conversation-2026-08-09.md) |
@@ -44,4 +48,3 @@ updated: 2026-08-09
 ## 目前刻意沒有的文件
 
 倉庫還沒有可執行產品，因此暫不建立空的教學、操作指南與 API 參考目錄。等到第一個可重複執行的原型出現，再依實際讀者任務增加這些文件。
-

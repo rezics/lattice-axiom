@@ -57,11 +57,27 @@ updated: 2026-08-09
 
 ## 優先級 1：多人與可重現性
 
-- [ ] 遊戲閉包雜湊要保證輸入相同、位元相同，還是協定相容？
+- [ ] 客戶端與伺服器握手應比較哪些權威能力子圖、套件鎖定與 schema 狀態；哪些差異可由 adapter 或純表現政策接受？
 - [ ] 客戶端與伺服器允許哪些純表現差異？
 - [ ] 受擊與局部柔體同步輸入、狀態還是只同步玩法結果？
 - [ ] 原生第三方模組如何進入伺服器，是否允許自動下載？
 - [ ] 二進位快取、簽章、撤銷與供應鏈信任如何運作？
+
+## 優先級 1：可組合世界生成
+
+- [ ] 第一批兩個 `CaveTopologyProvider` 應選哪些受約束幾何圖、方向場或生長模型做對照？
+- [ ] 地表與三維地下領地使用相同圖譜抽象，還是只共用所有權仲裁介面？
+- [ ] 洞穴預算如何在主要拓撲、支洞、洞室、目的地與水文修正間換算？
+- [ ] 地表群系、地下群系、深度帶與地質體如何共同影響淺層入口和深層洞穴？
+- [ ] 跨規劃格與拓撲所有權域的入口契約需要保存哪些流體狀態，才能維持地下河與含水層連續？
+- [ ] 第一個領地原型採用 Voronoi、冪圖、扭曲網格或其他候選中的哪兩種比較？
+- [ ] Province、Region 與 Ecotope 的尺度、面積分布及形狀參數如何由實際旅行速度決定？
+- [ ] `BiomePack` 世界份額由整合包、伺服器、玩家預設或內容作者中的誰治理？
+- [ ] 哪些生成通道屬於第一版核心，且各自使用何種合成代數？
+- [ ] `BoundaryProfile` 如何避免 `N²` 配對，同時處理海岸、峭壁、地下河與其他特殊接縫？
+- [ ] 水文、岩層、侵蝕與大型結構要使用多大的規劃格及 halo 才能有界查詢？
+- [ ] 產物生成記錄採多大的空間與語義粒度，才能兼顧局部失效、儲存成本、舊提供者封存與跨世代邊界？
+- [ ] 洞穴原型用哪些拓撲與玩法指標判斷優劣，而不是只比較截圖？
 
 ## 優先級 2：生態與治理
 
@@ -80,11 +96,20 @@ updated: 2026-08-09
 3. `ResolvedModuleGraph` 資料模型草案。
 4. 渲染擷取垂直切片測試計畫。
 5. 一個帶骨架語義與腹部物理場的龍資產範例。
-6. 第一份候選決策紀錄，例如「選擇原型用核心語言」；尚未決定前不預建空 ADR。
+6. 下一份候選決策紀錄，例如「選擇原型用核心語言」；尚未決定前不預建空 ADR。
+7. 二維多尺度領地與一千個合成群系的可重複原型。
+8. 一個根域預設與兩個群系子域拓撲提供者、共享入口及三種形態的三維洞穴原型。
 
 ## 相關文件
 
 - [專案願景與設計支柱](../foundations/project-vision.md)
 - [模組核心與宣告式組合](../architecture/module-composition.md)
+- [版本、相依性與相容性架構](../architecture/versioning-and-compatibility.md)
+- [可組合世界生成架構](../architecture/world-generation.md)
+- [可組合洞穴生成架構](../architecture/cave-generation.md)
+- [世界生成方向決策](../decisions/0001-territory-first-biome-driven-world-generation.md)
+- [洞穴生成組合決策](../decisions/0002-hybrid-cave-generation-composition.md)
+- [無全域大版本決策](../decisions/0003-no-global-version-package-scoped-compatibility.md)
+- [空間生成領地委派決策](../decisions/0004-territorial-delegation-for-spatial-generation.md)
+- [現代地形與洞穴生成研究](../research/modern-terrain-and-cave-generation.md)
 - [文件組織方式](../meta/documentation-organization.md)
-

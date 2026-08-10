@@ -7,11 +7,14 @@ updated: 2026-08-09
 source:
   - conversation-2026-08-09-turn-1
   - conversation-2026-08-09-turn-2
+  - conversation-2026-08-09-worldgen-4
+decision:
+  - ../decisions/0003-no-global-version-package-scoped-compatibility.md
 ---
 
 # 模組核心與宣告式組合
 
-> 本頁整理架構方向，尚未決定程式語言、ABI、套件格式或建置工具。
+> 本頁整理架構方向，尚未決定程式語言、ABI、套件格式或建置工具。[不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)已獲採納。
 
 ## 核心命題
 
@@ -126,30 +129,45 @@ Lattice Axiom 不把遊戲理解為「一個完成的執行檔加上一批外掛
 
 ## 宣告式組合與遊戲閉包
 
-整合包可以是一份描述「這個遊戲由什麼構成」的配置，而不只是 `mods/` 目錄：
+官方遊戲、伺服器規則集與整合包可以是一份描述「這個遊戲由什麼構成」的根 manifest，而不只是 `mods/` 目錄：
 
 ```toml
-[game]
-core = "..."
-
 [modules]
-vanilla = "..."
-adventure = "..."
+runtime = "^0.18"
+official_content = "^3"
+cave_contract = "^2.1"
+cave_backbone = "~1.4"
 
 [realization]
 trusted = "native-static"
 community = "wasm"
 ```
 
-解析器需要輸出完整、可識別的輸入集合，可能包括：
+根 manifest 可以有自己的元套件發行版本，但它不支配內部套件、演算法、能力契約與資料 schema 的版本。Lattice Axiom 不使用一個 `gameVersion` 或 `worldVersion` 作為所有相容性的總開關。
+
+| 層 | 作用 |
+| --- | --- |
+| Manifest | 宣告套件版本範圍、能力需求、可選相依性與根政策 |
+| Resolved graph | 決定實際套件、能力提供者、adapter 與 fallback |
+| Lock graph | 鎖定精確版本、來源、內容雜湊、組態與依賴邊 |
+| Capability contract | 判斷提供者與使用者能否交換同一語義 |
+| Owner schema | 由資料擁有者讀取與遷移自己的持久化資料 |
+| Artifact receipt | 記錄某項編譯或生成產物真正依賴的子圖 |
+
+解析器輸出的可識別輸入可能包括：
 
 - 核心與模組版本或內容雜湊
+- 能力契約版本與所選提供者
 - 組態與資產雜湊
 - 編譯器、資產工具與目標平台
 - 信任政策與實現方式
 - 授權與再散布條件
 
-這可支援可重現建置、二進位快取，以及客戶端與伺服器比較閉包識別碼。是否要求位元完全相同、只要求邏輯相容，仍待定義。
+完整解析圖仍可計算根雜湊，以快速確認兩個集合完全相同；根雜湊不同只代表存在差異，不能直接宣布整體不相容。解析器必須沿差異子圖判斷受影響的能力、資料與產物。
+
+對世界生成、資產編譯和其他可重算結果，快取鍵應由實際生產者、正規化組態與輸入產物雜湊組成。更新不相關套件不應使產物失效。
+
+完整候選模型見[版本、相依性與相容性架構](versioning-and-compatibility.md)。
 
 ## 靜態、動態與沙箱的取捨
 
@@ -180,6 +198,7 @@ community = "wasm"
 ## 相關文件
 
 - [專案願景與設計支柱](../foundations/project-vision.md)
+- [版本、相依性與相容性架構](versioning-and-compatibility.md)
 - [渲染架構與擴充邊界](rendering.md)
 - [待決問題](../planning/open-questions.md)
 
