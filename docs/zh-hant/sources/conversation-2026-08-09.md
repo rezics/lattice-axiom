@@ -11,7 +11,7 @@ updated: 2026-08-09
 ## 來源
 
 - 原始檔名：`ChatGPT-插件架構與性能优化.md`
-- 原始位置：`C:/Users/edge/Downloads/ChatGPT-插件架構與性能优化.md`
+- 原始位置：`chat-history\ChatGPT-插件架構與性能优化.md`
 - 規模：7 輪提問與回覆
 - 本次處理：按主題重寫為繁體中文 living docs
 
