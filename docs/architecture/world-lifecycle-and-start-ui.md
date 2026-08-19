@@ -2,7 +2,7 @@
 title: World 目錄、開始頁與安全生命週期
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0009-rocksdb-authoritative-world-snapshots.md
   - ../decisions/0010-nickel-driven-package-system.md
@@ -244,6 +244,8 @@ shell package可以贡献：
 - WorldHeader／catalog scan、search、last-played sort与health状态；
 - exact lock preflight、missing package／schema／unclean shutdown三类错误；
 - Quick Create、rename、checkpoint、clone、move-to-trash／restore；
+- `RecoverableReadOnly`最小只读open与export；只读open不建立writer，export为含checkpoint、header、
+  exact lock、package／license清单与checksum的可移动bundle，不携带未经policy允许的native artifact；
 - Continue只对`ReadyExact`world启用；
 - loading阶段、cancel boundary与durability indicator；
 - migration先实现一个old schema fixture的clone／checkpoint路径；
@@ -260,6 +262,8 @@ public registry下载、cloud sync、多人server browser与任意旧world修复
 - migration各故障点终止后原world与checkpoint可载入，半迁移copy不发布。
 - Move to Trash可restore；Purge前可由narration读出对象与不可逆后果。
 - 低磁盘fixture在新mutation前产生persistent UI并保护durable snapshot。
+- `RecoverableReadOnly`open期间writer与authoritative command计数为零；export可在独立目录验证checksum，
+  并由headless catalog／preflight读取而不修改source world。
 - world list扫描／thumbnail／size计算不阻塞60 FPS shell输入。
 - mouse、keyboard、controller都能完成create／play／checkpoint／restore；focus在异步刷新后不跳到
   另一个world。

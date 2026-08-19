@@ -2,7 +2,7 @@
 title: Demo workspace 與 Terrenia 維度套件組織
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0019-separate-package-and-registration-identities.md
@@ -52,6 +52,12 @@ dependency／capability、锁定 version／source、选择 realization、取得�
 Cargo／Rust 实作边界；只有未来出现真实可替换、可独立版本化、由 profile 选择的
 package contract 与至少两个 provider 时，才把具体能力提升为 logical package。
 
+Rust crate名称也不得暗示第二套renderer。若render registration model需要独立crate，使用
+`latticeaxiom-render-contracts`保存纯资料schema／validation；真正的window、render world、wgpu
+device与submission仍由Bevy host adapter拥有。headless profile省略Bevy render／window plugins，
+不建立`render-headless`或null renderer crate。只有ADR 0014的upstream偏离gate通过后，才能提议
+新的backend实现边界与名称。
+
 `packages/terrenia` 只是 package family container，本身不是 source root。每个
 `package.ncl` 所在目录才是独立 source root；source roots 不得互相包含，避免递归
 content hash、资产扫描与发布边界把兄弟 package 意外算进主包。
@@ -69,9 +75,7 @@ lattice-axiom-demo/
 │   ├── latticeaxiom-compose/
 │   ├── latticeaxiom-packages/
 │   ├── latticeaxiom-modules/
-│   ├── latticeaxiom-render/
-│   ├── latticeaxiom-render-wgpu/
-│   ├── latticeaxiom-render-headless/
+│   ├── latticeaxiom-render-contracts/
 │   ├── latticeaxiom-storage/
 │   ├── latticeaxiom-storage-rocksdb/
 │   ├── latticeaxiom-voxel-mesh/

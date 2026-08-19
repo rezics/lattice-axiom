@@ -2,7 +2,7 @@
 title: 套件驅動的 Bevy 執行期整合路線
 status: active
 type: roadmap
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0010-nickel-driven-package-system.md
@@ -170,7 +170,8 @@ Nickel / typed models
 - minimal worldgen／provenance；
 - target block name／owner inspect overlay；
 - Performance preset、chunk lifecycle／persistence／mesh／collision与physics shape visualizers；
-- world list／Quick Create／Continue gate、checkpoint／clone／trash／restore与loading／durability UI。
+- world list／Quick Create／Continue gate、checkpoint／clone／trash／restore、recoverable read-only export与
+  loading／durability UI。
 
 ### 出场条件
 
@@ -183,6 +184,36 @@ Nickel / typed models
 - package／ABI overhead 出现在真实 profiler capture，而不只 microbenchmark。
 - unselected diagnostics不执行昂贵采集；chunk／collision visualizer受radius／primitive／upload budget约束。
 - preflight不写world；missing／migration／unclean／low-disk fixtures给可恢复动作，损坏header不从catalog消失。
+- `RecoverableReadOnly`不建立writer；export bundle checksum可在独立目录验证并通过headless preflight。
+
+## R5-C：Terrenia Sandbox Active Continuation
+
+R5与[first demo D0–D6](roadmap-first-demo.md)只证明package-driven voxel vertical slice。
+Terrenia的active content／gameplay／worldgen轨继续执行D7–D10；它可与R6／R7的render／upgrade证据
+并行，但不能绕过R0–R5的lock、registration、semantic、settings、diagnostics或persistence contract。
+
+### 交付
+
+- D7 Natural Terrenia 40：40方块自然内容、production territory delegation、地质／水文／资源／植被与
+  accepted hybrid cave最小切片；
+- D8 Sandbox Systems：item／inventory／drop／tool／recipe／workstation／furnace／container通用机制，
+  Terrenia只提供内容与domain rules；
+- D9 Terrenia 72 + Fluids：精确72方块、water／lava独立流体、有限BlockState、完整definition与
+  solid／fluid snapshot encoding；
+- D10 Sandbox Completion：自动探索／采集／制作／建造／保存／恢复旅程与冻结性能预算；
+- D11 Post-Baseline Biome Expansion：D10后以普通packages增加湿地、寒冷高地、火山与发光深洞，
+  不改变D10完成定义。
+
+### 出场条件
+
+- D7–D10各自的自动出场门禁全部通过，clean checkout与frozen locks可重现；
+- Terrenia 18→40→72内容阶段、semantic image与world migration均显式，旧materialized snapshot不隐式重生；
+- production worldgen遵守ADR 0001／0002／0004的一coordinator、通道×领地唯一所有者、边界contract、
+  有界贡献与deterministic arbitration；
+- inventory／recipe／container等通用机制由非Terrenia fixture dimension复用，host与platform package
+  不出现`terrenia:*`默认值或私有registry；
+- static／portable、client／headless、正常／crash-recovery旅程保持相同authoritative state与normative save；
+- D10以前不宣称Terrenia sandbox完成；D11不得成为修补D7–D10缺失门禁的隐藏必需package。
 
 ## R6：Render Feature 與 Provider 組合
 
@@ -194,7 +225,8 @@ Nickel / typed models
 - 两个可组合 post／compute feature fixtures；
 - 两个 mutually exclusive terrain backend fixtures；
 - portable dynamic compact command list prototype；
-- engine-coupled render interface prototype（只有真实 consumer才保留）；
+- 窄的engine-coupled exact-build conformance fixture；该fixture只算`EngineBuildId`生命周期consumer，
+  不算保留通用render-internal interface的产品consumer；后者只有真实provider需求时才建立；
 - chunk Rendering visualizer layer：visibility／LOD／provider／GPU budget／stale reason。
 
 ### 出场条件

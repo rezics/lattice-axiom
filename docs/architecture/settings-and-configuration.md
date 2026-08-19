@@ -2,7 +2,7 @@
 title: Package 可注入的設定與配置架構
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
@@ -66,7 +66,7 @@ validation必须拒绝。
 | `default`／`constraints` | typed默认值、min／max／step／allowed values／长度 |
 | `allowed_scopes`／`default_scope` | 哪些store可保存该值 |
 | `authority` | local user、world owner／server、admin-only或fixed-by-profile |
-| `apply_impact` | preview、immediate、world-reactivate、graph-recompose、process-restart |
+| `apply_impact` | runtime setting只允许preview、immediate、world-reactivate、process-restart |
 | `category`／`order` | stable语义分类与owner内顺序；不使用load order |
 | `label_key`／`description_key` | localization key；缺失时回退ID和诊断 |
 | `visibility`／`enabled_when` | 只允许已验证声明式predicate；隐藏不等于无权限 |
@@ -85,6 +85,12 @@ default        = 8
 ```
 
 这是typed manifest schema示例，不冻结最终Nickel／Rust语法。
+
+`graph-recompose`属于settings surface同时显示的**composition draft impact**，不是runtime
+`SettingSpec.apply_impact`的合法值。它来自profile parameter／`CompositionSpec` descriptor；Apply
+只会产生draft、graph diff与新lock，再经world preflight建立新EngineInstance。若共用schema内部以
+同一个impact enum编码两类UI row，manifest validation仍必须拒绝runtime `SettingSpec`携带
+`graph-recompose`，避免已锁定registration被设置值暗改。
 
 ## Scope 與 Authority
 
@@ -133,7 +139,8 @@ typed draft ── validate all dependencies ── impact summary
 - video mode、UI scale等可能让画面不可用的设置必须有倒计时rollback；
 - slider可实时preview，但写盘使用debounce；退出时再做sync-if-changed；
 - world-authoritative设置在fixed-tick barrier以一个batch验证／提交／revision；
-- `world-reactivate`、`graph-recompose`、`process-restart`必须在Apply前列出影响；
+- runtime `world-reactivate`／`process-restart`与独立composition draft的`graph-recompose`都必须在
+  Apply前列出影响；后者不进入`SettingChanged` batch；
 - package callback只能在transaction提交后收到typed batch，不能在validation中产生副作用；
 - 多个字段的cross-setting constraint失败时，整个draft不部分写入。
 

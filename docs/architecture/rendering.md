@@ -2,7 +2,7 @@
 title: Bevy 渲染能力、Pass 與 Provider 組合
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
@@ -185,6 +185,12 @@ host 翻译成 Bevy／wgpu work，并保留实际 resource state 所有权。若
 - 必须提供 disabled／fallback 体验，避免整个 world 因纯 presentation provider 缺失而无法恢复。
 
 若 C table 只是把每个 Bevy type 逐项镜像，说明这个 realization 选错了；应改为 `NativeStatic`。
+
+D5／R6保留的exact-build conformance fixture只验证`EngineBuildId` mismatch、rebuild、instance
+lifecycle与fallback，因此算**相容层级的测试consumer**，不算建立通用render-internal interface的
+产品consumer。fixture只能查询最小test-only table，不能借此镜像RenderWorld／wgpu API。只有一个真实
+terrain／visibility／pass provider证明static或portable contract不足时，才设计并保留对应的窄
+engine-coupled render interface；没有该证据时，upgrade rehearsal完成后不扩大或发布它。
 
 ## 體素渲染機制
 
