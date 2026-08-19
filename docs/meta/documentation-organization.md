@@ -29,7 +29,7 @@ Diátaxis 本身也提醒：四種類型是判斷文件目的的地圖，不應�
 ## 目錄契約
 
 ```text
-docs/zh-hant/
+docs/
 ├── foundations/   專案願景、原則與共同詞彙
 ├── architecture/  可驗證的架構假說與邊界
 ├── decisions/     已明確採納的重大選擇、理由與後果
@@ -39,7 +39,7 @@ docs/zh-hant/
 └── sources/       對話與主題頁的追溯索引
 ```
 
-`decisions/` 已在第一項明確採納的世界生成方向出現後建立；每份紀錄只處理一項決策。若出現其他語系，與 `zh-hant/` 平行建立，不把不同語言混在同一頁。
+`decisions/` 已在第一項明確採納的世界生成方向出現後建立；每份紀錄只處理一項決策。主題依領域分目錄，不另建 `docs/zh-hant/` 或 `docs/en/` 等語系平行樹。一頁只使用一種語言，語系寫在 frontmatter 的 `locale`。現有頁保留現有檔名與 `locale: zh-Hant`；同一主題若要第二種語言，在同一目錄新增 sibling，檔名加語系後綴（例如 `world-generation.en.md`，`locale: en`）。
 
 ## 文件生命週期
 

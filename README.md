@@ -4,7 +4,7 @@ Lattice Axiom（晶格公理）是遊戲名稱。這個倉庫採取「文件先�
 
 目前尚無程式實作；已接受的 ADR 是實作基線，其餘 proposed／exploration 文件仍會依原型與量測修正。
 
-從[文档入口](docs/README.md)開始閱讀。
+從[文件入口](docs/README.md)開始閱讀。
 
 ## License
 
