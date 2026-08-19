@@ -7,126 +7,116 @@ updated: 2026-08-19
 
 # 待決問題
 
-這不是承諾清單，而是尚需以討論、原型、故障測試或量測回答的問題。已形成選擇的項目保留在「本輪已關閉」並連到 ADR；細節仍未驗證，不表示整個領域已完成。
+本頁只保留會改變產品、可玩原型或長期資料邊界的問題。Bevy 已有答案的通用引擎問題不再列為 Lattice Axiom 的自研工作。
 
-## 本輪已關閉
+## 已關閉的方向
 
-- [x] 實作語言採 Rust，核心自研集中在模組、區塊、世界生成與持久化語義；見[決策 0005](../decisions/0005-rust-and-focused-build-boundary.md)。
-- [x] demo 的最小可玩驗收已寫入[第一個 demo 路線圖](roadmap-first-demo.md)。
-- [x] 套件系統以 Nickel 驅動宣告與組合、以 Rust 執行解析與實現；求值結果直接轉成 Rust 強型別，不使用 JSON 內部總線；見[決策 0010](../decisions/0010-nickel-driven-package-system.md)。
-- [x] 靜態建置與資料夾動態載入共用同一 `LockedGameGraph`；見[決策 0008](../decisions/0008-static-and-dynamic-realizations-share-one-graph.md)與[決策 0010](../decisions/0010-nickel-driven-package-system.md)。
-- [x] demo GPU 後端採 wgpu，以 `latticeaxiom-render` 門面與 headless 實現隔離；見[決策 0006](../decisions/0006-wgpu-behind-rendering-facade.md)。
-- [x] demo 直接以 RocksDB 保存權威區塊快照，不先建立自訂 Region File；見[決策 0009](../decisions/0009-rocksdb-authoritative-world-snapshots.md)。
-- [x] 權威世界空間採用右手笛卡兒座標系，`XY` 為水平面、`+Z` 向上，並固定單位、旋轉、負座標與邊界轉換；見[決策 0011](../decisions/0011-right-handed-z-up-world-coordinates.md)。
+- [x] 遊戲引擎採 Bevy；預設使用完整上游能力，見[決策 0014](../decisions/0014-adopt-bevy-upstream-first.md)。
+- [x] 世界座標採 Bevy 原生右手 Y-up，水平面 `x-z`，見[決策 0015](../decisions/0015-bevy-native-y-up-world-coordinates.md)。
+- [x] 第一階段使用 Cargo + Bevy plugin + typed asset；不建立自訂 package runtime，見[決策 0016](../decisions/0016-stage-content-composition-on-bevy.md)。
+- [x] 已物化世界以 RocksDB 完整 snapshot 為權威，見[決策 0009](../decisions/0009-rocksdb-authoritative-world-snapshots.md)。
+- [x] 相容性不由單一全域版本決定，見[決策 0003](../decisions/0003-no-global-version-switch.md)。
+- [x] Godot 只作有觸發條件的工具鏈對照，不作第二 runtime。
 
-## 優先級 0：第一個 demo 的實作契約
+## P0：第一個可玩 spike
 
-- [ ] `latticeaxiom.lib` 的 `Package`、`GameProfile`、`Capability` 與 `Realization` 合約最小欄位是什麼？
-- [ ] `nickel-lang` 求值結果如何直接轉成 `CompositionSpec`，並保留足夠的來源診斷？
-- [ ] 來源請求、既有 lock、受控 import 根與套件 manifest 的兩階段 bootstrap 如何避免循環？
-- [ ] `CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RuntimeImage`、lock graph、登錄表與穩定數值 ID 的 Rust 資料模型為何？
-- [ ] `latticeaxiom.lock` canonicalization 如何固定集合排序、套件識別、路徑、數值與內容雜湊？
-- [ ] 模組衝突、能力提供者與缺少精確來源時，CLI 的診斷與修復建議如何呈現？
-- [ ] 區塊尺寸、調色盤格式與 RocksDB 值 envelope 的第一組基準參數為何？
-- [ ] 自動存檔的耐久等級、可接受資料損失視窗與明確 `fsync` 邊界是什麼？
-- [ ] RocksDB 鍵編碼、column family、cache、compression、batch 與 compaction 的最小配置為何？
-- [ ] 渲染擷取採複製、雙緩衝或所有權移交，如何限制每幀配置與記憶體頻寬？
-- [ ] demo 的 CPU、記憶體、磁碟、啟動、存檔與建置時間預算各是多少？
+### 玩家與操作
 
-## 優先級 0：遊戲定義仍缺的部分
+- [ ] 第一版玩家 movement 要驗收哪些行為：走、跳、坡面、台階、飛行／noclip debug？
+- [ ] break／place 的距離、冷卻、選取回饋與錯誤回饋是什麼？
+- [ ] demo 的最小「好玩／可理解」標準，除了技術循環還需要哪個玩家目標？
+- [ ] 支援的第一個 OS／GPU／輸入裝置矩陣是什麼？
 
-- [ ] 除了技術縱切外，玩家每分鐘的核心循環與情緒目標是什麼？
-- [ ] 哪一項玩家價值必須依賴模組架構，而不只是工程上的優雅？
-- [ ] 官方最小內容包除了方塊、兩個群系與一個實體外，還需要什麼才能形成可評估體驗？
-- [ ] 第一個可公開測試版本是純單機、合作預備，還是創作工具預備？
+### Bevy 與生態 spike
 
-## 優先級 1：套件、ABI 與生態治理
+- [ ] 實作時鎖定哪個 Bevy `0.19.x` patch 和 feature 集？
+- [ ] `bevy_voxel_world` 能否直接承擔權威 chunk，還是只適合作 presentation／streaming adapter？
+- [ ] 它的 chunk 尺寸、voxel type、material、raycast 和 async meshing 假設有哪些不可設定限制？
+- [ ] Avian 的 Bevy 0.19 對應版本能否支援 character movement、voxel collider 更新與 FixedUpdate 預算？
+- [ ] Bevy 原生 input 是否已足夠；Leafwing Input Manager 具體省下哪些 action mapping／test injection 工作？
+- [ ] 標準 Bevy UI／diagnostics 是否足夠完成 crosshair、保存狀態和 debug overlay？
 
-- [ ] 面向陌生第三方的長期程式碼邊界採穩定 C ABI、WASM 元件模型，還是兩者分層？
-- [ ] 同工具鏈 dylib 的「相同」如何識別：rustc、target、profile、feature、依賴 ABI 與標準庫需記錄哪些？
-- [ ] registry 的命名、發布、所有權轉移、撤銷與惡意套件處理由誰治理？
-- [ ] 何時需要一般版本求解器；精確 lock 不足時應採何種範圍與衝突模型？
-- [ ] 二進位快取、簽章、來源證明、授權與再散布政策如何進入 lock graph？
-- [ ] v1 不卸載的前提下，開發期內容迭代與重啟時間如何控制？
-- [ ] 模組擁有的持久 schema 在移除、升級或重新加入時如何保留、遷移與診斷？
+### 量測
 
-## 優先級 1：量測「熱路徑已消除模組邊界」
+- [ ] 目標硬體與最低可接受 frame／fixed-tick budget 是什麼？
+- [ ] 需要同時 active、resident、visible 的 chunk 數是多少？
+- [ ] edit-to-visible、collider rebuild、chunk load 和 save P95 預算是多少？
+- [ ] queue depth、in-flight bytes、RAM／VRAM 高水位的第一版上限是多少？
 
-- [ ] 建立純資料、靜態原生與動態原生同功能基準測試。
-- [ ] 比較逐實體呼叫、批次查詢與編譯排程的成本。
-- [ ] 證明官方與第三方內容進入同一執行表示後沒有來源查詢成本。
-- [ ] 量測 LTO 的實際收益、動態函式指標的成本與載入時間，而不是由部署名稱推論。
-- [ ] 亂序發現、增刪無關套件與靜／動切換時，ID、區塊雜湊與產物記錄是否穩定？
+P0 的回答必須來自可玩的 D1 build，不由文檔預先猜定。
 
-## 優先級 1：渲染邊界
+## P1：權威世界與持久化
 
-- [ ] `RenderWorld` 的實際最小資料模型、生命週期與增量更新策略是什麼？
-- [ ] 區塊網格重建、上傳、淘汰與 RocksDB 區塊生命週期如何背壓？
-- [ ] 自訂 shader 的長期來源語言、IR、驗證、能力與快取鍵是什麼？
-- [ ] 普通材質、Render Feature 與 Render Graph 擴充的權限邊界在哪裡？
-- [ ] 動態模組第一次載入 shader／pipeline 時，如何編譯、快取與提供可讀進度？
-- [ ] 第二渲染後端出現什麼真實需求時才值得加入？
+- [ ] B1 adoption report 後，權威 chunk 資料型別最小需要哪些欄位？
+- [ ] chunk 尺寸、palette encoding 與 Y-up key encoding 如何選擇？
+- [ ] stable block ID 的 namespace、alias、missing-content policy 是什麼？
+- [ ] `ChunkRevision` 在 voxel、persistent entity、scheduled work 之間是一個 revision 還是分域 revision？
+- [ ] active／resident／persistence radius 的狀態機和 backpressure 如何定義？
+- [ ] RocksDB column family、prefix extractor、compression、cache 和 compaction 的 benchmark 結果？
+- [ ] queued／written／durable／checkpointed 中，UI 的「已保存」對應哪一級？
+- [ ] 正常 shutdown deadline 與 timeout UX 是什麼？
+- [ ] 第一個 schema envelope／migration fixture 的實際 encoding 採何種 serde format？
+- [ ] checkpoint 頻率、保留數、磁碟預算和 restore-time 目標？
 
-## 優先級 1：世界持久化
+## P1：最小世界生成
 
-- [ ] `ChunkCommit` 的原子範圍要包含哪些空間實體、續行工作與 receipt？
-- [ ] 區塊快照採完整狀態、分層 blob 或週期性基線加 delta，哪種在實際 workload 下最合適？
-- [ ] checksum 錯誤、磁碟滿、background compaction error 與雙重世界掛載時如何安全降級？
-- [ ] checkpoint、增量備份、物件儲存、保留期與實際還原演練如何設計？
-- [ ] `/regenerate --preserve-player` 如何分類 generated、player-owned 與 system-persistent 物件？
-- [ ] 新舊 generation epoch 接縫需要哪些邊界輸入，誰負責生成 transition？
-- [ ] 什麼查詢壓力才足以把 Persistent World Object 提升到 PostgreSQL？
-- [ ] 未來跨 RocksDB／PostgreSQL 的 staged transaction、journal/outbox 與補償流程為何？
+- [ ] 第一個 terrain spike 是否先使用 voxel plugin 的 generator hook，還是直接接 `WorldgenPlugin`？
+- [ ] demo 的兩個 placeholder biome 要證明哪兩種真正不同的生成能力？
+- [ ] world seed、`WorldgenConfig` 和 generator revision 如何 canonicalize／hash？
+- [ ] terrain height、soil、cave／void 的最小 dependency graph 是什麼？
+- [ ] 新舊 generation epoch 的邊界在 demo 中需要哪種最小驗收？
+- [ ] 完整領地架構的第一個二維 `(x, z)` prototype 何時開始，不能阻塞哪個 demo gate？
 
-## 優先級 1：可組合世界生成
+## P1：公開內容 API
 
-- [ ] 第一批兩個 `CaveTopologyProvider` 應選哪些受約束幾何圖、方向場或生長模型做對照？
-- [ ] 地表與三維地下領地使用相同圖譜抽象，還是只共用所有權仲裁介面？
-- [ ] 洞穴預算如何在主要拓撲、支洞、洞室、目的地與水文修正間換算？
-- [ ] 地表群系、地下群系、深度帶與地質體如何共同影響淺層入口和深層洞穴？
-- [ ] 跨規劃格與拓撲所有權域的入口契約需要保存哪些流體狀態？
-- [ ] 第一個領地原型採用 Voronoi、冪圖、扭曲網格或其他候選中的哪兩種比較？
-- [ ] Province、Region 與 Ecotope 的尺度、面積分布及形狀參數如何由實際旅行速度決定？
-- [ ] `BiomePack` 世界份額由整合包、伺服器、玩家預設或內容作者中的誰治理？
-- [ ] `BoundaryProfile` 如何避免 `N²` 配對，同時處理海岸、峭壁、地下河與其他特殊接縫？
-- [ ] 水文、岩層、侵蝕與大型結構要使用多大的規劃格及 halo 才能有界查詢？
-- [ ] 產物生成記錄採多大的空間與語義粒度，才能兼顧局部失效、儲存成本與跨世代邊界？
-- [ ] 洞穴原型用哪些拓撲與玩法指標判斷優劣，而不是只比較截圖？
+- [ ] `ContentCatalog` 的最小 definition：block、item、biome 各有哪些必填欄位？
+- [ ] registration 直接用 Rust builder、typed asset，或兩者如何分工？
+- [ ] validation 在 plugin build、Startup 或 loading state 的哪個階段完成？
+- [ ] runtime compact ID 如何由 stable ID 建立，chunk palette 如何保存 mapping？
+- [ ] `TestContentPlugin` 應刻意與官方內容有什麼差異，才能真正反證 API 偏見？
+- [ ] content 移除時，placeholder、read-only recovery、migration 與拒絕載入如何選擇？
 
-## 優先級 1：模型與物理資產
+## P2：Bevy 升級與依賴治理
 
-- [ ] glTF/GLB 是否承擔主要交換格式，哪些資料需要 extension 或 sidecar？
-- [ ] 第一版只支援哪些跨模型能力：注視、接觸點、裝備、受擊區或其他？
-- [ ] 語義角色、能力、物理場與互動語義如何分層與版本化？
-- [ ] Blender add-on 最小功能是匯出、驗證，還是也包含物理預覽？
-- [ ] 高解析度網格與低解析度 simulation cage 如何建立與對應？
-- [ ] 物理 LOD 在不同硬體上是否會影響命中判定或遊戲公平性？
+- [ ] Bevy minor 升級 cadence 是每版、隔版，還是只在需要 feature／fix 時？
+- [ ] ecosystem plugin compatibility matrix 由誰、在哪份機器可讀資料維護？
+- [ ] license／notice、SBOM、security advisory 與 source pin 如何自動檢查？
+- [ ] upstream patch 何時用 git dependency，何時等待 release，何時維持最小 fork？
+- [ ] 可玩 smoke、save fixture、asset fixture 和 performance benchmark 哪些是升級必過 gate？
 
-## 優先級 2：多人與供應鏈
+## P2：資產與作者工具
 
-- [ ] 客戶端與伺服器握手比較哪些權威能力子圖、lock 與 schema 狀態？
-- [ ] 哪些純表現差異可以協商，哪些碰撞、生成或玩法能力必須完全一致？
-- [ ] 原生第三方模組能否進入伺服器，是否允許自動下載？
-- [ ] 伺服器如何取得、驗證與隔離舊生成器或歷史內容？
-- [ ] 撤銷惡意套件時，已物化世界與可重現建置如何同時維持安全？
+- [ ] Blender → glTF → Bevy 能否保存 demo 需要的 socket、collider 與 semantic tags？
+- [ ] 哪些語義真的需要 typed sidecar，而不是 node naming／glTF extras？
+- [ ] Bevy hot reload 對 collision／gameplay asset 的安全邊界如何實作？
+- [ ] 何種真實工作流會觸發 Godot toolchain spike？
+- [ ] 若觸發，Godot 對照要節省多少作者時間，資料 round-trip 要保留哪些語義？
 
-## 下一批實作型文件
+## 只有觸發後才重新開啟
 
-只在開始相應原型時建立：
+以下不是目前待實作項目：
 
-1. `latticeaxiom.lib` Nickel 合約與 Rust `CompositionSpec` 對應模型。
-2. `LockedGameGraph`、`BuildPlan`、`RuntimeImage`、lock graph 與數值 ID 資料模型。
-3. RocksDB 鍵格式、耐久政策與故障注入測試計畫。
-4. 渲染擷取垂直切片與效能預算。
-5. 二維多尺度領地與大量合成群系的可重複原型報告。
-6. 一個根域、兩個子域拓撲提供者與共享入口的三維洞穴原型報告。
+- 自訂 package manager／registry／resolver；
+- dynamic Rust ABI、WASM host 或執行期卸載；
+- 自研 renderer、physics、ECS、schedule、asset server；
+- 第二 runtime 或 Godot runtime integration；
+- multiplayer rollback／lockstep；
+- 完整 visual world editor。
+
+每一項都需要真實 playable／author workflow failure、新 ADR 和 upstream 調查才能重啟。
+
+## 下一批要產生的證據
+
+1. B0 Bevy client／headless smoke build。
+2. B1 upstream voxel／physics 可玩 build 與 adoption report。
+3. 一份含 frame、chunk、task、memory、collision 指標的 profiling capture。
+4. D2 RocksDB crash／revision-race 測試結果。
+5. Official／TestContent 亂序註冊和存檔 fixture。
 
 ## 相關文件
 
-- [第一個 demo 路線圖](roadmap-first-demo.md)
-- [Nickel 驅動的套件系統與雙實現路徑](../architecture/package-management.md)
-- [世界持久化與 RocksDB World Store](../architecture/world-persistence.md)
-- [渲染架構與擴充邊界](../architecture/rendering.md)
-- [可組合世界生成架構](../architecture/world-generation.md)
-- [可組合洞穴生成架構](../architecture/cave-generation.md)
-- [詞彙表](../foundations/glossary.md)
+- [Bevy 執行期整合路線](roadmap-game-engine.md)
+- [第一個可玩 demo 路線圖](roadmap-first-demo.md)
+- [技術棧](../foundations/technology-stack.md)
+- [渲染與物理候選](../research/renderer-physics-landscape.md)
+- [Godot 工具鏈對照](../research/godot-toolchain-comparison.md)

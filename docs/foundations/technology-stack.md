@@ -1,63 +1,88 @@
 ---
-title: 已選技術棧與採用邊界
+title: Bevy-first 技術棧與採用邊界
 status: active
 type: reference
 updated: 2026-08-19
 ---
 
-# 已選技術棧與採用邊界
+# Bevy-first 技術棧與採用邊界
 
-本頁集中記錄 Lattice Axiom 已接受的技術選擇、預定用於第一個 demo 的函式庫，以及每項依賴不得越過的架構邊界。重大選擇仍以 ADR 為準；本頁是便於實作與審查的單一入口，不取代各決策的理由。
+本頁是目前實作技術的單一入口。`accepted` 是已採納基線；`spike candidate` 只允許進入短期可玩原型，必須以相容性、維護狀態、授權和量測結果決定是否鎖定。
 
 ## 採用原則
 
-- 套件系統、模組圖、區塊生命週期、世界生成與持久化語義是產品差異層，由專案掌握。
-- Nickel 負責宣告、組合、合約與參數化；Rust 負責有副作用的解析、取得、建置、信任與執行。
-- GPU、儲存引擎、視窗與其他第三方型別藏在專案門面後，不得滲入核心內容契約。
-- 只有 `accepted` 選擇是實作基線；`demo baseline` 項目仍須以最小原型鎖定精確 crate 與版本。
-- 每項外部依賴都要記錄版本、授權、來源與其替代的自研工作；升級需通過相應契約測試。
+- Bevy 是引擎，不在專案內再建立一層對等引擎 API。
+- Rust／Bevy 型別可以在執行期內部自由使用；只有存檔、網路與穩定內容契約隔離 process-local 型別。
+- 先使用 upstream 預設，再組合、擴充、最小 fork；自研替代受[決策 0014](../decisions/0014-adopt-bevy-upstream-first.md)的證據門檻約束。
+- crate 精確版本、feature 與來源在開始實作時寫入 Cargo manifest／`Cargo.lock`；本頁只記錄選型與理由。
+- 一個外部依賴若只服務單一領域，就在該領域做薄整合，不建立全專案 provider facade。
 
-## 已接受的核心選擇
+## 已接受基線
 
-| 領域 | 技術 | 專案中的角色與邊界 | 狀態 | 上游 |
+| 能力 | 選擇 | 使用方式 | 狀態 |
+| --- | --- | --- | --- |
+| 語言與建置 | Rust stable、Cargo workspace、`Cargo.lock` | 遊戲與內容 plugin 靜態組合；CI 鎖定 toolchain | accepted |
+| 遊戲引擎 | [Bevy](https://github.com/bevyengine/bevy) `0.19.x` | client 使用 `DefaultPlugins`；headless／測試使用 `MinimalPlugins` 加必要標準 plugin | accepted |
+| ECS 與 App | Bevy ECS、App、Plugin、States、Schedules、SystemSet | 直接使用，不建立 `latticeaxiom-ecs` 或自研 lifecycle／scheduler | accepted |
+| 時間與工作池 | Bevy Time、`FixedUpdate`、TaskPool | 固定玩法 tick；背景 job 回主世界時驗證 revision／epoch | accepted |
+| 渲染與視窗 | Bevy Render／PBR／UI／winit integration | wgpu、winit 是 Bevy 實作細節；專案不直接建立 render facade | accepted |
+| 資產 | Bevy `AssetServer`、`AssetLoader`、glTF 與 typed asset | 依賴追蹤、載入狀態與熱重載沿 Bevy；權威資料不保存 `Handle` | accepted |
+| 座標 | Bevy 原生右手 Y-up | `+X` 右、`+Y` 上、forward `-Z`；公尺／弧度 | accepted |
+| 世界儲存 | RocksDB + memory test implementation | 完整已物化區塊快照與原子 write batch；由 domain storage 邊界隔離 | accepted |
+| 序列化 | serde 生態 | schema owner 定義穩定 DTO；實際 wire／disk encoding 由原型鎖定 | accepted |
+| 觀測 | Bevy diagnostics + `tracing` 生態 | 先用標準 diagnostics、log 與 profiler 整合 | accepted |
+
+Bevy `0.19.x` 是本次文件重構的相容系列，不代表允許自動漂移。實作提交必須固定精確 patch；任何 minor 升級都視為顯式遷移工作。
+
+## 首個可玩原型候選
+
+| 能力 | 首選候選 | 原型要回答的問題 | 回退順序 | 狀態 |
 | --- | --- | --- | --- | --- |
-| 實作語言與建置 | Rust + Cargo workspace | 實作套件核心、遊戲核心、工具與執行期；crate 邊界隔離第三方系統 | accepted | [rust-lang/rust](https://github.com/rust-lang/rust)、[rust-lang/cargo](https://github.com/rust-lang/cargo) |
-| 套件宣告與遊戲組合 | Nickel；Rust 透過 `nickel-lang` 嵌入 | `package.ncl`、`game.ncl`、overlay、合約與宣告式建置描述；不進入遊戲熱路徑 | accepted | [nickel-lang/nickel](https://github.com/nickel-lang/nickel)、[`nickel-lang` Rust API](https://docs.rs/nickel-lang/latest/nickel_lang/) |
-| 套件解析與實現 | Lattice Axiom 自研 Rust package kernel | 來源取得、版本與能力解析、信任政策、內容雜湊、lock、建置、載入與啟用；不依賴 Nickel 的實驗性 package manager | accepted | 專案內部實作；見[套件管理架構](../architecture/package-management.md) |
-| GPU 與 shader | wgpu + WGSL | 唯一 demo GPU 後端；只由 `latticeaxiom-render-wgpu` 使用 | accepted | [gfx-rs/wgpu](https://github.com/gfx-rs/wgpu) |
-| 世界儲存 | RocksDB | `WorldStorage` 的 demo 生產實現；鍵、column family 與壓實細節不得穿過門面 | accepted | [facebook/rocksdb](https://github.com/facebook/rocksdb) |
-| 世界空間約定 | 右手笛卡兒座標系；Z-up；公尺／弧度 | 世界生成、物理、渲染輸入、資產編譯與持久化共享的空間 ABI；外部格式只在邊界轉換 | accepted | [決策 0011](../decisions/0011-right-handed-z-up-world-coordinates.md) |
+| 體素世界 | [`bevy_voxel_world`](https://github.com/splashdust/bevy_voxel_world) `0.17`（Bevy 0.19） | chunk streaming、編輯、raycast、mesh job 與材質能否支撐 demo；其硬編碼假設能否被設定或薄擴充吸收 | plugin 擴充／貢獻上游 → 直接採用 `block-mesh` 等小型 mesher | spike candidate |
+| 物理 | [Avian](https://github.com/avianphysics/avian) `0.7`（Bevy 0.19） | 固定 tick、character movement、voxel collider、raycast 與 local-origin 能否達到預算 | Bevy 生態另一維護方案 → 最小 domain-specific collision | spike candidate |
+| 動作輸入 | [Leafwing Input Manager](https://github.com/Leafwing-Studios/leafwing-input-manager) `0.21`（Bevy 0.19） | action mapping、重綁、測試注入是否比 Bevy 原生輸入更省工作 | Bevy 原生 input resources | spike candidate |
+| 資產載入狀態 | [`bevy_asset_loader`](https://github.com/NiklasEi/bevy_asset_loader) `0.27`（Bevy 0.19） | 是否真的需要 state-aware collection；標準 `AssetServer` 是否已足夠 | Bevy `AssetServer` 直接管理 | optional spike |
 
-## 第一個 demo 的函式庫基線
+候選不是承諾。第一個 spike 應盡量保持 upstream 原貌，先確認能力，再決定是否保留依賴。
 
-下列項目已被選為 demo 起點，但精確 crate、feature、版本與平台支援要在對應里程碑以原型鎖定。
+## 明確採用的上游邊界
 
-| 領域 | 預定技術 | 邊界 | 狀態 | 上游 |
-| --- | --- | --- | --- | --- |
-| 視窗與輸入 | winit | 只存在於宿主與平台層 | demo baseline | [rust-windowing/winit](https://github.com/rust-windowing/winit) |
-| 數學 | glam | 經核心型別或薄轉接層使用，避免成為持久格式 | demo baseline | [bitshifter/glam-rs](https://github.com/bitshifter/glam-rs) |
-| ECS 儲存 | hecs | 提供資料儲存；主迴圈與排程由核心控制 | demo baseline | [Ralith/hecs](https://github.com/Ralith/hecs) |
-| 體素網格 | 自研 `latticeaxiom-voxel-mesh`（參考 block-mesh 演算法重寫） | 位於區塊網格編譯器內，不定義世界資料模型；面方向與繞序原生遵循[決策 0011](../decisions/0011-right-handed-z-up-world-coordinates.md) | demo baseline | [bonsairobo/block-mesh-rs](https://github.com/bonsairobo/block-mesh-rs)（參考來源，MIT OR Apache-2.0，2022 年後停更；移植片段保留 attribution） |
-| 動態原生載入 | libloading | 只負責載入；ABI、工具鏈與信任驗證由 Lattice Axiom 實作 | demo baseline | [nagisa/rust_libloading](https://github.com/nagisa/rust_libloading) |
-| 序列化 | serde + bincode | serde 轉換強型別模型；bincode 只放在自有 schema envelope 內 | demo baseline | [serde-rs/serde](https://github.com/serde-rs/serde)、[bincode-org/bincode](https://github.com/bincode-org/bincode) |
-| 開發者 UI | egui | 除錯與觀測疊加層，不成為玩家 UI 架構 | demo baseline | [emilk/egui](https://github.com/emilk/egui) |
-| RocksDB Rust 綁定 | rust-rocksdb | `WorldStorage` 實現候選；須先驗證原生建置、備份與平台支援 | demo baseline | [rust-rocksdb/rust-rocksdb](https://github.com/rust-rocksdb/rust-rocksdb) |
+- 程序入口是正常 Bevy `App`。
+- ECS 使用 Bevy ECS。
+- 排程與固定時間使用 Bevy schedules、`FixedUpdate` 與 `Time<Fixed>`。
+- 渲染使用 Bevy renderer；headless profile 不安裝 render plugin。
+- 資產使用 Bevy `AssetServer` 與 typed assets。
+- 非同步工作使用 Bevy task pools。
+- 內容組合使用 Cargo、Bevy plugins 與 typed assets；後續分發需求另立研究。
+- 所有空間資料直接使用 Bevy 原生 Y-up。
 
-## 刻意延後
+## Bevy 型別邊界
 
-- Rapier、glTF 角色管線與柔體能力等待垂直切片證明需求。
-- WASM 元件模型、穩定第三方 ABI、一般版本求解器、registry、簽章與二進位快取不進入第一個 demo。
-- Bevy、Godot 或其他完整引擎不作為宿主。
-- Nickel 上游的 package manager 目前是實驗功能，不作為 Lattice Axiom 套件生態的解析與發布基礎。
+可以直接使用 Bevy 型別的區域：
 
-## 版本與授權記錄
+- plugin 之間的執行期整合；
+- ECS component、resource、system parameter 與 event／message；
+- Transform、Mesh、Material、Image、Animation、Audio 與 asset handle；
+- render extraction、diagnostics 與開發工具。
 
-實作開始後，每個外部依賴都應在 workspace lock 與第三方 notices 中保存精確版本和授權。若上游倉庫、維護狀態、授權或 API 穩定性發生重大變化，先更新本頁與相關 ADR，再調整依賴。
+必須轉成專案穩定 DTO／ID 的邊界：
+
+- RocksDB record 與備份；
+- 未來網路協定；
+- 生成 provenance；
+- 跨重啟內容引用；
+- 需要獨立遷移承諾的公開資料格式。
+
+Bevy `Entity`、`Handle`、Rust `TypeId`、反射註冊順序與 GPU resource ID 都不得進入這些長期邊界。
+
+## Godot 的位置
+
+Godot 只作未來工具鏈對照組，不作 runtime、第二渲染後端或內容格式真相來源。若 Blender + glTF + Bevy 工具不足，依[Godot 工具鏈對照](../research/godot-toolchain-comparison.md)做限時 spike，再決定是否需要場景／資產橋接。
 
 ## 相關文件
 
-- [決策 0005：Rust 與自研邊界](../decisions/0005-rust-and-focused-build-boundary.md)
-- [決策 0006：wgpu 渲染門面](../decisions/0006-wgpu-behind-rendering-facade.md)
-- [決策 0009：RocksDB 權威世界快照](../decisions/0009-rocksdb-authoritative-world-snapshots.md)
-- [決策 0010：以 Nickel 驅動套件系統](../decisions/0010-nickel-driven-package-system.md)
-- [決策 0011：右手 Z-up 世界座標](../decisions/0011-right-handed-z-up-world-coordinates.md)
+- [決策 0014：採用 Bevy 並以上游能力為預設](../decisions/0014-adopt-bevy-upstream-first.md)
+- [決策 0015：Bevy 原生 Y-up](../decisions/0015-bevy-native-y-up-world-coordinates.md)
+- [決策 0016：以 Bevy 插件起步](../decisions/0016-stage-content-composition-on-bevy.md)
+- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
+- [渲染與物理候選](../research/renderer-physics-landscape.md)

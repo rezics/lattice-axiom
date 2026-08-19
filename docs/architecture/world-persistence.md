@@ -1,209 +1,208 @@
 ---
-title: 世界持久化與 RocksDB World Store
+title: Bevy 世界持久化與 RocksDB World Store
 status: proposed
-type: explanation
+type: architecture
 updated: 2026-08-19
 decision:
-  - ../decisions/0003-no-global-version-package-scoped-compatibility.md
+  - ../decisions/0003-no-global-version-switch.md
   - ../decisions/0009-rocksdb-authoritative-world-snapshots.md
-  - ../decisions/0011-right-handed-z-up-world-coordinates.md
+  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
 ---
 
-# 世界持久化與 RocksDB World Store
+# Bevy 世界持久化與 RocksDB World Store
 
-> 區塊快照是已存在空間世界的權威，且 demo 直接使用 RocksDB，已由[決策 0009](../decisions/0009-rocksdb-authoritative-world-snapshots.md)採納。本頁整理資料分層、儲存契約與恢復流程；鍵編碼、column family 與調校值仍需原型量測。
+## 結論
 
-## 四層責任
+RocksDB 保存已物化世界的權威快照；Bevy World／ECS 只保存目前 active working set。`PersistencePlugin` 透過 Bevy schedule 和 task pool 捕捉、寫入與確認 snapshot，但長期格式不序列化 Bevy 或 RocksDB 的 process-local 型別。
 
-```text
-                   執行中的世界
-                    RAM / ECS
-                         │ load / commit
-                         ▼
-             RocksDB authoritative World Store
-        chunks / spatial entities / continuation / receipts
-                         │ checkpoint / restore
-                         ▼
-               Object Storage（平台期）
+## 資料所有權
 
-PostgreSQL（平台期）
-accounts / ownership / economy / searchable persistent objects
-```
-
-| 層 | 權威範圍 | 不應承擔 |
+| 層 | 擁有 | 不擁有 |
 | --- | --- | --- |
-| RAM／ECS | 目前載入區塊的模擬狀態 | 跨重啟耐久性 |
-| RocksDB World Store | 方塊、生成基線、空間實體、持久元件與模擬續行 | 跨世界社會查詢與多節點共同寫入 |
-| PostgreSQL | 帳號、權限、經濟、所有權與需要關聯查詢的資料 | 每方塊或一般空間實體熱路徑 |
-| 物件儲存 | checkpoint、備份、封存與分發 | 活躍世界逐 tick 寫入 |
+| Bevy World／chunk working set | 目前載入、正在模擬的 chunk 與 entity | 跨重啟耐久性 |
+| RocksDB World Store | 已物化 voxel、持久 entity/component、必要續行狀態、provenance | 多節點共同寫入、帳號經濟 |
+| PostgreSQL（未來可選） | 帳號、權限、交易、跨世界查詢 | 每 voxel／一般 chunk 熱路徑 |
+| Object storage（未來可選） | checkpoint／backup 分發 | active mutable world |
 
-SQLite 可在日後承擔客戶端本地索引或 UI 中繼資料，但不作為 demo World Store，也不是世界權威。
+一個 world 同一時間只有一個權威 writer。多節點寫入若成為產品需求，需要新的協調架構，不把嵌入式 RocksDB 當共享遠端資料庫。
 
-## 權威快照原則
+## 保存什麼
 
-請求區塊時只存在兩條路：
-
-```text
-requested chunk
-       │
-       ├─ snapshot exists ──→ load snapshot
-       │
-       └─ missing ──────────→ current generation lock
-                                  ↓ generate
-                                  ↓ validate boundaries
-                                  ↓ commit snapshot + provenance
-                                  ↓ return materialized chunk
-```
-
-「同一種子可以重算」只能用於尚未物化的空間。對已保存區塊：
-
-- 更新生成套件不會隱式重寫舊區塊；
-- 移除舊生成器不影響讀取已物化方塊與狀態；
-- 新探索區域可以使用新 generation lock；
-- 新舊區域靠明確的邊界契約與 transition 規則銜接；
-- 只有顯式 regenerate 或 migration 能更換已存在快照。
-
-## 恢復狀態模型
-
-區塊提交保存目前狀態與尚未完成的必要工作，而不是每次變更的永久事件流：
-
-```text
-MaterializedBaseline
-  voxel palette, biome, generated structures
-
-PersistentState
-  player edits, containers, machines, spatial entities,
-  owner-defined persistent components
-
-SimulationContinuation
-  scheduled ticks, fluid frontier, pending jobs,
-  deterministic continuation state
-
-DerivedEphemeral
-  meshes, pathfinding cache, broadphase, GPU resources
-  → rebuild after load; never authoritative
-```
-
-流體造成的最終方塊狀態需要保存；若卸載時仍有未完成傳播，還要保存足以繼續模擬的邊界或排定工作，不必保存「每一步流動歷史」。
-
-## `WorldStorage` 契約
-
-核心依賴語義操作，不依賴 RocksDB API。概念介面如下：
-
-```rust
-trait WorldStorage {
-    fn load_chunk(&self, key: ChunkKey) -> Result<Option<StoredChunk>>;
-    fn commit_chunk(&self, commit: ChunkCommit) -> Result<CommitReceipt>;
-    fn delete_or_replace_range(&self, tx: RegenerationTransaction) -> Result<()>;
-    fn scan_receipts(&self, query: ReceiptQuery) -> Result<Vec<ArtifactReceipt>>;
-    fn create_checkpoint(&self, target: CheckpointTarget) -> Result<CheckpointId>;
-}
-```
-
-實際同步／非同步形式由 I/O 原型決定，但契約必須表達：
-
-- 一次提交涵蓋哪些資料類別；
-- 預期的耐久等級與確認時點；
-- schema、所有者與 generation provenance；
-- 冪等重試、取消及錯誤恢復語義；
-- 讀取是否來自一致 view；
-- checkpoint 完成後能否獨立還原。
-
-`MemoryWorldStorage` 與 RocksDB 實現共用同一契約測試；前者不能以較弱原子性掩蓋生產路徑錯誤。
-
-## RocksDB 邏輯資料模型
-
-第一版先定義鍵空間，不預先承諾每個鍵空間各有 column family：
-
-| 鍵空間 | 鍵的主要部分 | 值 |
+| 類別 | 是否保存 | 例子 |
 | --- | --- | --- |
-| World metadata | world | active generation lock、schema、時間與政策 |
-| Chunk snapshot | world / dimension / chunk | 壓縮後調色盤、方塊、群系與基線 |
-| Spatial entities | world / dimension / chunk / entity | 元件載荷、owner schema、生命週期 |
-| Continuation | world / dimension / chunk / work kind | 排定工作、流體邊界、必要 RNG 狀態 |
-| Artifact receipts | world / domain / artifact | 生產者、組態、輸入與內容雜湊 |
-| Regeneration journal | world / transaction | 範圍、保留政策、階段與恢復資訊 |
+| 已物化基線 | 是 | voxel、biome、結構、第一次生成結果 |
+| 玩家／玩法狀態 | 是 | 修改、容器、機器、持久實體與 owner component |
+| 模擬續行 | 是 | 排定 tick、流體前緣、必要 RNG state、未完成權威工作 |
+| provenance | 是 | generator revision、config hash、規劃產物、schema |
+| 可重建衍生 | 否 | mesh、collider cache、physics broadphase、GPU asset、navigation cache |
 
-座標編碼必須保留確定排序，讓維度、region 或區塊前綴掃描有界；不得把不穩定的 Rust 記憶體表示直接當永久鍵或值。所有值帶 envelope schema，內容模組的資料再帶 owner schema。
+generator 只創造未物化空間。只要 snapshot 存在，載入就以 snapshot 為準；生成器更新或內容變更不得隱式重算。
 
-一次 `ChunkCommit` 使用原子 write batch 同步更新快照、空間實體索引、續行狀態與產物記錄。大量區塊生成可以批次化，但不能讓一個過大的 batch 造成無界停頓；大小與 flush 策略以壓力測試決定。
+## 穩定 key 與 Y-up
 
-## 儲存與執行生命週期
+chunk key 的邏輯欄位為：
 
 ```text
-load snapshot + spatial entities + continuation
-                    ↓
-          validate envelopes / schemas
-                    ↓
-              instantiate ECS
-                    ↓
-               simulation ticks
-                    ↓
-          build immutable ChunkCommit
-                    ↓
-          write batch + durability policy
-                    ↓
-       only then acknowledge durable save
+world_id / dimension_id / chunk_x / chunk_y / chunk_z / record_kind / owner
 ```
 
-網格、GPU buffer、物理 broadphase 與尋路快取在載入後重建。內容模組卸載或升級時，未知 owner 資料要保留、遷移或明確拒絕載入，不能靜默丟棄。
+`chunk_y` 是垂直索引，`chunk_x`／`chunk_z` 位於水平面。實際 byte encoding 必須：
 
-## 耐久、壓實與備份
+- 對有號座標有明確、可測的 canonical encoding；
+- 支援 world／dimension／chunk prefix scan；
+- 不依 Rust struct memory layout；
+- 帶 schema ID／version；
+- 能在 diagnostics 中安全解碼；
+- 允許日後增加 record kind 而不碰撞。
 
-RocksDB 提供 WAL、原子 write batch、排序鍵與 point-in-time read snapshot，但專案仍需定義：
+column family 數量、compression、prefix extractor 和 compaction 由 benchmark 決定，不寫入 domain API。
 
-- 自動存檔可接受的資料損失視窗；
-- 哪些管理操作要求同步耐久；
-- 壓實是否會與區塊串流競爭延遲；
-- 磁碟空間不足與 background error 如何使世界安全降級；
-- checkpoint／backup 的保留、驗證與還原演練；
-- schema 升級前後的回復政策。
+## Chunk snapshot
 
-RocksDB read snapshot 是程序內一致 view，重啟後不保留。可攜備份必須使用 checkpoint 或 backup 流程，複製到獨立目標後實際開啟驗證；平台期再把完成的備份送入物件儲存。
+每個 chunk snapshot 至少包含：
 
-## Persistent World Object 與 PostgreSQL
+- stable chunk coordinate；
+- snapshot schema；
+- chunk revision；
+- stable block palette + compact voxel data；
+- persistent spatial entities 和 owner component envelopes；
+- 必要 scheduled work／simulation continuation；
+- generation provenance；
+- optional integrity hash。
 
-demo 先把所有隨區塊載入的持久物件放在 RocksDB。平台期只有當物件需要下列能力時，才考慮同步到 PostgreSQL：
+Bevy `Entity`、`Handle`、Rust `TypeId`、物理 solver handle、asset server index 和 GPU ID 都不允許出現在 payload。
 
-- 跨世界或跨區塊查詢；
-- 所有權、交易、稽核與約束；
-- 依 package/schema 找出全部待遷移物件；
-- 平台服務在世界未載入時仍需查詢。
+## Bevy schedule 中的 commit
 
-若採用 PostgreSQL，資料以 `PersistentWorldObject` 與有 owner schema 的 component 模型組織，並以 `(world_id, dimension_id, chunk_x, chunk_y, chunk_z)` 作主要載入索引，一次取得整個區塊的物件，避免 N+1 查詢。三軸含義、順序與負座標分區遵守[決策 0011](../decisions/0011-right-handed-z-up-world-coordinates.md)，其中 `chunk_z` 是垂直索引。
+`PersistencePlugin` 定義少量 domain SystemSet：
 
-跨 RocksDB 與 PostgreSQL 的 regenerate 不是單一 write batch。平台期必須採 staged replacement、journal/outbox、冪等提交與補償恢復等明確協定；在此協定完成前，不把物件拆到兩個權威儲存。
+```text
+FixedUpdate
+... gameplay mutates authoritative state ...
+CommitWorldRevision
+CapturePersistence
+        ↓ immutable ChunkCommit
+Bevy I/O task pool
+        ↓ RocksDB atomic WriteBatch
+Update
+ObserveCommitResult
+```
+
+流程：
+
+1. gameplay command 只在 FixedUpdate 的權威 set 修改 chunk，成功後遞增 `ChunkRevision` 並標 dirty。
+2. `CapturePersistence` 從一致 revision 建立 immutable `ChunkCommit`；序列化輸入不再借用 Bevy World。
+3. 有界 I/O task 將同一 chunk 的 snapshot、entity index、continuation 和 provenance 放入一個 RocksDB atomic write batch。
+4. 完成訊息帶回 world／chunk／revision／durability level／error。
+5. 主 World system 只有在目前 revision 不小於完成 revision 時更新 `last_committed_revision`；只有二者相等時才能清 dirty。
+6. 若 chunk 已再次變更，舊 commit 仍是合法 durability 進度，但不能宣告最新狀態已保存。
+
+callback 不直接修改 ECS。in-flight commits、bytes、retry 和 shutdown drain 都有上限。
+
+## Durability 語義
+
+API 必須區分：
+
+- queued：只進記憶體 queue；
+- written：RocksDB 已接受 write，但未必要求同步介質；
+- durable：按選定 sync policy 確認；
+- checkpointed：已進可獨立還原的 checkpoint／backup。
+
+玩家 UI 顯示「已保存」時對應哪一級必須固定。自動保存、手動保存與正常退出可以有不同 batch／sync 策略，但不能以模糊 boolean 表達。
+
+## 載入
+
+```text
+request chunk
+    ↓
+I/O task reads and validates envelope
+    ↓
+schema owners migrate to current DTO
+    ↓
+content IDs resolve against validated ContentCatalog
+    ↓
+main-world system instantiates chunk working set / ECS
+    ↓
+derived mesh and collider jobs start
+```
+
+未知 schema、缺失權威內容、checksum error 和 migration failure 要在修改 Bevy World 前被辨識。可恢復情況可進 read-only recovery／placeholder policy；不可恢復時保持 world 未載入並提供診斷。
+
+## Chunk 卸載
+
+chunk 只有在以下條件成立時才能離開 working set：
+
+- 不在必須保持 active 的 simulation／player radius；
+- 沒有未套用的權威 command；
+- 最新 revision 已達要求的 durability；
+- 持久 entity 已轉成 stable envelope；
+- 衍生 task 已取消或其結果會因 epoch／revision 自動失效；
+- presentation／physics resource 已撤除。
+
+卸載 ECS／mesh 不等於刪除 RocksDB snapshot。
+
+## 正常退出與崩潰
+
+正常退出進入 `ShuttingDown` state：
+
+1. 停止接收會產生新 dirty state 的 gameplay action；
+2. capture 所有 dirty chunk 的最新 revision；
+3. 等待有界 I/O drain；
+4. 寫入 world metadata／clean-shutdown marker；
+5. 到達 durability 要求後才發送 Bevy `AppExit`。
+
+若 deadline 超時，保留 WAL 可恢復狀態並報告未確認 revision。程序 crash／kill test 必須證明每個 atomic batch 要麼完整存在、要麼完全不存在；正常退出流程不能替代這項測試。
 
 ## Regenerate
 
-`/regenerate chunk|region|selection` 至少指定：
+`/regenerate` 是顯式破壞性 world transaction，不是 cache refresh。它必須指定：
 
-- 目標範圍與 generation lock；
-- 是否保留玩家擁有、系統持久或 package 擁有的物件；
-- 與現有鄰接區塊的邊界輸入；
-- 預覽、備份點與確認；
-- 失敗後回復或繼續的交易識別。
+- world／dimension／chunk 範圍；
+- generator revision 和 config；
+- 玩家／系統擁有內容的保留政策；
+- 邊界輸入與鄰接 validation；
+- 預覽／dry run；
+- checkpoint／backup；
+- staged 新 snapshot 和原子切換策略。
 
-流程是先在隔離狀態產生並驗證替代資料，再以原子切換取代權威快照；不能先刪舊資料再嘗試生成。跨 generation epoch 的接縫由世界生成邊界契約處理，而不是由持久化層平均方塊。
+對單一 RocksDB 範圍，盡量用 staging keys + atomic metadata switch 或有界 write batch；跨 RocksDB／未來 PostgreSQL 時另需 journal／outbox／補償協定，不能假裝有免費跨庫 transaction。
 
-## 量測與故障測試
+## Backup
 
-- 典型與最壞區塊的壓縮大小、讀寫 P50/P95/P99；
-- 初次生成持續寫入時的 write amplification、compaction stall 與磁碟峰值；
-- 隨機 kill、磁碟滿、checksum 錯誤與 schema 不相容；
-- 同一世界單寫者保證與錯誤雙重掛載；
-- checkpoint 時繼續遊玩的延遲，以及從 checkpoint 實際還原；
-- 生成器更新後舊快照不變、新區域 provenance 正確、邊界可診斷。
+RocksDB read snapshot 只提供程序內一致讀視圖，不是可攜備份。備份使用 checkpoint／backup engine 等上游機制，複製到獨立位置後驗證 restore。
 
-## 外部依據
+至少定期做：
 
-- [RocksDB Overview：排序鍵、WAL、column family、write batch 與 snapshot](https://github.com/facebook/rocksdb/wiki/RocksDB-Overview)
-- [RocksDB Basic Operations：原子批次與一致讀取](https://github.com/facebook/rocksdb/wiki/Basic-Operations)
-- [RocksDB Checkpoints](https://github.com/facebook/rocksdb/wiki/Checkpoints)
+- checkpoint 建立與獨立目錄 restore；
+- manifest／world metadata checksum；
+- 抽樣 chunk decode 與 content reference validation；
+- 舊 schema fixture migration；
+- 恢復時間與儲存放大量測。
+
+## WorldStorage 邊界
+
+`WorldStorage` 是合理的產品邊界，因為它描述權威 snapshot 的 load／commit／checkpoint 語義並支援 `MemoryWorldStorage` 測試；它不是為任意資料庫建立的通用 facade。
+
+規則：
+
+- domain crate 看不到 RocksDB key／column family／iterator type；
+- RocksDB implementation 可以完整善用 transaction batch、prefix scan、WAL、checkpoint 和 tuning API；
+- 不因假想替換而限制到最低共同分母；
+- 第二 production backend 只有真實部署需求時才加入。
+
+## 驗收
+
+- 挖掘／放置後重啟，stable block ID 與 voxel revision 正確恢復。
+- 更換 generator 後舊 chunk bytes 不變，新 chunk 保存新 provenance。
+- 在 write batch 各階段強制終止，重啟不出現半個 snapshot 或 orphan index。
+- 打亂 I/O completion 順序，舊完成訊息不清除新 dirty revision。
+- `MemoryWorldStorage` 與 RocksDB 通過相同 domain contract tests。
+- checkpoint 可在獨立目錄恢復並進入 headless world。
+- 存檔掃描不出現 Bevy Entity／Handle 或第三方 solver handle。
 
 ## 相關文件
 
-- [版本、相依性與相容性架構](versioning-and-compatibility.md)
-- [可組合世界生成架構](world-generation.md)
 - [決策 0009：RocksDB 權威世界快照](../decisions/0009-rocksdb-authoritative-world-snapshots.md)
-- [第一個 demo 路線圖](../planning/roadmap-first-demo.md)
+- [版本與相容性](versioning-and-compatibility.md)
+- [Bevy 執行期架構](game-engine-runtime.md)
+- [世界生成](world-generation.md)

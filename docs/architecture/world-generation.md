@@ -6,14 +6,14 @@ updated: 2026-08-19
 decision:
   - ../decisions/0001-territory-first-biome-driven-world-generation.md
   - ../decisions/0002-hybrid-cave-generation-composition.md
-  - ../decisions/0003-no-global-version-package-scoped-compatibility.md
+  - ../decisions/0003-no-global-version-switch.md
   - ../decisions/0004-territorial-delegation-for-spatial-generation.md
-  - ../decisions/0011-right-handed-z-up-world-coordinates.md
+  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
 ---
 
 # 可組合世界生成架構
 
-> [領地優先、群系驅動、約束求解](../decisions/0001-territory-first-biome-driven-world-generation.md)、[混合洞穴組合模型](../decisions/0002-hybrid-cave-generation-composition.md)、[無全域大版本](../decisions/0003-no-global-version-package-scoped-compatibility.md)、[領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)與[右手 Z-up 世界座標](../decisions/0011-right-handed-z-up-world-coordinates.md)的方向已採納。本頁提出具體責任、資料流與候選介面；演算法與參數仍需原型驗證。
+> [領地優先、群系驅動、約束求解](../decisions/0001-territory-first-biome-driven-world-generation.md)、[混合洞穴組合模型](../decisions/0002-hybrid-cave-generation-composition.md)、[無全域版本開關](../decisions/0003-no-global-version-switch.md)、[領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)與[Bevy 原生 Y-up](../decisions/0015-bevy-native-y-up-world-coordinates.md)的方向已採納。本頁提出具體責任、資料流與候選介面；演算法與參數仍需原型驗證。世界生成實作為 Bevy domain plugin，非另一套引擎或 package runtime。
 
 ## 目標與非目標
 
@@ -28,14 +28,16 @@ decision:
 
 目前不承諾真實地球模擬，也不要求所有生成能力都能在已建立世界中無縫熱插拔。
 
+所有二維規劃使用水平座標 `(x, z)`，高度為 `y`；三維 chunk／voxel 使用 `(x, y, z)`。演算法輸出直接符合 Bevy Y-up，不維護軸轉換版本。
+
 ## 世界生成是依賴圖，不是單一演算法
 
 概念上的資料流如下：
 
 ```text
-設定檔／元套件宣告 + 世界種子
+Validated ContentCatalog + WorldgenConfig + 世界種子
         ↓
-已解析鎖定圖 + 能力圖
+WorldgenPlugin 建立不可變 GenerationPlan resource
         ↓
 空間骨架
 領地圖譜／計畫格／跨邊界入口
@@ -52,9 +54,9 @@ decision:
         ↓
 地形密度、材質與內容實體化
         ↓
-區塊輸出 + 產物生成記錄
+ChunkDraft + generation provenance
         ↓
-執行期與玩家修改
+Bevy task 結果驗證 → 權威區塊 → RocksDB snapshot
 ```
 
 這不是固定的函式呼叫清單。每個節點宣告輸入、輸出、空間範圍、尺度、實現版本、能力契約與合成方式；載入階段把它們編譯成已解析生成圖。大型結構可以在地形密度前提交計畫，裝飾只能在表面完成後執行，而不相關的場可以並行求值。
@@ -181,9 +183,9 @@ winner = argmin t(b,c)
 建議採兩級份額：
 
 1. 世界或整合包先決定 `BiomePack` 的份額。
-2. 獲勝套件再用套件內權重選擇群系。
+2. 獲勝內容集合再用集合內權重選擇群系。
 
-這讓含有一百個群系的套件不會只因項目數量壓倒含有五個群系的套件，同時不會在地圖上製造連續的「模組專屬區域」。套件份額應由世界組態治理，內容模組不能以任意極大權重自行取得全世界。
+這讓含有一百個群系的內容集合不會只因項目數量壓倒含有五個群系的集合，同時不會在地圖上製造連續的「模組專屬區域」。集合份額應由世界組態治理，content plugin 不能以任意極大權重自行取得全世界。
 
 ### 數量上限的精確含義
 
@@ -339,15 +341,15 @@ StructurePlan
 
 世界不綁定一個決定全部相容性的 `worldVersion`。它至少保存：
 
-- 目前供新規劃工作使用的已解析設定檔與鎖定圖。
+- 目前供新規劃工作使用的 `WorldgenConfig`、validated content catalog fingerprint 與 `GenerationPlan` revision。
 - 每個規劃域、生成計畫或可重算快取的產物級生成記錄。
-- 實際生產者的套件版本、能力契約、精確實現與組態雜湊。
+- 實際生產者的 stable ID、generator revision、精確實現與組態雜湊。
 - 該產物真正依賴的輸入產物雜湊、群系份額、權重與 fallback。
 - 已實體化程序基線、玩家／模擬差異和各資料擁有者的 schema 狀態。
 
-更新模組後，只沿真正受影響的依賴子圖使產物失效。新規劃域可以使用新的鎖定圖；舊域保留原生成記錄，並透過地形邊界、洞穴入口、水文出口或其他版本化契約連接。若沒有合法 adapter 或遷移，解析器必須局部拒絕更新，而不是以整體遊戲版本掩蓋差異。
+更新內容或生成器後，只沿真正受影響的依賴子圖使可重算產物失效。新規劃域可以使用新的 generation revision；舊域與已物化區塊保留原 provenance，並透過地形邊界、洞穴入口、水文出口或其他版本化契約連接。若沒有合法 adapter 或 migration，worldgen plugin 必須拒絕建立受影響的新邊界，而不是以整體遊戲版本掩蓋差異。
 
-完整模型見[版本、相依性與相容性架構](versioning-and-compatibility.md)與[決策 0003](../decisions/0003-no-global-version-package-scoped-compatibility.md)。
+完整模型見[版本、相依性與相容性架構](versioning-and-compatibility.md)與[決策 0003](../decisions/0003-no-global-version-switch.md)。
 
 ## 必須保持的不變條件
 
@@ -367,7 +369,7 @@ StructurePlan
 ### 二維領地原型
 
 1. 建立至少三個尺度的領地圖譜。
-2. 註冊一千個合成群系與數十個合成套件。
+2. 註冊一千個合成群系與數十個合成內容集合。
 3. 驗證註冊順序、增刪候選、權重與領地面積統計。
 4. 視覺化第一與第二候選、邊界距離和過渡帶。
 5. 測量冷查詢、快取查詢、記憶體與平行一致性。
@@ -384,7 +386,7 @@ StructurePlan
 ## 已知限制與待驗證假說
 
 - 有界 domain warp 是否能在自然外觀、領地連通與查詢成本間取得平衡？
-- 兩級套件／群系份額是否符合整合包作者對公平與稀有度的直覺？
+- 兩級內容集合／群系份額是否符合內容作者對公平與稀有度的直覺？
 - 場通道的型別與合成規則能否保持可理解，而不演變成隱藏的全域優先級系統？
 - 巨型結構、水文與侵蝕的規劃格需要多大 halo 才能避免接縫？
 - 產物生成記錄應採多大的空間與語義粒度，才能兼顧局部失效、儲存成本與舊生成器封存？
@@ -394,12 +396,12 @@ StructurePlan
 
 - [世界生成方向決策](../decisions/0001-territory-first-biome-driven-world-generation.md)
 - [洞穴生成組合決策](../decisions/0002-hybrid-cave-generation-composition.md)
-- [無全域大版本決策](../decisions/0003-no-global-version-package-scoped-compatibility.md)
+- [無全域大版本決策](../decisions/0003-no-global-version-switch.md)
 - [空間生成領地委派決策](../decisions/0004-territorial-delegation-for-spatial-generation.md)
 - [可組合洞穴生成架構](cave-generation.md)
 - [版本、相依性與相容性架構](versioning-and-compatibility.md)
 - [世界持久化與 RocksDB World Store](world-persistence.md)
-- [模組核心與宣告式組合](module-composition.md)
+- [Bevy 模組與內容組合](module-composition.md)
 - [Minecraft 世界生成與洞穴模組的設計教訓](../research/minecraft-world-generation-lessons.md)
 - [現代地形與洞穴生成研究](../research/modern-terrain-and-cave-generation.md)
 - [待決問題](../planning/open-questions.md)

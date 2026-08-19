@@ -2,10 +2,12 @@
 title: 物理資產與局部形變創作
 status: exploration
 type: explanation
-updated: 2026-08-09
+updated: 2026-08-19
 ---
 
 # 物理資產與局部形變創作
+
+> 本頁是第一個可玩 demo 之後的產品研究，不是目前實作承諾。剛體、碰撞、接觸與普通角色運動先完整使用 Bevy 與選定的 Bevy 物理 plugin；只有可玩內容證明局部形變是不可妥協需求，且現有生態無法滿足時，才啟動解算器或資產擴充原型。
 
 ## 設計意圖
 
@@ -70,11 +72,11 @@ Blender add-on 可以沿用 weight paint 或 attribute paint 的思維：
 - 預覽接觸衝量下的回應。
 - 匯出交換格式與遊戲物理語義。
 
-這不代表執行期直接載入或重現 Blender Soft Body。DCC 設定是創作語義，遊戲引擎可以把它編譯成完全不同的即時表示。
+這不代表執行期直接載入或重現 Blender Soft Body。DCC 設定是創作語義；通過需求 gate 後，可由 Bevy `AssetLoader`、glTF sidecar 或外部匯入工具轉成 Bevy animation／mesh／material 與選定物理 plugin 能消費的表示。
 
 ## 資產編譯與模擬代理
 
-高解析度渲染網格不應逐頂點參與昂貴柔體模擬。資產編譯器可以：
+高解析度渲染網格不應逐頂點參與昂貴柔體模擬。若原型證明需要這項能力，匯入步驟可以建立：
 
 ```text
 高解析度渲染網格
@@ -148,6 +150,7 @@ Game Physical Asset
 
 - [Blender：Vertex Groups](https://docs.blender.org/manual/en/latest/modeling/meshes/properties/vertex_groups/index.html)
 - [Blender：Soft Body](https://docs.blender.org/manual/en/latest/physics/soft_body/index.html)
+- [Avian Bevy physics](https://github.com/avianphysics/avian)
 - [Jolt Physics：Soft Body 文件](https://jrouwe.github.io/JoltPhysicsDocs/5.5.0/index.html)
 - [Khronos glTF Registry](https://registry.khronos.org/glTF/)
 - [OpenUSD Physics](https://openusd.org/release/api/usd_physics_page_front.html)

@@ -1,189 +1,127 @@
 ---
-title: 渲染架構與擴充邊界
+title: Bevy 渲染架構與擴充邊界
 status: proposed
-type: explanation
+type: architecture
 updated: 2026-08-19
 decision:
-  - ../decisions/0006-wgpu-behind-rendering-facade.md
-  - ../decisions/0011-right-handed-z-up-world-coordinates.md
+  - ../decisions/0014-adopt-bevy-upstream-first.md
+  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
 ---
 
-# 渲染架構與擴充邊界
+# Bevy 渲染架構與擴充邊界
 
-> demo 唯一 GPU 後端採 wgpu、第一階段直接使用 WGSL，並以 `latticeaxiom-render` 門面及 headless 實現隔離，已由[決策 0006](../decisions/0006-wgpu-behind-rendering-facade.md)採納。長期 shader IR、Render Feature 與 Render Graph 擴充仍在探索。
+## 結論
 
-## 核心原則
+Lattice Axiom 使用 Bevy renderer。wgpu、render graph、GPU device、window surface 和資源上傳是 Bevy 的實作與擴充領域；專案不在外面建立 renderer facade，也不維護 headless renderer。
 
-**模組描述如何呈現，渲染器統一決定如何執行。**
+第一個 demo 的渲染目標是讓體素世界清楚可玩並能量測 chunk streaming，不是證明專案能自行畫出立方體。
 
-普通內容模組不應直接發送 GPU 命令。若每個實體或模組自行 `draw()`，渲染器便難以全域排序、剔除、批次化、實例化、管理資源生命週期與安排同步。
-
-`RenderWorld` 中的位置、方向與變換使用[規範世界座標](../decisions/0011-right-handed-z-up-world-coordinates.md)。wgpu 的裁剪空間與深度範圍只在相機／後端邊界轉換，不改變模擬、剔除或持久化座標。
-
-## demo 邊界
+## 預設資料流
 
 ```text
-latticeaxiom-core / content
-        │ produces RenderWorld
-        ▼
-      latticeaxiom-render
-       ┌──────┴──────┐
-       ▼             ▼
-latticeaxiom-      latticeaxiom-
-render-wgpu        render-headless
+authoritative chunk / gameplay state
+                ↓
+     revision-checked derived work
+                ↓
+ Bevy Mesh / Material / Transform / Visibility
+                ↓
+       Bevy render extraction
+                ↓
+        Bevy RenderApp + wgpu
 ```
 
-門面第一版只包含相機、區塊網格實例、一般實體實例、`MeshId`、`MaterialId`、網格與材質上傳，以及 `submit`。核心流程固定為「模擬 tick → 擷取 `RenderWorld` → `renderer.submit`」；渲染 crate 不訂閱玩法事件，內容 crate 編譯期依賴不到 wgpu。
+玩法系統不呼叫 raw GPU API。它修改權威狀態、產生需要重建的 chunk revision 或更新正常 Bevy presentation component；Bevy 負責 extraction、prepare、queue 和 render。
 
-區塊先用 greedy meshing、純色調色盤、每區塊網格緩衝與 CPU 視錐剔除；一般實體先用 instanced cube。demo 只有 chunk、entity 與 egui 所需的最少 pipeline。
+## 體素 chunk presentation
 
-## 模擬世界與渲染世界分離
+首個 spike 優先使用 `bevy_voxel_world` 的既有 streaming、editing、raycast 與 meshing 路徑。如果它的資料模型無法承擔權威世界，應讓它作 presentation／interaction adapter，而不是立刻 fork 整個 plugin。
 
-```text
-模擬世界
-實體、生命值、AI、物品、群系
-        ↓
-渲染擷取
-        ↓
-渲染世界
-網格實例、骨架姿勢、燈光、粒子、地形區塊
-        ↓
-剔除與排序
-        ↓
-批次化與 Render Graph
-        ↓
-GPU
-```
+若需要自有 chunk mesh job，背景工作產生 CPU-side vertex attributes、index、bounds 和來源 `ChunkRevision`；主 World system 驗證 revision 後建立或更新 Bevy `Mesh` asset。每個可見 chunk 通常只需要粗粒度 presentation entity，不為每個 voxel 建 entity。
 
-例如「龍」是遊戲內容概念；渲染器只應收到蒙皮網格、骨架姿勢、材質參數、變換與粒子發射器。
+必須量測：
 
-這個分離帶來兩個目標：
+- visible／resident chunk 數；
+- mesh job queue、取消率、P50／P95 latency；
+- 每 chunk vertex／triangle／byte 數；
+- 每 frame mesh apply／asset upload 預算；
+- 編輯後可見更新延遲；
+- 快速移動時的 frame time、顯存與 RAM 高水位。
 
-- 官方與第三方內容在進入渲染世界後沒有天然差異。
-- 渲染器可以根據整個畫面的資料做全域最佳化，而不是服從模組呼叫順序。
+greedy meshing、face culling、LOD、occlusion 與 meshlet 都是量測後的優化，不是第一階段自研平台。
 
-## 內容描述如何被消化
+## 材質與 shader
 
-```text
-模組中的 Render Description
-        ↓ 載入與驗證
-Render Archetype
-        ↓ 配置控制代碼
-Pipeline ID + Mesh ID + Material ID
-        ↓ 每幀只更新必要資料
-Instance Buffer
-        ↓
-批次繪製
-```
+採用順序：
 
-方塊、群系與一般實體尤其適合資料化：
+1. Bevy 內建 PBR／unlit material；
+2. Bevy `Material` extension 與 WGSL shader asset；
+3. instancing、specialized pipeline 或 render phase 等公開 Bevy extension；
+4. `RenderApp` extraction／prepare／queue system；
+5. 只有證據門檻通過後才接觸更低層 wgpu 或替換 renderer。
 
-- 方塊描述幾何類型、材質與不透明性，區塊網格器再產生最佳化網格。
-- 群系提供天空、霧、水體、環境光與地表參數。
-- 實體提供網格、材質、骨架、動畫狀態與效果資料。
+方塊 atlas、texture array、vertex packing 和材質分組由 spike 量測決定。不要為假想的第二後端建立自有 shader IR。
 
-正式渲染時不需要再查詢「這個三角形來自哪個模組」。
+## 相機、座標與精度
 
-## 擴充能力分級
+所有 Transform 使用 Bevy 原生右手 Y-up：`+X` 右、`+Y` 上、forward `-Z`。資產、physics 和 raycast 共用這套空間。
 
-### 第一級：渲染資料
+無限世界可能超過單一全域 `f32` Transform 的精度。處理順序是：
 
-適用於絕大多數內容：
+1. 以 chunk 整數座標保存權威位置；
+2. 只讓目前 working set 使用相機附近的局部 `Transform`；
+3. 量測可見抖動、physics 穩定性與 rebase 成本；
+4. 優先評估 Bevy 生態中維護中的 large-world／floating-origin 方案；
+5. 只有候選都無法達成已定精度預算時才做專案擴充。
 
-- 網格與蒙皮網格
-- 材質與貼圖
-- 動畫
-- 粒子
-- 方塊模型與地形表面
-- 燈光與環境參數
+## 權威與表現隔離
 
-這一級應最穩定、最容易跨平台，也最容易與官方內容共用熱路徑。
+Mesh、Material、Image、GPU buffer、visibility 和 render entity 都是可重建表現。device loss、shader reload、render frame drop 或 mesh job 失敗不得修改 voxel／gameplay state。
 
-### 第二級：渲染功能
+chunk presentation component 應記住來源 revision。收到舊 mesh 時直接丟棄；卸載 chunk 時撤除 presentation entity／asset 引用，但不刪除權威 snapshot。
 
-供需要新表現方式的模組使用：
+## Headless
 
-- 自訂材質節點或 shader
-- 自訂幾何產生器
-- 自訂粒子模擬
-- 後處理效果
+headless app 不加入 window／render plugin，也不建立 `Mesh`／GPU 資源。worldgen、gameplay、physics（若伺服器需要）與 persistence 必須能在這個組合運作。
 
-模組仍提供可編譯的描述，不直接擁有 GPU 裝置與底層資源。
+需要測試 mesher 時，直接測試其純 CPU 輸出與 winding／normal／bounds，不以「null renderer 收到 submit」作替代驗證。
 
-### 第三級：Render Graph 擴充
+## Debug 與觀測
 
-處理遞迴傳送門、體積光線步進或特殊計算 pass 等需求。模組可以宣告：
+優先使用 Bevy diagnostics、gizmos、wireframe／debug render 和現有 inspector／profiler integration。開發 overlay 至少顯示：
 
-- 輸入與輸出資源
-- pass 之間的前後關係
-- 所需格式、佇列與能力
-- 可以接受的回退方案
+- FPS／frame time 與 fixed tick debt；
+- camera chunk 與 active／resident chunk；
+- mesh queue、過期結果與 upload bytes；
+- triangle／draw／material count；
+- world load／save latency。
 
-渲染核心仍負責相依性分析、資源別名、生命週期、同步 barrier、排程與平台轉譯。
+若標準 Bevy UI 足以呈現，不加入另一個 UI framework。只有真實工具工作流需要 richer widgets 時才評估 egui 生態。
 
-### 非一般 API：原始圖形存取
+## 何時允許客製 RenderApp
 
-Raw Vulkan、Direct3D 12 或 Metal 存取若存在，應被視為不安全的原生擴充，而不是普通內容 API。它會破壞跨平台、同步、裝置遺失復原與效能保證。
+只有下列條件同時成立：
 
-## Shader 與建置
+- 第一個可玩 demo 已存在；
+- 需求不能由 Mesh／Material／shader／正常 Bevy plugin 實現；
+- profiler 證明瓶頸位於 render pipeline；
+- 有 render test 或可重現 capture；
+- extension 僅接入必要的 extract／prepare／queue／render node；
+- 有 Bevy 升級 owner 與 fallback。
 
-demo 直接提交專案控制的 WGSL。讓第三方模組提交統一 shader 來源或中介表示，再由建置與載入管線產生各平台程式，仍是長期候選；尚未決定使用 WGSL 子集、Slang、HLSL 衍生流程或自有 IR。
+客製 RenderApp system 仍是 Bevy extension，不自動構成自有渲染器。
 
-宣告式整合包在建置前已知完整功能集合，理論上可以：
+## 驗收
 
-- 移除不存在的 shader 變體
-- 預先編譯 pipeline
-- 建立 pipeline cache
-- 合併或打包貼圖與材質資料
-- 預先做網格、meshlet 與資源配置最佳化
-
-動態資料夾掃描仍可走相同登錄流程，只是第一次載入時可能需要編譯新增的 shader 與 pipeline，再寫入快取。
-
-## 渲染核心應理解什麼
-
-合理的核心基元可能包括：
-
-- Mesh Renderer
-- Skinned Mesh Renderer
-- Terrain Renderer
-- Particle Renderer
-- Lighting Renderer
-- UI Renderer
-- Material System
-- Render Graph
-
-核心不應內建 `ZombieRenderer`、`DragonRenderer` 或 `GrassBlockRenderer` 之類內容類別。
-
-## 不變量
-
-以下前四項是 demo 要驗證的已採納邊界；第五項在開放特殊渲染功能時再成為必要契約：
-
-1. 普通內容模組無法直接發送 GPU 命令。
-2. 渲染世界不包含具體玩法類型。
-3. 所有內容先被轉成有限的渲染基元或經審核的渲染功能。
-4. 渲染擷取有明確的記憶體所有權與同步邊界。
-5. 無法使用特殊功能時，模組能宣告回退表現或明確拒絕載入。
-
-## 主要風險
-
-- 渲染擷取若複製過多資料，可能把模組抽象成本轉成記憶體頻寬成本。
-- Render Graph 擴充的資源與排序衝突需要可診斷的錯誤模型。
-- 自訂 shader 會引入編譯時間、變體爆炸、安全性與跨平台一致性問題。
-- 靜態整合包的全域最佳化收益仍需與建置時間、快取命中率一起量測。
-- 允許多少全新渲染基元，是自由度與可最佳化程度之間最關鍵的產品選擇。
-
-## 原型量測建議
-
-- 相同渲染基元下，官方與第三方內容的 CPU/GPU 成本是否一致。
-- 1 萬、10 萬個實例的擷取、剔除與提交成本。
-- 動態加入一個材質或 pass 後的首次啟動與快取啟動時間。
-- 多個 Render Graph 擴充互相競爭資源時的診斷品質。
-- 無特殊擴充、一般擴充與 raw-native 擴充的隔離程度。
+- 不直接依賴 raw wgpu 即可完成可玩體素世界。
+- 六個 Y-up voxel 面的 normal、winding、ray hit 與材質方向一致。
+- 編輯方塊後，只有 matching revision 的 mesh 被顯示。
+- headless 測試不載入 renderer，仍可完成相同世界修改與保存。
+- device／window／presentation 重建不改變權威 world hash。
 
 ## 相關文件
 
-- [模組核心與宣告式組合](module-composition.md)
+- [Bevy 執行期架構](game-engine-runtime.md)
 - [實體、物理與表現層](entity-physics-presentation.md)
-- [渲染與物理技術地圖](../research/renderer-physics-landscape.md)
-- [決策 0006：wgpu 與渲染門面](../decisions/0006-wgpu-behind-rendering-facade.md)
-- [第一個 demo 路線圖](../planning/roadmap-first-demo.md)
+- [資產語義](asset-semantics.md)
+- [技術棧](../foundations/technology-stack.md)
+- [渲染與物理候選](../research/renderer-physics-landscape.md)

@@ -1,202 +1,150 @@
 ---
-title: 版本、相依性與相容性架構
+title: Bevy、內容與持久化的版本相容性
 status: proposed
-type: explanation
+type: architecture
 updated: 2026-08-19
 decision:
-  - ../decisions/0003-no-global-version-package-scoped-compatibility.md
-  - ../decisions/0010-nickel-driven-package-system.md
+  - ../decisions/0003-no-global-version-switch.md
+  - ../decisions/0014-adopt-bevy-upstream-first.md
+  - ../decisions/0016-stage-content-composition-on-bevy.md
 ---
 
-# 版本、相依性與相容性架構
+# Bevy、內容與持久化的版本相容性
 
-> [不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)已獲採納。Nickel 驅動套件宣告與組合、求值後直接進入 Rust 強型別管線，已由[決策 0010](../decisions/0010-nickel-driven-package-system.md)採納；本頁其餘 lock schema、能力契約與遷移細節仍是提案。
+## 結論
 
-## 核心模型
+相容性沿真正擁有資料或契約的邊界處理。Bevy 版本由 Cargo 鎖定並透過程式碼遷移；存檔、內容 ID、生成器、資產與未來網路協定各自版本化。產品版本可以供發布和支援使用，但不替代任何一項實際相容性判斷。
 
-```text
-官方遊戲／整合包 manifest
-          │  宣告版本範圍、能力與政策
-          ▼
-      Dependency Resolver
-          │
-          ▼
-       LockedGameGraph
-          │  精確版本、來源、內容雜湊與所選提供者
-          ├───────────────┐
-          ▼               ▼
-      建置／載入       lock graph
-          │               │
-          └───────┬───────┘
-                  ▼
-       執行期產物與生成記錄
-```
+## 六種版本座標
 
-官方集合可以像套件管理器的根專案一樣擁有自己的發布版本，但它只是依賴解析的根，不是所有相容性判斷的共同座標。
+| 座標 | Owner | 用途 | 不得代替 |
+| --- | --- | --- | --- |
+| 產品 SemVer | 發布流程 | 發行說明、更新與支援 | 存檔 schema |
+| Rust／Bevy lock | Cargo | 精確 crate、feature、source 與建置重現 | world generation provenance |
+| stable content ID + definition revision | content owner | 方塊、物品、群系、實體類型 | Bevy Entity／Handle |
+| schema ID + version | persistence owner | record decode、validation 與 migration | 產品版本 |
+| generator revision + config hash | worldgen owner | 新空間生成與 provenance | 已物化區塊的資料來源 |
+| asset format／semantic version | asset owner | importer、sidecar 與 fixture migration | gameplay protocol |
 
-## 四種不能混用的版本
+未來若有網路協定或內容 package，會新增自己的座標；不把它們塞進 `engineVersion`。
 
-### 套件版本
+## Bevy 與 Cargo
 
-識別一個可發布套件，供依賴範圍、更新政策與發行說明使用。同一套件版本的產物仍可能因目標平台或組態而不同，因此不能單獨作為精確建置識別。
+Bevy 是編譯期相依：
 
-### 能力契約版本
+- `Cargo.toml` 描述允許的依賴與 feature；
+- `Cargo.lock` 保存目前建置的精確解析結果；
+- toolchain file 保存 Rust compiler channel／version；
+- build metadata 可以記錄 commit、lock hash、target 和 profile 供診斷。
 
-識別具名介面的語義，例如 `cave.portal@2`、`terrain.base@1` 或 `entity.health@3`。提供者與使用者依賴能力契約，而非依賴「官方遊戲版本」。Adapter 也以能力契約作為輸入與輸出。
+Bevy minor 升級視為明確遷移：
 
-### 資料 schema 版本
+1. 閱讀官方 release notes／migration guide；
+2. 確認所有 Bevy 生態 plugin 的對應系列；
+3. 單獨更新 code 和 lock；
+4. 執行 client／headless、可玩 smoke、存檔、asset fixture 與性能回歸；
+5. 合併後才讓新建置成為支援基線。
 
-持久化資料由擁有者自行版本化。遷移函式的作用域是 `(ownerId, schemaId, from, to)`，不能有一個中央 `switch(worldVersion)` 解析所有歷史資料。
+既有世界不需要知道 Bevy 版本才能被讀取；它只需要其 record schema 和 content ID 能由目前程式遷移／解析。build metadata 可保存 Bevy 版本供故障診斷，但不是 decode switch。
 
-### 精確實現識別
+## 持久化 envelope
 
-程序生成、編譯快取與重現需要內容雜湊、演算法修訂、正規化組態雜湊和依賴產物雜湊。語義相容的 bug fix 仍可能改變生成結果，因此它可以保持能力契約版本，但必須得到新的精確實現識別。
+每類長期 record 至少有：
 
-## Nickel 根設定檔
+- record kind；
+- schema owner／schema ID；
+- schema version；
+- stable world／dimension／spatial key；
+- payload；
+- checksum 或 storage 層完整性資訊；
+- 與該 record 真正相關的 provenance／content references。
 
-```nickel
-let latticeaxiom = import "latticeaxiom/game.ncl" in
-{
-  game = {
-    id = "latticeaxiom.official-game",
-    version = "2026.8",
-  },
-  packages = {
-    "latticeaxiom.runtime" = {
-      source = 'Registry { registry = "official", version = "=0.1.0" },
-    },
-    "latticeaxiom.cave.contract" = {
-      source = 'Registry { registry = "official", version = "=2.1.0" },
-    },
-    "latticeaxiom.cave.topology.geodesic" = {
-      source = 'Registry { registry = "official", version = "=1.4.0" },
-    },
-    "latticeaxiom.biomes.official" = {
-      source = 'Registry { registry = "official", version = "=3.0.0" },
-    },
-  },
-  capabilities = {
-    require = {
-      "generation.coordinator" = "1",
-      "cave.portal" = "2",
-    },
-  },
-  policy = {
-    authoritative = ["simulation.*", "worldgen.*"],
-    presentationMayDiffer = ["render.*", "audio.*"],
-  },
-} | latticeaxiom.GameProfile
-```
+一個 schema owner 必須提供：
 
-`latticeaxiom.official-game@2026.8` 只識別這份根設定的發布。若兩個實例解析出不同根版本但權威能力子圖相容，它們不應只因標籤不同而被拒絕。
+- 目前可寫版本；
+- 支援讀取的舊版本範圍；
+- 逐步 migration 或明確拒絕；
+- malformed／unknown-field policy；
+- round-trip、golden 和 migration fixture。
 
-v1 profile 使用精確版本或已鎖定來源，不先承諾一般版本求解器。Nickel 完整求值後直接轉成 Rust `CompositionSpec`，再由 package kernel 建立 `LockedGameGraph`；`.ncl` 原始文字本身不是 lock graph。
+不要在每個 record 複製完整 Cargo lock。建置 fingerprint 放在 world metadata／diagnostic manifest；record 只保留自己真正需要的版本與來源。
 
-## 鎖定圖
+## Stable content ID
 
-鎖定圖至少保存：
+存檔引用 `latticeaxiom:block/stone` 之類穩定 ID，不引用 Rust type name、Bevy asset handle 或 plugin 註冊序號。
 
-- 精確套件版本、來源與內容雜湊；
-- 直接與遞迴相依性；
-- 能力候選與最終所選提供者；
-- root override、adapter、可選相依性與 fallback；
-- 正規化組態與資產雜湊；
-- 必要的工具鏈、平台與實現方式資訊；
-- 信任、簽章、撤銷與取得來源。
+content catalog 對移除／更名至少選擇一個明確政策：
 
-鎖定圖是可重現解析結果，不是宣稱所有節點必須永遠一起升級的單體版本。
+- 保留 alias 並遷移到新 ID；
+- 以 versioned migration 改寫 snapshot；
+- 使用明確 placeholder，但保留原 ID 供恢復；
+- 拒絕載入並列出缺失 owner／ID。
 
-## 產物級生成記錄
+不得默默把未知 numeric ID 映射到另一個方塊。
 
-世界不只保存一個全域生成版本。每個可重算產物保存自己的依賴子圖：
+若 runtime 需要 compact numeric palette，每個 chunk snapshot 保存其 stable-ID-to-local-index mapping；local index 只在該 snapshot／working set 有意義。
 
-```text
-ArtifactReceipt {
-  artifactId
-  artifactKind
-  spatialDomain
-  producerCapability
-  producerImplementationHash
-  normalizedConfigHash
-  inputArtifactHashes[]
-  contractVersions[]
-  deterministicInputHash
-}
-```
+## 世界生成
 
-產物識別可以表示為：
+對未物化空間，生成輸入至少包含 world seed、座標、generator revision、正規化設定 hash 和真正相關的上游規劃 fingerprint。
 
-```text
-artifactHash = H(
-  producerImplementationHash,
-  normalizedConfigHash,
-  sorted(inputArtifactHashes),
-  deterministicInputHash
-)
-```
+對已物化空間，完整 snapshot 是權威。更新 generator：
 
-這形成 Merkle 式依賴圖。某個群系裝飾器更新時，失效沿真正依賴它的後繼產物傳播；洞穴拓撲、地質和渲染器若不依賴它則不受影響。
+- 不重算舊區塊；
+- 新區塊使用新 revision；
+- 邊界由明確規劃／過渡規則銜接；
+- regenerate 是顯式、有備份與預覽的破壞性 transaction。
 
-## 世界目前設定與歷史產物
+因此，同一世界可合法包含不同 generation epoch；相容性由 snapshot schema 與邊界契約決定，而不是要求全世界共享 generation version。
 
-```text
-World {
-  activeProfileLock
-  artifactReceiptIndex
-  materializedBaselines
-  runtimeDeltas
-  ownerSchemaStates
-}
-```
+## 衍生 artifact 與 cache
 
-- `activeProfileLock` 是今後新規劃或明確重算時的預設依賴圖。
-- `artifactReceiptIndex` 保存歷史產物的精確來源子圖。
-- `materializedBaselines` 保存已落地且不再需要舊生成器即可讀取的基線。
-- `runtimeDeltas` 保存玩家與模擬對基線的修改。
-- `ownerSchemaStates` 由各資料擁有者獨立遷移。
+mesh、collider、navigation、thumbnail 和其他 cache 保存最小 source fingerprint，例如 chunk revision + mesher revision。若來源不匹配就丟棄重建，不為 cache 維護昂貴 migration。
 
-同一世界可以包含不同生成記錄的規劃域；跨域不變條件由地形邊界、洞穴入口、水文出口或其他版本化契約銜接。第一次生成的區塊快照是已存在空間世界的權威，詳見[世界持久化與 RocksDB World Store](world-persistence.md)。
+權威 snapshot 不可只因 renderer、Bevy patch 或純視覺 asset 更新而失效。
 
-## 相容性不是布林值
+## Migration 執行
 
-比較兩個依賴圖時，解析器應按能力與產物輸出結果：
+1. 在原資料旁建立 checkpoint／備份。
+2. 先讀取並驗證 envelope，不直接原地猜測格式。
+3. 依 schema owner 執行純函式 migration chain。
+4. 在 staging keyspace／新 world copy 寫入目前版本。
+5. 執行 referential、spatial 和 content validation。
+6. 原子切換可行時才切換；否則使用可恢復 journal。
+7. 記錄 migration receipt、來源版本、目標版本和工具 build。
 
-| 結果 | 含義 |
-| --- | --- |
-| `Identical` | 精確子圖與內容雜湊相同，可直接重用 |
-| `ContractCompatible` | 實現不同但能力契約相容，可供新工作使用 |
-| `Recomputable` | 受影響產物可安全重算，沒有不可覆寫狀態 |
-| `Migratable` | 擁有者提供完整資料遷移路徑 |
-| `Bridgeable` | 舊新空間或協定可由 adapter／邊界契約連接 |
-| `MaterializedOnly` | 舊產物可讀但已無法以原生成器重算 |
-| `Incompatible` | 權威語義或必要資料沒有合法轉換 |
+小型 record 可 lazy migration，但只有 owner 已證明混合版本讀寫安全時才採用。大型世界預設提供離線或 staged migration，不在一個 frame 內卡住遊戲。
 
-根閉包雜湊適合快速確認 `Identical`，但不能取代其餘結果。
+## Missing content 與部分相容
 
-## 多人與建置
+載入前先掃描 snapshot／world metadata 所需 stable content ID。診斷區分：
 
-多人握手應比較伺服器權威能力子圖，而不是要求所有客戶端閉包完全相同。純表現模組可以不同；會改變碰撞、玩法、世界生成或權威資料的模組必須相容或由伺服器提供結果。
+- 純表現資產缺失：可以 placeholder；
+- 權威 definition 缺失但有 migration：先遷移；
+- 權威 definition 缺失且無 migration：拒絕進入會修改世界的模式；
+- 未知可選 component：只有 envelope policy 明確允許 opaque preservation 時才能保留。
 
-可重現建置、多人確定性與資料相容是三個不同問題：
+「能勉強 decode」不等於「允許保存回去」。read-only recovery mode 與正常 writable mode 必須分開。
 
-- 可重現建置關心相同輸入能否得到相同產物。
-- 多人確定性關心權威模擬是否得到相同語義結果。
-- 資料相容關心舊狀態是否能由新擁有者讀取或遷移。
+## 未來內容分發
 
-## 尚待設計
+若日後引入 package metadata，它可記錄 package version、來源、簽章與相依；這些資料用於安裝／建置。runtime 與存檔仍沿 stable content ID、schema 和 generator provenance 判斷相容。
 
-- `CompositionSpec`、`LockedGameGraph` 與持久化 `latticeaxiom.lock` 的實際 schema、canonicalization 與演進規則。
-- 能力契約使用 SemVer、結構相容或自訂版本代數的範圍。
-- 舊原生生成器的封存與安全執行方式。
-- 產物生成記錄的儲存粒度、去重與垃圾回收。
-- 伺服器權威子圖與客戶端純表現差異的握手協定。
+Bevy 永遠由 Cargo／產品建置選定，不成為內容 package graph 裡可由單一 world 任意換掉的 runtime。
+
+## 驗收
+
+- Bevy patch／minor 升級不修改未變更的 save schema。
+- 每個 schema owner 都有 golden old-version fixture 和 migration test。
+- content plugin 加入順序改變不改變 stable ID 或 snapshot bytes（不含允許的非規範 metadata）。
+- generator 更新後舊區塊保持不變，新區塊記錄新 provenance。
+- 缺失權威內容時不 silent remap，也不把未知資料覆寫掉。
+- cache fingerprint 不匹配時可安全重建，不啟動 snapshot migration。
 
 ## 相關文件
 
-- [模組核心與宣告式組合](module-composition.md)
-- [Nickel 驅動的套件系統與雙實現路徑](package-management.md)
-- [世界持久化與 RocksDB World Store](world-persistence.md)
-- [可組合世界生成架構](world-generation.md)
-- [決策 0003：不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)
-- [詞彙表](../foundations/glossary.md)
-- [待決問題](../planning/open-questions.md)
+- [決策 0003：不以全域版本代替相容性](../decisions/0003-no-global-version-switch.md)
+- [世界持久化](world-persistence.md)
+- [模組與內容組合](module-composition.md)
+- [內容分發邊界](package-management.md)
+- [Bevy 執行期架構](game-engine-runtime.md)

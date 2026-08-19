@@ -1,95 +1,103 @@
 ---
-title: 一人與 AI 協作的開發策略
+title: 一人與 AI 協作的 Bevy-first 開發策略
 status: accepted
 type: overview
 updated: 2026-08-19
 decision:
-  - ../decisions/0005-rust-and-focused-build-boundary.md
+  - ../decisions/0014-adopt-bevy-upstream-first.md
+  - ../decisions/0016-stage-content-composition-on-bevy.md
 ---
 
-# 一人與 AI 協作的開發策略
+# 一人與 AI 協作的 Bevy-first 開發策略
 
 ## 結論
 
-Lattice Axiom 可以由一位具架構能力的主要開發者配合 AI 與成熟開源基礎設施開始，但前提是先證明一個粗糙、可玩的系統型垂直切片，而不是先完成通用引擎或商業級美術管線。
+Lattice Axiom 以一位主要開發者、AI 協作和成熟開源元件開始。開發順序不是「先完成引擎」，而是把 Bevy 的完整上游能力組成最小可玩縱切，然後只對真實阻塞做局部擴充。
 
-第一個驗收濃縮為：
+第一個驗收是：
 
-> 玩家走進程序生成的體素世界，挖掉並放回一個方塊；退出再進入後，世界仍保留變更。官方內容經公開模組路徑加入。
+> 玩家走進程序生成的體素世界，挖掉並放回一個方塊；退出再進入後，世界仍保留變更。官方內容經公開 Bevy plugin 路徑加入。
 
-這個原型成立，才表示區塊、生成套件、內容模組與持久化可以成為逐步擴展的工程；視窗、立方體或漂亮 shader 本身不構成核心假說的證據。
+## 買／造決策梯
+
+每個通用能力依固定順序處理：
+
+1. **Adopt**：直接使用 Bevy 內建能力與慣用資料流。
+2. **Compose**：用 plugin、feature、schedule、asset 或設定組合現有能力。
+3. **Extend**：使用公開 extension point 或維護中的 Bevy 生態 plugin。
+4. **Contribute／fork**：將缺口回饋 upstream；必要時維持最小、可同步的 fork。
+5. **Build**：只有可玩原型與可重現證據都證明前四步無法滿足不可妥協需求時，才建立最小自研替代。
+
+例外證據格式見[決策 0014](../decisions/0014-adopt-bevy-upstream-first.md)。抽象出一個與 Bevy 一一對應的 facade 不算降低風險；它只會把升級工作複製到兩層。
+
+## Bevy-first 實作方式
+
+- client 從 `DefaultPlugins` 開始，headless／測試從 `MinimalPlugins` 與必要標準 plugin 開始。
+- 玩法拆成小型 Bevy `Plugin`，系統以 `SystemSet` 表達領域順序；不用自製 lifecycle 或 scheduler。
+- 權威世界資料保留在 domain resource／storage；活躍實體使用 Bevy ECS，不把每個體素做成 entity。
+- 非同步工作使用 Bevy task pools；結果經 epoch／版本檢查後在明確 schedule barrier 套用。
+- 渲染先使用 Bevy Mesh、Material、camera、lighting、visibility 與 render extraction。
+- 資產先使用 `AssetServer`、標準 loader 與 glTF；不要先建立完整內容編譯平台。
+- 物理、輸入與體素世界先做 Bevy 生態候選 spike，量測後鎖定，不先重寫。
 
 ## 人與 AI 的責任
 
-主要開發者必須決定：
+主要開發者決定：
 
-- 玩家價值、範圍與驗收條件；
-- 資料所有權、權威來源與生命週期；
-- 模組、持久化、確定性與安全邊界；
-- 失敗模式、可接受成本與何時停止某條路；
-- 外部依賴與授權風險。
+- 玩家價值、範圍和不可妥協需求；
+- 權威資料、持久化與相容性承諾；
+- 性能預算、失敗模式與停止條件；
+- 外部依賴、授權、維護狀態與 fork 成本；
+- 何時有足夠證據啟動新的抽象。
 
-AI 適合在這些決策之下處理：
+AI 適合處理：
 
-- 有明確輸入輸出的資料型別與演算法；
-- property、round-trip、golden 與故障注入測試；
-- API 串接、樣板、遷移與機械重構；
-- 可重複的 profiling、診斷工具與文件同步；
-- 小範圍 shader、資產轉換與開發工具初稿。
+- Bevy API 與既有 plugin 的窄型整合；
+- property、round-trip、golden、故障注入與 migration test；
+- 資料型別、演算法、工具腳本和機械重構；
+- profiling、診斷與文件同步；
+- 有明確輸入、輸出和驗收的小型資產或 shader 工作。
 
-如果「岩漿變化是否是世界狀態」「區塊快照何時成為權威」尚未決定，增加程式碼只會放大錯誤方向。每個 AI 工作單元都應先有契約、不變量、資料擁有者與可執行驗收。
+AI 不替代產品判斷。若「什麼狀態必須跨重啟保存」尚未決定，增加程式碼只會更快固化錯誤方向。
 
-## 買／造邊界
+## 工作單元契約
 
-自研真正造成產品差異的部分：Nickel 驅動的套件組合、package kernel、登錄表、區塊生命週期、世界生成、持久化語義、主迴圈與內容契約。
+每個工作單元都要同時有：
 
-直接採用成熟 upstream 處理 GPU、視窗、數學、ECS 儲存、體素網格、序列化、除錯 UI、嵌入式儲存等基礎問題。以窄門面隔離它們，只有在量測證明現成方案構成限制時才 fork 或替換。
-
-「參考開源實現」不等於複製大型程式碼樹。依賴 upstream 能持續取得修正並保留授權與來源；fork 必須有明確理由、最小差異與回歸策略。
-
-## 工作方式
-
-每一步都要同時有：
-
-1. 可執行產物；
+1. 玩家可見結果或明確的下游 consumer；
 2. 要證明的不變量；
-3. 明確不做的範圍；
-4. 失敗或效能預算；
-5. 自動化驗收。
+3. 採用的 upstream 能力與版本；
+4. 明確不做的範圍；
+5. 自動化驗收與性能／失敗預算。
 
-例如「實作區塊」不是可交付工作；「區塊調色盤可 round-trip、亂序註冊仍有穩定 ID、挖洞後跨重啟保留」才是。
+例如「做區塊系統」不夠具體；「玩家修改方塊後跨重啟保留，卸載再載入不重生，mesh job 的過期結果不覆蓋新 revision」才可交付。
 
-原型驗收未通過就修正邊界，不在未驗證的基礎上繼續堆高階能力。架構文件描述方向，benchmark、故障測試與第二內容包才決定抽象是否成立。
+## demo 刻意不做
 
-## 美術與功能範圍
+- 自研 App、ECS、scheduler、renderer、asset server、input layer 或 task runtime；
+- 動態 Rust ABI、自訂套件內核、一般版本求解器與模組市場；
+- 多人同步、WASM 沙箱、運行期卸載；
+- 柔體、完整角色動畫、高階 PBR 美術與自研 Render Graph；
+- 第二渲染後端或為不存在的作者建立完整編輯器。
 
-demo 接受：
+demo 可以使用方塊／膠囊模型、簡單材質、最低限度碰撞、Bevy diagnostics 和開發者 gizmo。
 
-- 方塊、膠囊或低多邊形替代模型；
-- 單色材質與簡單調色盤；
-- AABB、重力、射線與最少碰撞；
-- 兩個手寫群系與合成測試內容；
-- egui 開發者疊加層而非完整玩家 UI。
+## 工具鏈原則
 
-demo 不做：
-
-- 多人、WASM 市場與任意第三方安全沙箱；
-- 柔體、完整角色動畫、PBR 美術與自研 Render Graph；
-- 第二渲染後端、運行期模組卸載與一般版本求解器；
-- 為尚不存在的內容建立完整編輯器。
+優先使用 Blender、glTF、Bevy loader 與現成資產工具。若真實創作流程需要視覺化場景、import 或關卡工具，可用 Godot 作限時對照 spike；只有資料往返、語義保存與作者效率都通過驗收，才寫正式工具鏈文件或橋接器。
 
 ## 風險控制
 
-- **範圍膨脹**：以[第一個 demo 路線圖](../planning/roadmap-first-demo.md)的出場條件阻止提前加入能力。
-- **抽象先於使用者**：用第二內容包與動態實現重新走公開 API，不為官方內容開後門。
-- **AI 產生大量錯誤方向程式碼**：先寫 invariants、資料流與故障測試，再交付小變更。
-- **依賴升級拖累專案**：鎖定版本、隔離門面、只在路線圖節點升級並記錄理由。
-- **美術成為阻塞**：以可讀的 placeholder 驗證玩法，資產品質在系統成立後逐步替換。
+- **Bevy 版本演進**：精確鎖版，升級時閱讀官方 migration guide，執行可玩 smoke test 與存檔回歸。
+- **抽象先於需求**：任何公共抽象至少由官方內容和第二內容集合共同使用。
+- **生態 plugin 維護風險**：記錄 Bevy 對應版本、授權、活躍度與退出路徑；薄整合比全域 facade 更容易替換。
+- **範圍膨脹**：以[第一個 demo 路線圖](../planning/roadmap-first-demo.md)的出場條件阻止平台工作提前進入。
+- **美術阻塞**：先用可讀 placeholder 驗證玩法，再逐步換成正式資產。
 
 ## 相關文件
 
-- [專案願景與設計支柱](project-vision.md)
-- [已選技術棧與採用邊界](technology-stack.md)
-- [決策 0005：Rust 與自研邊界](../decisions/0005-rust-and-focused-build-boundary.md)
-- [渲染架構與擴充邊界](../architecture/rendering.md)
-- [第一個 demo 路線圖](../planning/roadmap-first-demo.md)
+- [專案願景](project-vision.md)
+- [技術棧](technology-stack.md)
+- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
+- [Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
+- [第一個可玩 demo 路線圖](../planning/roadmap-first-demo.md)

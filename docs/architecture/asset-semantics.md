@@ -1,143 +1,118 @@
 ---
-title: 資產管線與模型語義
+title: Bevy 資產管線與模型語義
 status: exploration
-type: explanation
+type: architecture
 updated: 2026-08-19
 decision:
-  - ../decisions/0011-right-handed-z-up-world-coordinates.md
+  - ../decisions/0014-adopt-bevy-upstream-first.md
+  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
 ---
 
-# 資產管線與模型語義
+# Bevy 資產管線與模型語義
 
-> glTF/GLB、VRM 與 OpenUSD 在本頁都是候選或參考，不是已接受的格式決策。
+## 結論
 
-## 核心問題
+資產預設走 Bevy `AssetServer`、標準 loader 和 glTF 管線。Lattice Axiom 不先建立平行 asset database／compiler；只有遊戲特有且無法由現有格式保存的語義，才加入小型 typed asset、sidecar 或 importer extension。
 
-通用受擊、步態、注視、裝備與粒子模組若要處理任意第三方模型，就不能只知道頂點與骨骼；它們還需要知道「哪裡是頭、手、地面接觸點、受擊區與效果插槽」。
+## 三種資料不要混用
 
-因此需要同時解決三個層級：
+| 層 | 例子 | 目的 |
+| --- | --- | --- |
+| 創作來源 | Blender、Krita、音訊工程檔，或日後經驗證的 Godot 工具 | 保存作者可編輯資訊 |
+| 交換／專案資產 | glTF、PNG／KTX2、WGSL、音訊、專案 typed asset | 由 Git、工具與 Bevy loader 交換 |
+| 執行期資源 | Bevy Mesh、Image、Material、Animation、Scene、Audio handle | 在目前程序載入和呈現 |
 
-1. 幾何與動畫如何交換。
-2. 遊戲語義如何附著在模型上。
-3. 交換資產如何編譯成高效的執行期資產。
+創作來源不必直接進 runtime；Bevy handle 也不是可跨重啟保存的資產 ID。
 
-## 三段式資產管線
-
-```text
-創作格式
-.blend / USD / Maya project / 其他 DCC
-        ↓ 匯出
-開放交換格式
-glTF / GLB + 遊戲語義擴充
-        ↓ 驗證與資產編譯
-執行期格式
-平台專屬網格、貼圖、動畫、碰撞與語義表
-```
-
-創作格式保存編輯器所需的高階資訊；交換格式是工具與引擎的契約；執行期格式則可以自由做壓縮、meshlet 產生、貼圖轉碼、動畫壓縮與碰撞烘焙。
-
-開放交換格式與引擎專屬執行格式並不衝突。
-
-## 為何討論 glTF/GLB
-
-glTF 2.0 能攜帶網格、PBR 材質、貼圖、節點階層、skin/joint、骨架動畫與 morph target，且有公開規格與擴充機制。它適合作為 runtime delivery 導向的交換格式候選。
-
-`.blend` 更適合作為 Blender 創作來源，不適合直接成為所有工具都必須理解的遊戲 ABI。
-
-不論創作工具或交換格式使用哪種基底，資產編譯器都必須將其顯式轉換成專案的[右手 Z-up 規範執行期基底](../decisions/0011-right-handed-z-up-world-coordinates.md)。來源的 `forward_axis` 等欄位用於解釋和轉換作者資料；它們不允許不同軸約定繼續滲入執行期、物理或存檔。
-
-OpenUSD 的 scene composition、layering、reference 與大型 DCC 管線能力值得研究；它可能位於大型內容製作的上游，而非每個一般模組的最終交付格式。這個角色分工仍需用實際工作流驗證。
-
-## 幾何資料不等於遊戲語義
-
-模型檔即使有 37 根骨骼，也不一定說明哪一根代表頭部、右手或胸腔。不能依賴節點名稱恰好是 `Head`：
+## 預設載入路徑
 
 ```text
-作者名稱：DragonSkull
-        ↓ 語義映射
-引擎角色：head
+source authoring file
+        ↓ export
+glTF / image / audio / typed data asset
+        ↓ Bevy AssetServer + loaders
+Bevy assets and dependency graph
+        ↓ handles used by ECS presentation
 ```
 
-名字屬於作者；語義角色屬於跨工具契約。
+優先使用：
 
-## 能力式語義
+- Bevy glTF scene／mesh／material／animation loader；
+- Bevy Image 與 shader asset；
+- `AssetServer` 的載入狀態、相依與 hot reload；
+- 真的需要新副檔名時才實作 Bevy `AssetLoader`；
+- 只有資產集合與 app state 管理成為重複問題時才評估 `bevy_asset_loader`。
 
-固定的 `humanoid`、`quadruped` 或 `flying` 類別可作為範本，但不應限制六翼龍、八足生物或機械體。模型應以能力描述它能參與哪些通用機制。
+## 座標與單位
 
-```yaml
-semantics:
-  root: Root
-  head: DragonSkull
-  chest: Torso
+執行期、物理與交換基線是 Bevy 原生右手 Y-up：`+X` 右、`+Y` 上、forward `-Z`，距離為公尺，角度為弧度。
 
-capabilities:
-  gaze:
-    origin: head
-    forward_axis: +Z
-  locomotion:
-    ground_contacts:
-      - Foot.FrontLeft
-      - Foot.FrontRight
-      - Foot.BackLeft
-      - Foot.BackRight
-  equipment:
-    right_hand: Claw.Right
-  projectile:
-    origin: MouthSocket
-```
+glTF 優先交由 Bevy loader 按其官方座標處理。其他來源格式在 exporter／importer 邊界轉換一次；執行期只保留統一 Y-up 表示，不建立全域軸轉換 component。
 
-這只是說明形狀的草圖，不是 schema。
+資產 fixture 至少驗證：
 
-## VRM 可提供的啟發
+- forward／up 朝向；
+- skeleton bind pose、animation root motion；
+- triangle winding、normal、tangent；
+- collider 與視覺 mesh 對齊；
+- 1 unit 對應的公尺尺度。
 
-VRM 建立在 glTF 上，為 humanoid 定義骨骼角色與可重定向的共同語義。Lattice Axiom 所需範圍更廣，但可以借鑑「交換格式 + 領域語義層」的模式，而不是照搬 humanoid 欄位。
+## 遊戲特有語義
 
-語義層若足夠穩定，模型、動畫、AI、物理與表現包便可分開組合：
+普通模型先用 glTF node、material、animation 和清楚的命名約定。只有被兩個真實資產共同需要、且命名約定無法安全表達時，才定義 versioned semantic sidecar 或 typed asset。
 
-```text
-Dragon Model
-+ Quadruped Locomotion
-+ Heavy Hit Reaction
-+ Boss Health
-+ Dragon AI
-```
+可能的 domain 語義包括：
 
-## 執行期編譯
+- hit zone 與 damage multiplier；
+- 裝備 socket；
+- foot／hand／eye 等 attachment point；
+- collider intent 與 movement affordance；
+- 可形變區域、材質物理參數或 interaction tag。
 
-交換資產進入建置流程後，至少需要：
+sidecar 應以 stable semantic name 對應 glTF node，不保存 Bevy `Entity`、`Handle` 或 importer 產生順序。loader 解析後可以轉成正常 Bevy component／resource。
 
-- schema 與必要能力驗證
-- 節點／骨骼語義解析成數值控制代碼
-- 網格與材質最佳化
-- 動畫壓縮與可選重定向資料
-- 碰撞與物理表示烘焙
-- 版本與擴充相容性記錄
-- 內容雜湊與快取鍵
+## 穩定資產識別與 Handle
 
-正式執行期不必解析完整 glTF JSON，也不必保留作者節點名稱。
+| 識別 | 生命週期 | 可否持久化 |
+| --- | --- | --- |
+| stable content／asset ID | 由內容 owner 維護，跨發行遷移 | 可以 |
+| logical asset path／label | 專案資產圖內可診斷引用 | 視格式契約而定 |
+| Bevy `Handle<A>` | 目前 App／AssetServer 執行期 | 不可以 |
+| GPU resource／render entity | 目前 device／frame | 不可以 |
 
-## Schema 設計問題
+存檔保存 stable content ID 和必要版本；載入時由目前 content catalog 解析成 asset path／handle。缺失內容要產生可診斷錯誤或明確 placeholder policy，不能保存 raw handle 期待下次有效。
 
-- 語義放在 glTF extension、sidecar 檔，或兩者皆支援？
-- 如何命名與治理擴充，避免宣稱尚未註冊的官方 `EXT_` 名稱？
-- 哪些語義是跨遊戲通用，哪些應由遊戲或模組自訂？
-- 能力的版本與相容性如何協商？
-- 動畫重定向需要哪些基準姿勢、座標系與比例規則？
-- 不可信資產的大小、拓樸、shader 與壓縮炸彈如何驗證？
-- Blender add-on 如何顯示缺少語義、無效映射與執行期回退？
+## Hot reload
 
-## 初步來源
+開發期可以熱重載純表現資產。若資產會改變 collision、可通行性、生成結果或玩法判定，它就是權威輸入：
 
-- [Khronos glTF 2.0 規格](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)
-- [glTF 擴充登錄表](https://github.com/KhronosGroup/glTF/tree/main/extensions)
-- [Blender glTF 2.0 匯入／匯出手冊](https://docs.blender.org/manual/en/latest/addons/import_export/scene_gltf2.html)
-- [VRM 規格與功能](https://vrm.dev/en/vrm/vrm_features/)
-- [OpenUSD](https://openusd.org/)
+- 修改後不直接重寫已物化世界；
+- 需要新的 generator／content revision；
+- 只有在安全 reload、顯式 migration 或新 session 後生效；
+- client 與 headless 對同一權威語義有一致解析。
 
-這些連結來自原對話脈絡或其官方入口；真正選型前仍需建立需求矩陣與互通原型。
+## 體素資產
+
+第一個 demo 的方塊定義只需要 stable ID、可見材質、collision kind、破壞／放置規則與簡單音效引用。atlas 或 texture array 的實際布局由 Bevy／voxel plugin spike 決定，不先定義自有 universal material format。
+
+若採 `bevy_voxel_world`，其 voxel type 與 material 設定可以是初始 adapter；權威存檔仍保存 Lattice Axiom stable block ID，而不是 plugin-private numeric ID。
+
+## Godot 工具鏈對照
+
+Godot 可以在未來作視覺 authoring／import workflow 對照，但不是 runtime 或權威場景格式。任何 bridge 只交換明確資料，例如 glTF 與 versioned sidecar；不得要求遊戲同時載入 Godot runtime。啟動條件與驗收見[Godot 工具鏈對照](../research/godot-toolchain-comparison.md)。
+
+## 驗收
+
+- 一個 glTF fixture 在 Bevy 中無額外軸修正即可正確朝向、播放動畫並對齊 collider。
+- client 由 `AssetServer` 載入資產；headless 不必載入純視覺資產也能解析權威 content ID。
+- hot reload 視覺材質不改變 world hash；修改 collision semantic 必須走顯式權威更新。
+- 重啟後 stable content ID 能重新解析，存檔中不存在 Bevy handle。
+- custom asset type 必須有 malformed-input、version 和 round-trip test。
 
 ## 相關文件
 
+- [決策 0015：Bevy 原生 Y-up](../decisions/0015-bevy-native-y-up-world-coordinates.md)
+- [Bevy 執行期架構](game-engine-runtime.md)
+- [渲染架構](rendering.md)
 - [實體、物理與表現層](entity-physics-presentation.md)
 - [物理資產與局部形變創作](physical-authoring.md)
-- [渲染與物理技術地圖](../research/renderer-physics-landscape.md)

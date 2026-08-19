@@ -2,21 +2,24 @@
 title: 可組合洞穴生成架構
 status: proposed
 type: explanation
-updated: 2026-08-09
+updated: 2026-08-19
 decision:
   - ../decisions/0002-hybrid-cave-generation-composition.md
   - ../decisions/0004-territorial-delegation-for-spatial-generation.md
+  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
 ---
 
 # 可組合洞穴生成架構
 
-> [洞穴採共享拓撲與群系形態的混合模型](../decisions/0002-hybrid-cave-generation-composition.md)與[依領地遞迴委派地形／洞穴能力](../decisions/0004-territorial-delegation-for-spatial-generation.md)已獲採納。本頁把責任邊界展開成候選介面、資料流與可驗證原型；具體演算法和參數仍待實驗。
+> [洞穴採共享拓撲與群系形態的混合模型](../decisions/0002-hybrid-cave-generation-composition.md)與[依領地遞迴委派地形／洞穴能力](../decisions/0004-territorial-delegation-for-spatial-generation.md)已獲採納。本頁把責任邊界展開成候選介面、資料流與可驗證原型；具體演算法和參數仍待實驗。這些通道實作為 `WorldgenPlugin` 的 typed domain registry／resource 與 Bevy task，不是平行 plugin runtime。
 
 ## 目標
 
 洞穴生成必須同時做到四件事：跨區域保持連通、讓地下群系擁有鮮明形態、接受地質與水文約束，以及容納任意數量但行為有界的擴展模組。
 
 關鍵不是尋找一個包辦全部責任的「洞穴演算法」，而是把不同數學問題放進具有明確基數與契約的組合通道。
+
+所有三維位置遵守 Bevy Y-up；垂直度、深度與入口高程沿 `y`，水平規劃使用 `(x, z)`。
 
 ## 「層」有三種不同含義
 

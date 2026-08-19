@@ -7,66 +7,30 @@ updated: 2026-08-19
 
 # 詞彙表
 
-本頁統一目前文件的用語。定義會隨架構演進；它們描述此專案中的用法，不主張是業界唯一用法。
-
-| 詞彙 | 本文件中的意思 |
+| 詞彙 | 本專案中的意思 |
 | --- | --- |
-| 核心（kernel/core） | 保存通用機制、生命週期與資源治理的最小遊戲核心，不包含具體遊戲內容。 |
-| 套件核心（package kernel） | 以 Rust 實作的套件控制平面，負責來源取得、解析、能力選擇、信任、lock、建置、載入與啟用；Nickel 為其宣告與組合語言。 |
-| 模組（module） | 可獨立開發、宣告能力與相依性，並參與遊戲組合的邏輯單位。這是通用稱呼。 |
-| 外掛（plugin） | 模組的一種部署或發現形式，通常強調可在既有程式之外載入；不等同於「模組必須動態載入」。 |
-| 內容模組 | 主要提供實體、物品、群系、模型、材質、配方或其他資料的模組。 |
-| 機制模組 | 提供移動、戰鬥、受擊、表現或其他可重用行為的模組。 |
-| 模組發現 | 找出候選模組的方式，例如宣告式配置、套件圖、靜態清單或資料夾掃描。 |
-| 已鎖定遊戲圖（`LockedGameGraph`） | 完成精確來源、版本、相依性、能力、信任與實現解析後，交給後續建置或載入的統一 Rust 表示。 |
-| 模組實現方式（module realization） | 模組最後以靜態原生、動態原生、沙箱 WASM 或直譯腳本等方式執行。 |
-| 遊戲閉包（game closure） | 某次解析、建置或發布所需的核心、套件、資產、組態與工具鏈輸入的完整可識別集合。它可用於重現，不是支配全部套件相容性的全域版本。 |
-| 遊戲設定檔／元套件（game profile/metapackage） | 以 Nickel 宣告官方遊戲或整合包想要的套件、能力、實現偏好與政策；其發布版本和實際解析出的套件版本是不同座標。 |
-| 鎖定圖（lock graph） | 解析器選出的精確套件版本、來源、內容雜湊、能力提供者與 adapter 集合，用於重建同一組輸入。 |
-| Nickel 組合期 | 對 `package.ncl`、`game.ncl`、overlay 與 `latticeaxiom.lib` 合約進行合併、驗證和完整求值的階段；結果直接轉成 Rust 強型別，不進入遊戲熱路徑。 |
-| 組合規格（`CompositionSpec`） | Nickel 完整求值後直接轉成的有版本 Rust 型別，保存作者要求、能力、實現偏好與政策；尚未代表來源已取得或版本已鎖定。 |
-| 建置計畫（`BuildPlan`） | 從 `LockedGameGraph` 產生的工作 DAG，描述來源準備、程式建置、資產編譯、封裝與快取輸入輸出。 |
-| 執行映像（`RuntimeImage`） | 建置或載入完成後供遊戲啟動與熱路徑使用的 ID、登錄表、排程、資產索引與窄入口集合。 |
-| 能力契約版本（capability contract version） | 某項公開能力的語義與介面版本；實現套件版本不同不必然表示契約不相容。 |
-| 資料 schema 版本 | 某資料擁有者用來決定讀取、遷移或保留舊資料路徑的版本，不能由整體遊戲版本代替。 |
-| 產物生成記錄（artifact dependency receipt） | 隨規劃域、生成計畫或可重算產物保存的實際生產者、契約、組態、上游雜湊與 fallback；只使真正受影響的依賴子圖失效。 |
-| 熱路徑（hot path） | 每幀、每 tick 或大量實體反覆執行、對效能高度敏感的路徑。 |
-| 規範世界座標（canonical world coordinates） | 專案權威的右手笛卡兒座標約定：`XY` 為水平面、`+Z` 向上、座標按 `(x, y, z)` 排列，長度以公尺、角度以弧度表示；外部工具與圖形後端在邊界轉換。 |
-| World Store | 依空間局部性保存方塊、已物化生成結果、空間實體與模擬續行狀態的權威儲存；demo 的生產實現是 RocksDB。 |
-| `WorldStorage` | 核心用來載入、提交、替換區塊範圍與建立 checkpoint 的語義契約，不暴露 RocksDB 鍵或型別。 |
-| 權威區塊快照（authoritative chunk snapshot） | 區塊第一次生成或顯式重建後保存的完整可讀狀態；只要它存在，就不因目前生成器改變而隱式重算。 |
-| 生成來源記錄（generation provenance） | 隨已物化空間保存的 generation epoch、組態、套件、契約與精確實現雜湊，用於解釋、遷移與 regenerate，不取代快照。 |
-| Persistent World Object | 位置依附於世界、但資訊量超出一般方塊狀態的持久物件，例如容器、機器或傳送門；是否進關聯庫取決於查詢與交易需求。 |
-| Regeneration Transaction | 以明確範圍、generation lock、保留政策與備份點替換權威快照的破壞性世界操作；不能是隱式生成器更新。 |
-| 模擬世界 | 保存玩法狀態與規則語義的世界，例如生命值、AI、速度、物品與生物類型。 |
-| 渲染擷取（render extraction） | 把模擬狀態轉成渲染需要的資料，而不讓渲染器理解具體玩法內容。 |
-| 渲染世界 | 只保存網格實例、骨架姿勢、燈光、粒子、地形區塊等渲染資料的表示。 |
-| 渲染基元 | 渲染核心原生理解的通用能力，例如網格、蒙皮網格、材質、粒子與燈光。 |
-| 渲染門面（rendering facade） | `latticeaxiom-render` 暴露的後端無關窄介面；demo 由 wgpu 與 headless 兩個實現消費同一 `RenderWorld`。 |
-| 表現層（presentation） | 把遊戲事件與狀態轉成姿勢、材質參數、音效、粒子、鏡頭回饋等感知結果的層。 |
-| 創作格式（authoring format） | 供藝術家與設計者編輯的來源格式，例如 `.blend` 或 USD。 |
-| 交換格式（interchange format） | 工具與引擎之間的開放契約；目前討論以 glTF/GLB 為候選。 |
-| 執行期資產 | 經驗證、壓縮、烘焙與平台最佳化後，遊戲實際載入的引擎格式。 |
-| 語義映射 | 把作者自訂節點或骨骼對應到引擎可理解角色，例如「頭部」「右手」「嘴部發射點」。 |
-| 物理場（physical field） | 分布在頂點、表面或體積上的物理參數，例如剛性、阻尼、密度與厚度。 |
-| 生成依賴子圖（generation dependency subgraph） | 某個生成產物實際讀取的精確提供者、組態與上游產物集合；相容性與失效沿此子圖判定，不使用單一 `worldVersion`。早期文件中的「生成閉包」應按此較細粒度理解。 |
-| 空間領地圖譜（Territory Atlas） | 在賦予群系或文明等語義前，先由世界種子建立的多尺度空間單元、邊界、鄰接與父子關係。 |
-| 群系程式（Biome Program） | 取得領地後，可提供地形或洞穴能力，並向氣候、水文、地質、生態、資源與氣氛等通道提交目標場或約束的內容定義。 |
-| 目標場（intent/target field） | 生成提供者希望世界在某空間呈現的連續或離散性質；它仍需由相應通道的合成器或求解器整合，不等同於最終方塊。 |
-| 生成計畫（generation plan） | 在區塊實體化之前建立、具有穩定 ID 與邊界的跨區塊語義物件，例如河網、城市、道路、洞穴圖或巨型結構。 |
-| 邊界設定檔（Boundary Profile） | 群系或其他領地向通用邊界合成器公開的邊緣性質、過渡寬度與相容能力。 |
-| 生成通道（generation channel） | 有名稱、型別、單位、版本與合成規則的生成輸出類別，例如地形密度、水位或岩性；新模組可以註冊新通道。 |
-| 維度生成協調器（Dimension Generation Coordinator） | 每維度唯一的責任協調者，解析領地所有權、依賴、預算、邊界與跨域契約；它不是該維度唯一的地形或洞穴演算法。 |
-| 領地委派（territorial delegation） | 父域提供預設能力，更具體的子領地可按通道接管主要提供者；唯一性作用於「通道 × 所有權域」。 |
-| 空間影響形態（spatial influence kind） | 群系宣告能力影響 `surface-only`、淺層、有限三維體積、垂直柱或整維度等哪一種空間，避免地表群系默認擁有全部地下。 |
-| 地下群系領地（subsurface biome territory） | 在空洞形成以前即可查詢的三維語義領地，描述某位置若形成洞穴時由哪種地下環境負責。 |
-| 洞穴拓撲（cave topology） | 由節點、邊、跨規劃格入口與連通約束構成的低解析度語義圖；它描述必須如何連接，不等同於最終洞壁幾何。 |
-| 洞穴拓撲協調器（Cave Topology Coordinator） | 每維度唯一的跨域協調器，建立委派、入口、水文、可達性與共同預算，不替所有領地生成同一套拓撲。 |
-| 洞穴拓撲提供者（Cave Topology Provider） | 每個拓撲所有權域唯一的主要圖生成者；維度提供根域預設，地下群系可接管子域並使用完全不同的演算法。 |
-| 洞穴入口契約（cave portal contract） | 相鄰規劃格或拓撲所有權域共同重建的邊界條件，包括入口位置、切向、半徑、淨空、通行類別與必要流體狀態。 |
+| Bevy runtime | 由 Bevy App、ECS、schedule、asset、render 與標準 plugin 組成的遊戲執行期；不是 Lattice Axiom 自研引擎。 |
+| `LatticeAxiomPluginGroup` | 組合遊戲 domain plugin 的專案入口；薄組合層，不複製 Bevy lifecycle。 |
+| domain plugin | 擁有一項產品語義的 Bevy `Plugin`，例如世界、世界生成、持久化或官方內容。 |
+| content plugin | 只經公開註冊路徑加入方塊、物品、實體或生成內容的 Bevy plugin。官方與測試內容遵守同一規則。 |
+| 權威世界（authoritative world） | 能決定玩法且必須正確恢復的區塊、實體與續行狀態；不是 render world 或可重建快取。 |
+| 已物化區塊 | 已完成第一次生成並保存完整快照的區塊。之後以快照為權威，不因生成器更新而隱式重算。 |
+| active working set | 目前載入 RAM／Bevy ECS、供模擬與呈現的世界子集；可由持久化資料重建。 |
+| chunk revision | 區塊權威資料每次變更後遞增的 revision，用來拒絕過期 mesh、collision 或 I/O job 結果。 |
+| generation provenance | 描述某項世界資料由哪個生成器 revision、設定與上游規劃產物產生的持久化記錄。 |
+| schema owner | 唯一負責一類持久化資料格式、版本和遷移的 domain component／plugin。 |
+| 穩定內容 ID | 跨重啟、存檔與未來網路使用的具名識別；不得以 Bevy `Entity`、`Handle` 或 Rust `TypeId` 代替。 |
+| process-local ID | 只在一次執行有效的 Bevy Entity、asset handle、GPU handle 等識別，不可持久化。 |
+| presentation | 從權威狀態與玩法事件衍生的相機、mesh、材質、粒子、動畫、音訊和 UI；可丟棄重建。 |
+| fixed tick | 在 Bevy `FixedUpdate` 中以 `Time<Fixed>` 推進的玩法模擬步長；不等同渲染 frame。 |
+| headless app | 不安裝 window／render plugin 的 Bevy App 組合，用於伺服器、模擬測試和持久化測試；不是自製 null renderer。 |
+| upstream deviation | 對 Bevy 或成熟依賴進行替換、fork 或平行實作；必須通過決策 0014 的可玩原型證據門檻。 |
+| Y-up | Bevy 原生右手座標約定：`+X` 右、`+Y` 上、forward `-Z`，水平面是 `x-z`。 |
+| toolchain comparison | 對作者工具的限時、可驗收比較；Godot 可作這類對照，但不因此成為遊戲 runtime。 |
 
-## 用語原則
+## 相關文件
 
-- 正文優先使用「模組」，只有在討論動態發現或載入時才特別使用「外掛」。
-- 使用「效能」「最佳化」「執行期」「建置」「相依性」等繁體中文用語。
-- 初次出現且容易混淆的英文術語保留括號；後文優先使用中文。
+- [專案願景](project-vision.md)
+- [技術棧](technology-stack.md)
+- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
+- [版本與相容性](../architecture/versioning-and-compatibility.md)

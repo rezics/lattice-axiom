@@ -1,93 +1,180 @@
 ---
-title: 第一個可玩 demo 路線圖
+title: 第一個 Bevy 可玩 demo 路線圖
 status: active
-type: planning
+type: roadmap
 updated: 2026-08-19
+decision:
+  - ../decisions/0014-adopt-bevy-upstream-first.md
+  - ../decisions/0016-stage-content-composition-on-bevy.md
 ---
 
-# 第一個可玩 demo 路線圖
+# 第一個 Bevy 可玩 demo 路線圖
 
-## 驗收目標
+## Demo 定義
 
-> 玩家在可延伸的體素世界中行走，穿過兩個群系與一條可見邊界，破壞並放置一種方塊；世界能保存與載入。官方內容是獨立模組，畫面可以只是純色方塊。
+> 玩家走進程序生成的體素世界，挖掉並放回一個方塊；退出再進入後，世界仍保留變更。官方內容經公開 Bevy plugin 路徑加入。
 
-這份路線圖驗證可組合世界平台的最小縱切，不是完整遊戲發行計畫。每一步必須先通過自動驗收才進入下一步；時間是單人加 AI 的估算區間，不是承諾。
+這是一個玩家可操作的 vertical slice，不是引擎展示、package manager 展示或純技術 benchmark。
 
-## 已固定的基線
+## 固定基線
 
-- Rust + Cargo workspace；
-- Nickel 組合後直接建立 Rust `CompositionSpec`；
-- Rust package kernel 解析同一 `LockedGameGraph`，支援靜態建置與資料夾動態載入；
-- wgpu 藏在渲染門面後，另有 headless 實現；
-- RocksDB 從 demo 起就是生產 World Store，另有記憶體測試實現；
-- 世界空間採用右手笛卡兒座標系，`XY` 為水平面、`+Z` 向上，長度單位為公尺；
-- 官方內容只使用公開模組路徑。
+- Bevy `0.19.x`，精確 patch 與 feature 由 `Cargo.lock` 固定；
+- client 使用 `DefaultPlugins`；
+- headless／整合測試使用 `MinimalPlugins` 加必要標準 plugin；
+- Bevy 原生右手 Y-up；
+- voxel、physics、input、assets 和 diagnostics 先用 Bevy／生態 upstream；
+- RocksDB 保存完整已物化 chunk snapshot；
+- 官方與 test content 使用普通 Bevy plugin；
+- 不含自研 engine facade、動態 ABI、套件內核或一般 resolver。
 
-## 里程碑
+## 玩家循環
 
-| 步驟 | 產物 | 出場驗收 | 估算 | 狀態 |
-| --- | --- | --- | --- | --- |
-| 0 | 決策、架構與本路線圖轉正 | 互鏈一致；暫時對話與草稿完成吸收並刪除 | 1–2 天 | 完成 |
-| 1 | workspace、空宿主、渲染門面三件套與立方體 | headless CI 通過；核心／內容無法依賴 wgpu | 約 1 週 | 待開始 |
-| 2 | `package.ncl` → `CompositionSpec` → `LockedGameGraph`／lock；穩定數值 ID；CLI 雛形 | 無 JSON 中間檔；亂序註冊不改 ID；熱路徑只見 `BlockId` 等數值型別 | 1–1.5 週 | 未開始 |
-| 3 | 區塊／調色盤、串流、挖放、AABB 物理、RocksDB `WorldStorage`、egui | 陌生人可玩 3 分鐘；重開後坑仍在；kill 測試無半提交區塊 | 2–4 週 | 未開始 |
-| 4 | 與主迴圈分離的領地生成 PNG 預覽 | 同種子同像素；仲裁與註冊順序無關 | 2–3 週 | 未開始 |
-| 5 | `terrain.base`、`terrain.boundary`、`surface.content` 接入世界並保存產物記錄 | 邊界連續；種子可重現；並行生成接縫一致 | 2–3 週 | 未開始 |
-| 6 | 第二內容包走靜態路徑 | 關掉官方包仍可啟動；無 `if pack == official` | 1–2 週 | 未開始 |
-| 7 | 同一第二內容包以預編譯 dylib 放入 `packages/` | 靜／動實現得到相同 ID 與區塊雜湊；ABI 不符診斷可讀 | 1–2 週 | 未開始 |
-| 8 | 最小混合洞穴與共享入口契約 | 以可達性與入口契約測試，不以截圖判定 | 2–3 週 | 未開始 |
+1. 建立或載入一個 world。
+2. 在 Y-up 體素地形出生。
+3. 使用滑鼠／鍵盤移動、觀看和跳躍。
+4. raycast 指向方塊並挖掉它。
+5. 選擇可放置方塊並放回。
+6. 看見 mesh／collision 在合理延遲內更新。
+7. 正常退出或被測試強制終止。
+8. 重啟後看見已確認保存的修改。
 
-走到第 8 步約需 5–6 個月，實際速度以每個出場驗收為準。
+任何里程碑若不能縮短到這個循環的距離，就不進 demo 範圍。
 
-## 每一步的邊界
+## D0：Bevy smoke
 
-### 1：空宿主與渲染門面
+### 交付
 
-建立 `latticeaxiom-core`、`latticeaxiom-render`、`latticeaxiom-render-wgpu`、`latticeaxiom-render-headless` 與 `latticeaxiom-demo`。能開窗、控制相機、上傳並畫一個立方體；headless 只驗證 `RenderWorld`，不建立 GPU。
+- client／headless 兩個 App profile；
+- placeholder camera、light、ground／cube fixture；
+- manual fixed-time test；
+- diagnostics、log 和 CI；
+- Y-up glTF／voxel orientation tests。
 
-不做區塊、模組與物理。若 crate 邊界或編譯時間已不合理，在這一步修正。
+### 完成
 
-### 2：薄組合核心
+- client 可操作相機並退出；
+- headless 不建立 GPU，可推進固定 tick；
+- 無自有 lifecycle、renderer 或 ECS layer。
 
-加入 `latticeaxiom-compose`、`latticeaxiom-packages`、`latticeaxiom-modules` 與 `latticeaxiom-cli`：`latticeaxiom.lib` 合約、Nickel 完整求值、直接 serde 轉換、精確來源 lock、能力解析、`LockedGameGraph`、穩定數值 ID 與靜態膠水 crate 產生。
+## D1：Upstream voxel playground
 
-不做 registry、一般 SemVer 求解器、二進位快取、WASM 或卸載。
+### 交付
 
-### 3：第一次可玩
+- `bevy_voxel_world` 優先 spike；
+- Avian 優先 physics spike；
+- Bevy input 或 Leafwing 二選一；
+- walk／look／jump、raycast、break／place；
+- chunk／mesh／collider diagnostics。
 
-實作區塊調色盤、玩家周圍串流、greedy meshing、AABB／重力／射線、挖放方塊、簡單高度圖與 egui 指標。第一次生成的區塊連同 provenance 直接提交 RocksDB；玩家修改、空間實體與續行狀態走同一 `WorldStorage` 契約。
+### 完成
 
-除了正常重啟，還要在 write batch、checkpoint 與載入階段注入程序終止。這一步不做光照傳播、水體、美術資產、合成或多人。
+- 另一位測試者可取得 build 並完成挖掘／放置；
+- chunk 邊界行為正確；
+- edit-to-visible latency、frame time、memory 與 task queue 有測量；
+- 對每個 upstream 缺口有可重現記錄。
 
-### 4–5：領地生成進入世界
+D1 之前不寫自有 voxel renderer、mesher 或 physics。
 
-先以獨立程式比較兩種二維 Territory Atlas 候選，使用兩個真群系與大量合成群系測仲裁、索引與快取。原型通過後只開三個生成通道，並為實體化區塊保存實際生產者與輸入雜湊。
+## D2：權威 chunk 與保存
 
-不做水文、侵蝕、大型洞穴網路或全部文檔通道。
+### 交付
 
-### 6–7：模組架構期末考
+- 根據 D1 adoption report 選擇直接採用或最小 adapter；
+- stable block ID、chunk revision、dirty state；
+- `MemoryWorldStorage`／RocksDB；
+- snapshot envelope、atomic batch、durability；
+- chunk unload／reload；
+- normal shutdown 和 crash test。
 
-第二內容包提供新方塊、新群系與可選盒子實體，只依賴公開 API。先靜態建置，再以相同來源產出動態函式庫；兩路必須收斂到同一解析圖與註冊結果。
+### 完成
 
-不為動態路徑加入官方特例，不支援熱卸載或跨工具鏈 ABI。
+- 修改跨重啟保留；
+- 舊 async result 不覆蓋新 revision；
+- 已物化 chunk 不重新生成；
+- checkpoint 可在獨立目錄恢復；
+- 存檔沒有 Bevy Entity、Handle 或 solver handle。
 
-### 8：洞穴第一口
+## D3：公開內容路徑
 
-建立一個根域預設拓撲與一個可由地下群系接管的子域提供者，透過共享入口契約銜接。驗收最小淨空、入口滿足與可達性，不追求完整地質或視覺品質。
+### 交付
 
-## 刻意延後
+- validated `ContentCatalog`；
+- `OfficialContentPlugin`：最小 stone／dirt／placeable item；
+- `TestContentPlugin`：另一 namespace 的 marker block；
+- stable ID duplicate／missing diagnostics；
+- headless content composition test。
 
-- registry、一般版本求解器、簽章、撤銷與二進位快取；
-- WASM、穩定第三方 ABI 與運行期卸載；
-- 多人、帳號、經濟、PostgreSQL 與物件儲存；
-- Rapier、柔體、完整 glTF 角色與第二渲染後端；
-- 通用 shader IR、第三方 Render Graph 擴充與 PBR 美術；
-- 水文、侵蝕、巨型結構與完整洞穴生態。
+### 完成
+
+- 官方內容只用公共 registration；
+- plugin 加入順序不改變內容 ID；
+- test content 可獨立啟動；
+- 缺失權威 ID 不 silent remap。
+
+## D4：最小程序世界
+
+### 交付
+
+- world seed 與 `WorldgenConfig`；
+- 兩個 placeholder biome 或 terrain style；
+- deterministic terrain height（`y`）與最小洞穴／空洞；
+- generator revision、config hash 和 chunk provenance；
+- 新區塊生成後立即 snapshot。
+
+### 完成
+
+- 相同 seed／`(x, z)`／config 在 headless 測試產生相同權威 chunk；
+- 不同 task／chunk 順序不改變結果；
+- generator 更新不改變舊 chunk；
+- 玩家循環仍完整。
+
+不要求第一版就實作完整領地、水文、地質或洞穴拓撲架構。
+
+## D5：交付與回歸
+
+### 自動驗收
+
+- client 可玩 smoke；
+- headless fixed-tick gameplay；
+- save round-trip／old-schema fixture；
+- RocksDB crash／atomicity；
+- chunk revision race；
+- Y-up six-face mesh／raycast／collider；
+- official／test content order randomization；
+- 10 分鐘 traversal memory／queue bound；
+- checkpoint restore。
+
+### 人工驗收
+
+- 新測試者不看原始碼能在 5 分鐘內完成挖掘、放置、退出與重載；
+- 畫面清楚區分目標方塊、選中方塊和保存狀態；
+- crash／missing content／存檔失敗有可理解診斷；
+- build 與操作說明可重複。
+
+## Demo 明確不做
+
+- 動態模組載入、registry、mod marketplace、WASM sandbox；
+- 多人、rollback 或 lockstep；
+- 自研 renderer／physics／ECS／scheduler／asset system；
+- 完整 terrain graph、文明、水文或世界編輯器；
+- 正式角色美術、複雜動畫、柔體與進階 PBR；
+- 以 Godot 作第二 runtime。
+
+## Demo 完成定義
+
+以下條件全部成立才算完成：
+
+1. 一個真實玩家可完成完整循環。
+2. client 與 headless 使用相同權威 gameplay／world／persistence plugin。
+3. 保存與 crash 測試證明已確認 revision 不遺失、不半寫。
+4. 官方內容證明公共 Bevy plugin 路徑。
+5. upstream adoption report 沒有以猜測支持的自研替代。
+6. 性能、記憶體和 queue 有基線數據，可供下一階段比較。
 
 ## 相關文件
 
-- [一人與 AI 協作的開發策略](../foundations/development-strategy.md)
-- [Nickel 驅動的套件系統與雙實現路徑](../architecture/package-management.md)
-- [世界持久化與 RocksDB](../architecture/world-persistence.md)
-- [渲染架構與擴充邊界](../architecture/rendering.md)
+- [Bevy 執行期整合路線](roadmap-game-engine.md)
+- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
+- [世界持久化](../architecture/world-persistence.md)
+- [模組與內容組合](../architecture/module-composition.md)
 - [待決問題](open-questions.md)
