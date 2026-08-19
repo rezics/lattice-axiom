@@ -4,9 +4,6 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-ai-game-development
-  - implementation-plan-2026-08-19
 ---
 
 # 決策 0005：採用 Rust 並集中自研遊戲差異層
@@ -32,7 +29,7 @@ Lattice Axiom 需要自行定義模組組合、無限體素世界、區塊生命
 | --- | --- |
 | 遊戲核心與內容契約 | 自研 |
 | 區塊、調色盤、流式生命週期 | 自研 |
-| 模組求值、解析與數值 ID | Nickel + 自研解析模型 |
+| 套件宣告、解析與數值 ID | Nickel + 自研 Rust package kernel；見[決策 0010](0010-nickel-driven-package-system.md) |
 | 動態原生載入 | libloading + 自研 ABI 驗證與註冊層 |
 | 世界生成與產物記錄 | 自研 |
 | 世界儲存語義 | 自研 `WorldStorage` 介面；RocksDB 實現 |

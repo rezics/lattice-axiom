@@ -4,9 +4,6 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-worldgen-1
-  - conversation-2026-08-09-worldgen-2
 amended_by:
   - 0003-no-global-version-package-scoped-compatibility.md
   - 0004-territorial-delegation-for-spatial-generation.md
@@ -90,4 +87,3 @@ Lattice Axiom 的世界生成採用以下方向：
 4. 領地沒有未定義區域，邊界可查詢且過渡連續。
 5. 一千個合成群系下仍能在可接受時間內建立、查詢與快取領地。
 6. 相鄰區塊以任意順序或平行生成時，地形、水系與結構計畫保持一致。
-

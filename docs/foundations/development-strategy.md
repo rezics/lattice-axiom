@@ -4,9 +4,6 @@ status: accepted
 type: overview
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-ai-game-development
-  - implementation-plan-2026-08-19
 decision:
   - ../decisions/0005-rust-and-focused-build-boundary.md
 ---
@@ -45,7 +42,7 @@ AI 適合在這些決策之下處理：
 
 ## 買／造邊界
 
-自研真正造成產品差異的部分：模組組合、登錄表、區塊生命週期、世界生成、持久化語義、主迴圈與內容契約。
+自研真正造成產品差異的部分：Nickel 驅動的套件組合、package kernel、登錄表、區塊生命週期、世界生成、持久化語義、主迴圈與內容契約。
 
 直接採用成熟 upstream 處理 GPU、視窗、數學、ECS 儲存、體素網格、序列化、除錯 UI、嵌入式儲存等基礎問題。以窄門面隔離它們，只有在量測證明現成方案構成限制時才 fork 或替換。
 
@@ -93,7 +90,7 @@ demo 不做：
 ## 相關文件
 
 - [專案願景與設計支柱](project-vision.md)
+- [已選技術棧與採用邊界](technology-stack.md)
 - [決策 0005：Rust 與自研邊界](../decisions/0005-rust-and-focused-build-boundary.md)
 - [渲染架構與擴充邊界](../architecture/rendering.md)
 - [第一個 demo 路線圖](../planning/roadmap-first-demo.md)
-

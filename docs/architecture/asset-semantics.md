@@ -4,8 +4,6 @@ status: exploration
 type: explanation
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-turn-6
 ---
 
 # 資產管線與模型語義
@@ -140,4 +138,3 @@ Dragon Model
 - [實體、物理與表現層](entity-physics-presentation.md)
 - [物理資產與局部形變創作](physical-authoring.md)
 - [渲染與物理技術地圖](../research/renderer-physics-landscape.md)
-

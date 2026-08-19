@@ -14,16 +14,18 @@ updated: 2026-08-19
 
 - [x] 實作語言採 Rust，核心自研集中在模組、區塊、世界生成與持久化語義；見[決策 0005](../decisions/0005-rust-and-focused-build-boundary.md)。
 - [x] demo 的最小可玩驗收已寫入[第一個 demo 路線圖](roadmap-first-demo.md)。
-- [x] 宣告式組合語言採 Nickel，完整求值後收斂到正規化 JSON；見[決策 0007](../decisions/0007-nickel-as-composition-language.md)。
-- [x] 靜態建置與資料夾動態載入共用同一 `ResolvedModuleGraph`；見[決策 0008](../decisions/0008-static-and-dynamic-realizations-share-one-graph.md)。
+- [x] 套件系統以 Nickel 驅動宣告與組合、以 Rust 執行解析與實現；求值結果直接轉成 Rust 強型別，不使用 JSON 內部總線；見[決策 0010](../decisions/0010-nickel-driven-package-system.md)。
+- [x] 靜態建置與資料夾動態載入共用同一 `LockedGameGraph`；見[決策 0008](../decisions/0008-static-and-dynamic-realizations-share-one-graph.md)與[決策 0010](../decisions/0010-nickel-driven-package-system.md)。
 - [x] demo GPU 後端採 wgpu，以 `lattice-render` 門面與 headless 實現隔離；見[決策 0006](../decisions/0006-wgpu-behind-rendering-facade.md)。
 - [x] demo 直接以 RocksDB 保存權威區塊快照，不先建立自訂 Region File；見[決策 0009](../decisions/0009-rocksdb-authoritative-world-snapshots.md)。
 
 ## 優先級 0：第一個 demo 的實作契約
 
-- [ ] `Module`、`GameProfile` Nickel 合約與正規化 JSON schema 的最小欄位是什麼？
-- [ ] canonicalization 如何固定集合排序、套件識別、路徑、數值與錯誤來源？
-- [ ] `ResolvedModuleGraph`、lock graph、登錄表與穩定數值 ID 的 Rust 資料模型為何？
+- [ ] `lattice.lib` 的 `Package`、`GameProfile`、`Capability` 與 `Realization` 合約最小欄位是什麼？
+- [ ] `nickel-lang` 求值結果如何直接轉成 `CompositionSpec`，並保留足夠的來源診斷？
+- [ ] 來源請求、既有 lock、受控 import 根與套件 manifest 的兩階段 bootstrap 如何避免循環？
+- [ ] `CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RuntimeImage`、lock graph、登錄表與穩定數值 ID 的 Rust 資料模型為何？
+- [ ] `lattice.lock` canonicalization 如何固定集合排序、套件識別、路徑、數值與內容雜湊？
 - [ ] 模組衝突、能力提供者與缺少精確來源時，CLI 的診斷與修復建議如何呈現？
 - [ ] 區塊尺寸、調色盤格式與 RocksDB 值 envelope 的第一組基準參數為何？
 - [ ] 自動存檔的耐久等級、可接受資料損失視窗與明確 `fsync` 邊界是什麼？
@@ -112,8 +114,8 @@ updated: 2026-08-19
 
 只在開始相應原型時建立：
 
-1. Nickel `Module`／`GameProfile` 合約與正規化 JSON schema。
-2. `ResolvedModuleGraph`、lock graph 與數值 ID 資料模型。
+1. `lattice.lib` Nickel 合約與 Rust `CompositionSpec` 對應模型。
+2. `LockedGameGraph`、`BuildPlan`、`RuntimeImage`、lock graph 與數值 ID 資料模型。
 3. RocksDB 鍵格式、耐久政策與故障注入測試計畫。
 4. 渲染擷取垂直切片與效能預算。
 5. 二維多尺度領地與大量合成群系的可重複原型報告。
@@ -122,7 +124,7 @@ updated: 2026-08-19
 ## 相關文件
 
 - [第一個 demo 路線圖](roadmap-first-demo.md)
-- [套件管理、Nickel 組合與雙實現路徑](../architecture/package-management.md)
+- [Nickel 驅動的套件系統與雙實現路徑](../architecture/package-management.md)
 - [世界持久化與 RocksDB World Store](../architecture/world-persistence.md)
 - [渲染架構與擴充邊界](../architecture/rendering.md)
 - [可組合世界生成架構](../architecture/world-generation.md)

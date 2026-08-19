@@ -4,9 +4,6 @@ status: proposed
 type: explanation
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-game-database
-  - implementation-plan-2026-08-19
 decision:
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md
   - ../decisions/0009-rocksdb-authoritative-world-snapshots.md

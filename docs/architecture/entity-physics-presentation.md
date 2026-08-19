@@ -4,9 +4,6 @@ status: exploration
 type: explanation
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-turn-4
-  - conversation-2026-08-09-turn-5
 ---
 
 # 實體、物理與表現層
@@ -141,4 +138,3 @@ Damage Event
 - [渲染架構與擴充邊界](rendering.md)
 - [資產管線與模型語義](asset-semantics.md)
 - [物理資產與局部形變創作](physical-authoring.md)
-

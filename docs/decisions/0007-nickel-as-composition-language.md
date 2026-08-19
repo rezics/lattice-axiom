@@ -1,14 +1,16 @@
 ---
 title: 採 Nickel 作為組合語言
-status: accepted
+status: superseded
 type: decision
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - implementation-plan-2026-08-19
+superseded_by:
+  - 0010-nickel-driven-package-system.md
 ---
 
 # 決策 0007：採 Nickel 作為組合語言
+
+> 本決策已由[決策 0010：以 Nickel 驅動套件系統並以 Rust 執行](0010-nickel-driven-package-system.md)取代。保留本頁以記錄最初選擇；其中 canonical JSON 內部邊界與「可替換來源前端」定位不再生效。
 
 ## 背景
 
@@ -61,4 +63,3 @@ Nickel 以記錄、函式、合約與合併為核心，並能匯出 JSON。這�
 - 合約錯誤能指出來源檔、欄位與期望語義。
 - 合併順序與預設值有 golden test，輸入欄位重新排序不改變 lock graph 雜湊。
 - 執行期核心的相依圖中不包含 Nickel 求值器。
-

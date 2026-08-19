@@ -4,19 +4,15 @@ status: proposed
 type: explanation
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-2026-08-09-turn-1
-  - conversation-2026-08-09-turn-2
-  - conversation-2026-08-09-worldgen-4
 decision:
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md
-  - ../decisions/0007-nickel-as-composition-language.md
+  - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
 ---
 
 # 模組核心與宣告式組合
 
-> 模組組合採 Nickel，靜態建置與資料夾動態載入共用同一 `ResolvedModuleGraph`，已由[決策 0007](../decisions/0007-nickel-as-composition-language.md)與[決策 0008](../decisions/0008-static-and-dynamic-realizations-share-one-graph.md)採納。長期穩定 ABI、WASM 與 registry 仍未決定。
+> 模組組合採 Nickel，靜態建置與資料夾動態載入共用同一 `LockedGameGraph`，已由[決策 0010](../decisions/0010-nickel-driven-package-system.md)與[決策 0008](../decisions/0008-static-and-dynamic-realizations-share-one-graph.md)採納。長期穩定 ABI、WASM 與 registry 仍未決定。
 
 ## 核心命題
 
@@ -29,11 +25,11 @@ Lattice Axiom 不把遊戲理解為「一個完成的執行檔加上一批外掛
 + 組態
 + 工具鏈輸入
         ↓
-解析相依性與能力
+Nickel 組合 + package kernel 解析
         ↓
-已解析模組圖
+LockedGameGraph
         ↓
-建置或載入
+BuildPlan → RuntimeImage
         ↓
 可執行的遊戲閉包
 ```
@@ -89,7 +85,7 @@ Lattice Axiom 不把遊戲理解為「一個完成的執行檔加上一批外掛
 - 直譯腳本
 - 純資料編譯
 
-所有發現方式最後必須產生相同的 `ResolvedModuleGraph`。之後的登錄表、排程器、資產編譯器與渲染器不需要知道模組原本來自 Nickel profile、鎖定圖還是資料夾掃描。
+所有發現方式最後必須產生相同的 `LockedGameGraph`。之後的建置計畫、登錄表、排程器、資產編譯器與渲染器不需要知道模組原本來自 Nickel profile、既有 lock 還是資料夾掃描。
 
 ## 效能模型
 
@@ -134,39 +130,40 @@ Lattice Axiom 不把遊戲理解為「一個完成的執行檔加上一批外掛
 官方遊戲、伺服器規則集與整合包是一份描述「這個遊戲由什麼構成」的 Nickel 根設定檔，而不只是 `mods/` 目錄：
 
 ```nickel
-let lattice = import "contracts.ncl" in
+let lattice = import "lattice/game.ncl" in
 {
-  modules = {
+  packages = {
     "lattice.runtime" = {
-      version = "=0.1.0",
-      realization = "native-static",
+      source = 'Registry { registry = "official", version = "=0.1.0" },
+      realization = 'NativeStatic,
     },
     "lattice.official" = {
-      version = "=0.1.0",
-      realization = "native-static",
+      source = 'Registry { registry = "official", version = "=0.1.0" },
+      realization = 'NativeStatic,
     },
     "example.dragon" = {
-      path = "./modules/dragon",
-      realization = "native-dynamic",
+      source = 'Path "./packages/dragon",
+      realization = 'NativeDynamic,
     },
   },
 } | lattice.GameProfile
 ```
 
-Nickel 只負責組合期的合約、合併與參數化；求值結果轉成有版本的正規化 JSON 模型，再進入 resolver。完整格式與雙路徑見[套件管理、Nickel 組合與雙實現路徑](package-management.md)。
+Nickel 負責套件宣告、合約、合併、overlay 與參數化；求值結果透過嵌入 API 直接轉成有版本的 Rust `CompositionSpec`，再由 package kernel 解析為 `LockedGameGraph`。完整模型與雙路徑見[Nickel 驅動的套件系統與雙實現路徑](package-management.md)。
 
 根 manifest 可以有自己的元套件發行版本，但它不支配內部套件、演算法、能力契約與資料 schema 的版本。Lattice Axiom 不使用一個 `gameVersion` 或 `worldVersion` 作為所有相容性的總開關。
 
 | 層 | 作用 |
 | --- | --- |
-| Manifest | 宣告套件版本範圍、能力需求、可選相依性與根政策 |
-| Resolved graph | 決定實際套件、能力提供者、adapter 與 fallback |
-| Lock graph | 鎖定精確版本、來源、內容雜湊、組態與依賴邊 |
+| `CompositionSpec` | 保存 Nickel 合約與合併後的套件要求、能力需求、實現偏好與根政策 |
+| `LockedGameGraph` | 決定並鎖定實際套件、來源、內容雜湊、能力提供者、adapter 與 fallback |
+| `BuildPlan` | 把已鎖定圖轉成可執行的建置、資產編譯、封裝與快取工作 DAG |
+| `RuntimeImage` | 保存啟動與熱路徑使用的 ID、登錄表、排程、資產索引與窄入口 |
 | Capability contract | 判斷提供者與使用者能否交換同一語義 |
 | Owner schema | 由資料擁有者讀取與遷移自己的持久化資料 |
 | Artifact receipt | 記錄某項編譯或生成產物真正依賴的子圖 |
 
-解析器輸出的可識別輸入可能包括：
+package kernel 輸出的可識別輸入可能包括：
 
 - 核心與模組版本或內容雜湊
 - 能力契約版本與所選提供者
@@ -190,7 +187,7 @@ Nickel 只負責組合期的合約、合併與參數化；求值結果轉成有�
 | 沙箱 WASM | 能力隔離、較可控的第三方執行 | 邊界與資料交換成本、API 粒度限制 |
 | 直譯腳本 | 快速創作、熱重載與低門檻 | 效能、工具鏈與行為可預測性；不在 v1 範圍 |
 
-來源 API 可以一致，但實現方式不必一致。模組清單應明確宣告支援的實現方式與所需能力。
+套件與模組 API 可以一致，但實現方式不必一致。套件宣告應明確列出支援的實現方式與所需能力。
 
 ## 已知限制
 
@@ -211,6 +208,6 @@ Nickel 只負責組合期的合約、合併與參數化；求值結果轉成有�
 
 - [專案願景與設計支柱](../foundations/project-vision.md)
 - [版本、相依性與相容性架構](versioning-and-compatibility.md)
-- [套件管理、Nickel 組合與雙實現路徑](package-management.md)
+- [Nickel 驅動的套件系統與雙實現路徑](package-management.md)
 - [渲染架構與擴充邊界](rendering.md)
 - [待決問題](../planning/open-questions.md)

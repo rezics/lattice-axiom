@@ -4,16 +4,14 @@ status: proposed
 type: explanation
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-2026-08-09-worldgen-4
-  - implementation-plan-2026-08-19
 decision:
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md
+  - ../decisions/0010-nickel-driven-package-system.md
 ---
 
 # 版本、相依性與相容性架構
 
-> [不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)已獲採納。manifest 來源採 Nickel、組合後進入正規化 JSON，已另由[決策 0007](../decisions/0007-nickel-as-composition-language.md)採納；本頁其餘 lock schema、能力契約與遷移細節仍是提案。
+> [不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)已獲採納。Nickel 驅動套件宣告與組合、求值後直接進入 Rust 強型別管線，已由[決策 0010](../decisions/0010-nickel-driven-package-system.md)採納；本頁其餘 lock schema、能力契約與遷移細節仍是提案。
 
 ## 核心模型
 
@@ -24,7 +22,7 @@ decision:
       Dependency Resolver
           │
           ▼
-Resolved Package + Capability Graph
+       LockedGameGraph
           │  精確版本、來源、內容雜湊與所選提供者
           ├───────────────┐
           ▼               ▼
@@ -58,18 +56,25 @@ Resolved Package + Capability Graph
 ## Nickel 根設定檔
 
 ```nickel
-let lattice = import "contracts.ncl" in
+let lattice = import "lattice/game.ncl" in
 {
-  package = {
+  game = {
     id = "lattice.official-game",
     version = "2026.8",
-    kind = "game-profile",
   },
-  dependencies = {
-    "lattice.runtime" = "=0.1.0",
-    "lattice.cave.contract" = "=2.1.0",
-    "lattice.cave.topology.geodesic" = "=1.4.0",
-    "lattice.biomes.official" = "=3.0.0",
+  packages = {
+    "lattice.runtime" = {
+      source = 'Registry { registry = "official", version = "=0.1.0" },
+    },
+    "lattice.cave.contract" = {
+      source = 'Registry { registry = "official", version = "=2.1.0" },
+    },
+    "lattice.cave.topology.geodesic" = {
+      source = 'Registry { registry = "official", version = "=1.4.0" },
+    },
+    "lattice.biomes.official" = {
+      source = 'Registry { registry = "official", version = "=3.0.0" },
+    },
   },
   capabilities = {
     require = {
@@ -86,7 +91,7 @@ let lattice = import "contracts.ncl" in
 
 `lattice.official-game@2026.8` 只識別這份根設定的發布。若兩個實例解析出不同根版本但權威能力子圖相容，它們不應只因標籤不同而被拒絕。
 
-v1 profile 使用精確版本或已鎖定來源，不先承諾一般版本求解器。Nickel 完整求值後輸出正規化 JSON，再由 resolver 建立 lock graph；`.ncl` 原始文字本身不是 lock graph。
+v1 profile 使用精確版本或已鎖定來源，不先承諾一般版本求解器。Nickel 完整求值後直接轉成 Rust `CompositionSpec`，再由 package kernel 建立 `LockedGameGraph`；`.ncl` 原始文字本身不是 lock graph。
 
 ## 鎖定圖
 
@@ -181,7 +186,7 @@ World {
 
 ## 尚待設計
 
-- 正規化組合 JSON 與 lock graph 的實際 schema、canonicalization 與演進規則。
+- `CompositionSpec`、`LockedGameGraph` 與持久化 `lattice.lock` 的實際 schema、canonicalization 與演進規則。
 - 能力契約使用 SemVer、結構相容或自訂版本代數的範圍。
 - 舊原生生成器的封存與安全執行方式。
 - 產物生成記錄的儲存粒度、去重與垃圾回收。
@@ -190,7 +195,7 @@ World {
 ## 相關文件
 
 - [模組核心與宣告式組合](module-composition.md)
-- [套件管理、Nickel 組合與雙實現路徑](package-management.md)
+- [Nickel 驅動的套件系統與雙實現路徑](package-management.md)
 - [世界持久化與 RocksDB World Store](world-persistence.md)
 - [可組合世界生成架構](world-generation.md)
 - [決策 0003：不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)

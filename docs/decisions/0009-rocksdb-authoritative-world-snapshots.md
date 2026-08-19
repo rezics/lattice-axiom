@@ -4,9 +4,6 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-game-database
-  - implementation-plan-2026-08-19
 ---
 
 # 決策 0009：demo 以 RocksDB 保存權威世界快照
@@ -83,4 +80,3 @@ provenance 用來回答來源、差異、遷移與 regenerate 基線，不表示
 - 量測不同區塊尺寸、壓縮、批次、快取與壓實設定下的讀寫延遲、放大與磁碟占用。
 - checkpoint 能在獨立目錄還原，並由內容雜湊或巡檢工具驗證。
 - `MemoryWorldStorage` 與 RocksDB 實現通過同一契約測試套件。
-

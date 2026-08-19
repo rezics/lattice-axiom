@@ -4,13 +4,11 @@ status: exploration
 type: research
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-turn-4
 ---
 
 # 渲染與物理技術地圖
 
-> 這是由原對話整理出的候選清單，不是選型結論。專案尚未逐項建立、整合或進行效能測試；版本、平台與授權狀態必須在評估時重新查證。
+> 這是早期研究整理出的候選清單，不是選型結論。專案尚未逐項建立、整合或進行效能測試；版本、平台與授權狀態必須在評估時重新查證。
 
 ## 需求輪廓
 
@@ -102,4 +100,3 @@ source:
 - [渲染架構與擴充邊界](../architecture/rendering.md)
 - [實體、物理與表現層](../architecture/entity-physics-presentation.md)
 - [物理資產與局部形變創作](../architecture/physical-authoring.md)
-

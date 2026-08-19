@@ -4,12 +4,6 @@ status: proposed
 type: explanation
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-2026-08-09-worldgen-1
-  - conversation-2026-08-09-worldgen-2
-  - conversation-2026-08-09-worldgen-3
-  - conversation-2026-08-09-worldgen-4
-  - conversation-2026-08-09-worldgen-5
 decision:
   - ../decisions/0001-territory-first-biome-driven-world-generation.md
   - ../decisions/0002-hybrid-cave-generation-composition.md

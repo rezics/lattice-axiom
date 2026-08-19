@@ -4,9 +4,6 @@ status: proposed
 type: explanation
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-2026-08-09-turn-3
-  - implementation-plan-2026-08-19
 decision:
   - ../decisions/0006-wgpu-behind-rendering-facade.md
 ---

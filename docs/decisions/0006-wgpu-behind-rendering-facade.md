@@ -4,9 +4,6 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-2026-08-09-turn-3
-  - implementation-plan-2026-08-19
 ---
 
 # 決策 0006：demo 採 wgpu 並以渲染門面隔離
@@ -71,4 +68,3 @@ pub trait Renderer: Send {
 - 以依賴檢查保證核心與內容 crate 無法引用 wgpu。
 - 同一個 `RenderWorld` 能同時提交給 wgpu 與 headless 實現。
 - 記錄區塊網格化、擷取、剔除與提交時間，確認門面沒有造成不可接受的複製。
-

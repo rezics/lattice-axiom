@@ -4,8 +4,6 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-worldgen-4
 ---
 
 # 決策 0003：不以全域大版本決定相容性
@@ -80,4 +78,3 @@ Lattice Axiom 由核心、演算法、內容、資產、工具與組態組成。
 - 在[版本、相依性與相容性架構](../architecture/versioning-and-compatibility.md)中定義候選 manifest、lock graph 與產物生成記錄。
 - 為多人連線區分伺服器權威能力、可協商能力與純表現能力。
 - 為持久化生成器定義封存、內容定址取得、撤銷與安全執行政策。
-

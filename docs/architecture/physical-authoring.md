@@ -4,8 +4,6 @@ status: exploration
 type: explanation
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-turn-7
 ---
 
 # 物理資產與局部形變創作
@@ -162,4 +160,3 @@ Game Physical Asset
 - [資產管線與模型語義](asset-semantics.md)
 - [實體、物理與表現層](entity-physics-presentation.md)
 - [待決問題](../planning/open-questions.md)
-

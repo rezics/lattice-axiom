@@ -4,13 +4,11 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-19
-source:
-  - conversation-2026-08-09-turn-1
-  - conversation-2026-08-09-turn-2
-  - implementation-plan-2026-08-19
 ---
 
 # 決策 0008：靜態與動態實現收斂於同一模組圖
+
+> [決策 0010](0010-nickel-driven-package-system.md)將這個共同解析圖的現行名稱明確為 `LockedGameGraph`；本決策要求靜態與動態路徑共用同一圖的語義不變。
 
 ## 背景
 
@@ -19,10 +17,10 @@ source:
 ## 決策
 
 1. 模組的邏輯身分與實現方式正交。v1 支援純資料、靜態原生與動態原生；WASM 是遠期實現方式。
-2. 宣告式 profile 與資料夾掃描先各自產生候選模組，再交給同一 resolver，唯一輸出為 `ResolvedModuleGraph`。
+2. 宣告式 profile 與資料夾掃描先各自產生候選模組，再交給同一 resolver，唯一輸出為 `LockedGameGraph`。
 3. 套件版本、來源、能力、組態、實現方式與工具鏈識別都寫入 lock graph；v1 只解析明確版本與精確鎖定，不先建立完整 SemVer 求解器。
-4. 靜態路徑依 `ResolvedModuleGraph` 產生膠水 crate，由 `register_all()` 呼叫各模組的公開註冊函式，再交給 Cargo 建置與 LTO。
-5. 動態路徑掃描資料夾中的正規化 manifest，解析同一模組圖後載入預編譯動態函式庫或純資料模組。
+4. 靜態路徑依 `LockedGameGraph` 產生膠水 crate，由 `register_all()` 呼叫各模組的公開註冊函式，再交給 Cargo 建置與 LTO。
+5. 動態路徑掃描資料夾中的版本化 `PublishedPackageDescriptor`，解碼成強型別並解析同一遊戲圖後，載入預編譯動態函式庫或純資料模組。
 6. 動態原生 v1 僅支援相同且受記錄工具鏈的可信程式碼。單一 `extern "C"` 入口回傳具 ABI 版本與工具鏈雜湊的 `#[repr(C)]` 描述符；載入器不相容時提供可讀診斷。
 7. 跨動態邊界優先傳遞可序列化的註冊載荷；系統函式在註冊期轉成排程器可直接呼叫的窄函式指標。熱路徑不查詢模組管理器。
 8. 數值 ID 由穩定鍵與已解析圖決定，不依資料夾枚舉、註冊或動態載入順序。
@@ -31,19 +29,19 @@ source:
 ## 共同流程
 
 ```text
-Nickel profile / folder manifests
+CompositionSpec / folder descriptors
                ↓
-       candidate modules
+        candidate packages
                ↓
        one resolver + policy
                ↓
-      ResolvedModuleGraph
+        LockedGameGraph
           ┌────┴────┐
           ▼         ▼
    glue crate    dylib / data loader
           └────┬────┘
                ▼
-      common registration model
+          RuntimeImage
                ▼
        IDs, tables, schedules
 ```
@@ -75,4 +73,3 @@ Nickel profile / folder manifests
 - 隨機化候選發現順序不改變解析結果。
 - 不相容 ABI、工具鏈或缺少相依性都在載入玩法狀態前失敗並指出修復方式。
 - 基準測試比較靜態與動態系統呼叫，確認差異只出現在預期邊界。
-

@@ -4,9 +4,6 @@ status: exploration
 type: research
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-worldgen-1
-  - conversation-2026-08-09-worldgen-2
 ---
 
 # Minecraft 世界生成與洞穴模組的設計教訓
@@ -123,4 +120,3 @@ Minecraft 官方回饋同時出現偏好巨大洞窟與認為巨大洞窟過於�
 - [空間生成領地委派決策](../decisions/0004-territorial-delegation-for-spatial-generation.md)
 - [現代地形與洞穴生成研究](modern-terrain-and-cave-generation.md)
 - [待決問題](../planning/open-questions.md)
-

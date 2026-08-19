@@ -4,8 +4,6 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-worldgen-3
 amended_by:
   - 0004-territorial-delegation-for-spatial-generation.md
 ---
@@ -97,4 +95,3 @@ amended_by:
 - 在[洞穴生成架構](../architecture/cave-generation.md)中定義資料契約與原型切片。
 - 為共享入口、實際淨空、可達性和流體連續性建立自動驗證。
 - 用同一組種子比較純雕刻、純群系與混合模型的連通性、局部辨識度和生成成本。
-

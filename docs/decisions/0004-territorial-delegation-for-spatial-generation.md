@@ -4,8 +4,6 @@ status: accepted
 type: decision
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-worldgen-5
 ---
 
 # 決策 0004：空間生成採領地遞迴委派
@@ -100,4 +98,3 @@ CaveTopologyDelegation {
 
 - [決策 0001](0001-territory-first-biome-driven-world-generation.md)中的「群系提交意圖」現在明確包含群系可在領地內提供完整的基礎生成能力。
 - [決策 0002](0002-hybrid-cave-generation-composition.md)中的「每維度唯一洞穴主幹」修正為「每拓撲所有權域唯一提供者；每維度唯一協調器」。
-

@@ -4,9 +4,6 @@ status: exploration
 type: research
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-worldgen-4
-  - conversation-2026-08-09-worldgen-5
 ---
 
 # 現代地形與洞穴生成的演算法和硬體邊界
@@ -118,4 +115,3 @@ source:
 - [空間生成採領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)
 - [Minecraft 世界生成與洞穴模組的設計教訓](minecraft-world-generation-lessons.md)
 - [待決問題](../planning/open-questions.md)
-

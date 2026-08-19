@@ -4,9 +4,6 @@ status: proposed
 type: explanation
 locale: zh-Hant
 updated: 2026-08-09
-source:
-  - conversation-2026-08-09-worldgen-3
-  - conversation-2026-08-09-worldgen-5
 decision:
   - ../decisions/0002-hybrid-cave-generation-composition.md
   - ../decisions/0004-territorial-delegation-for-spatial-generation.md
