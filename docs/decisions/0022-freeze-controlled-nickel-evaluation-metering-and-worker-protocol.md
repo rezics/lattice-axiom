@@ -47,7 +47,8 @@ current-package、versioned-library、profile-overlay 與 test-fixture 四種 ro
 - `.` segment 先消除，`..` 必須仍留在同一 root；absolute、drive、UNC、device、反斜線、
   非 UTF-8 NFC 與未授權 path 一律拒絕；
 - 跨 root 只使用 request 明文給定的 Nickel package alias；alias 是 Nickel identifier，
-  `latticeaxiom_lib_v1` 保留給 `latticeaxiom.lib` contract major 1；
+  `latticeaxiom_lib_v2` 保留給 `latticeaxiom.lib` contract major 2；library major 必須在
+  request 中明文記錄，且保留 alias 的版本後綴必須與該 major 完全一致；
 - alias 在一個 request 內唯一；同一 root／entry 不得由多個 alias 指向，package map 不做
   filesystem、environment 或 discovery-order fallback；
 - overlay／fixture alias 由 profile／fixture 明文記錄，不能由目錄列舉推導。
