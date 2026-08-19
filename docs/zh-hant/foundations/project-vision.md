@@ -3,7 +3,7 @@ title: 專案願景與設計支柱
 status: exploration
 type: overview
 locale: zh-Hant
-updated: 2026-08-09
+updated: 2026-08-19
 source:
   - conversation-2026-08-09
 ---
@@ -14,7 +14,7 @@ source:
 
 Lattice Axiom 探索一種「遊戲本身就是模組組合結果」的遊戲架構：核心提供可組合的機制，官方內容與第三方內容透過相同能力加入遊戲，而建置與執行系統把這些描述整理成可高效執行的形式。
 
-這是目前從對話中提煉出的架構願景，不是完整的遊戲願景。玩法類型、玩家體驗、世界觀與商業模式仍未定義。
+這是目前從對話中提煉出的架構願景，不是完整的遊戲願景。第一個 demo 以「官方遊戲 + 可組合平台」的最小縱切驗證它；完整玩法、世界觀與商業模式仍未定義。
 
 ## 暫定設計支柱
 
@@ -53,6 +53,6 @@ Vanilla 內容不應依賴第三方無法使用的私有能力。官方內容本
 ## 相關文件
 
 - [模組核心與宣告式組合](../architecture/module-composition.md)
+- [一人與 AI 協作的開發策略](development-strategy.md)
 - [物理資產與局部形變創作](../architecture/physical-authoring.md)
 - [詞彙表](glossary.md)
-

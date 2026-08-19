@@ -3,7 +3,7 @@ title: 文件組織方式
 status: active
 type: meta
 locale: zh-Hant
-updated: 2026-08-09
+updated: 2026-08-19
 ---
 
 # 文件組織方式
@@ -18,6 +18,7 @@ updated: 2026-08-09
 4. 對話是來源，主題頁是整理後的知識；同一項規格只維護一份。
 5. 只有真正形成選擇時才建立決策紀錄，保留背景、選項、結果與後果。
 6. 先建立有內容的分類，不為了看起來完整而建立空目錄。
+7. 原始對話在完成主題化、來源索引與互鏈檢查後可以刪除；`sources/` 保存檔名、主題與正式去向，不把聊天紀錄當永久規格副本。
 
 ## 為何適合現在的 Lattice Axiom
 
@@ -81,10 +82,10 @@ docs/zh-hant/
 
 檔名採 `NNNN-short-title.md`；狀態至少支援 `proposed`、`accepted`、`rejected`、`deprecated` 與 `superseded`。
 
-## 這次沒有做的事
+## 目前不做的事
 
-- 沒有把所有對話逐句複製到主題頁。
-- 沒有把對話中的技術偏好提升為已接受決策。
+- 不把所有對話逐句複製到主題頁。
+- 不因技術偏好出現在對話中就提升為已接受決策；需要維護者確認與 ADR。
 - 沒有選擇靜態網站產生器；目前 Markdown 已足夠。
 - 沒有建立尚無讀者任務可支撐的空教學或 API 目錄。
 
@@ -96,4 +97,3 @@ docs/zh-hant/
 - [Write the Docs：文件應可掃讀、就近、單一來源且可定位](https://www.writethedocs.org/guide/writing/docs-principles/)
 - [The Good Docs Project：先從讀者、任務與維護能力設計資訊架構](https://www.thegooddocsproject.dev/tactic/ia-guide)
 - [MADR：以精簡 Markdown 紀錄單一重要決策及其理由](https://adr.github.io/madr/)
-

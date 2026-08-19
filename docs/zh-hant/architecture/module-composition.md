@@ -1,20 +1,22 @@
 ---
 title: 模組核心與宣告式組合
-status: exploration
+status: proposed
 type: explanation
 locale: zh-Hant
-updated: 2026-08-09
+updated: 2026-08-19
 source:
   - conversation-2026-08-09-turn-1
   - conversation-2026-08-09-turn-2
   - conversation-2026-08-09-worldgen-4
 decision:
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md
+  - ../decisions/0007-nickel-as-composition-language.md
+  - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
 ---
 
 # 模組核心與宣告式組合
 
-> 本頁整理架構方向，尚未決定程式語言、ABI、套件格式或建置工具。[不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)已獲採納。
+> 模組組合採 Nickel，靜態建置與資料夾動態載入共用同一 `ResolvedModuleGraph`，已由[決策 0007](../decisions/0007-nickel-as-composition-language.md)與[決策 0008](../decisions/0008-static-and-dynamic-realizations-share-one-graph.md)採納。長期穩定 ABI、WASM 與 registry 仍未決定。
 
 ## 核心命題
 
@@ -47,7 +49,7 @@ Lattice Axiom 不把遊戲理解為「一個完成的執行檔加上一批外掛
 - 物品、配方與登錄表
 - 渲染、物理、網路與持久化的共通能力
 - 資產生命週期
-- 模組發現、解析、註冊與卸載政策
+- 模組發現、解析與註冊政策；v1 不支援執行期卸載
 
 內容模組則提供具體實例：
 
@@ -87,7 +89,7 @@ Lattice Axiom 不把遊戲理解為「一個完成的執行檔加上一批外掛
 - 直譯腳本
 - 純資料編譯
 
-所有發現方式最後應產生相同的 `ResolvedModuleGraph`。之後的登錄表、排程器、資產編譯器與渲染器不需要知道模組原本來自 Nix 式描述、套件檔還是資料夾掃描。
+所有發現方式最後必須產生相同的 `ResolvedModuleGraph`。之後的登錄表、排程器、資產編譯器與渲染器不需要知道模組原本來自 Nickel profile、鎖定圖還是資料夾掃描。
 
 ## 效能模型
 
@@ -129,19 +131,29 @@ Lattice Axiom 不把遊戲理解為「一個完成的執行檔加上一批外掛
 
 ## 宣告式組合與遊戲閉包
 
-官方遊戲、伺服器規則集與整合包可以是一份描述「這個遊戲由什麼構成」的根 manifest，而不只是 `mods/` 目錄：
+官方遊戲、伺服器規則集與整合包是一份描述「這個遊戲由什麼構成」的 Nickel 根設定檔，而不只是 `mods/` 目錄：
 
-```toml
-[modules]
-runtime = "^0.18"
-official_content = "^3"
-cave_contract = "^2.1"
-cave_backbone = "~1.4"
-
-[realization]
-trusted = "native-static"
-community = "wasm"
+```nickel
+let lattice = import "contracts.ncl" in
+{
+  modules = {
+    "lattice.runtime" = {
+      version = "=0.1.0",
+      realization = "native-static",
+    },
+    "lattice.official" = {
+      version = "=0.1.0",
+      realization = "native-static",
+    },
+    "example.dragon" = {
+      path = "./modules/dragon",
+      realization = "native-dynamic",
+    },
+  },
+} | lattice.GameProfile
 ```
+
+Nickel 只負責組合期的合約、合併與參數化；求值結果轉成有版本的正規化 JSON 模型，再進入 resolver。完整格式與雙路徑見[套件管理、Nickel 組合與雙實現路徑](package-management.md)。
 
 根 manifest 可以有自己的元套件發行版本，但它不支配內部套件、演算法、能力契約與資料 schema 的版本。Lattice Axiom 不使用一個 `gameVersion` 或 `worldVersion` 作為所有相容性的總開關。
 
@@ -176,7 +188,7 @@ community = "wasm"
 | 靜態原生 | LTO、跨模組內聯、移除未使用程式碼、已知完整功能集合 | 重建與連結時間、二進位快取、授權與完全信任 |
 | 動態原生 | 更新與開發迭代較快、可掃描載入 | ABI 穩定性、平台差異、仍是完全信任程式碼 |
 | 沙箱 WASM | 能力隔離、較可控的第三方執行 | 邊界與資料交換成本、API 粒度限制 |
-| 直譯腳本 | 快速創作、熱重載與低門檻 | 效能、工具鏈與行為可預測性 |
+| 直譯腳本 | 快速創作、熱重載與低門檻 | 效能、工具鏈與行為可預測性；不在 v1 範圍 |
 
 來源 API 可以一致，但實現方式不必一致。模組清單應明確宣告支援的實現方式與所需能力。
 
@@ -185,13 +197,13 @@ community = "wasm"
 - 靜態連結會把第三方原生程式碼變成遊戲本體的一部分，不能當成安全沙箱。
 - 大型靜態整合包需要可信建置者、簽章、快取與供應鏈政策。
 - 不同授權在靜態連結與再散布時可能產生不同義務，必須把授權中繼資料視為一等資訊。
-- 動態卸載比動態載入更困難，牽涉實體、資產、排程與持久化資料的所有權。
+- 動態卸載比動態載入更困難，牽涉實體、資產、排程與持久化資料的所有權；v1 明確不支援。
 - 可重現建置不等於多人確定性；兩者需要分開設計與驗證。
 
 ## 待驗證假說
 
 - 第一方內容只使用公開模組 API，是否仍能達到所需的開發效率與效能？
-- 靜態與動態實現能否共用足夠一致的原始碼介面？
+- 同一第二內容包以靜態與動態實現載入時，能否得到相同 ID、生成結果與可接受的效能差異？
 - 粗粒度沙箱 API 是否能支援真正複雜的第三方機制？
 - 模組解析與資產編譯能否讓執行期不再追蹤內容來源？
 
@@ -199,6 +211,6 @@ community = "wasm"
 
 - [專案願景與設計支柱](../foundations/project-vision.md)
 - [版本、相依性與相容性架構](versioning-and-compatibility.md)
+- [套件管理、Nickel 組合與雙實現路徑](package-management.md)
 - [渲染架構與擴充邊界](rendering.md)
 - [待決問題](../planning/open-questions.md)
-

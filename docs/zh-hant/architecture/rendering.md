@@ -1,22 +1,42 @@
 ---
 title: 渲染架構與擴充邊界
-status: exploration
+status: proposed
 type: explanation
 locale: zh-Hant
-updated: 2026-08-09
+updated: 2026-08-19
 source:
   - conversation-2026-08-09-turn-3
+  - implementation-plan-2026-08-19
+decision:
+  - ../decisions/0006-wgpu-behind-rendering-facade.md
 ---
 
 # 渲染架構與擴充邊界
 
-> 本頁定義要探索的責任邊界，不代表已選定渲染器、圖形 API、shader 語言或 Render Graph 實作。
+> demo 唯一 GPU 後端採 wgpu、第一階段直接使用 WGSL，並以 `lattice-render` 門面及 headless 實現隔離，已由[決策 0006](../decisions/0006-wgpu-behind-rendering-facade.md)採納。長期 shader IR、Render Feature 與 Render Graph 擴充仍在探索。
 
 ## 核心原則
 
 **模組描述如何呈現，渲染器統一決定如何執行。**
 
 普通內容模組不應直接發送 GPU 命令。若每個實體或模組自行 `draw()`，渲染器便難以全域排序、剔除、批次化、實例化、管理資源生命週期與安排同步。
+
+## demo 邊界
+
+```text
+lattice-core / content
+        │ produces RenderWorld
+        ▼
+   lattice-render
+    ┌──────┴──────┐
+    ▼             ▼
+lattice-render-  lattice-render-
+wgpu             headless
+```
+
+門面第一版只包含相機、區塊網格實例、一般實體實例、`MeshId`、`MaterialId`、網格與材質上傳，以及 `submit`。核心流程固定為「模擬 tick → 擷取 `RenderWorld` → `renderer.submit`」；渲染 crate 不訂閱玩法事件，內容 crate 編譯期依賴不到 wgpu。
+
+區塊先用 greedy meshing、純色調色盤、每區塊網格緩衝與 CPU 視錐剔除；一般實體先用 instanced cube。demo 只有 chunk、entity 與 egui 所需的最少 pipeline。
 
 ## 模擬世界與渲染世界分離
 
@@ -108,7 +128,7 @@ Raw Vulkan、Direct3D 12 或 Metal 存取若存在，應被視為不安全的原
 
 ## Shader 與建置
 
-候選方向是讓模組提交統一的 shader 來源或中介表示，再由建置與載入管線產生各平台程式。尚未決定使用 WGSL、Slang、HLSL 衍生流程或自有 IR。
+demo 直接提交專案控制的 WGSL。讓第三方模組提交統一 shader 來源或中介表示，再由建置與載入管線產生各平台程式，仍是長期候選；尚未決定使用 WGSL 子集、Slang、HLSL 衍生流程或自有 IR。
 
 宣告式整合包在建置前已知完整功能集合，理論上可以：
 
@@ -135,9 +155,9 @@ Raw Vulkan、Direct3D 12 或 Metal 存取若存在，應被視為不安全的原
 
 核心不應內建 `ZombieRenderer`、`DragonRenderer` 或 `GrassBlockRenderer` 之類內容類別。
 
-## 不變量候選
+## 不變量
 
-以下適合作為原型要驗證的不變量，而不是目前已接受規格：
+以下前四項是 demo 要驗證的已採納邊界；第五項在開放特殊渲染功能時再成為必要契約：
 
 1. 普通內容模組無法直接發送 GPU 命令。
 2. 渲染世界不包含具體玩法類型。
@@ -166,4 +186,5 @@ Raw Vulkan、Direct3D 12 或 Metal 存取若存在，應被視為不安全的原
 - [模組核心與宣告式組合](module-composition.md)
 - [實體、物理與表現層](entity-physics-presentation.md)
 - [渲染與物理技術地圖](../research/renderer-physics-landscape.md)
-
+- [決策 0006：wgpu 與渲染門面](../decisions/0006-wgpu-behind-rendering-facade.md)
+- [第一個 demo 路線圖](../planning/roadmap-first-demo.md)

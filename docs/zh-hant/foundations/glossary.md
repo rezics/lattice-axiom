@@ -3,7 +3,7 @@ title: 詞彙表
 status: active
 type: reference
 locale: zh-Hant
-updated: 2026-08-09
+updated: 2026-08-19
 ---
 
 # 詞彙表
@@ -23,14 +23,23 @@ updated: 2026-08-09
 | 遊戲閉包（game closure） | 某次解析、建置或發布所需的核心、套件、資產、組態與工具鏈輸入的完整可識別集合。它可用於重現，不是支配全部套件相容性的全域版本。 |
 | 遊戲設定檔／元套件（game profile/metapackage） | 像根 `package.json` 一樣宣告官方遊戲或整合包想要的依賴範圍、能力與政策；其發布版本和實際解析出的套件版本是不同座標。 |
 | 鎖定圖（lock graph） | 解析器選出的精確套件版本、來源、內容雜湊、能力提供者與 adapter 集合，用於重建同一組輸入。 |
+| Nickel 組合期 | 對 `module.ncl`、`game.ncl` 與合約進行合併、驗證和完整求值的階段；結果立即轉成正規化資料，不進入遊戲熱路徑。 |
+| 正規化組合模型（canonical composition model） | Nickel 完整求值後產生、有 schema 版本且可穩定雜湊的 JSON 資料，是 resolver 的唯一輸入與替換組合語言的邊界。 |
 | 能力契約版本（capability contract version） | 某項公開能力的語義與介面版本；實現套件版本不同不必然表示契約不相容。 |
 | 資料 schema 版本 | 某資料擁有者用來決定讀取、遷移或保留舊資料路徑的版本，不能由整體遊戲版本代替。 |
 | 產物生成記錄（artifact dependency receipt） | 隨規劃域、生成計畫或可重算產物保存的實際生產者、契約、組態、上游雜湊與 fallback；只使真正受影響的依賴子圖失效。 |
 | 熱路徑（hot path） | 每幀、每 tick 或大量實體反覆執行、對效能高度敏感的路徑。 |
+| World Store | 依空間局部性保存方塊、已物化生成結果、空間實體與模擬續行狀態的權威儲存；demo 的生產實現是 RocksDB。 |
+| `WorldStorage` | 核心用來載入、提交、替換區塊範圍與建立 checkpoint 的語義契約，不暴露 RocksDB 鍵或型別。 |
+| 權威區塊快照（authoritative chunk snapshot） | 區塊第一次生成或顯式重建後保存的完整可讀狀態；只要它存在，就不因目前生成器改變而隱式重算。 |
+| 生成來源記錄（generation provenance） | 隨已物化空間保存的 generation epoch、組態、套件、契約與精確實現雜湊，用於解釋、遷移與 regenerate，不取代快照。 |
+| Persistent World Object | 位置依附於世界、但資訊量超出一般方塊狀態的持久物件，例如容器、機器或傳送門；是否進關聯庫取決於查詢與交易需求。 |
+| Regeneration Transaction | 以明確範圍、generation lock、保留政策與備份點替換權威快照的破壞性世界操作；不能是隱式生成器更新。 |
 | 模擬世界 | 保存玩法狀態與規則語義的世界，例如生命值、AI、速度、物品與生物類型。 |
 | 渲染擷取（render extraction） | 把模擬狀態轉成渲染需要的資料，而不讓渲染器理解具體玩法內容。 |
 | 渲染世界 | 只保存網格實例、骨架姿勢、燈光、粒子、地形區塊等渲染資料的表示。 |
 | 渲染基元 | 渲染核心原生理解的通用能力，例如網格、蒙皮網格、材質、粒子與燈光。 |
+| 渲染門面（rendering facade） | `lattice-render` 暴露的後端無關窄介面；demo 由 wgpu 與 headless 兩個實現消費同一 `RenderWorld`。 |
 | 表現層（presentation） | 把遊戲事件與狀態轉成姿勢、材質參數、音效、粒子、鏡頭回饋等感知結果的層。 |
 | 創作格式（authoring format） | 供藝術家與設計者編輯的來源格式，例如 `.blend` 或 USD。 |
 | 交換格式（interchange format） | 工具與引擎之間的開放契約；目前討論以 glTF/GLB 為候選。 |

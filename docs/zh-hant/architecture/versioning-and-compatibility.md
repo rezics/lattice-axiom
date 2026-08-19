@@ -3,16 +3,17 @@ title: 版本、相依性與相容性架構
 status: proposed
 type: explanation
 locale: zh-Hant
-updated: 2026-08-09
+updated: 2026-08-19
 source:
   - conversation-2026-08-09-worldgen-4
+  - implementation-plan-2026-08-19
 decision:
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md
 ---
 
 # 版本、相依性與相容性架構
 
-> [不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)已獲採納。本頁提出 manifest、鎖定圖、能力契約、資料遷移與產物生成記錄的候選資料模型。
+> [不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)已獲採納。manifest 來源採 Nickel、組合後進入正規化 JSON，已另由[決策 0007](../decisions/0007-nickel-as-composition-language.md)採納；本頁其餘 lock schema、能力契約與遷移細節仍是提案。
 
 ## 核心模型
 
@@ -54,30 +55,38 @@ Resolved Package + Capability Graph
 
 程序生成、編譯快取與重現需要內容雜湊、演算法修訂、正規化組態雜湊和依賴產物雜湊。語義相容的 bug fix 仍可能改變生成結果，因此它可以保持能力契約版本，但必須得到新的精確實現識別。
 
-## 候選 manifest
+## Nickel 根設定檔
 
-```toml
-[package]
-id = "lattice.official-game"
-version = "2026.8"
-kind = "game-profile"
-
-[dependencies]
-"lattice.runtime" = "^0.18"
-"lattice.cave.contract" = "^2.1"
-"lattice.cave.topology.geodesic" = "~1.4"
-"lattice.biomes.official" = "^3"
-
-[capabilities.require]
-"generation.coordinator" = "^1"
-"cave.portal" = "^2"
-
-[policy]
-authoritative = ["simulation.*", "worldgen.*"]
-presentationMayDiffer = ["render.*", "audio.*"]
+```nickel
+let lattice = import "contracts.ncl" in
+{
+  package = {
+    id = "lattice.official-game",
+    version = "2026.8",
+    kind = "game-profile",
+  },
+  dependencies = {
+    "lattice.runtime" = "=0.1.0",
+    "lattice.cave.contract" = "=2.1.0",
+    "lattice.cave.topology.geodesic" = "=1.4.0",
+    "lattice.biomes.official" = "=3.0.0",
+  },
+  capabilities = {
+    require = {
+      "generation.coordinator" = "1",
+      "cave.portal" = "2",
+    },
+  },
+  policy = {
+    authoritative = ["simulation.*", "worldgen.*"],
+    presentationMayDiffer = ["render.*", "audio.*"],
+  },
+} | lattice.GameProfile
 ```
 
 `lattice.official-game@2026.8` 只識別這份根設定的發布。若兩個實例解析出不同根版本但權威能力子圖相容，它們不應只因標籤不同而被拒絕。
+
+v1 profile 使用精確版本或已鎖定來源，不先承諾一般版本求解器。Nickel 完整求值後輸出正規化 JSON，再由 resolver 建立 lock graph；`.ncl` 原始文字本身不是 lock graph。
 
 ## 鎖定圖
 
@@ -142,7 +151,7 @@ World {
 - `runtimeDeltas` 保存玩家與模擬對基線的修改。
 - `ownerSchemaStates` 由各資料擁有者獨立遷移。
 
-同一世界可以包含不同生成記錄的規劃域；跨域不變條件由地形邊界、洞穴入口、水文出口或其他版本化契約銜接。
+同一世界可以包含不同生成記錄的規劃域；跨域不變條件由地形邊界、洞穴入口、水文出口或其他版本化契約銜接。第一次生成的區塊快照是已存在空間世界的權威，詳見[世界持久化與 RocksDB World Store](world-persistence.md)。
 
 ## 相容性不是布林值
 
@@ -172,7 +181,7 @@ World {
 
 ## 尚待設計
 
-- manifest 與 lock graph 的實際序列化格式。
+- 正規化組合 JSON 與 lock graph 的實際 schema、canonicalization 與演進規則。
 - 能力契約使用 SemVer、結構相容或自訂版本代數的範圍。
 - 舊原生生成器的封存與安全執行方式。
 - 產物生成記錄的儲存粒度、去重與垃圾回收。
@@ -181,8 +190,9 @@ World {
 ## 相關文件
 
 - [模組核心與宣告式組合](module-composition.md)
+- [套件管理、Nickel 組合與雙實現路徑](package-management.md)
+- [世界持久化與 RocksDB World Store](world-persistence.md)
 - [可組合世界生成架構](world-generation.md)
 - [決策 0003：不以全域大版本決定相容性](../decisions/0003-no-global-version-package-scoped-compatibility.md)
 - [詞彙表](../foundations/glossary.md)
 - [待決問題](../planning/open-questions.md)
-

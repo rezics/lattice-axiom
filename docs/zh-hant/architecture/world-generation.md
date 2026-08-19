@@ -3,7 +3,7 @@ title: 可組合世界生成架構
 status: proposed
 type: explanation
 locale: zh-Hant
-updated: 2026-08-09
+updated: 2026-08-19
 source:
   - conversation-2026-08-09-worldgen-1
   - conversation-2026-08-09-worldgen-2
@@ -311,7 +311,7 @@ StructurePlan
 
 ### 執行期修改
 
-玩家建造、採掘、工業污染和文明演化不屬於可任意重算的基礎生成結果。持久化層需區分可再生的程序基線、已實體化內容與執行期差異，避免版本升級覆寫玩家世界。
+玩家建造、採掘、工業污染和文明演化不屬於可任意重算的基礎生成結果。區塊第一次生成並提交後，快照即成為該空間的權威；生成器更新只影響尚未物化或被顯式 regenerate 的範圍。持久化細節見[世界持久化與 RocksDB World Store](world-persistence.md)。
 
 ## 洞穴採共享協調與領地拓撲的混合模型
 
@@ -404,6 +404,7 @@ StructurePlan
 - [空間生成領地委派決策](../decisions/0004-territorial-delegation-for-spatial-generation.md)
 - [可組合洞穴生成架構](cave-generation.md)
 - [版本、相依性與相容性架構](versioning-and-compatibility.md)
+- [世界持久化與 RocksDB World Store](world-persistence.md)
 - [模組核心與宣告式組合](module-composition.md)
 - [Minecraft 世界生成與洞穴模組的設計教訓](../research/minecraft-world-generation-lessons.md)
 - [現代地形與洞穴生成研究](../research/modern-terrain-and-cave-generation.md)
