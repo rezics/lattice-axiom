@@ -1,20 +1,7 @@
 [workspace]
 resolver = "3"
-members = [
-    "crates/latticeaxiom-core",
-    "crates/latticeaxiom-render",
-    "crates/latticeaxiom-render-headless",
-    "crates/latticeaxiom-render-wgpu",
-    "crates/latticeaxiom-demo",
-    "crates/latticeaxiom-compose",
-    "crates/latticeaxiom-packages",
-    "crates/latticeaxiom-modules",
-    "crates/latticeaxiom-cli",
-    "crates/latticeaxiom-storage",
-    "crates/latticeaxiom-storage-rocksdb",
-    "crates/latticeaxiom-voxel-mesh",
-    "tools/xtask",
-]
+members = ["crates/latticeaxiom-engine"]
+default-members = ["crates/latticeaxiom-engine"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,44 +10,10 @@ rust-version = "1.97"
 publish = false
 repository = "https://github.com/rezics/lattice-axiom-demo"
 
-# Single source of truth for dependency versions. Exact versions below were
-# verified as the latest stable releases on crates.io on 2026-08-19; Cargo.lock
-# is the authoritative pin. Upgrades happen at roadmap milestones only.
 [workspace.dependencies]
-# Internal crates.
-latticeaxiom-core = { path = "crates/latticeaxiom-core" }
-latticeaxiom-compose = { path = "crates/latticeaxiom-compose" }
-latticeaxiom-packages = { path = "crates/latticeaxiom-packages" }
-latticeaxiom-modules = { path = "crates/latticeaxiom-modules" }
-latticeaxiom-render = { path = "crates/latticeaxiom-render" }
-latticeaxiom-render-headless = { path = "crates/latticeaxiom-render-headless" }
-latticeaxiom-render-wgpu = { path = "crates/latticeaxiom-render-wgpu" }
-latticeaxiom-storage = { path = "crates/latticeaxiom-storage" }
-latticeaxiom-voxel-mesh = { path = "crates/latticeaxiom-voxel-mesh" }
-
-# External crates selected through milestones 1–3.
-anyhow = "1.0.104"
-bincode = { version = "2.0.1", features = ["serde"] }
-bytemuck = { version = "1.25", features = ["derive"] }
-clap = { version = "4.6.6", features = ["derive"] }
-egui = { version = "0.36.1", features = ["default_fonts"] }
-egui-wgpu = { version = "0.36.1", default-features = false }
-egui-winit = { version = "0.36.1", default-features = false }
-glam = "0.33.4"
-nickel-lang = "2.2.0"
-pollster = "0.4"
-rocksdb = "0.24.0"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-sha2 = "0.11.0"
-thiserror = "2.0.20"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wgpu = "30.0.0"
-winit = "0.30.13"
-
-# Test-only.
-proptest = "1.11.0"
+# ADR 0014 fixes the implementation baseline at Bevy 0.19.x. Cargo.lock is
+# the authoritative dependency record, so upgrades are deliberate migrations.
+bevy = "=0.19.1"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
@@ -73,14 +26,19 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 dbg_macro = "deny"
 expect_used = "warn"
-# Facade types intentionally share stems with their module names.
-module_name_repetitions = "allow"
 print_stdout = "deny"
 todo = "warn"
 undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
 
-# The demo binary is not performance-tuned yet; keep dev builds fast and give
-# dependencies (wgpu, shader translation) enough optimization to be usable.
+# Bevy's official development profile: optimize project code lightly and
+# dependencies heavily so the debug build remains playable.
+[profile.dev]
+opt-level = 1
+
 [profile.dev.package."*"]
-opt-level = 2
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

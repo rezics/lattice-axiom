@@ -1,0 +1,19 @@
+[package]
+name = "latticeaxiom-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# Dynamic linking makes iterative Bevy builds substantially faster. Disable
+# default features for a statically linked distributable build.
+default = ["development"]
+development = ["bevy/dynamic_linking"]
+
+[dependencies]
+bevy.workspace = true
+
+[lints]
+workspace = true
