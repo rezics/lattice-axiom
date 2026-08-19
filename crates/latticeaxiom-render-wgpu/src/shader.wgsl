@@ -14,14 +14,15 @@ var<uniform> globals: Globals;
 struct VertexIn {
   @location(0) position: vec3<f32>,
   @location(1) normal: vec3<f32>,
+  @location(2) color: vec4<f32>,
 };
 
 struct InstanceIn {
-  @location(2) model_0: vec4<f32>,
-  @location(3) model_1: vec4<f32>,
-  @location(4) model_2: vec4<f32>,
-  @location(5) model_3: vec4<f32>,
-  @location(6) color: vec4<f32>,
+  @location(3) model_0: vec4<f32>,
+  @location(4) model_1: vec4<f32>,
+  @location(5) model_2: vec4<f32>,
+  @location(6) model_3: vec4<f32>,
+  @location(7) color: vec4<f32>,
 };
 
 struct VertexOut {
@@ -44,7 +45,7 @@ fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
   // Rigid transforms only at milestone 1, so the linear part is fine for
   // normals; revisit when non-uniform scaling appears.
   out.world_normal = (model * vec4<f32>(vertex.normal, 0.0)).xyz;
-  out.color = instance.color;
+  out.color = vertex.color * instance.color;
   return out;
 }
 

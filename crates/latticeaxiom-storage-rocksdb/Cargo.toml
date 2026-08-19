@@ -1,0 +1,15 @@
+[package]
+name = "latticeaxiom-storage-rocksdb"
+description = "RocksDB implementation of the Lattice Axiom world storage facade."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-storage.workspace = true
+rocksdb.workspace = true
+
+[lints]
+workspace = true

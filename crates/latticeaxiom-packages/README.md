@@ -1,6 +1,7 @@
-# latticeaxiom-packages (milestone 2)
+# latticeaxiom-packages
 
-Placeholder. Will implement the package kernel (ADR 0010): source fetching,
-capability resolution, trust policy, content hashing, `latticeaxiom.lock`,
-`LockedGameGraph`, and `BuildPlan`. Dynamic library loading (milestone 7) also
-lands here behind its own trust and ABI checks.
+The milestone 2 package kernel (ADR 0010): exact controlled local sources,
+dependency and capability resolution, deterministic content hashing,
+canonical `latticeaxiom.lock`, `LockedGameGraph`, and `BuildPlan`. Registry,
+general version solving, and dynamic-library loading remain deliberately out
+of scope.

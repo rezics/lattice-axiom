@@ -30,7 +30,7 @@ pub const SOUTH: Vec3 = Vec3::NEG_Y;
 ///
 /// The cell covers the half-open box `[x, x+1) x [y, y+1) x [z, z+1)` in
 /// world space, so its center sits at `(x + 0.5, y + 0.5, z + 0.5)`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockPos {
     /// East-west coordinate (east is positive).
     pub x: i32,
@@ -77,6 +77,21 @@ impl BlockPos {
             self.y as f32 + 0.5,
             self.z as f32 + 0.5,
         )
+    }
+
+    /// Adds an integer offset, returning `None` on coordinate overflow.
+    #[must_use]
+    pub const fn checked_offset(self, x: i32, y: i32, z: i32) -> Option<Self> {
+        let Some(x) = self.x.checked_add(x) else {
+            return None;
+        };
+        let Some(y) = self.y.checked_add(y) else {
+            return None;
+        };
+        let Some(z) = self.z.checked_add(z) else {
+            return None;
+        };
+        Some(Self::new(x, y, z))
     }
 }
 

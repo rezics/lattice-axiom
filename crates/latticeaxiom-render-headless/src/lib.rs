@@ -84,6 +84,19 @@ impl Renderer for HeadlessRenderer {
         Ok(id)
     }
 
+    fn replace_mesh(&mut self, id: MeshId, mesh: &MeshData) -> Result<(), RenderError> {
+        let slot = self
+            .meshes
+            .get_mut(id.to_raw() as usize)
+            .ok_or(RenderError::UnknownMesh(id))?;
+        mesh.validate()?;
+        *slot = StoredMesh {
+            vertex_count: mesh.positions.len(),
+            index_count: mesh.indices.len(),
+        };
+        Ok(())
+    }
+
     fn upload_material(&mut self, material: &MaterialData) -> Result<MaterialId, RenderError> {
         if !material.base_color.iter().all(|c| c.is_finite()) {
             return Err(RenderError::InvalidMaterial {

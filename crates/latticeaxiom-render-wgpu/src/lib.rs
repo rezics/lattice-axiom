@@ -15,4 +15,4 @@
 
 mod renderer;
 
-pub use renderer::WgpuRenderer;
+pub use renderer::{UiFrame, WgpuRenderer};

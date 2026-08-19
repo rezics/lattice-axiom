@@ -20,6 +20,19 @@ pub trait Renderer {
     /// cannot allocate the resource.
     fn upload_mesh(&mut self, mesh: &MeshData) -> Result<MeshId, RenderError>;
 
+    /// Replaces the geometry stored under an existing mesh handle.
+    ///
+    /// Chunk streaming uses stable handles as bounded render slots: an
+    /// unloaded chunk's slot can be filled by a newly loaded chunk without
+    /// growing backend resource tables forever.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::InvalidMesh`] when `mesh` is invalid,
+    /// [`RenderError::UnknownMesh`] when `id` was not issued by this renderer,
+    /// or [`RenderError::Backend`] when replacement allocation fails.
+    fn replace_mesh(&mut self, id: MeshId, mesh: &MeshData) -> Result<(), RenderError>;
+
     /// Uploads a material and returns a handle valid for this renderer.
     ///
     /// # Errors

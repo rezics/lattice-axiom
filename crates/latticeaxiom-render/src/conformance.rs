@@ -28,6 +28,7 @@ where
     F: FnMut() -> R,
 {
     uploads_assign_distinct_handles(&mut make_renderer());
+    replaces_existing_meshes(&mut make_renderer());
     rejects_invalid_mesh(&mut make_renderer());
     rejects_unknown_handles(&mut make_renderer());
     rejects_non_finite_transform(&mut make_renderer());
@@ -41,8 +42,53 @@ pub fn test_triangle() -> MeshData {
     MeshData {
         positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
         normals: vec![[0.0, 0.0, 1.0]; 3],
+        colors: Vec::new(),
         indices: vec![0, 1, 2],
     }
+}
+
+/// Mesh replacement preserves a valid handle and rejects foreign handles.
+///
+/// # Panics
+///
+/// Panics when replacement changes handle validity or accepts an unknown ID.
+pub fn replaces_existing_meshes<R: Renderer>(renderer: &mut R) {
+    let mesh = renderer
+        .upload_mesh(&test_triangle())
+        .expect("uploading a valid mesh must succeed");
+    renderer
+        .replace_mesh(mesh, &test_triangle())
+        .expect("replacing an issued mesh must succeed");
+    assert!(matches!(
+        renderer.replace_mesh(mesh, &MeshData::default()),
+        Err(RenderError::InvalidMesh { .. })
+    ));
+
+    let material = renderer
+        .upload_material(&test_material())
+        .expect("uploading a valid material must succeed");
+    let world = RenderWorld {
+        camera: test_camera(),
+        instances: vec![MeshInstance {
+            mesh,
+            material,
+            transform: Mat4::IDENTITY,
+        }],
+    };
+    renderer
+        .submit(&world)
+        .expect("a rejected replacement must leave the old mesh usable");
+
+    let unknown = crate::world::MeshId::from_raw(mesh.to_raw() + 1000);
+    assert!(matches!(
+        renderer.replace_mesh(unknown, &test_triangle()),
+        Err(RenderError::UnknownMesh(id)) if id == unknown
+    ));
+
+    assert!(matches!(
+        renderer.replace_mesh(unknown, &MeshData::default()),
+        Err(RenderError::UnknownMesh(id)) if id == unknown
+    ));
 }
 
 fn test_camera() -> Camera {
@@ -90,12 +136,19 @@ pub fn rejects_invalid_mesh<R: Renderer>(renderer: &mut R) {
     out_of_range.indices = vec![0, 1, 3];
     let mut non_finite = test_triangle();
     non_finite.positions[0][2] = f32::NAN;
+    let mut mismatched_colors = test_triangle();
+    mismatched_colors.colors.push([1.0; 4]);
+    let mut non_finite_color = test_triangle();
+    non_finite_color.colors = vec![[1.0; 4]; 3];
+    non_finite_color.colors[0][0] = f32::NAN;
 
     for (label, mesh) in [
         ("empty", MeshData::default()),
         ("mismatched normals", missing_normals),
         ("out-of-range index", out_of_range),
         ("non-finite position", non_finite),
+        ("mismatched colors", mismatched_colors),
+        ("non-finite color", non_finite_color),
     ] {
         let result = renderer.upload_mesh(&mesh);
         assert!(

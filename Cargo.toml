@@ -6,6 +6,12 @@ members = [
     "crates/latticeaxiom-render-headless",
     "crates/latticeaxiom-render-wgpu",
     "crates/latticeaxiom-demo",
+    "crates/latticeaxiom-compose",
+    "crates/latticeaxiom-packages",
+    "crates/latticeaxiom-modules",
+    "crates/latticeaxiom-cli",
+    "crates/latticeaxiom-storage",
+    "crates/latticeaxiom-storage-rocksdb",
     "crates/latticeaxiom-voxel-mesh",
     "tools/xtask",
 ]
@@ -23,16 +29,30 @@ repository = "https://github.com/rezics/lattice-axiom-demo"
 [workspace.dependencies]
 # Internal crates.
 latticeaxiom-core = { path = "crates/latticeaxiom-core" }
+latticeaxiom-compose = { path = "crates/latticeaxiom-compose" }
+latticeaxiom-packages = { path = "crates/latticeaxiom-packages" }
+latticeaxiom-modules = { path = "crates/latticeaxiom-modules" }
 latticeaxiom-render = { path = "crates/latticeaxiom-render" }
 latticeaxiom-render-headless = { path = "crates/latticeaxiom-render-headless" }
 latticeaxiom-render-wgpu = { path = "crates/latticeaxiom-render-wgpu" }
+latticeaxiom-storage = { path = "crates/latticeaxiom-storage" }
 latticeaxiom-voxel-mesh = { path = "crates/latticeaxiom-voxel-mesh" }
 
-# External crates (milestone 1).
+# External crates selected through milestones 1–3.
 anyhow = "1.0.104"
+bincode = { version = "2.0.1", features = ["serde"] }
 bytemuck = { version = "1.25", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive"] }
+egui = { version = "0.36.1", features = ["default_fonts"] }
+egui-wgpu = { version = "0.36.1", default-features = false }
+egui-winit = { version = "0.36.1", default-features = false }
 glam = "0.33.4"
+nickel-lang = "2.2.0"
 pollster = "0.4"
+rocksdb = "0.24.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
 thiserror = "2.0.20"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

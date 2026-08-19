@@ -1,0 +1,22 @@
+[package]
+name = "latticeaxiom-modules"
+description = "Stable registration and RuntimeImage contracts for Lattice Axiom."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-compose.workspace = true
+latticeaxiom-core.workspace = true
+latticeaxiom-packages.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

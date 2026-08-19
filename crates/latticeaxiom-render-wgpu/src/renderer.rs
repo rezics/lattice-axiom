@@ -22,6 +22,7 @@ const INITIAL_INSTANCE_CAPACITY: usize = 64;
 struct GpuVertex {
     position: [f32; 3],
     normal: [f32; 3],
+    color: [f32; 4],
 }
 
 #[repr(C)]
@@ -37,10 +38,24 @@ struct Globals {
     view_proj: [[f32; 4]; 4],
 }
 
-const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+/// One tessellated egui frame waiting to be composited over the 3D scene.
+///
+/// The host owns input and widget construction through `egui-winit`; this
+/// backend owns only the GPU resources and render-pass integration.
+#[derive(Debug)]
+pub struct UiFrame {
+    /// Tessellated and clipped paint primitives.
+    pub primitives: Vec<egui::ClippedPrimitive>,
+    /// Texture uploads and frees produced by egui this frame.
+    pub textures_delta: egui::TexturesDelta,
+    /// Logical-to-physical scale used when tessellating the primitives.
+    pub pixels_per_point: f32,
+}
+
+const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4];
 const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4
+    3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4
 ];
 
 #[derive(Debug)]
@@ -50,8 +65,13 @@ struct GpuMesh {
     index_count: u32,
 }
 
+#[derive(Clone, Debug)]
+struct DrawRun {
+    mesh: MeshId,
+    instances: std::ops::Range<u32>,
+}
+
 /// A [`Renderer`] drawing to a window surface through wgpu.
-#[derive(Debug)]
 pub struct WgpuRenderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -65,6 +85,32 @@ pub struct WgpuRenderer {
     instance_capacity: usize,
     meshes: Vec<GpuMesh>,
     materials: Vec<MaterialData>,
+    ui_renderer: egui_wgpu::Renderer,
+    pending_ui: Option<UiFrame>,
+}
+
+impl std::fmt::Debug for WgpuRenderer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WgpuRenderer")
+            .field("config", &self.config)
+            .field("instance_capacity", &self.instance_capacity)
+            .field("mesh_count", &self.meshes.len())
+            .field("material_count", &self.materials.len())
+            .field("has_pending_ui", &self.pending_ui.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for WgpuRenderer {
+    fn drop(&mut self) {
+        if let Some(ui) = &mut self.pending_ui {
+            // Dropping the renderer intentionally abandons an unpresented UI
+            // frame. Clear egui's must-consume delta before its debug guard
+            // runs; all corresponding GPU textures are being dropped too.
+            ui.textures_delta.clear();
+        }
+    }
 }
 
 fn backend_error(context: &str, detail: impl std::fmt::Display) -> RenderError {
@@ -77,6 +123,19 @@ fn to_u32(value: usize, what: &str) -> Result<u32, RenderError> {
     u32::try_from(value).map_err(|_| RenderError::Backend {
         message: format!("{what} exceeds u32 range"),
     })
+}
+
+fn gpu_vertices(mesh: &MeshData) -> Vec<GpuVertex> {
+    mesh.positions
+        .iter()
+        .zip(&mesh.normals)
+        .enumerate()
+        .map(|(index, (&position, &normal))| GpuVertex {
+            position,
+            normal,
+            color: mesh.colors.get(index).copied().unwrap_or([1.0; 4]),
+        })
+        .collect()
 }
 
 impl WgpuRenderer {
@@ -155,6 +214,11 @@ impl WgpuRenderer {
         let (globals_buffer, globals_layout, globals_bind_group) = create_globals(&device);
         let pipeline = create_forward_pipeline(&device, config.format, &globals_layout);
         let instance_buffer = create_instance_buffer(&device, INITIAL_INSTANCE_CAPACITY);
+        let ui_renderer = egui_wgpu::Renderer::new(
+            &device,
+            config.format,
+            egui_wgpu::RendererOptions::default(),
+        );
 
         Ok(Self {
             surface,
@@ -169,7 +233,22 @@ impl WgpuRenderer {
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
             meshes: Vec::new(),
             materials: Vec::new(),
+            ui_renderer,
+            pending_ui: None,
         })
+    }
+
+    /// Queues an egui frame to be drawn over the next submitted world.
+    ///
+    /// Calling this more than once before [`Renderer::submit`] replaces the
+    /// older paint jobs while preserving every pending texture update; UI
+    /// state remains owned by the host.
+    pub fn queue_ui(&mut self, mut frame: UiFrame) {
+        if let Some(mut pending) = self.pending_ui.take() {
+            pending.textures_delta.append(frame.textures_delta);
+            frame.textures_delta = pending.textures_delta;
+        }
+        self.pending_ui = Some(frame);
     }
 
     fn mesh_count(&self) -> u32 {
@@ -208,12 +287,149 @@ impl WgpuRenderer {
         (order, data)
     }
 
+    fn build_draw_runs(world: &RenderWorld, order: &[usize]) -> Result<Vec<DrawRun>, RenderError> {
+        let mut runs = Vec::new();
+        let mut run_start = 0;
+        while run_start < order.len() {
+            let mesh = world.instances[order[run_start]].mesh;
+            let mut run_end = run_start + 1;
+            while run_end < order.len() && world.instances[order[run_end]].mesh == mesh {
+                run_end += 1;
+            }
+            runs.push(DrawRun {
+                mesh,
+                instances: to_u32(run_start, "instance range")?..to_u32(run_end, "instance range")?,
+            });
+            run_start = run_end;
+        }
+        Ok(runs)
+    }
+
     fn ensure_instance_capacity(&mut self, required: usize) {
         if required > self.instance_capacity {
             let capacity = required.next_power_of_two();
             self.instance_buffer = create_instance_buffer(&self.device, capacity);
             self.instance_capacity = capacity;
         }
+    }
+
+    fn create_gpu_mesh(&self, mesh: &MeshData) -> Result<GpuMesh, RenderError> {
+        mesh.validate()?;
+        let index_count = to_u32(mesh.indices.len(), "index count")?;
+        let vertices = gpu_vertices(mesh);
+
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh vertex buffer"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh index buffer"),
+                contents: bytemuck::cast_slice(&mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+        Ok(GpuMesh {
+            vertex_buffer,
+            index_buffer,
+            index_count,
+        })
+    }
+
+    fn prepare_ui(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        ui: &UiFrame,
+        screen: &egui_wgpu::ScreenDescriptor,
+    ) -> Vec<wgpu::CommandBuffer> {
+        for (id, deltas) in &ui.textures_delta.set {
+            for delta in deltas {
+                self.ui_renderer
+                    .update_texture(&self.device, &self.queue, *id, delta);
+            }
+        }
+        self.ui_renderer
+            .update_buffers(&self.device, &self.queue, encoder, &ui.primitives, screen)
+    }
+
+    fn encode_world_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color_view: &wgpu::TextureView,
+        draw_runs: &[DrawRun],
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("forward pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.globals_bind_group, &[]);
+        pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+        for run in draw_runs {
+            let mesh = &self.meshes[run.mesh.to_raw() as usize];
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, run.instances.clone());
+        }
+    }
+
+    fn encode_ui_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color_view: &wgpu::TextureView,
+        ui: &UiFrame,
+        screen: &egui_wgpu::ScreenDescriptor,
+    ) {
+        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui overlay pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.ui_renderer
+            .render(&mut pass.forget_lifetime(), &ui.primitives, screen);
+    }
+
+    fn release_ui_textures(&mut self, ui: &mut UiFrame) {
+        for id in &ui.textures_delta.free {
+            self.ui_renderer.free_texture(id);
+        }
+        ui.textures_delta.clear();
     }
 
     /// Acquires the next surface texture; `Ok(None)` means "skip this frame"
@@ -252,38 +468,19 @@ impl WgpuRenderer {
 
 impl Renderer for WgpuRenderer {
     fn upload_mesh(&mut self, mesh: &MeshData) -> Result<MeshId, RenderError> {
-        mesh.validate()?;
-        let index_count = to_u32(mesh.indices.len(), "index count")?;
         let id = MeshId::from_raw(to_u32(self.meshes.len(), "mesh table size")?);
-
-        let vertices: Vec<GpuVertex> = mesh
-            .positions
-            .iter()
-            .zip(&mesh.normals)
-            .map(|(&position, &normal)| GpuVertex { position, normal })
-            .collect();
-
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh vertex buffer"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        let index_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh index buffer"),
-                contents: bytemuck::cast_slice(&mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-
-        self.meshes.push(GpuMesh {
-            vertex_buffer,
-            index_buffer,
-            index_count,
-        });
+        let gpu_mesh = self.create_gpu_mesh(mesh)?;
+        self.meshes.push(gpu_mesh);
         Ok(id)
+    }
+
+    fn replace_mesh(&mut self, id: MeshId, mesh: &MeshData) -> Result<(), RenderError> {
+        if id.to_raw() >= self.mesh_count() {
+            return Err(RenderError::UnknownMesh(id));
+        }
+        let replacement = self.create_gpu_mesh(mesh)?;
+        self.meshes[id.to_raw() as usize] = replacement;
+        Ok(())
     }
 
     fn upload_material(&mut self, material: &MaterialData) -> Result<MaterialId, RenderError> {
@@ -317,6 +514,7 @@ impl Renderer for WgpuRenderer {
             .write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
         let (order, instance_data) = self.build_instance_data(world);
+        let draw_runs = Self::build_draw_runs(world, &order)?;
         self.ensure_instance_capacity(instance_data.len());
         if !instance_data.is_empty() {
             self.queue.write_buffer(
@@ -339,59 +537,30 @@ impl Renderer for WgpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame encoder"),
             });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("forward pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+        let mut pending_ui = self.pending_ui.take();
+        let mut ui_command_buffers = Vec::new();
+        let screen_descriptor = pending_ui.as_ref().map(|ui| egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: ui.pixels_per_point,
+        });
+        if let (Some(ui), Some(screen)) = (&pending_ui, &screen_descriptor) {
+            ui_command_buffers = self.prepare_ui(&mut encoder, ui, screen);
+        }
+        self.encode_world_pass(&mut encoder, &color_view, &draw_runs);
 
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.globals_bind_group, &[]);
-            pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-
-            // Draw contiguous runs of identical meshes as single instanced calls.
-            let mut run_start = 0;
-            while run_start < order.len() {
-                let mesh_id = world.instances[order[run_start]].mesh;
-                let mut run_end = run_start + 1;
-                while run_end < order.len() && world.instances[order[run_end]].mesh == mesh_id {
-                    run_end += 1;
-                }
-
-                let mesh = &self.meshes[mesh_id.to_raw() as usize];
-                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(
-                    0..mesh.index_count,
-                    0,
-                    to_u32(run_start, "instance range")?..to_u32(run_end, "instance range")?,
-                );
-
-                run_start = run_end;
-            }
+        if let (Some(ui), Some(screen)) = (&pending_ui, &screen_descriptor) {
+            self.encode_ui_pass(&mut encoder, &color_view, ui, screen);
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.submit(
+            ui_command_buffers
+                .into_iter()
+                .chain(std::iter::once(encoder.finish())),
+        );
         self.queue.present(frame);
+        if let Some(ui) = &mut pending_ui {
+            self.release_ui_textures(ui);
+        }
 
         Ok(FrameReport {
             instances_drawn: order.len(),
@@ -531,4 +700,36 @@ fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffe
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use latticeaxiom_render::conformance::test_triangle;
+
+    use super::gpu_vertices;
+
+    #[test]
+    fn omitted_vertex_colors_pack_as_white() {
+        let vertices = gpu_vertices(&test_triangle());
+        let expected = [1.0_f32; 4].map(f32::to_bits);
+        assert!(
+            vertices
+                .iter()
+                .all(|vertex| vertex.color.map(f32::to_bits) == expected)
+        );
+    }
+
+    #[test]
+    fn explicit_vertex_colors_are_preserved() {
+        let mut mesh = test_triangle();
+        mesh.colors = vec![[0.2, 0.4, 0.6, 0.8]; 3];
+
+        let vertices = gpu_vertices(&mesh);
+        let expected = [0.2_f32, 0.4, 0.6, 0.8].map(f32::to_bits);
+        assert!(
+            vertices
+                .iter()
+                .all(|vertex| vertex.color.map(f32::to_bits) == expected)
+        );
+    }
 }

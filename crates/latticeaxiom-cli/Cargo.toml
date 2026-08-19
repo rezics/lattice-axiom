@@ -1,0 +1,19 @@
+[package]
+name = "latticeaxiom-cli"
+description = "Command-line package and composition tooling for Lattice Axiom."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+latticeaxiom-compose.workspace = true
+latticeaxiom-modules.workspace = true
+latticeaxiom-packages.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

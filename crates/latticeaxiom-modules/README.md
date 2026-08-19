@@ -1,5 +1,6 @@
-# latticeaxiom-modules (milestone 2)
+# latticeaxiom-modules
 
-Placeholder. Will own the registration contracts shared by all realizations
-(ADR 0008): stable numeric ID assignment, registries, `RuntimeImage`, and the
-versioned ABI descriptor types used by static glue and dynamic loading.
+Stable registration contracts shared by every realization (ADR 0008).
+`RuntimeImage` maps package-qualified block keys to the canonical core
+`BlockId`, rejects collisions before gameplay, and retains the read-only
+color/solid metadata consumed by the first demo.

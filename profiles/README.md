@@ -1,6 +1,5 @@
-# profiles/ (milestone 2)
+# Root game profiles
 
-Placeholder for `game.ncl` root profiles: which packages, sources, realization
-preferences, and policies make up one buildable/launchable game (e.g.
-`dev.ncl` for local development). Evaluated by `latticeaxiom-compose` into a
-`CompositionSpec`.
+`dev.ncl` is the first exact local-source game closure. It intentionally lists
+every package source and version: milestone 2 does not include a registry or a
+general version solver.

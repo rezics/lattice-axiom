@@ -1,14 +1,20 @@
-//! Lattice Axiom demo host (milestone 1).
+//! Lattice Axiom first playable sandbox (milestones 1 through 3).
 //!
-//! Windowed mode opens a winit window, draws the scene through the wgpu
-//! renderer, and lets you fly the camera. Headless mode simulates and
-//! validates frames through the GPU-free renderer — the mode CI uses, since
-//! milestone 1 requires the whole vertical to be checkable without a GPU.
+//! Windowed mode composes official content, opens the persistent voxel world,
+//! and runs first-person play. Headless mode validates the same composition,
+//! streaming, persistence, meshing, physics, and render contracts without a
+//! window or GPU.
 
 mod app;
-mod camera_controller;
+mod block_catalog;
+mod chunk_codec;
+mod chunk_mesh;
+mod chunk_render;
 mod headless;
-mod scene;
+mod player_controller;
+mod runtime_config;
+mod sandbox_world;
+mod ui;
 
 use anyhow::bail;
 use tracing_subscriber::EnvFilter;

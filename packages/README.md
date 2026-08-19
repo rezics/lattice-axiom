@@ -1,6 +1,5 @@
-# packages/ (milestone 3+)
+# Package sources
 
-Placeholder for content package sources. Official content (`official/`,
-milestone 3) is an ordinary package with no private engine paths; a second
-pack (`boxling/`, milestones 6–7) re-walks the same public API statically and
-dynamically. Each package ships `package.ncl` plus its Rust crate and assets.
+Every content package is described by `package.ncl` and uses the public
+`latticeaxiom.lib` contracts. `official/` is the first pure-data package; it
+does not receive a private registration path.

@@ -6,52 +6,65 @@ roadmap live in the documentation repository
 ([`lattice-axiom`](https://github.com/rezics/lattice-axiom)); this repository
 contains the Rust workspace that implements them milestone by milestone.
 
-Current status: **milestone 1** — workspace, empty host, rendering facade with
-wgpu and headless implementations, one cube, camera controls.
+Current status: **milestones 1–3 implemented** — deterministic Nickel package
+composition, stable numeric registrations, a streamed palette-chunk world,
+walking physics, greedy voxel meshing, durable break/place interactions,
+RocksDB persistence, and an egui diagnostics overlay. The headless acceptance
+path exercises the same composition and gameplay contracts without a GPU.
 
 ## Quick start
 
 ```bash
-# Windowed demo (WASD + right-mouse-drag to fly, Escape to quit).
+# Windowed persistent sandbox.
 cargo run --package latticeaxiom-demo
 
-# Headless mode: simulates and validates N frames without a window or GPU.
+# M1–M3 acceptance without a window or GPU: compose, stream, mesh, simulate,
+# break/place, recreate the runtime, and verify the edits persisted.
 cargo run --package latticeaxiom-demo -- --headless 60
+
+# Validate and inspect the exact package closure.
+cargo run --package latticeaxiom-cli -- check profiles/dev.ncl
+cargo run --package latticeaxiom-cli -- doctor --lock latticeaxiom.lock
 
 # Everything CI runs (fmt, clippy, tests, cargo-deny if installed).
 cargo xtask ci
 ```
 
 The pinned toolchain from `rust-toolchain.toml` is installed automatically by
-rustup on first use.
+rustup on first use. Building the production RocksDB backend also requires a
+C++ build toolchain and LLVM/libclang; `librocksdb-sys` must be able to find
+libclang and its resource headers.
 
 ### Controls
 
-| Input             | Action                          |
-| ----------------- | ------------------------------- |
-| `W` `A` `S` `D`   | Move forward / left / back / right |
-| `Space` / `Ctrl`  | Move up / down (world +Z / −Z)  |
-| Right mouse drag  | Look around                     |
-| `Escape`          | Quit                            |
+| Input | Action |
+| --- | --- |
+| Left click while released | Capture the mouse |
+| Mouse | Look around |
+| `W` `A` `S` `D` | Walk forward / left / back / right |
+| `Space` | Jump |
+| Left mouse | Break the targeted block |
+| Right mouse | Place the selected block |
+| `Escape` | Release the mouse; press again to quit |
 
 ## Workspace layout
 
 ```text
 crates/
-├── latticeaxiom-core             M1  world/space conventions, simulation contracts
+├── latticeaxiom-core             M1–M3  space, blocks/chunks, terrain, raycast, AABB physics
 ├── latticeaxiom-render           M1  backend-agnostic rendering facade + conformance suite
-├── latticeaxiom-render-wgpu      M1  the only crate allowed to depend on wgpu
+├── latticeaxiom-render-wgpu      M1–M3  wgpu backend + egui compositor
 ├── latticeaxiom-render-headless  M1  GPU-free renderer used by tests and CI
-├── latticeaxiom-demo             M1  executable host: winit window, camera, scene
-├── latticeaxiom-compose          M2  Nickel evaluation -> CompositionSpec (placeholder)
-├── latticeaxiom-packages         M2  package kernel: sources, resolve, lock, build plan (placeholder)
-├── latticeaxiom-modules          M2  registration contracts, RuntimeImage, ABI descriptors (placeholder)
-├── latticeaxiom-cli              M2  check / lock / build / pack / doctor (placeholder)
-├── latticeaxiom-storage          M3  WorldStorage contract + in-memory impl (placeholder)
-├── latticeaxiom-storage-rocksdb  M3  the only crate allowed to depend on rocksdb (placeholder)
-└── latticeaxiom-voxel-mesh       M3  in-house voxel meshing (culling + greedy); implemented, integrates at M3
-nickel/       M2  versioned latticeaxiom.lib Nickel contracts
-packages/     M3+ content package sources (official content is an ordinary package)
+├── latticeaxiom-demo             M1–M3  winit host and first-person sandbox assembly
+├── latticeaxiom-compose          M2  typed Nickel evaluation boundary
+├── latticeaxiom-packages         M2  exact resolver, canonical lock, build plan
+├── latticeaxiom-modules          M2  stable BlockId runtime image
+├── latticeaxiom-cli              M2  check / lock / build / pack / doctor
+├── latticeaxiom-storage          M3  WorldStorage facade, DTOs, memory reference backend
+├── latticeaxiom-storage-rocksdb  M3  production RocksDB backend
+└── latticeaxiom-voxel-mesh       M3  in-house face culling and greedy meshing
+nickel/       M2  versioned latticeaxiom.lib contracts
+packages/     M2+ content package sources (official content is an ordinary package)
 profiles/     M2  game.ncl root profiles
 tools/xtask   dev automation (cargo xtask ci)
 run/          gitignored local runtime directory (world data, scanned packages)
@@ -59,8 +72,7 @@ run/          gitignored local runtime directory (world data, scanned packages)
 
 `M{n}` is the milestone in the
 [demo roadmap](https://github.com/rezics/lattice-axiom/blob/main/docs/planning/roadmap-first-demo.md)
-at which a directory gains its implementation. Placeholder directories carry a
-README describing their planned scope.
+at which a directory gains its implementation.
 
 ## Engineering rules
 

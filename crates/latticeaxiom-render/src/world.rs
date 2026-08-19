@@ -55,6 +55,12 @@ pub struct MeshData {
     pub positions: Vec<[f32; 3]>,
     /// Per-vertex normals; must have the same length as `positions`.
     pub normals: Vec<[f32; 3]>,
+    /// Optional per-vertex linear RGBA colors.
+    ///
+    /// An empty vector means opaque white, allowing the instance material to
+    /// provide the complete color. When present, the length must match
+    /// `positions`; render backends multiply it by the instance material.
+    pub colors: Vec<[f32; 4]>,
     /// Triangle list indices into `positions`.
     pub indices: Vec<u32>,
 }
@@ -81,6 +87,13 @@ impl MeshData {
                 self.positions.len()
             ));
         }
+        if !self.colors.is_empty() && self.colors.len() != self.positions.len() {
+            return invalid(format!(
+                "color count {} does not match vertex count {}",
+                self.colors.len(),
+                self.positions.len()
+            ));
+        }
         if self.indices.is_empty() || !self.indices.len().is_multiple_of(3) {
             return invalid(format!(
                 "index count {} is not a positive multiple of 3",
@@ -102,7 +115,12 @@ impl MeshData {
             .chain(self.normals.iter())
             .flatten()
             .all(|component| component.is_finite());
-        if !all_finite {
+        let colors_finite = self
+            .colors
+            .iter()
+            .flatten()
+            .all(|component| component.is_finite());
+        if !all_finite || !colors_finite {
             return invalid("mesh contains non-finite attribute components".to_owned());
         }
         Ok(())
