@@ -27,6 +27,29 @@ repository. Accepted ADRs there override older implementation assumptions.
 - Bevy is pinned exactly in `Cargo.lock`. Upgrade it only as a dedicated
   migration with the roadmap's compatibility and performance gates.
 
+## Performance and parallelism
+
+- Performance is a correctness requirement for real-time and scale-sensitive
+  code. Changes must meet the frame-time, latency, throughput, and memory
+  budgets defined by the roadmap or an accepted ADR; established budgets may
+  not regress without an accepted ADR.
+- Measure representative workloads in optimized builds before and after
+  changing a hot path. Performance-sensitive changes require a reproducible
+  benchmark, trace, or diagnostic that can detect regressions; optimize from
+  evidence rather than intuition.
+- Keep per-frame and per-entity work bounded. Avoid avoidable allocation,
+  cloning, string lookup, blocking I/O, unbounded queues, and coarse locking on
+  hot paths. Move expensive or bursty work out of the frame-critical path and
+  apply batching, streaming, or backpressure as appropriate.
+- Production workloads that scale with entities, chunks, assets, or players
+  must use Bevy's multithreaded scheduler, parallel iteration, or task pools.
+  Structure systems and data access so independent work can run concurrently;
+  do not serialize work through unnecessary system ordering, exclusive
+  `World` access, global locks, or a project-owned thread runtime.
+- A deliberately single-threaded scale-sensitive path requires profiling
+  evidence that parallel execution would not improve the applicable budget,
+  plus a code comment documenting the constraint and the evidence.
+
 ## Coordinate system
 
 - Use Bevy's native right-handed Y-up world coordinates: `+X` right, `+Y` up,
