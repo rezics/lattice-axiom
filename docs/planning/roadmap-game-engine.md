@@ -45,6 +45,8 @@ Nickel / typed models
 ### 出场条件
 
 - Nickel source 在 CLI／embedded evaluator 得到语义相同 `CompositionSpec`；
+- CLI／embedded通过同一受控worker路径，对positive corpus产生逐byte相同的canonical `CompositionSpec`，对negative corpus产生相同stable code与source provenance；
+- R0 Nickel deadline、memory、recursion与import／output／diagnostic limits通过boundary／`+1` fault fixtures；缺少hard enforcement capability时fail closed；
 - typed models 有 round-trip／golden fixtures；
 - source path／record key reorder 不改变 canonical hash；
 - Nickel普通merge不隐式拼接semantic arrays，相同优先级binding冲突保留双方source span；
