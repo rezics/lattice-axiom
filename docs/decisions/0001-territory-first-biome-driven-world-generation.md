@@ -2,7 +2,6 @@
 title: 採用領地優先、群系驅動、約束求解的世界生成
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-09
 amended_by:
   - 0003-no-global-version-package-scoped-compatibility.md

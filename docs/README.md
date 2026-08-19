@@ -2,7 +2,6 @@
 title: Lattice Axiom 文件
 status: active
 type: index
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

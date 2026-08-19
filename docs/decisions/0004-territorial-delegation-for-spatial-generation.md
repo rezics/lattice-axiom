@@ -2,7 +2,6 @@
 title: 空間生成採領地遞迴委派
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-09
 ---
 

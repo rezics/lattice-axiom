@@ -2,7 +2,6 @@
 title: 可組合世界生成架構
 status: proposed
 type: explanation
-locale: zh-Hant
 updated: 2026-08-19
 decision:
   - ../decisions/0001-territory-first-biome-driven-world-generation.md

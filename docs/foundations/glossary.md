@@ -2,7 +2,6 @@
 title: 詞彙表
 status: active
 type: reference
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

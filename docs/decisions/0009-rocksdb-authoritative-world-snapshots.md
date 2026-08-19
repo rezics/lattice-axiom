@@ -2,7 +2,6 @@
 title: demo 以 RocksDB 保存權威世界快照
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

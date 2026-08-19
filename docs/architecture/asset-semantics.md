@@ -2,7 +2,6 @@
 title: 資產管線與模型語義
 status: exploration
 type: explanation
-locale: zh-Hant
 updated: 2026-08-09
 ---
 

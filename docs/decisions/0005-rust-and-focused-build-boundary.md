@@ -2,7 +2,6 @@
 title: 採用 Rust 並集中自研遊戲差異層
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

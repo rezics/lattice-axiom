@@ -2,7 +2,6 @@
 title: 物理資產與局部形變創作
 status: exploration
 type: explanation
-locale: zh-Hant
 updated: 2026-08-09
 ---
 

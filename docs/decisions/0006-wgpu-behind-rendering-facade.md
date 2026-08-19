@@ -2,7 +2,6 @@
 title: demo 採 wgpu 並以渲染門面隔離
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

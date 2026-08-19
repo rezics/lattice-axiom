@@ -2,7 +2,6 @@
 title: 採 Nickel 作為組合語言
 status: superseded
 type: decision
-locale: zh-Hant
 updated: 2026-08-19
 superseded_by:
   - 0010-nickel-driven-package-system.md

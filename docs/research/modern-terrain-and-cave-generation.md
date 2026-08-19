@@ -2,7 +2,6 @@
 title: 現代地形與洞穴生成的演算法和硬體邊界
 status: exploration
 type: research
-locale: zh-Hant
 updated: 2026-08-09
 ---
 

@@ -2,7 +2,6 @@
 title: 靜態與動態實現收斂於同一模組圖
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

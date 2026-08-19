@@ -2,7 +2,6 @@
 title: Minecraft 世界生成與洞穴模組的設計教訓
 status: exploration
 type: research
-locale: zh-Hant
 updated: 2026-08-09
 ---
 

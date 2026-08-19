@@ -2,7 +2,6 @@
 title: 洞穴採共享拓撲與群系形態的混合組合模型
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-09
 amended_by:
   - 0004-territorial-delegation-for-spatial-generation.md

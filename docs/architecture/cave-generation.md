@@ -2,7 +2,6 @@
 title: 可組合洞穴生成架構
 status: proposed
 type: explanation
-locale: zh-Hant
 updated: 2026-08-09
 decision:
   - ../decisions/0002-hybrid-cave-generation-composition.md

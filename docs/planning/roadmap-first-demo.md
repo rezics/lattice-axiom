@@ -2,7 +2,6 @@
 title: 第一個可玩 demo 路線圖
 status: active
 type: planning
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

@@ -2,7 +2,6 @@
 title: 專案願景與設計支柱
 status: exploration
 type: overview
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

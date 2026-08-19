@@ -2,7 +2,6 @@
 title: 待決問題
 status: active
 type: planning
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

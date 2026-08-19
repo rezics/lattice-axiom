@@ -2,7 +2,6 @@
 title: Nickel 驅動的套件系統與雙實現路徑
 status: proposed
 type: explanation
-locale: zh-Hant
 updated: 2026-08-19
 decision:
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md

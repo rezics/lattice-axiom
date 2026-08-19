@@ -2,7 +2,6 @@
 title: 以 Nickel 驅動套件系統並以 Rust 執行
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-19
 supersedes:
   - 0007-nickel-as-composition-language.md

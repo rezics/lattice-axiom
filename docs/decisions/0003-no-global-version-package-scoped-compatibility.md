@@ -2,7 +2,6 @@
 title: 不以全域大版本決定相容性
 status: accepted
 type: decision
-locale: zh-Hant
 updated: 2026-08-09
 ---
 

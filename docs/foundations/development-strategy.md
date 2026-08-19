@@ -2,7 +2,6 @@
 title: 一人與 AI 協作的開發策略
 status: accepted
 type: overview
-locale: zh-Hant
 updated: 2026-08-19
 decision:
   - ../decisions/0005-rust-and-focused-build-boundary.md

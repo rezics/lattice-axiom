@@ -2,7 +2,6 @@
 title: 渲染架構與擴充邊界
 status: proposed
 type: explanation
-locale: zh-Hant
 updated: 2026-08-19
 decision:
   - ../decisions/0006-wgpu-behind-rendering-facade.md

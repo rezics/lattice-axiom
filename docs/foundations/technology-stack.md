@@ -2,7 +2,6 @@
 title: 已選技術棧與採用邊界
 status: active
 type: reference
-locale: zh-Hant
 updated: 2026-08-19
 ---
 

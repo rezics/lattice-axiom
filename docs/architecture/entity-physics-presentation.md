@@ -2,7 +2,6 @@
 title: 實體、物理與表現層
 status: exploration
 type: explanation
-locale: zh-Hant
 updated: 2026-08-09
 ---
 

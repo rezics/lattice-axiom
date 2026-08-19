@@ -2,7 +2,6 @@
 title: 渲染與物理技術地圖
 status: exploration
 type: research
-locale: zh-Hant
 updated: 2026-08-09
 ---
 
