@@ -9,7 +9,7 @@ updated: 2026-08-19
 
 ## 背景
 
-把 Nickel、package kernel 与动态 ABI 延后到可玩 demo 之后，适合一般「以后可能支持 mods」的游戏，却不适合 Lattice Axiom：逻辑套件、SemVer、可组合 closure 与静态／动态双 realization 是核心产品模型。如果先让官方内容直接成为 Bevy Plugin，等 domain API、schedule、ID 与渲染路径固定后再补 package graph，项目会被迫维护旧／新两条启动路径，或进行第二次全面重写。
+把 Nickel、package kernel 与动态 ABI 延后到可玩 demo 之后，适合一般「以后可能支持 mods」的游戏，却不适合 Lattice Axiom：逻辑套件、SemVer、可组合 closure 与静态／动态双 realization 是核心产品模型。如果先让 Terrenia／第一方内容直接成为 Bevy Plugin，等 domain API、schedule、ID 与渲染路径固定后再补 package graph，项目会被迫维护旧／新两条启动路径，或进行第二次全面重写。
 
 最佳时机不是先完成一套抽象 package platform，也不是游戏完成以后，而是**第一个真实玩法垂直切片的最窄闭环**：让一个小而真实的玩法／内容 package 同时走静态与动态路径，再由同一个已锁定 graph 启动 Bevy。
 
@@ -61,7 +61,7 @@ K0–K4 是最小架构闭环，不要求先建立 registry service。K5 防止 
 
 没有真实 system、schema、render feature 与性能资料，ABI 与 capability 会成为抽象猜测。最小 vertical slice 才是正确设计压力。
 
-### 官方內容暫時繞過 graph
+### 第一方內容暫時繞過 graph
 
 任何暂时捷径都会让公开路径失去首位 consumer；官方与测试 package 必须同样被锁定、验证与激活。
 

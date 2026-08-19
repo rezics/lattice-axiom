@@ -17,6 +17,7 @@ updated: 2026-08-19
 - [x] static／dynamic realization共用同一 graph／registration语义，但不共用最低调用约定，见[决策 0008](../decisions/0008-static-and-dynamic-realizations-share-one-graph.md)。
 - [x] dynamic native使用 C bootstrap、versioned capability tables、batch ECS与command buffer；static直接Bevy/LTO，见[决策 0017](../decisions/0017-versioned-native-module-abi.md)。
 - [x] package kernel与ABI `0.x` 从第一个 vertical slice开始；只延后registry／marketplace／hot unload／WASM规模，见[决策 0018](../decisions/0018-package-kernel-from-first-vertical-slice.md)。
+- [x] logical package 使用 `@scope/name`，stable registration 使用独立的 `<namespace>:<kind>/<path>` 与显式 namespace grant；Terrenia 是 package 定义的第一维度，见[决策 0019](../decisions/0019-separate-package-and-registration-identities.md)。
 - [x] package compatibility使用SemVer；Bevy是core package内部tool，外部break仍需诚实版本化。
 - [x] 已物化world以RocksDB完整snapshot为权威，见[决策 0009](../decisions/0009-rocksdb-authoritative-world-snapshots.md)。
 - [x] 没有global version开关，见[决策 0003](../decisions/0003-no-global-version-switch.md)。
@@ -26,7 +27,6 @@ updated: 2026-08-19
 
 ## P0：Package 语义與 Nickel Contract
 
-- [ ] package ID、capability ID、stable content／system／schema ID 的最终grammar与namespace delegation？
 - [ ] `latticeaxiom.lib` 第一版 `Package`／`GameProfile`／`Realization` contracts具体字段？
 - [ ] Nickel overlay的优先、default、force／conflict语义如何做到source-aware diagnostics？
 - [ ] import roots、evaluation time／memory／recursion／output size上限？
@@ -163,7 +163,7 @@ updated: 2026-08-19
 
 1. Nickel → typed `CompositionSpec` golden fixtures。
 2. SemVer／capability resolver conflict corpus与frozen lock。
-3. `example.dual-gameplay` static／dynamic registration与state equivalence。
+3. `@example/dual-gameplay` static／dynamic registration与state equivalence。
 4. static direct／dynamic batch／per-entity反例benchmark。
 5. package-driven Bevy client／headless smoke。
 6. upstream voxel／physics playable adoption report。

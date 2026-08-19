@@ -23,7 +23,7 @@ Lattice Axiom 以 package SemVer 表达逻辑依赖相容，以 capability／ABI
 | 坐标 | Owner | 回答的问题 | 不回答 |
 | --- | --- | --- | --- |
 | 产品 SemVer | release | 使用者取得哪次发行与支援线？ | package／save 是否相容 |
-| package ID + SemVer | package owner | 逻辑 API／行为与 dependency range 是否相容？ | binary layout／精确 artifact |
+| `PackageName` + SemVer | package owner | 逻辑 API／行为与 dependency range 是否相容？ | registration namespace／binary layout／精确 artifact |
 | capability ID + interface version | capability owner | provider／consumer 可协商哪项服务？ | package source／save schema |
 | native bootstrap／interface ABI | ABI owner | table、callback、batch layout 能否安全交换？ | gameplay behavior是否相容 |
 | `EngineBuildId` | core build | engine-coupled artifact 是否针对同一 host？ | portable artifact 是否相容 |
@@ -90,7 +90,7 @@ ABI require: native bootstrap 1, ecs.batch @1.3+
 
 Bevy crate version 由核心 host 的 Cargo manifest／lock 固定。模组通常依赖：
 
-- `latticeaxiom.engine` package／capability range；
+- `@rezics/backend` package／capability range；
 - Lattice SDK／schema version；
 - 对 dynamic realization 的 Lattice ABI／interfaces。
 
@@ -175,7 +175,7 @@ world metadata 保存真正影响恢复的最小要求：
 
 ## Stable Content ID
 
-存档引用 `latticeaxiom:block/stone`，不引用 Rust type name、Bevy `Entity`／`Handle`、registration order 或 dynamic callback index。
+存档引用 `terrenia:block/stone`，不引用 package name、Rust type name、Bevy `Entity`／`Handle`、registration order 或 dynamic callback index。
 
 移除／更名政策必须明确：
 

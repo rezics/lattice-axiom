@@ -23,7 +23,7 @@ Lattice Axiom 是一款以可演进体素世界、可组合套件生态与长期
 
 ### 游戏是一个已锁定套件闭包
 
-每次 client、server、headless test 与 tool 启动，都对应一个可审查的 `LockedGameGraph`。官方内容、测试内容与第三方模组拥有相同 package ID、SemVer、dependency、capability、schema 与 conflict rules；不存在官方私有加载捷径。
+每次 client、server、headless test 与 tool 启动，都对应一个可审查的 `LockedGameGraph`。Terrenia、其他第一方内容、测试内容与第三方模组拥有相同 scoped package name、SemVer、dependency、capability、schema 与 conflict rules；不存在第一方私有加载捷径。
 
 ### 静态与动态是 realization，不是两个生态
 
@@ -40,7 +40,7 @@ Lattice Axiom 是一款以可演进体素世界、可组合套件生态与长期
 1. 玩家能进入程序体素世界、挖掘、放置并跨重启保存；
 2. 一个真实 gameplay package 可由同一业务代码生成 static／portable dynamic realization，并得到相同注册与权威结果。
 
-只做 package manager demo 不够；先让官方内容绕过 graph 做完游戏也不够。正确顺序是最窄基础闭环立即服务真实玩法。
+只做 package manager demo 不够；先让 Terrenia／第一方内容绕过 graph 做完游戏也不够。正确顺序是最窄基础闭环立即服务真实玩法。
 
 ### 只自研产品差异层
 
@@ -48,7 +48,7 @@ Lattice Axiom 自行定义：
 
 - Nickel package／profile contract 与 Rust package kernel；
 - package SemVer、capability、realization 与 native ABI；
-- stable content／schema identity 与 official／external parity；
+- stable content／schema identity、独立 registration namespace 与 first-party／external parity；
 - 权威体素区块、世界生成、provenance 与持久化；
 - render feature／provider 的可组合产品契约；
 - 无限世界精度、串流与玩家体验预算。

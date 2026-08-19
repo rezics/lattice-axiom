@@ -1,11 +1,14 @@
 ---
 title: 統一品牌識別字 latticeaxiom 與命名約定
-status: accepted
+status: superseded
 type: decision
 updated: 2026-08-19
+superseded_by: 0019
 ---
 
 # 決策 0012：統一品牌識別字 `latticeaxiom` 與命名約定
+
+> 本决策中 Rust crate、ABI 与仓库命名仍由[决策 0019](0019-separate-package-and-registration-identities.md)保留；logical package 与 stable registration ID 共用品牌前缀的部分已被取代。本页保留为历史理由，不再是完整现行规范。
 
 ## 背景
 

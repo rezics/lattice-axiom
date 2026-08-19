@@ -34,7 +34,7 @@ Nickel / typed models
 
 - workspace／Rust toolchain／CI；
 - `CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RegistrationManifest`、`RegistrationImage`、`RuntimeImage` 的 crate／schema skeleton；
-- package ID、SemVer、capability ID、realization、schema owner 与 stable ID grammar；
+- scoped `PackageName`、SemVer、独立 `StableId`／namespace grant、realization 与 schema owner grammar；
 - canonical encoding／hash rules；
 - `latticeaxiom.lib` 最小 Nickel contracts；
 - version coordinate／diagnostic code catalog。
@@ -143,7 +143,7 @@ Nickel / typed models
 
 - upstream voxel／physics／input adoption spike；
 - stable block ID、chunk revision、world command；
-- official content／test content packages；
+- `@rezics/terrenia` dimension closure／test content packages；
 - dual-realization gameplay system 参与真实 break／place；
 - RocksDB／memory storage、snapshot、shutdown；
 - minimal worldgen／provenance。

@@ -75,7 +75,7 @@ Nickel contracts
 
 ## Package-first 實作方式
 
-- 所有 profile 都产生 `LockedGameGraph`，没有 hand-written official plugin list。
+- 所有 profile 都产生 `LockedGameGraph`，没有 hand-written first-party plugin／dimension list。
 - SDK/proc macro 是 authoring surface；manifest、static glue、C binding 与 fixtures 由同一 schema 生成。
 - static 直接 Bevy／LTO；不把它降为呼叫 C ABI。
 - dynamic 一次 system callback 处理 batches；不逐 entity／voxel FFI。

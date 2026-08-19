@@ -8,13 +8,14 @@ decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../decisions/0019-separate-package-and-registration-identities.md
 ---
 
 # 第一個套件驅動的 Bevy 可玩 demo 路線圖
 
 ## Demo 定義
 
-> 玩家从一个已锁定 package closure 进入程序生成的 Y-up 体素世界，挖掉并放回方块；退出再进入后世界仍保留修改。同一最小 gameplay package 可切换 static／portable dynamic realization，而 registration、玩法结果与存档不变。
+> 玩家从一个已锁定 package closure 进入由 `@rezics/terrenia` 定义的 Terrenia Y-up 体素维度，挖掉并放回方块；退出再进入后世界仍保留修改。同一最小 gameplay package 可切换 static／portable dynamic realization，而 registration、玩法结果与存档不变。
 
 这是可玩的 vertical slice，也是 package／ABI 的第一个真实 conformance consumer。它不是 package manager UI、空动态库 loader 或 renderer benchmark。
 
@@ -29,7 +30,7 @@ decision:
 - Bevy 原生右手 Y-up；
 - voxel／physics／input／assets／diagnostics 先采用 Bevy／生态 upstream；
 - RocksDB 保存完整已物化 chunk snapshot；
-- official／test content 都经 package graph；
+- Terrenia／test content 都经 package graph；host 没有内建默认维度；
 - 无自研 ECS／scheduler／renderer／asset server。
 
 ## 两条同时验收的循环
@@ -46,7 +47,7 @@ decision:
 
 ### Package 循环
 
-1. Nickel profile 选择 `example.dual-gameplay`。
+1. Nickel profile 选择 `@example/dual-gameplay`。
 2. 以 `NativeStatic` 启动并记录 lock／registration／state hash。
 3. 只切换 realization 为 `PortableNative`。
 4. loader 验证 artifact／ABI／manifest。
@@ -71,7 +72,7 @@ decision:
 
 - 同一 lock 可建立 client／headless的 compatible authoritative closure；
 - client 显示场景并退出；headless无 GPU推进 fixed tick；
-- 没有 hidden hand-written official plugin list；
+- 没有 hidden hand-written first-party plugin／dimension list；
 - 没有自有 runner／ECS／renderer；
 - dependency／license 与 lock metadata可重建。
 
@@ -80,7 +81,7 @@ decision:
 ### 交付
 
 - SDK／proc macro prototype；
-- `example.dual-gameplay` 的一个真实 component + fixed system + command；
+- `@example/dual-gameplay` 的一个真实 component + fixed system + command；
 - generated manifest／static glue／C binding／dynamic batch shim；
 - portable ABI entry、instance lifecycle、batch／command／diagnostics；
 - equivalence harness 与 static／dynamic／per-entity反例 benchmark。
@@ -122,7 +123,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 ### 交付
 
 - stable block ID、chunk revision、dirty／durability state；
-- `latticeaxiom.official-content`／`example.marker` packages；
+- `@rezics/terrenia` 维度 closure／`@example/marker` test package；
 - validated content／schema registry；
 - `MemoryWorldStorage`／RocksDB；
 - snapshot envelope、atomic batch、checkpoint；
@@ -133,7 +134,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 
 - 修改跨重启保留，已物化 chunk不重生；
 - stale async result不覆盖新 revision；
-- official／test packages无私有 registration；
+- Terrenia／test packages无私有 registration；
 - discovery／load order不改变 IDs／save；
 - static／dynamic gameplay产生相同 snapshot bytes（排除允许的 diagnostic metadata）；
 - save不含 Bevy／ABI／physics handles；
@@ -143,7 +144,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 
 ### 交付
 
-- world seed／`WorldgenConfig`；
+- Terrenia world seed／`WorldgenConfig`；
 - 两个 placeholder terrain／biome styles；
 - deterministic height（`y`）与最小 cave／void；
 - generator package／capability；
@@ -237,6 +238,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 
 - [執行期整合路線](roadmap-game-engine.md)
 - [套件內核](../architecture/package-management.md)
+- [Demo workspace 与 Terrenia package 组织](../architecture/demo-workspace-organization.md)
 - [原生 ABI](../architecture/native-module-abi.md)
 - [Bevy 執行期](../architecture/game-engine-runtime.md)
 - [待決問題](open-questions.md)

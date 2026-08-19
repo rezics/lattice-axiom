@@ -74,7 +74,7 @@ profile 可以选择不同的 presentation／tooling realization，但以下条�
 | renderer／asset／task service adapters | semantic render／asset／task requests |
 | world activation transaction | package-owned migration／missing content policy |
 
-core host 不拥有官方内容的私有注册表。官方 package 与测试 package 均经同一 registration image。
+core host 不拥有第一方内容或 Terrenia 维度的私有注册表。第一方 package 与测试 package 均经同一 registration image。
 
 ## EngineInstance
 
@@ -280,7 +280,7 @@ Playing
 - 自有 ECS scheduler／fixed-time runtime；
 - 自有 renderer／asset dependency graph／platform input layer；
 - dynamic module 直接取得 Bevy／Rust type；
-- 官方 package 绕过 `LockedGameGraph`；
+- 第一方 package 或 Terrenia 维度绕过 `LockedGameGraph`；
 - tick 内求值 Nickel／解析 SemVer；
 - 一个 global `EngineVersion` 代理所有相容性；
 - v1 native hot unload。

@@ -8,6 +8,7 @@ decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../decisions/0019-separate-package-and-registration-identities.md
 ---
 
 # 套件模組、註冊清單與靜動雙實現
@@ -71,9 +72,9 @@ package 可以依职责分类，但全部遵守同一 graph／registration：
 SDK 提供稳定的 Lattice-owned business surface，并生成 static／dynamic adapter。概念输入如下：
 
 ```rust
-#[latticeaxiom::package(id = "example.marker")]
+#[latticeaxiom::package(name = "@example/marker")]
 mod marker {
-    #[component(id = "example.marker:component/marked", schema = 1)]
+    #[component(id = "example:component/marked", schema = 1)]
     pub struct Marked { pub strength: f32 }
 
     #[system(stage = "gameplay.fixed", reads(Marked), commands)]
@@ -158,16 +159,17 @@ host 从已验证 manifest 取得 POD size、alignment 与 layout descriptor，�
 稳定 ID 例：
 
 ```text
-latticeaxiom:block/stone
-latticeaxiom:item/stone
-latticeaxiom:component/health
-example.marker:system/decay
-example.marker:render-feature/outline
+terrenia:block/stone
+terrenia:item/stone
+rezics:component/health
+example:system/decay
+example:render-feature/outline
 ```
 
 规则：
 
-- stable ID 的 owner 是 package／schema，不是 Rust type name；
+- stable ID 的 namespace owner／schema owner 由显式授权与 manifest 记录，不从 package name 或 Rust type name 推导；
+- registration row 另存 `declared_by: PackageName`，但 provider package 不成为 stable ID 的语法组成；
 - duplicate ID 一律在 activation 前失败，不能 last-writer-wins；
 - numeric ID 从完整 `LockedGameGraph`／manifest set 以规范规则产生，或由 snapshot local palette 保存；
 - numeric ID 不依 source discovery、Cargo link、plugin add 或 dynamic load 顺序；
@@ -248,13 +250,13 @@ discover / compose
 - 运行中 callback 失败：依 system policy 禁用当前 tick／module 或安全退出，不 unwind 跨 FFI；
 - v1 不卸载 native library；重组 package closure 需要新 EngineInstance／重启。
 
-## 官方內容與測試套件
+## Terrenia 與測試套件
 
 至少维护三个 consumers：
 
-1. `latticeaxiom.official-content`：最小正式方块／物品／群系；
-2. `example.marker`：独立 namespace 与不同 assumption 的测试 package；
-3. `example.dual-gameplay`：同一业务代码同时构建 static／portable dynamic 的 equivalence fixture。
+1. `@rezics/terrenia`：第一个维度的聚合 package，依赖最小方块／世界生成／玩法／表现 closure；
+2. `@example/marker`：独立 package name 与 registration namespace 的测试 package；
+3. `@example/dual-gameplay`：同一业务代码同时构建 static／portable dynamic 的 equivalence fixture。
 
 测试必须覆盖：
 
@@ -274,7 +276,7 @@ package kernel 不拥有：
 - 第二个 renderer／render graph；
 - per-tick package lookup；
 - 任意 native hot unload；
-- 官方 package 私有 registration shortcut。
+- 第一方 package 私有 registration shortcut。
 
 ## 驗收
 

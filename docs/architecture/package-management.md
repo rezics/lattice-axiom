@@ -8,6 +8,7 @@ decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../decisions/0019-separate-package-and-registration-identities.md
 ---
 
 # Nickel 驅動的套件內核與分發邊界
@@ -45,7 +46,24 @@ package.ncl / game.ncl / overlays / latticeaxiom.lib
                       Bevy App
 ```
 
-没有任何官方 `add_plugins(...)` 清单可以绕过这条管线成为第二份真相。测试可以用 in-memory source 与预构建 fixture 缩短 I/O，但仍产生相同语义型别与验证结果。
+没有任何第一方 `add_plugins(...)` 清单可以绕过这条管线成为第二份真相。测试可以用 in-memory source 与预构建 fixture 缩短 I/O，但仍产生相同语义型别与验证结果。
+
+## Package 名稱與註冊 ID
+
+Package identity 与 runtime／persistent registration identity 是两个正交坐标：
+
+```text
+PackageName("@rezics/terrenia-blocks")
+StableId("terrenia:block/stone")
+```
+
+`PackageName` 使用 `@scope/name`，负责 SemVer、依赖、来源、分发与 realization。
+`StableId` 使用 `<namespace>:<kind>/<path>`，负责内容、维度、schema、system、
+capability 与 render contract 的长期引用。manifest 必须直接声明完整 stable ID；
+package kernel 只另外记录 `declared_by`，不得从 package name、source path 或 crate name
+拼出注册 key。namespace 的使用权由显式 grant 验证。
+
+完整规范见[决策 0019](../decisions/0019-separate-package-and-registration-identities.md)。
 
 ## 套件模型
 
@@ -53,9 +71,9 @@ package.ncl / game.ncl / overlays / latticeaxiom.lib
 
 | 字段 | 语义 |
 | --- | --- |
-| `id` | 全域稳定 package 身分，例如 `latticeaxiom.world` |
+| `name` | scoped package 身分，例如 `@rezics/terrenia-worldgen` |
 | `version` | package 的 SemVer |
-| `dependencies` | package ID、SemVer range、optional／feature 条件 |
+| `dependencies` | package name、SemVer range、optional／feature 条件 |
 | `requires`／`provides` | versioned capability 与 cardinality |
 | `realizations` | data、`NativeStatic`、`PortableNative`、`EngineCoupledNative` 等候选 |
 | `schemas` | 持久化 component／message／asset schema owner |
@@ -70,8 +88,8 @@ let la = import "latticeaxiom/lib.ncl" in
 
 la.GameProfile & {
   packages = [
-    { id = "latticeaxiom.core", version = "^0.1" },
-    { id = "example.marker", version = "~0.1", realization = 'auto },
+    { name = "@rezics/backend", version = "^0.1" },
+    { name = "@rezics/terrenia", version = "~0.1", realization = 'auto },
   ],
   overlays = [import "./local-world.ncl"],
 }
@@ -149,11 +167,11 @@ dependency 表达「我需要某个 package 的公开 contract」；capability �
 每个 capability 至少包含 stable ID、interface major／minor range、cardinality 与 profile／target 条件：
 
 ```text
-render.terrain.mesh-source@1     exactly-one
-render.visibility@1              exactly-one
-render.post-effect@1             zero-or-more
-worldgen.terrain-provider@2      exactly-one
-gameplay.damage-observer@1       zero-or-more
+rezics:capability/render-terrain-mesh-source@1  exactly-one
+rezics:capability/render-visibility@1           exactly-one
+rezics:capability/render-post-effect@1          zero-or-more
+rezics:capability/worldgen-terrain-provider@2   exactly-one
+rezics:capability/gameplay-damage-observer@1    zero-or-more
 ```
 
 exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provider 的确定顺序来自显式 dependency／priority policy，不来自目录或动态库加载顺序。
@@ -163,7 +181,7 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 | realization | 构建／加载 | 相容边界 | 适合 |
 | --- | --- | --- | --- |
 | data | 验证并加载 assets／definitions | package／schema | 纯内容 |
-| `NativeStatic` | Cargo 从 source 编入 host | source API + rebuild | 官方／可信 code、最大性能、完整 Bevy 能力 |
+| `NativeStatic` | Cargo 从 source 编入 host | source API + rebuild | 第一方／可信 code、最大性能、完整 Bevy 能力 |
 | `PortableNative` | 验证后加载 `cdylib` | stable Lattice ABI／capability | 可分发可信 native mod |
 | `EngineCoupledNative` | 精确 host build 加载 | `EngineBuildId` + internal interface | 低层 engine／renderer integration |
 | `WasmComponent` | 未来独立 runtime | component／capability contract | 不可信或跨平台生态；不在首阶段 |
@@ -174,7 +192,7 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 
 首阶段来源只需支持 workspace／local directory 与测试 fixture；每个 source 都规范化并 content-addressed。lock 至少保存：
 
-- package ID／version／source／source hash；
+- package name／version／source／source hash；
 - dependency 与 capability resolution；
 - selected realization／target／profile；
 - manifest schema／hash；

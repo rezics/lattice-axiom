@@ -39,8 +39,8 @@ decision:
 一个发布的 native realization 至少包含：
 
 ```text
-example.marker/
-├── package descriptor        package ID / SemVer / source / realization
+marker-package/
+├── package descriptor        PackageName / SemVer / source / realization
 ├── registration manifest     schemas / systems / capabilities / hash
 ├── target descriptor         OS / arch / ABI / EngineBuildId if coupled
 ├── library                   .dll / .so / .dylib

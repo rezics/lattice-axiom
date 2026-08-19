@@ -15,14 +15,14 @@ Nickel 的 record、function、contract、merge 与嵌入式求值能力适合�
 
 ## 決策
 
-1. 套件系统是 Lattice Axiom 的产品核心。官方内容、测试内容、静态模组与动态模组都必须先成为 package graph 节点，不能绕过 package kernel 直接加入 Bevy App。
-2. 逻辑套件版本遵守 [Semantic Versioning](https://semver.org/)。package manifest 声明 package ID、version、dependency range、capability、schema owner、realization、feature／parameter 与资产；lock 选择精确版本、来源与 artifact hash。
+1. 套件系统是 Lattice Axiom 的产品核心。Terrenia／第一方内容、测试内容、静态模组与动态模组都必须先成为 package graph 节点，不能绕过 package kernel 直接加入 Bevy App。
+2. 逻辑套件版本遵守 [Semantic Versioning](https://semver.org/)。package manifest 声明 package name、version、dependency range、capability、schema owner、realization、feature／parameter 与资产；lock 选择精确版本、来源与 artifact hash。package name 与 stable registration ID 的语法及授权由决策 0019 规定。
 3. `package.ncl`、`game.ncl`、整合包与使用者 overlay 采用 Nickel。版本化 `latticeaxiom.lib` 提供 `Package`、`GameProfile`、`Dependency`、`Capability`、`Realization` 与相关 contract／组合函数。
 4. `latticeaxiom-compose` 通过 `nickel-lang` Rust API完整求值，并直接反序列化为强型别 `CompositionSpec`；不以 canonical JSON 作为求值器、resolver、planner 与 loader 的无型别内部总线。
 5. Rust package kernel 负责来源取得、SemVer／capability 解析、唯一版本政策、循环与冲突、信任、lock、store／cache、build、load、activation 与诊断。Nickel 不自行下载、执行 compiler 或加载动态库。
 6. 管线的核心语义型别是 `CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RegistrationImage` 与 `RuntimeImage`。每一层只携带已满足的不变量，并有独立 schema／semantic version、round-trip 与 golden fixture。
 7. `latticeaxiom.lock`、发布描述符与诊断可使用 canonical serialization。它们是强型别模型的持久化／交换表示；其 schema 与 producer version 必须记录，且可从 Nickel source 与受控来源重建。
-8. Bevy 是 Lattice Axiom 核心套件内部使用的 engine／build tool，不是每个模组可各自解析的 crate 相依。package graph 可以包含逻辑 `latticeaxiom.engine` package／capability；它表达外部可观察契约，不把 `bevy = 0.x` 暴露成模组相容性的唯一判断。
+8. Bevy 是 Lattice Axiom 核心套件内部使用的 engine／build tool，不是每个模组可各自解析的 crate 相依。package graph 可以包含逻辑 `@rezics/backend` package／capability；它表达外部可观察契约，不把 `bevy = 0.x` 暴露成模组相容性的唯一判断。
 9. Bevy 更新不自动造成所有 package major bump。但若更新改变了外部可观察的 Lattice API、capability 行为、schema、渲染语义或 engine-coupled interface，相关 owner 必须按 SemVer／ABI 规则诚实升级；不能以「Bevy 是内部工具」掩盖破坏。
 10. Nickel 与 package kernel 不进入热路径。Bevy App 启动前得到已验证的 `RegistrationImage`／`RuntimeImage`；游戏 tick 使用 numeric ID、typed registry、连续资料、direct function 或批次 callback。
 11. v1 实作真实 SemVer range 检查、确定性选择政策、精确 lock 与清楚冲突诊断；远端 registry、通用 PubGrub／SAT 规模、多来源 marketplace、签章透明日志与分散式 artifact cache 可延后，但不能用延后规模功能为理由省略核心 graph。
@@ -66,7 +66,7 @@ package.ncl + game.ncl + overlays + latticeaxiom.lib
 ## 結果
 
 - Nickel 成为套件声明与游戏组合的强大语言，而 Rust 保留副作用、安全、性能与宿主整合的清楚边界。
-- 所有内容都经同一 graph 与 lock，官方内容无法绕过相依、capability 或冲突规则。
+- 所有内容都经同一 graph 与 lock，Terrenia／第一方内容无法绕过相依、capability 或冲突规则。
 - Bevy 可以在核心套件内部升级，同时外部相容性由 Lattice-owned contract 诚实表达。
 - 项目承担 package kernel、SDK、lock format 与诊断的长期维护；这不是可延后的附属工具。
 

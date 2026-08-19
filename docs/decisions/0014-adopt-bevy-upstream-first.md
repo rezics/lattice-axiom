@@ -22,7 +22,7 @@ Lattice Axiom 曾規劃自行建立生命週期、ECS 門面、排程器、輸�
 3. Lattice Axiom 核心、`NativeStatic` realization 與 host adapter 直接使用 Bevy 的 `Plugin`／`PluginGroup`、`Component`、`Resource`、typed asset、event／message、state、schedule 與 `SystemSet`。不建立逐項映射 Bevy API 的自有 App、World、ECS、scheduler、render、asset、input 或 task facade。动态边界使用 Lattice-owned capability ABI，是可分发 package 契约，不是为了替换 Bevy 的镜像引擎 API。
 4. 通用渲染走 Bevy renderer；普通擴充先使用 Mesh、Material、shader、visibility、camera 與 Bevy render extraction。只有內建 API 和正常的 Bevy render extension point 都無法達成已證明需求時，才考慮更深層替換。
 5. Lattice Axiom 自己擁有的是產品語義：權威區塊資料、世界生成、已物化世界持久化、玩法規則、內容識別，以及存檔或網路等長期資料契約。這些邊界可以隔離 Bevy 的 process-local handle；引擎內部程式則應善用 Bevy 型別，不為假想替換成本建立包裝層。
-6. Bevy 是核心 host 的 Cargo 相依与内部 engine tool，不由每个内容 package 各自解析。Lattice package graph 可以包含逻辑 `latticeaxiom.engine` package／capability 来表达外部契约；它不能让不同模组各自选择 Bevy crate 版本。Bevy 升級是核心 host 的受控遷移：先讀官方 migration guide、在專用分支更新、通過 portable／engine-coupled ABI、可玩 smoke test、存檔與性能回歸，再合併。
+6. Bevy 是核心 host 的 Cargo 相依与内部 engine tool，不由每个内容 package 各自解析。Lattice package graph 可以包含逻辑 `@rezics/backend` package／capability 来表达外部契约；它不能让不同模组各自选择 Bevy crate 版本。Bevy 升級是核心 host 的受控遷移：先讀官方 migration guide、在專用分支更新、通過 portable／engine-coupled ABI、可玩 smoke test、存檔與性能回歸，再合併。
 7. 選擇外部能力時依序採用：Bevy 內建能力、維護中的 Bevy 生態 plugin、小型 upstream 擴充、最小且可回饋上游的 fork，最後才是自研替代。
 8. Godot 不作為第二個遊戲執行期。只有真實資產或關卡創作流程證明現有工具不足時，才把 Godot editor／importer 當工具鏈對照組做限時原型。
 9. Nickel package kernel、SemVer graph、static／dynamic realization 與 Lattice native ABI 属于产品组合语义，不是 Bevy 的替代品，也不受「不要自研通用引擎」的延后推论。它们仍应优先采用 Rust、Nickel、Cargo、平台 loader 与 Bevy 的成熟能力来实现。

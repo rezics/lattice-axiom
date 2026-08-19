@@ -9,7 +9,7 @@ updated: 2026-08-19
 
 ## 背景
 
-可信內容需要靜態連結、完整 Rust／Bevy 型別能力與 LTO；可安裝模組需要不重编整個游戏即可部署的动态实现。若两条路径各自定义 manifest、相依解析、ID、schema owner、schedule 与注册规则，官方内容会拥有私有捷径，组合结果也无法重现。
+可信內容需要靜態連結、完整 Rust／Bevy 型別能力與 LTO；可安裝模組需要不重编整個游戏即可部署的动态实现。若两条路径各自定义 manifest、相依解析、ID、schema owner、schedule 与注册规则，第一方内容会拥有私有捷径，组合结果也无法重现。
 
 Rust 没有稳定 ABI，Bevy 也不把动态 Rust plugin 作为稳定边界。因此「共用一切」既不可行，也会消灭静态实现的性能优势。正确的共同层是逻辑套件图与声明式注册语义，不是最低层呼叫约定。
 
@@ -73,7 +73,7 @@ package.ncl + game.ncl + overlays
 
 ### 靜態與動態各自一套 API
 
-这会让官方内容、开发者模组与预编译模组形成三个生态，也无法证明 lock、ID、schedule 与存档一致。
+这会让第一方内容、开发者模组与预编译模组形成三个生态，也无法证明 lock、ID、schedule 与存档一致。
 
 ### 所有 realization 都走同一个 C ABI
 
@@ -100,4 +100,3 @@ Rust layout、trait object、panic、allocator 与 Bevy内部 API 都不是稳�
 - [決策 0010：Nickel 驅動套件系統](0010-nickel-driven-package-system.md)
 - [決策 0017：版本化原生模組 ABI](0017-versioned-native-module-abi.md)
 - [模組組合](../architecture/module-composition.md)
-
