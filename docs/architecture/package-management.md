@@ -81,6 +81,8 @@ package kernel 只另外记录 `declared_by`，不得从 package name、source p
 | `schemas` | 持久化 component／message／asset schema owner |
 | `content` | stable content IDs 与资产根 |
 | `semantics` | Tag／Map contribution、StateProperty、Affordance、Predicate、Role 与 ContentBundle intent |
+| `settings` | runtime `SettingSpec` registrations；graph-affecting选择仍放`parameters` |
+| `observability` | info／metric、target inspect fragment与debug visualizer registrations |
 | `parameters` | 由 Nickel contract 验证的纯资料输入 |
 | `trust` | realization 所需信任等级与主机 capability policy |
 
@@ -149,7 +151,7 @@ Nickel evaluator 不直接访问网络、时钟、随机数或 compiler。packag
 
 ### `RegistrationImage`
 
-把所有 package 的 `RegistrationManifest` 合并为 closure-wide 的稳定／numeric ID table、component／message layout、system stages、read／write set、ordering、capability、render slot、schema owner与`SemanticCatalog`。它保存展开后的Tag／Map、compiled Predicate、Role binding、active bundle与provenance，并在 code activation 前完成冲突验证。
+把所有 package 的 `RegistrationManifest` 合并为 closure-wide 的稳定／numeric ID table、component／message layout、system stages、read／write set、ordering、capability、render slot、schema owner、`SettingsCatalog`、observability catalog与`SemanticCatalog`。它保存展开后的Tag／Map、compiled Predicate、Role binding、active bundle与provenance，并在 code activation 前完成冲突验证。
 
 ### `RuntimeImage`
 
@@ -216,7 +218,7 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 1. 读取 profile／lock；需要时在受控 source universe 重新 resolve。
 2. 验证 source／artifact hash、target、trust 与签章 policy（首阶段可只信任 local）。
 3. 读取所有 registration manifests，不执行模组 code。
-4. 合并 ID、schema、capability、schedule、render与semantic contracts；编译Tag／Map／Predicate／Role，解析单轮fallback；任何冲突均停止。
+4. 合并 ID、schema、capability、schedule、settings、observability、render与semantic contracts；编译Tag／Map／Predicate／Role，解析单轮fallback；任何冲突均停止。
 5. 构建／加载 realization；dynamic entry 只能协商 descriptor／interface。
 6. 验证 callback map 与 manifest hash，建立 `RuntimeImage`。
 7. 创建 EngineInstance 与 Bevy App，host adapter 安装 standard plugins、static systems 与 dynamic bridge systems。
@@ -246,6 +248,7 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 - ABI／manifest／artifact validation；
 - closure-wide ID／schema／schedule；
 - closure-wide SemanticCatalog、role bindings、active bundle lock与compiled hot-path tables；
+- package-injected SettingsCatalog与subscription-driven observability catalog；
 - Bevy host activation 与 diagnostics。
 
 ### 可延後
@@ -267,6 +270,7 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 - static／dynamic realization 可互换且不改变 stable ID、schedule、save schema 与权威 state hash。
 - 随机化 source discovery／artifact load 顺序不改变结果。
 - 多个语义相似内容可共存；Tag input、Role output与fallback activation均不依赖注册顺序。
+- 任一package可声明typed setting／diagnostic item而不自绘设置页或HUD；ID冲突与无provider在code activation前失败。
 - 用非 Terrenia root package替换维度 closure时，host与`latticeaxiom:*` semantic contracts不变。
 - range／capability／ABI／artifact 冲突在启动前给出 package chain、requested／available version 与可行动修复。
 - runtime hot path 不依赖 Nickel evaluator 或 resolver。
@@ -278,3 +282,5 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 - [原生模組 ABI](native-module-abi.md)
 - [版本與相容性](versioning-and-compatibility.md)
 - [首階段路線圖](../planning/roadmap-game-engine.md)
+- [Package 設定與配置](settings-and-configuration.md)
+- [診斷、檢查與除錯可視化](diagnostics-inspection-and-debug-visualization.md)

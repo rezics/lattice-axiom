@@ -33,11 +33,12 @@ updated: 2026-08-19
 | ECS／App／schedule | Bevy ECS、App、Plugin、States、Schedules、SystemSet | 唯一 runtime model；dynamic bridge 安装进同一 schedule | accepted |
 | 时间／任务 | Bevy Time、`FixedUpdate`、TaskPool | fixed gameplay；jobs 按 instance／revision／budget 治理 | accepted |
 | Rendering／window | Bevy Render／PBR／UI／winit／wgpu | Bevy 拥有 device／render schedules；package 使用 feature／provider contract | accepted |
+| App settings | Bevy `bevy_settings` | device／user store与ECS resource基础；package scope／authority／world transaction由Lattice contract补充 | accepted |
 | Assets | Bevy `AssetServer`、`AssetLoader`、glTF、typed assets | package 拥有 stable identity；Bevy handle 只在 process 内 | accepted |
 | 座标 | Bevy 原生右手 Y-up | `+X` 右、`+Y` 上、forward `-Z`；公尺／弧度 | accepted |
 | 世界储存 | RocksDB + memory test implementation | 完整已物化 snapshot、atomic batch、schema owner | accepted |
 | 序列化 | serde 生态 | typed model／schema envelope；具体 encoding 由 fixture锁定 | accepted |
-| 观测 | Bevy diagnostics + `tracing` | package／ABI／world／render structured diagnostics | accepted |
+| 观测／debug draw | Bevy diagnostics overlay、gizmos + `tracing` | package／ABI／world／render structured diagnostics与validated visualizer资料 | accepted |
 
 Bevy `0.19.x` 是 2026-08-19 文件基线，不允许自动漂移。实作 commit 必须固定精确 patch；新的 Bevy release 经过 migration／ABI／save／performance gate 后才能成为基线。
 
@@ -48,8 +49,8 @@ Bevy `0.19.x` 是 2026-08-19 文件基线，不允许自动漂移。实作 commi
 | `CompositionSpec` | typed Rust model from Nickel | 使用者组合意图 |
 | `LockedGameGraph` | typed model + canonical lock encoding | 精确 package／capability closure |
 | `BuildPlan` | typed Rust model | realization／target／artifact work |
-| `RegistrationManifest` | SDK-generated versioned data | package schema／system／render declarations |
-| `RegistrationImage` | package kernel | closure-wide IDs／schedule／capabilities |
+| `RegistrationManifest` | SDK-generated versioned data | package schema／system／setting／observability／render declarations |
+| `RegistrationImage` | package kernel | closure-wide IDs／schedule／settings／observability／capabilities |
 | `RuntimeImage` | loader／host | static functions、dynamic tables、instances |
 | C headers／Rust bindings | generated from ABI schema | portable／engine-coupled dynamic boundary |
 | `EngineBuildId` | core build metadata | exact engine-coupled compatibility |
@@ -116,6 +117,7 @@ Bevy `0.19.x` 是 2026-08-19 文件基线，不允许自动漂移。实作 commi
 - Transform、Mesh、Material、Image、Animation、Audio；
 - render extraction／`RenderApp` static extension；
 - diagnostics／development tools。
+- Bevy app settings、UI／Feathers与input focus实现。
 
 转换成 Lattice stable contract：
 
@@ -147,4 +149,7 @@ Godot 只作未来 authoring／import toolchain 对照，不作 runtime、render
 - [原生 ABI](../architecture/native-module-abi.md)
 - [Bevy 執行期](../architecture/game-engine-runtime.md)
 - [版本與相容性](../architecture/versioning-and-compatibility.md)
+- [設定與配置](../architecture/settings-and-configuration.md)
+- [診斷、檢查與除錯可視化](../architecture/diagnostics-inspection-and-debug-visualization.md)
+- [World 生命週期與開始頁](../architecture/world-lifecycle-and-start-ui.md)
 - [外掛／渲染模組調查](../research/native-plugin-and-render-mod-lessons.md)

@@ -83,6 +83,22 @@ updated: 2026-08-19
 - [ ] Bevy原生input或Leafwing，哪一个总实现／测试成本较低？
 - [ ] Bevy UI／diagnostics是否足够package／save／performance overlay？
 
+## P0：Settings、資訊 Surface 與 Client Shell
+
+- [ ] `@latticeaxiom/settings`／settings-ui／observability／inspect／dev-tools／front-end／world-library首版各自package与capability version边界？
+- [ ] `SettingSpec`首版value types、cross-setting constraint与declarative visibility predicate最小集合？
+- [ ] device／user／profile／world／player-world／session store的exact precedence、authority与provenance encoding？
+- [ ] Bevy 0.19 app settings只承接哪些device／user scopes；world store adapter如何共享typed schema又不镜像上游API？
+- [ ] `immediate`／`world-reactivate`／`graph-recompose`／`process-restart`的apply transaction与rollback hooks最终schema？
+- [ ] graph-affecting profile parameter从settings UI生成draft／diff／new lock的最小可用流程？
+- [ ] static typed handle与portable dynamic numeric setting key／batched change interface如何single-source生成？
+- [ ] diagnostic item／metric／inspect fragment的callback batch、freshness、unavailable与error encoding？
+- [ ] subscription planner如何确保关闭panel后不执行昂贵chunk／physics／server query；overlay自身CPU／GPU预算？
+- [ ] target inspect的server permission、progress／tool gating、cache revision与“隐藏 vs 不可用”protocol？
+- [ ] chunk／physics visualizer的legend、depth mode、pick、radius、primitive与upload hard limit？
+- [ ] shell／world在同process顺序重建fresh Bevy App是否能可靠重建window／GPU／static state；哪些realization会触发process restart fallback？
+- [ ] Bevy UI／Feathers／input focus在800×600、高UI scale、IME、keyboard、controller与screen narration下能否支撑首版surface？
+
 ## P0：性能预算
 
 - [ ] target hardware的render frame／fixed tick预算？
@@ -117,6 +133,15 @@ updated: 2026-08-19
 - [ ] world metadata保存exact lock、compatible ranges与used-content closure的组合？
 - [ ] missing package／content的placeholder、read-only recovery、migration与拒绝策略？
 - [ ] static↔dynamic切换后persistent component layout／schema如何fixture验证？
+- [ ] `WorldHeader`怎样与RocksDB metadata原子更新／交叉校验，避免catalog健康状态成为第二份真相？
+- [ ] WorldId、display name、directory slug与move／rename的canonical规则？
+- [ ] catalog scan roots、bounded header／thumbnail、async size与损坏entry的错误模型？
+- [ ] `ReadyExact`／`ReadyCompatible`／`NeedsMigration`／`RecoverableReadOnly`／`Blocked`的normative判定？
+- [ ] preflight可以执行到哪个验证层而绝不运行module business code／打开writer？
+- [ ] checkpoint轮替的数量／空间／changed-only policy；clone如何产生新WorldId且保留provenance？
+- [ ] migration staging用RocksDB keyswitch、独立目录还是按迁移规模选择；publish／rollback gate？
+- [ ] low-disk threshold何时暂停authoritative mutation，怎样避免警告出现后仍继续扩大损坏？
+- [ ] trash root／restore冲突／retention／permanent purge的跨平台filesystem语义？
 
 ## P1：最小世界生成
 
@@ -184,6 +209,10 @@ updated: 2026-08-19
 9. RocksDB crash／revision-race／realization-switch save fixtures。
 10. render feature pair／exclusive provider fixtures。
 11. portable old binary／engine-coupled Bevy upgrade rehearsal。
+12. 三个owner注入SettingSpec的scope／transaction／orphan与static／dynamic golden。
+13. target inspect permission／fragment conflict与diagnostic subscription-off overhead fixture。
+14. chunk lifecycle／collision shape／AABB／query／render visibility visualizer budget fixture。
+15. WorldHeader corruption、catalog scan、exact-lock preflight、clone migration、low-disk与trash／restore corpus。
 
 ## 相關文件
 
@@ -193,3 +222,6 @@ updated: 2026-08-19
 - [原生 ABI](../architecture/native-module-abi.md)
 - [語義註冊、內容判定與選擇](../architecture/semantic-registration.md)
 - [渲染架構](../architecture/rendering.md)
+- [Package 設定與配置](../architecture/settings-and-configuration.md)
+- [診斷、檢查與除錯可視化](../architecture/diagnostics-inspection-and-debug-visualization.md)
+- [World 目錄、開始頁與安全生命週期](../architecture/world-lifecycle-and-start-ui.md)

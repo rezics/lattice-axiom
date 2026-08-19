@@ -21,10 +21,16 @@ Terrenia 是第一个维度的 package closure。`terrenia` 是聚合 package，
 不是产品 package；它让 Lattice Axiom profile 得到一个完整可运行的维度，并在
 package graph 中选择方块、世界生成、玩法与表现实现。
 
+开始页、settings、observability、target inspect与dev tools同样是第一方logical packages。
+它们组成独立`ClientShellGraph`，不能退回host hand-written UI／plugin list；Terrenia不依赖、
+也不拥有这些平台surface。
+
 ## `packages/` 目錄契約
 
-`packages/` 只保存会进入 `LockedGameGraph`、由 package manager 解析／锁定／构建／
-注册的 shipped logical package sources。它不保存 package manager 自己的实现。
+`packages/` 只保存会进入 package manager 所锁定 closure、由其解析／锁定／构建／
+注册的 shipped logical package sources。开始页使用 `ClientShellGraph` 角色，选定世界后使用
+`LockedGameGraph`；两者共用同一 resolver、lock schema 与 registration pipeline。这里不保存
+package manager 自己的实现。
 
 | 位置 | 角色 | 是否为 logical package |
 | --- | --- | --- |
@@ -57,6 +63,7 @@ lattice-axiom-demo/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── latticeaxiom.lock
+├── latticeaxiom-shell.lock
 ├── crates/
 │   ├── latticeaxiom-core/
 │   ├── latticeaxiom-compose/
@@ -77,6 +84,21 @@ lattice-axiom-demo/
 │       ├── game.ncl
 │       └── registration.ncl
 ├── packages/
+│   ├── latticeaxiom/
+│   │   ├── settings/
+│   │   │   └── package.ncl
+│   │   ├── settings-ui/
+│   │   │   └── package.ncl
+│   │   ├── observability/
+│   │   │   └── package.ncl
+│   │   ├── inspect/
+│   │   │   └── package.ncl
+│   │   ├── dev-tools/
+│   │   │   └── package.ncl
+│   │   ├── front-end/
+│   │   │   └── package.ncl
+│   │   └── world-library/
+│   │       └── package.ncl
 │   └── terrenia/
 │       ├── main/
 │       │   └── package.ncl
@@ -91,6 +113,7 @@ lattice-axiom-demo/
 │           ├── package.ncl
 │           └── assets/
 ├── profiles/
+│   ├── shell.ncl
 │   ├── dev.ncl
 │   ├── headless.ncl
 │   └── test.ncl
@@ -120,10 +143,38 @@ lattice-axiom-demo/
 | --- | --- | --- |
 | `packages/terrenia/main` | `terrenia` | `terrenia:dimension/terrenia` |
 | `packages/terrenia/blocks` | `@terrenia/blocks` | `terrenia:block/stone` |
+| `packages/latticeaxiom/settings` | `@latticeaxiom/settings` | `latticeaxiom:capability/settings-registry@1` |
+| `packages/latticeaxiom/dev-tools` | `@latticeaxiom/dev-tools` | `latticeaxiom:debug-visualizer/chunks@1` |
 | `fixtures/packages/marker` | `@example/marker` | `example:component/marked` |
 
 这张表是显式 manifest 关系，不是转换规则。把 source directory 移走不改变另外两列；
 改 package name 也不会自动改 stable ID。
+
+## 平台基礎 Package Closure
+
+```text
+ClientShellGraph
+├── @latticeaxiom/front-end
+├── @latticeaxiom/world-library
+├── @latticeaxiom/settings
+├── @latticeaxiom/settings-ui
+├── @latticeaxiom/observability
+├── @latticeaxiom/inspect
+└── @latticeaxiom/dev-tools       optional outside dev profile
+
+Headless foundation
+├── @latticeaxiom/settings
+└── @latticeaxiom/observability
+```
+
+这些package使用`latticeaxiom:*` registrations的authority来自受信任platform source policy，
+不是因为package scope名称相同就自动取得。settings／observability registry在client与headless
+都有exactly-one provider；settings UI、inspect与dev tools是presentation packages，不进入
+authoritative world hash。
+
+任一gameplay／content package都可在自己的namespace声明`SettingSpec`、diagnostic item或
+inspect fragment，并依赖对应versioned capability。平台package负责统一surface，不因此取得
+其他package setting／content ID的ownership。
 
 ## Terrenia package closure
 
@@ -218,10 +269,12 @@ conformance fixture 冻结。
 
 ## Profile 與 source universe
 
-Profile 的「根 package」与「可用 source」必须分开：
+Profile 的「根 package」与「可用 source」必须分开。shell closure与所选world closure各有
+精确lock：
 
 ```text
 root requests                         local source universe
+@latticeaxiom/front-end          ←→  packages/latticeaxiom/*
 terrenia                         ←→  packages/terrenia/main
                                     packages/terrenia/blocks
                                     packages/terrenia/worldgen
@@ -229,12 +282,12 @@ terrenia                         ←→  packages/terrenia/main
                                     packages/terrenia/presentation
 ```
 
-Lattice Axiom 的开发 profile 请求 `terrenia`；resolver 根据 dependencies 建立
-维度 closure。host、renderer 与 storage backend 由 Cargo workspace／host profile
+Lattice Axiom 的shell profile请求`@latticeaxiom/front-end`，开发game profile请求
+`terrenia`；resolver分别根据dependencies建立shell与维度closure。host、renderer 与 storage backend 由 Cargo workspace／host profile
 提供，不伪装成 package roots。profile 列出本地 source 只是在尚无 registry 时提供候选，
 不表示每个 source 都是 root dependency。
 
-`dev.ncl` 与 `headless.ncl` 可选择不同 presentation realization，但必须解析出相同
+`shell.ncl`只读取world header／package metadata；`dev.ncl` 与 `headless.ncl` 可选择不同 presentation realization，但必须解析出相同
 Terrenia 维度身份、权威 package、schema 与 semantic bindings。
 
 ## Generated artifacts
@@ -265,6 +318,8 @@ logical package 层。
    `ContentRole` bindings；Terrenia 只是该 profile 的普通 provider。
 7. 将 profile 的 root requests 与 source universe 分开，再生成新的
    `latticeaxiom.lock`、registration golden 与存档迁移 fixture。
+8. 建立`latticeaxiom-shell.lock`与平台基础packages；删除host内硬编码settings／overlay／world
+   menu plugin list，让client shell和headless registry都经capability graph选择。
 
 ## 驗收
 
@@ -275,6 +330,8 @@ logical package 层。
 - client／headless 对 Terrenia 的权威 registration hash 与 bindings 相同。
 - 以另一个root dimension package替换`terrenia`时，host与平台semantic schema无需修改。
 - generated directory 全部删除后可从 lock 与 source 确定性重建。
+- shell与world使用独立lock；shell无法读取chunk或绕过world preflight，world缺失时仍可进入settings／recovery UI。
+- 任一fixture package可注入setting／metric／inspect fragment，而不修改platform UI source。
 
 ## 相關文件
 
@@ -284,3 +341,6 @@ logical package 层。
 - [语义注册、内容判定与选择](semantic-registration.md)
 - [Terrenia 方块内容规划](../planning/terrenia-block-catalog.md)
 - [第一个 demo 路线图](../planning/roadmap-first-demo.md)
+- [Package 设置与配置](settings-and-configuration.md)
+- [诊断、检查与除错可视化](diagnostics-inspection-and-debug-visualization.md)
+- [World目录、开始页与安全生命周期](world-lifecycle-and-start-ui.md)

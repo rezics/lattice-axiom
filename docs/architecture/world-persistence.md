@@ -115,6 +115,17 @@ API 必須區分：
 
 玩家 UI 顯示「已保存」時對應哪一級必須固定。自動保存、手動保存與正常退出可以有不同 batch／sync 策略，但不能以模糊 boolean 表達。
 
+## WorldHeader 與 Catalog Projection
+
+开始页不应为列出world而打开每个RocksDB或运行package code。每个world维护有checksum、大小有界的
+`WorldHeader`，投影WorldId、display name、last played、exact lock／schema／semantic setting
+fingerprints、clean shutdown、last durable revision、checkpoint与health摘要。`WorldCatalog`只
+异步扫描这些header；损坏／未知header仍保留为`NeedsRecovery` entry，不静默隐藏。
+
+header不是第二份权威world metadata。open preflight必须与RocksDB metadata交叉验证；发生不一致
+时不进入writable world。rename只改display metadata，不改变WorldId、chunk key或directory作为
+身份。完整开始页与preflight contract见[World目录、开始页与安全生命周期](world-lifecycle-and-start-ui.md)。
+
 ## 載入
 
 ```text
@@ -192,6 +203,11 @@ RocksDB read snapshot 只提供程序內一致讀視圖，不是可攜備份。�
 - 舊 schema fixture migration；
 - 恢復時間與儲存放大量測。
 
+checkpoint catalog记录WorldId、source revision、exact lock／header checksum、reason与验证结果。
+migration／graph change前强制建立或明确clone；自动轮替同时受数量与空间budget约束，world没有
+变化时不重复制造等价checkpoint。Move to Trash与restore属于catalog lifecycle，永久purge才
+删除checkpoint／world资料。
+
 ## WorldStorage 邊界
 
 `WorldStorage` 是合理的產品邊界，因為它描述權威 snapshot 的 load／commit／checkpoint 語義並支援 `MemoryWorldStorage` 測試；它不是為任意資料庫建立的通用 facade。
@@ -215,6 +231,8 @@ RocksDB read snapshot 只提供程序內一致讀視圖，不是可攜備份。�
 - 同一gameplay package从static切换到portable dynamic realization后读取／写回相同schema fixture，normative snapshot bytes不变。
 - 缺少required package／schema时在world进入writable Bevy state前失败，并列出owner与相容range。
 - semantic contract／binding／active bundle不相容时在writable load前给出展开差异；新增candidate不自动重写旧chunk或停用旧fallback。
+- 损坏WorldHeader不会让entry从catalog消失；preflight mismatch不会打开writer。
+- migration故障后原world／checkpoint可恢复，半迁移staging不会发布。
 
 ## 相關文件
 
@@ -223,3 +241,4 @@ RocksDB read snapshot 只提供程序內一致讀視圖，不是可攜備份。�
 - [語義註冊、內容判定與選擇](semantic-registration.md)
 - [套件與 ABI 版本](versioning-and-compatibility.md)
 - [世界生成](world-generation.md)
+- [World 目錄、開始頁與安全生命週期](world-lifecycle-and-start-ui.md)

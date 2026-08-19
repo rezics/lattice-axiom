@@ -17,6 +17,7 @@ decision:
 
 Lattice Axiom runtime 是一个由 package closure 建立的正常 Bevy App：
 
+- client先由`ClientShellGraph`建立package-driven开始页／settings／world catalog，再为所选world建立游戏closure；
 - package kernel 在 App 进入玩法前完成 compose、resolve、lock、realization、registration 与 artifact validation；
 - Bevy 拥有程序 runner、ECS、schedules、time、tasks、input、assets、window、render 与 diagnostics；
 - host adapter 把 `RegistrationImage`／`RuntimeImage` 安装为 Bevy plugins、compiled SemanticCatalog、typed static systems 与 dynamic bridge systems；
@@ -45,6 +46,8 @@ executable
 
 bootstrap 是短命的 control plane，不是第二套 game loop。进入 `Playing` 后，Nickel evaluator、resolver 与 build planner 不参与每 tick；仅保留 lock／package diagnostics 与 module instance lifecycle 所需的窄状态。
 
+client shell本身也是独立locked package closure与EngineInstance。它只读取`WorldHeader`与package metadata；world选择后先产生不执行module business code的`WorldOpenPlan`，正常停止shell App，再在同一process建立独立game EngineInstance／Bevy App。返回开始页执行相反流程；v1 native library仍保持mapped，不宣称hot unload。bootstrap只协调顺序生命周期，不是第二个game runner。
+
 ## 唯一啟動真相
 
 client、headless、server、test 与 tool 都以 profile 进入 package graph：
@@ -55,6 +58,8 @@ headless.ncl  → MinimalPlugins + authoritative packages
 test.ncl      → in-memory sources + selected fixtures
 tool.ncl      → MinimalPlugins + tooling package closure
 ```
+
+client profile另外锁定`@latticeaxiom/front-end`、settings、world-library与observability等shell packages；它们不是每个world的authoritative closure，也不能绕过world frozen lock。
 
 profile 可以选择不同的 presentation／tooling realization，但以下条件必须成立：
 
@@ -71,6 +76,7 @@ profile 可以选择不同的 presentation／tooling realization，但以下条�
 | host capability interfaces 与 ABI loader | required／provided capabilities |
 | registration merge、numeric IDs、schedule compilation | manifest 中的 stable IDs／schemas／systems |
 | SemanticCatalog／Role／fallback compilation | Nickel-authored Tag／Map／Predicate／Role／bundle intent |
+| settings／observability catalog compilation与surface adapter | package-authored SettingSpec／info／metric／inspect／visualizer declarations |
 | dynamic batch bridge／command validation | business callbacks／data transforms |
 | EngineInstance lifecycle 与 shutdown barrier | per-instance create／start／stop state |
 | renderer／asset／task service adapters | semantic render／asset／task requests |
@@ -87,7 +93,7 @@ core host 不拥有第一方内容或 Terrenia 维度的私有注册表。第一
 - `RuntimeImage`／artifact handles；
 - Bevy App／World；
 - dynamic module instance contexts；
-- world／save identity 与 lifecycle state；
+- optional world／save identity（shell为none）与 lifecycle state；
 - cancellation／task／diagnostic roots。
 
 禁止 module 用 process global 暗中绑定某个 App。测试可在同一 process 依序或并行创建多个 EngineInstance；所有 static resource／dynamic context 必须因此暴露错误的全域假设。
@@ -99,21 +105,22 @@ core host 不拥有第一方内容或 Terrenia 维度的私有注册表。第一
 1. 读取／产生 lock。
 2. 选择 realization 与 artifacts。
 3. 读取所有 registration manifests。
-4. 验证 package／capability／schema／ID／schedule／render graph。
-5. 编译Tag／Map／State／Affordance／Predicate／Role，解析声明式fallback并建立`RegistrationImage`。
+4. 验证 package／capability／schema／ID／schedule／settings／observability／render graph。
+5. 编译Tag／Map／State／Affordance／Predicate／Role、SettingsCatalog与observability subscription plan，解析声明式fallback并建立`RegistrationImage`。
+6. 对已选择world验证header／frozen lock／schema／setting／checkpoint并产生`WorldOpenPlan`；尚未选择world的shell跳过本步。
 
 ### Phase B：載入但不開放 world
 
-6. 准备 static function map；加载 dynamic libraries 并协商 descriptor／interfaces。
-7. 比对 callback map／manifest hash，产生 `RuntimeImage`。
-8. 建立 Bevy App，安装 standard／ecosystem plugins 与 host adapters。
-9. 建立 module instances，注册 static systems／dynamic bridges。
+7. 准备 static function map；加载 dynamic libraries 并协商 descriptor／interfaces。
+8. 比对 callback map／manifest hash，产生 `RuntimeImage`。
+9. 建立 Bevy App，安装 standard／ecosystem plugins 与 host adapters。
+10. 建立 module instances，注册 static systems／dynamic bridges。
 
 ### Phase C：啟用
 
-10. 依 graph 顺序启动 modules。
-11. 载入 assets／world metadata，验证 required package／schema closure。
-12. 完成 migration／content validation 后进入 `Playing`。
+11. 依 graph 顺序启动 modules，但尚不开放writable gameplay。
+12. 依已审核`WorldOpenPlan`在checkpoint／staging边界执行migration，载入assets／world并再次验证content。
+13. 原子发布world activation后才进入`Playing`。
 
 任一阶段失败都逆序释放已建立 instance，不让 world 进入 writable gameplay。启动不是「尽量加载能用的模组」；权威 closure 必须原子成立。
 
@@ -247,6 +254,19 @@ Bevy renderer 仍是唯一 renderer。package 注册 `RenderData`、`RenderFeatu
 
 详见[渲染架构](rendering.md)。
 
+## Settings、Inspect 與 Diagnostics
+
+Bevy app settings、diagnostics、UI与gizmos是上游机制；package通过`RegistrationManifest`贡献
+typed schema／sources：
+
+- `@latticeaxiom/settings`解析device／user／world／session scope并以transaction apply；
+- `@latticeaxiom/inspect`组合准星目标的name／summary／detail fragments；
+- `@latticeaxiom/dev-tools`按subscription显示F3类metrics与chunk／physics／render visualizers；
+- headless保留相同authoritative settings与metric IDs，以CLI／report取代UI／GPU；
+- hidden panel不会继续执行专用昂贵query，visualizer failure不改变world。
+
+详见[设置架构](settings-and-configuration.md)与[诊断／检查架构](diagnostics-inspection-and-debug-visualization.md)。
+
 ## Persistence Barrier
 
 `persistence.capture` 从一个已提交权威 revision 建立 immutable snapshot envelope，再交给 I/O task。完成结果只确认它实际写入／耐久的 revision；较旧 completion 不能清除较新 dirty state。
@@ -309,4 +329,7 @@ Playing
 - [原生模組 ABI](native-module-abi.md)
 - [渲染架構](rendering.md)
 - [世界持久化](world-persistence.md)
+- [設定與配置](settings-and-configuration.md)
+- [診斷、檢查與除錯可視化](diagnostics-inspection-and-debug-visualization.md)
+- [World 生命週期與開始頁](world-lifecycle-and-start-ui.md)
 - [執行期路線圖](../planning/roadmap-game-engine.md)

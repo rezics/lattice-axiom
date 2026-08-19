@@ -26,7 +26,7 @@ updated: 2026-08-19
 | 非同步 | Bevy task pools | worldgen／mesh／I/O 使用同一 runtime |
 | Assets | `AssetServer`、`AssetLoader`、typed assets、glTF | 不做平行 asset service |
 | Rendering | Bevy Render／PBR／Material／`RenderApp` extraction | wgpu 是 Bevy 實作細節 |
-| UI／診斷 | Bevy UI、gizmos、diagnostics | demo overlay 先用內建能力 |
+| UI／設定／診斷 | Bevy UI／Feathers、app settings、diagnostics overlay、gizmos／text gizmos | demo surface／store／debug draw先用内建能力；Lattice只加package catalog、scope与budget |
 
 官方來源：
 
@@ -38,6 +38,8 @@ updated: 2026-08-19
 - [`FixedUpdate` API](https://docs.rs/bevy/latest/bevy/prelude/struct.FixedUpdate.html)
 - [render extraction](https://docs.rs/bevy/latest/bevy/render/extract_plugin/index.html)
 - [`AssetServer` API](https://docs.rs/bevy/latest/bevy/asset/struct.AssetServer.html)
+- [Bevy app settings example](https://bevy.org/examples/application/settings/)
+- [Bevy 3D gizmos example](https://bevy.org/examples/gizmos/3d-gizmos/)
 
 ## 體素候選：`bevy_voxel_world`
 

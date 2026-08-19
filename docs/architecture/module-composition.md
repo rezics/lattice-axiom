@@ -120,11 +120,17 @@ RegistrationManifest
 │   ├── StateProperty / Affordance contracts
 │   ├── Predicate / Role / offers
 │   └── ContentBundles / fallback guards
+├── settings
+│   ├── SettingSpec / scope / authority
+│   └── apply impact / migration
+├── observability
+│   ├── info items / metrics / inspect fragments
+│   └── debug visualizers / cost / permissions
 ├── render features / slots / fallback
 └── canonical hash
 ```
 
-manifest 不包含 process-local Bevy `TypeId`、`Entity`、`Handle`、function address 或动态库 base address。
+manifest 不包含 process-local Bevy `TypeId`、`Entity`、`Handle`、function address、动态库 base address或任意UI widget tree。settings／observability只保存host可验证的结构化schema与callback key。
 
 pure-data semantic rows 可以来自完全求值的 Nickel registration fragment；code-bound
 schema／system／Affordance callback由 SDK 生成 fragment。两者进入同一 canonical manifest，
@@ -315,6 +321,7 @@ package kernel 不拥有：
 - 同一业务 package 能由 SDK 产生 static／dynamic realization，不复制业务函数。
 - static benchmark 保留 direct Bevy call／LTO 路径；dynamic benchmark按批次而非逐 entity。
 - manifest 足以在不加载 code 的情况下发现 ID、schema、schedule、capability 与 render conflict。
+- settings与HUD贡献通过catalog组合；package不能借custom widget／absolute coordinates覆盖其他package surface。
 - package activation 完成后，tick 不查询 Nickel／resolver，且 dynamic code 不直接取得 Bevy World。
 
 ## 相關文件
@@ -324,3 +331,5 @@ package kernel 不拥有：
 - [原生模組 ABI](native-module-abi.md)
 - [Bevy 執行期](game-engine-runtime.md)
 - [版本與相容性](versioning-and-compatibility.md)
+- [Package 設定與配置](settings-and-configuration.md)
+- [診斷、檢查與除錯可視化](diagnostics-inspection-and-debug-visualization.md)

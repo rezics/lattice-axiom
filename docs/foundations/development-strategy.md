@@ -130,6 +130,8 @@ AI 不单独决定 public ABI。任何「方便先暴露整个 World／RenderDev
 - 一个真实 dual-realization gameplay package；
 - C ABI `0.x` loader／batch／command／lifecycle；
 - client／headless Bevy App profiles；
+- package-injected settings／observability与统一settings／inspect／dev-tools surfaces；
+- package-driven开始页、WorldHeader／catalog、write-before preflight与可恢复checkpoint／trash；
 - voxel edit、worldgen 与 RocksDB persistence；
 - portable／engine-coupled upgrade fixture；
 - 最小 render feature／provider composition test。
@@ -153,6 +155,8 @@ AI 不单独决定 public ABI。任何「方便先暴露整个 World／RenderDev
 - **Bevy 快速演进**：Cargo lock、migration branch、portable old binaries、engine-coupled rebuild 与 performance gates。
 - **生态 plugin 风险**：记录版本、license、维护、fallback；以薄 adapter 隔离产品语义。
 - **范围膨胀**：核心 graph 与分发规模分开；registry／hot unload／WASM 不进入首阶段。
+- **surface碎片化**：package贡献typed settings／fragments／visualizers，由基础package统一布局、权限与预算；不各画一套菜单／HUD。
+- **存档先改后救**：Continue只接受ReadyExact；升级先preflight与checkpoint／clone，delete先进trash。
 - **native 安全误解**：UI／docs 明确 trusted code；ABI validation 不宣传为 sandbox。
 
 ## 相關文件

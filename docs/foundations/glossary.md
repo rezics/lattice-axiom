@@ -21,8 +21,8 @@ updated: 2026-08-19
 | `CompositionSpec` | Nickel 完整求值后直接转换的强型别组合意图；仍可含 version range 与 realization preference。 |
 | `LockedGameGraph` | 已解析、确定的 package version／source／dependency／capability closure。每次游戏启动的逻辑真相。 |
 | `BuildPlan` | 从 lock 选择 target、profile、realization、toolchain 与 artifact工作的强型别计划。 |
-| `RegistrationManifest` | SDK 为单一 package realization 产生的纯资料注册声明；包含 stable IDs、schemas、systems、access、capabilities 与 render contracts。 |
-| `RegistrationImage` | package kernel 合并整个 closure manifests 后产生的 IDs、schema、schedule 与 capability plan。code activation 前完成。 |
+| `RegistrationManifest` | SDK 为单一 package realization 产生的纯资料注册声明；包含 stable IDs、schemas、systems、settings、observability、capabilities 与 render contracts。 |
+| `RegistrationImage` | package kernel 合并整个 closure manifests 后产生的 IDs、schema、schedule、settings／observability catalog与capability plan。code activation 前完成。 |
 | `RuntimeImage` | 与 registration image 匹配的 static functions、dynamic callback tables、artifacts 与 instance factories。 |
 | realization | 同一 logical package 的具体交付方式：data、`NativeStatic`、`PortableNative`、`EngineCoupledNative`，未来可有 `WasmComponent`。 |
 | `NativeStatic` | 从 source 与 generated glue 编入 Bevy host 的 realization；直接使用 Rust／Bevy，保留 inline／LTO，不承诺 runtime ABI。 |
@@ -83,11 +83,28 @@ updated: 2026-08-19
 | presentation | 从权威状态衍生的 camera、mesh、material、particle、animation、audio 与 UI；可丢弃重建。 |
 | Y-up | Bevy 原生右手坐标：`+X` 右、`+Y` 上、forward `-Z`，水平面 `x-z`。 |
 
+## 設定、資訊與前端
+
+| 词汇 | 本项目中的意思 |
+| --- | --- |
+| `SettingSpec` | package以stable ID注册的typed setting schema；声明scope、authority、default、constraint、apply impact、migration与localization，不是任意UI widget。 |
+| composition parameter | 在resolve／lock前改变dependency、feature、realization或provider的profile输入；不能伪装成runtime setting热改graph。 |
+| effective setting | registry按spec允许的scope／authority规则解析出的当前typed值，带default／user／world／session provenance。 |
+| diagnostic item | package注册的结构化info／metric资料源；由subscription、permission与budget控制，不是package直接绘制的文字行。 |
+| target inspect | 准星目标的玩家信息surface；组合name／summary／detail／technical fragments，并受server／world visibility policy控制。 |
+| debug visualizer | 以stable ID注册、受radius／primitive／CPU／GPU预算约束的world-space除错资料；例如chunk lifecycle、collider、AABB或query。 |
+| `ClientShellGraph` | world activation前运行开始页、settings、world catalog与diagnostics的独立locked package closure；与`LockedGameGraph`共用resolver／lock schema，只读world header，不是hidden host plugin list。 |
+
 ## 世界與持久化
 
 | 词汇 | 本项目中的意思 |
 | --- | --- |
 | 权威世界（authoritative world） | 能决定玩法且必须正确恢复的 chunk、entity 与续行状态；不是 render world／cache。 |
+| `WorldId` | 创建时生成、rename／move不变的world稳定身份；display name与directory slug都不是identity。 |
+| `WorldHeader` | 可校验、大小有界、供catalog与preflight只读扫描的world metadata projection；不需要载入chunk或执行module code。 |
+| `WorldCatalog` | shell使用的world header／checkpoint／trash索引；保留损坏entry与health状态，不是权威world store。 |
+| `WorldPreflight` | world写入与module business code之前验证frozen lock、artifact、schema、semantic setting与migration并产生`WorldOpenPlan`的阶段。 |
+| checkpoint | 与某个world revision／lock／header一起校验、可独立恢复的RocksDB恢复点；不同于process-local read snapshot。 |
 | 已物化 chunk | 已完成第一次生成并保存完整 snapshot 的 chunk；之后不因 generator 更新隐式重算。 |
 | active working set | 当前载入 RAM／Bevy ECS 供模拟与 presentation 的世界子集；可由 persistent data 重建。 |
 | chunk revision | chunk 权威资料变更后递增的 revision，用来拒绝 stale mesh／collision／I/O result。 |
@@ -107,3 +124,6 @@ updated: 2026-08-19
 - [語義註冊](../architecture/semantic-registration.md)
 - [原生 ABI](../architecture/native-module-abi.md)
 - [版本與相容性](../architecture/versioning-and-compatibility.md)
+- [設定與配置](../architecture/settings-and-configuration.md)
+- [診斷、檢查與除錯可視化](../architecture/diagnostics-inspection-and-debug-visualization.md)
+- [World 生命週期與開始頁](../architecture/world-lifecycle-and-start-ui.md)

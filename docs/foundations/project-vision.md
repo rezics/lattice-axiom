@@ -23,7 +23,11 @@ Lattice Axiom 是一款以可演进体素世界、可组合套件生态与长期
 
 ### 游戏是一个已锁定套件闭包
 
-每次 client、server、headless test 与 tool 启动，都对应一个可审查的 `LockedGameGraph`。Terrenia、其他第一方内容、测试内容与第三方模组拥有相同 root／scoped package name、SemVer、dependency、capability、schema 与 conflict rules；不存在第一方私有加载捷径。
+每次 client、server、headless test 与 tool 启动，都对应一个可审查的 locked package closure：
+client 开始页是 `ClientShellGraph`，选定世界、server、headless test 与 world tool 则是
+`LockedGameGraph`。两种角色共用相同 resolver／lock schema。Terrenia、其他第一方内容、
+测试内容与第三方模组拥有相同 root／scoped package name、SemVer、dependency、capability、
+schema 与 conflict rules；不存在第一方私有加载捷径。
 
 ### 静态与动态是 realization，不是两个生态
 
@@ -40,6 +44,10 @@ Lattice Axiom 是一款以可演进体素世界、可组合套件生态与长期
 1. 玩家能进入程序体素世界、挖掘、放置并跨重启保存；
 2. 一个真实 gameplay package 可由同一业务代码生成 static／portable dynamic realization，并得到相同注册与权威结果。
 
+玩家循环从可理解的开始页与world catalog开始：选择前能看见相容／durability状态，进入后能
+知道准星指向什么，遇到问题能按需打开chunk／collision diagnostics。可恢复性与信息可理解性
+属于纵切，不是实现完成后的装饰。
+
 只做 package manager demo 不够；先让 Terrenia／第一方内容绕过 graph 做完游戏也不够。正确顺序是最窄基础闭环立即服务真实玩法。
 
 ### 只自研产品差异层
@@ -51,13 +59,16 @@ Lattice Axiom 自行定义：
 - stable content／schema identity、独立 registration namespace 与 first-party／external parity；
 - 权威体素区块、世界生成、provenance 与持久化；
 - render feature／provider 的可组合产品契约；
+- package setting、target inspect、diagnostic／debug visualizer与world preflight的组合契约；
 - 无限世界精度、串流与玩家体验预算。
 
 Bevy 提供 App、ECS、scheduler、renderer、window、input、assets、task pools、UI 与 diagnostics；通用物理优先采用 Bevy 生态。
 
 ### 作者描述语义，系统产生机制
 
-作者声明 package、依赖、capability、component／message schema、system access、render slot 与 fallback。package kernel 验证并编译 closure；Bevy host 执行。模组不靠 load order、method patch 或私有 type 猜测另一个模组行为。
+作者声明 package、依赖、capability、component／message schema、system access、SettingSpec、
+info／inspect／visualizer、render slot 与 fallback。package kernel 验证并编译 closure；Bevy
+host执行。模组不靠load order、method patch、绝对HUD坐标或私有type猜测另一个模组行为。
 
 精确 StableId 只回答对象身份；SemanticTag／Map、StateProperty、Affordance、Predicate 与 Role
 分别表达集合、带值资料、实例状态、上下文行为、判定和 concrete candidate选择。作者通过
@@ -83,6 +94,8 @@ package SemVer、capability／ABI、`EngineBuildId`、schema、stable content ID
 - registration／artifact／ABI validation；
 - semantic Tag／Map／Predicate／Role 与 locked fallback bundle；
 - Bevy host adapter 与可玩／持久化纵切；
+- 基础settings／observability packages、block inspect、chunk／collision diagnostics；
+- package-driven client shell、world catalog／preflight与checkpoint／trash recovery；
 - render feature／provider 最小组合 fixture。
 
 ### 延後規模／營運能力

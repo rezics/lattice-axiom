@@ -214,6 +214,18 @@ authoritative chunks
 - clear fallback 与 target capability matrix；
 - profiler／capture／visual regression 可比较。
 
+### 區塊渲染除錯
+
+高级chunk debug不是单一“显示边界”开关。统一debug workbench分别订阅Grid、Lifecycle、
+Persistence、Mesh、Collision、Visibility／LOD与Worldgen layers，并能pick一个chunk查看source
+revision、queue age、provider、triangle／memory bytes与stale rejection reason。renderer只发布
+结构化状态与validated gizmo data；layout、legend、radius、primitive／upload budget由
+`@latticeaxiom/dev-tools`治理。
+
+同一颜色不能同时表示dirty、occluded和collider missing；line style、label与legend也必须表达
+状态。启停visualizer、截断budget或render failure都不改变authoritative world。完整contract见
+[诊断、检查与除错可视化](diagnostics-inspection-and-debug-visualization.md)。
+
 ## 从 Minecraft 模组只吸收问题形状
 
 Minecraft 渲染模组说明了玩家会要求批次、chunk rebuild、occlusion、LOD、shader pipeline 与 alternate backend；也说明了依靠 bytecode patch／Mixin、版本特定内部结构与模组间非结构化注入，会造成大版本破裂、组合冲突与高维护成本。
@@ -286,13 +298,17 @@ budget 可以由 profile 声明，但 host 负责强制上限与 diagnostics。�
 - engine-coupled artifact 在 `EngineBuildId` 不匹配时精确失败并回退。
 - headless 不建立 GPU，仍能验证 package／schema 与 CPU derived work。
 - device loss、shader failure 或 render module failure 不改变权威 world hash。
+- chunk visualizer可区分mesh／collision／visibility pipeline与revision，且受radius／primitive／upload budget限制。
 
 ## 外部依據
 
 - [Bevy 0.19：Render Graph as ECS systems](https://bevy.org/news/bevy-0-19/#render-graph-as-systems)
 - [Bevy render extraction](https://docs.rs/bevy/latest/bevy/render/extract_plugin/index.html)
+- [Bevy 0.19 diagnostics overlay／text gizmos](https://bevy.org/news/bevy-0-19/#diagnostics-overlay)
 
 ## 相關文件
+
+- [診斷、檢查與除錯可視化](diagnostics-inspection-and-debug-visualization.md)
 
 - [Bevy 執行期](game-engine-runtime.md)
 - [原生模組 ABI](native-module-abi.md)
