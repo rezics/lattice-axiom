@@ -6,6 +6,7 @@ updated: 2026-08-19
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # 一人與 AI 協作的 package-first／Bevy-first 開發策略
@@ -37,7 +38,7 @@ Lattice Axiom 以一位主要开发者、AI 协作与成熟开源元件开始。
 
 ### Lattice 产品契约
 
-package identity、SemVer、capability、dual realization、ABI、stable ID、schema 与 world semantics 是明确产品需求，不能要求「先证明 Bevy 做不到」才开始。这里的规则是：
+package identity、SemVer、capability、dual realization、ABI、stable ID、schema、semantic Tag／Map／Predicate／Role 与 world semantics 是明确产品需求，不能要求「先证明 Bevy 做不到」才开始。这里的规则是：
 
 1. 采用 Nickel／Cargo／C ABI／Bevy 等成熟 building blocks；
 2. 从一个真实 consumer 设计最小 contract；
@@ -125,6 +126,7 @@ AI 不单独决定 public ABI。任何「方便先暴露整个 World／RenderDev
 - local Nickel package／game profile；
 - deterministic SemVer／capability resolution 与 lock；
 - `RegistrationManifest`／`RegistrationImage`；
+- 由 Nickel constructors／contracts 产生、Rust 全图编译的 semantic Tag／Map／Predicate／Role／fallback 闭环；
 - 一个真实 dual-realization gameplay package；
 - C ABI `0.x` loader／batch／command／lifecycle；
 - client／headless Bevy App profiles；
@@ -158,5 +160,6 @@ AI 不单独决定 public ABI。任何「方便先暴露整个 World／RenderDev
 - [專案願景](project-vision.md)
 - [技術棧](technology-stack.md)
 - [套件內核](../architecture/package-management.md)
+- [語義註冊與內容選擇](../architecture/semantic-registration.md)
 - [原生 ABI](../architecture/native-module-abi.md)
 - [執行期路線圖](../planning/roadmap-game-engine.md)

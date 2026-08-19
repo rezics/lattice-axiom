@@ -8,6 +8,7 @@ decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0017-versioned-native-module-abi.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # 套件、ABI、Bevy 與持久化的相容性
@@ -30,6 +31,8 @@ Lattice Axiom 以 package SemVer 表达逻辑依赖相容，以 capability／ABI
 | `latticeaxiom.lock` + artifact hash | package kernel | 这次 closure 精确选择了什么？ | 旧世界 record 如何迁移 |
 | Cargo／Bevy lock | core build | host 使用哪些精确 Rust／Bevy 相依？ | 外部 package 的唯一版本语言 |
 | stable content ID + revision | content owner | 方块／物品／entity type 是什么？ | code artifact identity |
+| semantic Tag／Map／Affordance ID + major | contract owner | 集合、typed value或行为signature如何解释？ | 当前具体成员／provider artifact |
+| ContentRole binding + active bundle set | composition／world lock | 这次closure选择哪个具体内容、激活哪些fallback？ | 已物化voxel是否自动改写 |
 | schema ID + version | schema owner | record／component 如何 decode 与 migrate？ | package dependency resolution |
 | generator revision + config hash | worldgen owner | 未物化空间由什么算法／参数产生？ | 已物化 snapshot 是否重算 |
 | asset format／semantic version | asset owner | importer／sidecar 如何解释资料？ | gameplay ABI |
@@ -141,6 +144,7 @@ latticeaxiom.lock
 ├── dependency / capability resolution
 ├── realization / target / artifact hashes
 ├── manifest / ABI / EngineBuildId requirements
+├── semantic image / role bindings / active content bundles
 └── core package identity + supported engine capability
 
 core build metadata
@@ -158,6 +162,8 @@ world metadata 保存真正影响恢复的最小要求：
 
 - required package ID／compatible range 或 locked identity；
 - 使用到的 stable content IDs；
+- authoritative semantic contract majors、semantic image fingerprint；
+- active content bundle set与实际使用的Role bindings；
 - schema ID／version 与 owner；
 - generator provenance；
 - optional presentation package policy；
@@ -185,6 +191,10 @@ world metadata 保存真正影响恢复的最小要求：
 - 拒绝 writable load。
 
 runtime numeric palette 是 closure／snapshot local optimization；每个 persistent palette 保存 stable ID mapping，不能让 package discovery order 改变意义。
+
+Tag、Predicate与Role不代替stable content ID。Tag新增成员或Role重新binding只影响新判定／输出；
+已存在palette value继续指向原concrete ID。打开world时先恢复frozen binding／bundle intent，再
+验证当前semantic contracts；不允许因为安装新provider就自动停用旧fallback registration。
 
 ## 持久化 Schema
 
@@ -219,6 +229,9 @@ mesh、collider、navigation、thumbnail 与 shader cache 保存 source fingerpr
 | 改变 batch ownership semantics | 受影响 package major | interface major | 变 | 视资料而定 |
 | engine-coupled 重编，无行为变化 | 不变 | internal可不变 | 变 | 不变 |
 | 移除 stable block ID | owner major | 通常不相关 | 可能变 | migration／拒绝 |
+| extensible authoritative Tag增加成员 | contributor按行为判定 | 通常不相关 | 可能变 | image／generation receipt变，旧concrete data不变 |
+| Tag／Map／Affordance meaning破坏性改变 | contract owner major | Affordance可能变 | 可能变 | semantic contract major／adapter／拒绝 |
+| Role rebind或fallback activation改变 | composition lock变 | 通常不相关 | 可能变 | 只影响新output；旧world保持frozen intent或显式migration |
 | persistent component 新格式 | owner按行为判定 | layout可能变 | 可能变 | schema version + migration |
 | generator algorithm 更新 | owner按contract判定 | 不必变 | 可能变 | generator revision |
 
@@ -230,10 +243,12 @@ mesh、collider、navigation、thumbnail 与 shader cache 保存 source fingerpr
 - 每个 schema owner 有 old-version fixture；每个 supported ABI major 有 old-binary fixture。
 - missing authoritative package／content 不 silent remap，也不因 renderer-only package 缺失无故破坏世界。
 - lock／build fingerprint 能重现与诊断，但不被当成唯一相容判据。
+- semantic image不同会展开为contract／member／binding／bundle差异诊断，不以hash不同直接拒绝或静默接受。
 
 ## 相關文件
 
 - [決策 0003：不以全域版本代替相容性](../decisions/0003-no-global-version-switch.md)
 - [套件內核](package-management.md)
 - [原生模組 ABI](native-module-abi.md)
+- [語義註冊、內容判定與選擇](semantic-registration.md)
 - [世界持久化](world-persistence.md)

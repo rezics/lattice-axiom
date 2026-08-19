@@ -35,8 +35,9 @@ Nickel / typed models
 - workspace／Rust toolchain／CI；
 - `CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RegistrationManifest`、`RegistrationImage`、`RuntimeImage` 的 crate／schema skeleton；
 - root／scoped `PackageName`、SemVer、独立 `StableId`／namespace grant、realization 与 schema owner grammar；
+- `SemanticTag`／`SemanticMap`／`StatePropertyKey`／`Affordance`／`ContentPredicate`／`ContentRole`／`ContentBundle` typed model skeleton；
 - canonical encoding／hash rules；
-- `latticeaxiom.lib` 最小 Nickel contracts；
+- `latticeaxiom.lib` package与semantic constructors、contracts、explicit concat、default／binding overlay；
 - version coordinate／diagnostic code catalog。
 
 ### 出场条件
@@ -44,6 +45,7 @@ Nickel / typed models
 - Nickel source 在 CLI／embedded evaluator 得到语义相同 `CompositionSpec`；
 - typed models 有 round-trip／golden fixtures；
 - source path／record key reorder 不改变 canonical hash；
+- Nickel普通merge不隐式拼接semantic arrays，相同优先级binding冲突保留双方source span；
 - 模型没有 Bevy Entity／Handle／TypeId 或 function pointer；
 - 每项 version field 都有明确 owner，未出现 global `engineVersion`。
 
@@ -75,8 +77,10 @@ Nickel / typed models
 - 从单一业务声明生成 manifest 与 static Bevy glue；
 - `HostTyped`／`GeneratedSharedSchema` component 注册与 generated schema crate prototype；
 - stable IDs、components／messages／assets、system stage、read／write、capabilities；
+- semantic manifest fragments、typed Tag DAG、Map merger、Predicate checker、Role resolver与single-wave fallback compiler；
 - manifest linter／hash／producer metadata；
 - closure-wide numeric ID、schema owner 与 schedule compiler；
+- closure-wide SemanticCatalog、active bundle／binding lock与hot-path bitset／table／predicate plan；
 - `TestGameplayPackage` static realization。
 
 ### 出场条件
@@ -86,6 +90,7 @@ Nickel / typed models
 - static typed dependency 必须由 host／generated schema crate 在 build plan 中显式满足；
 - manifest 与 static callback map 完全对应；
 - discovery／registration order 不改变 IDs／schedule；
+- randomized fragment order不改变semantic image；Tag cycle、Map conflict、Role ambiguity与fallback竞争fail-fast；
 - optimized build 能启用 LTO，并有 static direct-call baseline。
 
 ## R3：Portable Native ABI `0.x`
@@ -143,6 +148,8 @@ Nickel / typed models
 
 - upstream voxel／physics／input adoption spike；
 - stable block ID、chunk revision、world command；
+- Tag input、Role output、shared state key与一个typed Map的真实block／structure consumer；
+- new-world／frozen-world fallback bundle persistence；
 - `terrenia` dimension closure／test content packages；
 - dual-realization gameplay system 参与真实 break／place；
 - RocksDB／memory storage、snapshot、shutdown；
@@ -154,6 +161,8 @@ Nickel / typed models
 - static／dynamic realization切换不改变权威 state／save；
 - stale mesh／collision／I/O result 不覆盖新 revision；
 - package missing／schema mismatch 有 recovery／拒绝 policy；
+- semantic binding／bundle mismatch在writable world前诊断，Role在world command前解析为concrete ID；
+- 非Terrenia测试维度可替换`terrenia` closure而无host／platform semantic special case；
 - package／ABI overhead 出现在真实 profiler capture，而不只 microbenchmark。
 
 ## R6：Render Feature 與 Provider 組合
@@ -209,6 +218,7 @@ Nickel / typed models
 6. render feature pair 与 exclusive provider conflict／fallback 通过。
 7. C header、Rust SDK、manifest、inspector 与 docs由同一 schema 可重建。
 8. 错误诊断能让 package author实际修复，不只返回 numeric status。
+9. semantic Tag／Map／Predicate／Role／fallback fixtures经过两代lock／world reopen，且runtime热路径不执行Nickel或字符串package查询。
 
 ## 上游偏離 Gate
 
@@ -241,4 +251,5 @@ package／ABI 核心不需要通过此 gate证明「Bevy 做不到」，但其�
 - [套件內核](../architecture/package-management.md)
 - [原生 ABI](../architecture/native-module-abi.md)
 - [Bevy 執行期](../architecture/game-engine-runtime.md)
+- [語義註冊、內容判定與選擇](../architecture/semantic-registration.md)
 - [待決問題](open-questions.md)

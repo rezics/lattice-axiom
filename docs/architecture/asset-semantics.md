@@ -6,6 +6,7 @@ updated: 2026-08-19
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # Bevy 資產管線與模型語義
@@ -95,7 +96,18 @@ sidecar 應以 stable semantic name 對應 glTF node，不保存 Bevy `Entity`�
 
 ## 體素資產
 
-第一個 demo 的方塊定義只需要 stable ID、可見材質、collision kind、破壞／放置規則與簡單音效引用。atlas 或 texture array 的實際布局由 Bevy／voxel plugin spike 決定，不先定義自有 universal material format。
+第一個 demo 的方塊定義只需要 stable ID、可見材質、collision kind、破壞／放置規則、
+有限state schema与简单音效引用。跨package内容语义不从asset路径或模型名称推断，而由
+[SemanticTag／Map、StateProperty、Affordance、Predicate与Role](semantic-registration.md)
+声明。atlas 或 texture array 的实际布局由 Bevy／voxel plugin spike 决定，不先定义自有
+universal material format或无型别properties bag。
+
+block definition、semantic contribution 与placement选择必须分开：
+
+- definition拥有exact stable ID与本体schema；
+- Tag／Map描述definition-level集合与typed values；
+- StateProperty描述已放置instance的有限状态；
+- structure／worldgen用Predicate接受候选，用Role取得要写入chunk的concrete ID。
 
 若採 `bevy_voxel_world`，其 voxel type 與 material 設定可以是初始 adapter；權威存檔仍保存 Lattice Axiom stable block ID，而不是 plugin-private numeric ID。
 
@@ -110,6 +122,7 @@ Godot 可以在未來作視覺 authoring／import workflow 對照，但不是 ru
 - hot reload 視覺材質不改變 world hash；修改 collision semantic 必須走顯式權威更新。
 - 重啟後 stable content ID 能重新解析，存檔中不存在 Bevy handle。
 - static／dynamic realization引用同一stable asset ID，manifest／lock可定位相同owner与artifact hash。
+- semantic Tag／Map改变不偷偷覆盖asset identity；authoritative semantic change建立新registration image，presentation-only change才可安全client reload。
 - custom asset type 必須有 malformed-input、version 和 round-trip test。
 
 ## 相關文件
@@ -119,3 +132,4 @@ Godot 可以在未來作視覺 authoring／import workflow 對照，但不是 ru
 - [渲染架構](rendering.md)
 - [實體、物理與表現層](entity-physics-presentation.md)
 - [物理資產與局部形變創作](physical-authoring.md)
+- [語義註冊、內容判定與選擇](semantic-registration.md)

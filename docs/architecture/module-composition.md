@@ -9,6 +9,7 @@ decision:
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0019-separate-package-and-registration-identities.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # 套件模組、註冊清單與靜動雙實現
@@ -114,11 +115,20 @@ RegistrationManifest
 │   ├── before / after
 │   └── thread / command policy
 ├── capabilities required / provided
+├── semantic registration
+│   ├── Tag / Map definitions and contributions
+│   ├── StateProperty / Affordance contracts
+│   ├── Predicate / Role / offers
+│   └── ContentBundles / fallback guards
 ├── render features / slots / fallback
 └── canonical hash
 ```
 
 manifest 不包含 process-local Bevy `TypeId`、`Entity`、`Handle`、function address 或动态库 base address。
+
+pure-data semantic rows 可以来自完全求值的 Nickel registration fragment；code-bound
+schema／system／Affordance callback由 SDK 生成 fragment。两者进入同一 canonical manifest，
+同一 stable row key若重复但不完全相同必须失败，不能让 Nickel 与 Rust annotation成为两份真相。
 
 ## Bevy Component 註冊模式
 
@@ -174,6 +184,25 @@ example:render-feature/outline
 - numeric ID 从完整 `LockedGameGraph`／manifest set 以规范规则产生，或由 snapshot local palette 保存；
 - numeric ID 不依 source discovery、Cargo link、plugin add 或 dynamic load 顺序；
 - realization 切换不改变 stable ID、schema owner 与 normative numeric mapping。
+
+## Exact Registration 與 Semantic Catalog
+
+exact ID 冲突规则不应用于 extensible semantic contribution。多个 package 可以向同一个公开
+Tag 添加各自拥有的 entry，却不能重复定义 Tag contract。package kernel在numeric ID之后／
+code activation之前编译：
+
+```text
+exact stable IDs
+  → typed Tag bitsets / SemanticMap tables
+  → StateProperty and Affordance signatures
+  → checked Predicate plans
+  → concrete Role bindings
+  → active ContentBundle set
+```
+
+输入／结构匹配使用 Tag／Predicate，输出／world command使用已经解析的Role target。材料Tag
+不会自动赋予机制行为；context behavior使用机制owner的Tag／Map或versioned Affordance。
+完整schema、Nickel authoring与fallback算法见[语义注册架构](semantic-registration.md)。
 
 ## Schedule 編譯
 
@@ -264,6 +293,8 @@ discover / compose
 - 调换 discovery／load 顺序不改变 lock、ID 与 schedule；
 - static／dynamic 切换不改变 registration hash、tick state hash 与 save bytes；
 - duplicate／missing ID、capability conflict 与 wrong ABI 产生稳定诊断；
+- Tag cycle／Map conflict／Role ambiguity／fallback竞争产生带source provenance的稳定诊断；
+- Terrenia普通内容与另一个测试维度可互换，host没有`terrenia:*` special case；
 - 移除 package 时遵守 missing-content／schema migration policy。
 
 ## 不建立的平行系統
@@ -289,6 +320,7 @@ package kernel 不拥有：
 ## 相關文件
 
 - [套件內核](package-management.md)
+- [語義註冊、內容判定與選擇](semantic-registration.md)
 - [原生模組 ABI](native-module-abi.md)
 - [Bevy 執行期](game-engine-runtime.md)
 - [版本與相容性](versioning-and-compatibility.md)

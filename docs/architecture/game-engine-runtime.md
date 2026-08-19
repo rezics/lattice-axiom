@@ -8,6 +8,7 @@ decision:
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # 套件驅動的 Bevy 執行期架構
@@ -18,7 +19,7 @@ Lattice Axiom runtime 是一个由 package closure 建立的正常 Bevy App：
 
 - package kernel 在 App 进入玩法前完成 compose、resolve、lock、realization、registration 与 artifact validation；
 - Bevy 拥有程序 runner、ECS、schedules、time、tasks、input、assets、window、render 与 diagnostics；
-- host adapter 把 `RegistrationImage`／`RuntimeImage` 安装为 Bevy plugins、typed static systems 与 dynamic bridge systems；
+- host adapter 把 `RegistrationImage`／`RuntimeImage` 安装为 Bevy plugins、compiled SemanticCatalog、typed static systems 与 dynamic bridge systems；
 - 权威世界、世界生成、持久化、内容身分与 ABI 是 Lattice Axiom 的产品语义。
 
 package-first 与 Bevy upstream-first 不冲突。前者决定游戏闭包，后者避免重做游戏引擎。
@@ -31,7 +32,7 @@ executable
     ├── evaluate game.ncl / read latticeaxiom.lock
     ├── resolve sources / SemVer / capabilities
     ├── select static / dynamic realizations
-    ├── validate manifests / artifacts / ABI
+    ├── validate manifests / semantics / artifacts / ABI
     └── produce RegistrationImage + RuntimeImage
          └── EngineInstance
              └── Bevy App
@@ -69,12 +70,13 @@ profile 可以选择不同的 presentation／tooling realization，但以下条�
 | Bevy App／runner／standard plugin profile | package identity、SemVer、dependency |
 | host capability interfaces 与 ABI loader | required／provided capabilities |
 | registration merge、numeric IDs、schedule compilation | manifest 中的 stable IDs／schemas／systems |
+| SemanticCatalog／Role／fallback compilation | Nickel-authored Tag／Map／Predicate／Role／bundle intent |
 | dynamic batch bridge／command validation | business callbacks／data transforms |
 | EngineInstance lifecycle 与 shutdown barrier | per-instance create／start／stop state |
 | renderer／asset／task service adapters | semantic render／asset／task requests |
 | world activation transaction | package-owned migration／missing content policy |
 
-core host 不拥有第一方内容或 Terrenia 维度的私有注册表。第一方 package 与测试 package 均经同一 registration image。
+core host 不拥有第一方内容或 Terrenia 维度的私有注册表。第一方 package 与测试 package 均经同一 registration image。`terrenia` 是普通可替换模组；core host也不为它预设platform role binding、fallback或`terrenia:*` semantic contract。
 
 ## EngineInstance
 
@@ -98,7 +100,7 @@ core host 不拥有第一方内容或 Terrenia 维度的私有注册表。第一
 2. 选择 realization 与 artifacts。
 3. 读取所有 registration manifests。
 4. 验证 package／capability／schema／ID／schedule／render graph。
-5. 建立 `RegistrationImage`。
+5. 编译Tag／Map／State／Affordance／Predicate／Role，解析声明式fallback并建立`RegistrationImage`。
 
 ### Phase B：載入但不開放 world
 
@@ -175,6 +177,7 @@ Update / PostUpdate
 | 身分 | 生命周期 | 可否持久化／跨 ABI |
 | --- | --- | --- |
 | stable content／component ID | package contract | 可以 |
+| semantic contract ID／Role binding | registration／world lock | contract与binding可持久化；Tag／Role不能代替concrete voxel ID |
 | stable entity key | world／schema contract | 可以 |
 | closure numeric ID | RegistrationImage／snapshot palette | 仅带 mapping 时 |
 | Bevy `Entity`／`Handle`／`TypeId` | 当前 App | 不可以 |
@@ -281,6 +284,7 @@ Playing
 - 自有 renderer／asset dependency graph／platform input layer；
 - dynamic module 直接取得 Bevy／Rust type；
 - 第一方 package 或 Terrenia 维度绕过 `LockedGameGraph`；
+- host写死`terrenia:*` content、semantic binding或fallback；
 - tick 内求值 Nickel／解析 SemVer；
 - 一个 global `EngineVersion` 代理所有相容性；
 - v1 native hot unload。
@@ -292,6 +296,8 @@ Playing
 - static system 直接进入 Bevy，dynamic system 以每 system／batch bridge 进入相同 semantic stage。
 - 多 EngineInstance 测试不泄漏 global module／world state。
 - 随机化 background completion／package load 不改变权威 revision、ID 或 schedule。
+- Tag／Map hot query使用compiled table，Role在world command前成为concrete ID，tick不执行Nickel或package lookup。
+- 非Terrenia测试维度可替换整个`terrenia` closure而无需修改host。
 - portable artifact 跨 Bevy 升级按 ABI contract 工作，engine-coupled artifact精确要求重建。
 - profiler 能区分 static systems、dynamic bridge overhead、module task、chunk／persistence 与 render costs。
 
@@ -299,6 +305,7 @@ Playing
 
 - [套件內核](package-management.md)
 - [模組組合](module-composition.md)
+- [語義註冊、內容判定與選擇](semantic-registration.md)
 - [原生模組 ABI](native-module-abi.md)
 - [渲染架構](rendering.md)
 - [世界持久化](world-persistence.md)

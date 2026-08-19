@@ -61,6 +61,9 @@ crate 实现、哪个分发单元提供它，以及世界／存档用什么稳�
 10. 从 lock／registration schema 生成的 static glue、shared-schema crates、C bindings
     与 `RegistrationImage` 是 build artifacts，不自动成为新的 logical packages。
     只有需要独立 SemVer、依赖选择与发布生命周期的生成结果才可提升为 package。
+11. semantic contract 的定义仍属于 stable registration，需要 namespace grant；向明确
+    extensible 的 Tag／Map 贡献自己拥有的对象是另一种经验证的 contribution，不构成对
+    contract ID 的重复注册，也不自动取得该 namespace 的其他权限。详细规则由决策 0020规定。
 
 ## 身分層次
 
@@ -84,6 +87,7 @@ crate 实现、哪个分发单元提供它，以及世界／存档用什么稳�
 - package 拆分、static／dynamic realization 切换与源码目录移动不会自动改变存档 ID。
 - root package name 与 scope 需要 registry／local source universe 分别保证唯一；
   registration namespace grant 仍需独立验证，不能依赖同名关系完成。
+- semantic contribution 不改变 exact StableId owner；相似内容可以共享语义而保持不同身份。
 
 ## 被否決的方案
 
@@ -118,4 +122,6 @@ Terrenia 是第一个维度及其 package closure，不是 Lattice Axiom 的替�
 - [Demo workspace 与 Terrenia package 组织](../architecture/demo-workspace-organization.md)
 - [套件内核](../architecture/package-management.md)
 - [模组与注册组合](../architecture/module-composition.md)
+- [决策 0020：语义注册与内容选择](0020-semantic-registration-and-content-selection.md)
+- [语义注册架构](../architecture/semantic-registration.md)
 - [决策 0012：旧命名约定](0012-latticeaxiom-naming-convention.md)

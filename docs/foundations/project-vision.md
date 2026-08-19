@@ -59,6 +59,11 @@ Bevy 提供 App、ECS、scheduler、renderer、window、input、assets、task po
 
 作者声明 package、依赖、capability、component／message schema、system access、render slot 与 fallback。package kernel 验证并编译 closure；Bevy host 执行。模组不靠 load order、method patch 或私有 type 猜测另一个模组行为。
 
+精确 StableId 只回答对象身份；SemanticTag／Map、StateProperty、Affordance、Predicate 与 Role
+分别表达集合、带值资料、实例状态、上下文行为、判定和 concrete candidate选择。作者通过
+Nickel functions／contracts／overlay组合这些语义，Rust把全图编译进 `RegistrationImage`。
+Terrenia 只是使用同一机制的普通内容聚合模组，不是平台 vocabulary 或 host default。
+
 ### 权威资料与可重建资料分离
 
 已物化 chunk、玩家修改、persistent entity 与必要续行状态是权威资料。Mesh、GPU resource、physics broadphase、runtime handle 与 cache 都可重建。Bevy ECS 是 active working set，不是永久存档格式；ABI handle 也不能持久化。
@@ -76,6 +81,7 @@ package SemVer、capability／ABI、`EngineBuildId`、schema、stable content ID
 - SDK／proc macro 与 `RegistrationManifest`；
 - `NativeStatic` + `PortableNative` ABI `0.x`；
 - registration／artifact／ABI validation；
+- semantic Tag／Map／Predicate／Role 与 locked fallback bundle；
 - Bevy host adapter 与可玩／持久化纵切；
 - render feature／provider 最小组合 fixture。
 
@@ -109,5 +115,7 @@ package SemVer、capability／ABI、`EngineBuildId`、schema、stable content ID
 - [決策 0014：Bevy／上游優先](../decisions/0014-adopt-bevy-upstream-first.md)
 - [決策 0017：原生模組 ABI](../decisions/0017-versioned-native-module-abi.md)
 - [決策 0018：首階段交付套件內核](../decisions/0018-package-kernel-from-first-vertical-slice.md)
+- [決策 0020：語義註冊與內容選擇](../decisions/0020-semantic-registration-and-content-selection.md)
+- [語義註冊架構](../architecture/semantic-registration.md)
 - [開發策略](development-strategy.md)
 - [執行期架構](../architecture/game-engine-runtime.md)

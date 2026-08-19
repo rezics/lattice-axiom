@@ -17,7 +17,7 @@ Nickel 的 record、function、contract、merge 与嵌入式求值能力适合�
 
 1. 套件系统是 Lattice Axiom 的产品核心。Terrenia／第一方内容、测试内容、静态模组与动态模组都必须先成为 package graph 节点，不能绕过 package kernel 直接加入 Bevy App。
 2. 逻辑套件版本遵守 [Semantic Versioning](https://semver.org/)。package manifest 声明 package name、version、dependency range、capability、schema owner、realization、feature／parameter 与资产；lock 选择精确版本、来源与 artifact hash。package name 与 stable registration ID 的语法及授权由决策 0019 规定。
-3. `package.ncl`、`game.ncl`、整合包与使用者 overlay 采用 Nickel。版本化 `latticeaxiom.lib` 提供 `Package`、`GameProfile`、`Dependency`、`Capability`、`Realization` 与相关 contract／组合函数。
+3. `package.ncl`、`game.ncl`、整合包与使用者 overlay 采用 Nickel。版本化 `latticeaxiom.lib` 提供 `Package`、`GameProfile`、`Dependency`、`Capability`、`Realization`，以及 semantic Tag／Map／Predicate／Role／bundle 的 contract 与组合函数。不能另以 Rust builder 清单绕过 Nickel 成为第二个内容组合平面。
 4. `latticeaxiom-compose` 通过 `nickel-lang` Rust API完整求值，并直接反序列化为强型别 `CompositionSpec`；不以 canonical JSON 作为求值器、resolver、planner 与 loader 的无型别内部总线。
 5. Rust package kernel 负责来源取得、SemVer／capability 解析、唯一版本政策、循环与冲突、信任、lock、store／cache、build、load、activation 与诊断。Nickel 不自行下载、执行 compiler 或加载动态库。
 6. 管线的核心语义型别是 `CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RegistrationImage` 与 `RuntimeImage`。每一层只携带已满足的不变量，并有独立 schema／semantic version、round-trip 与 golden fixture。
@@ -34,6 +34,7 @@ Nickel 的 record、function、contract、merge 与嵌入式求值能力适合�
 | record／function／contract／merge | 来源 I/O、hash、signature 与 trust |
 | package 与 profile 宣告 | SemVer／capability 解析与冲突诊断 |
 | defaults、overlay、参数化组合 | lock、store、cache 与 build execution |
+| semantic constructors、material／structure helper、role binding intent | Tag DAG、typed Map、Role cardinality、fallback 与 numeric compilation |
 | realization 候选与 policy intent | target／artifact 选择与 ABI validation |
 | 纯资料 plan | dynamic load、instance lifecycle 与 Bevy activation |
 
@@ -60,6 +61,7 @@ package.ncl + game.ncl + overlays + latticeaxiom.lib
 - Nickel 求值不得读取网络、时钟、随机数或未宣告主机状态。package kernel 先取得来源并提供受控 import root。
 - import path、求值时间、递归、内存、输出大小与错误来源必须有政策；不可信 package 不能用 manifest 求值取得任意 filesystem 能力。
 - `latticeaxiom.lib` contract 与 Rust `CompositionSpec` 由同一组 conformance fixtures 共同版本化。
+- additive arrays 使用标准库显式 `concat`／`add` function，不误用 Nickel 普通 record merge；互斥 binding 以 `default`／profile override表达，相同优先级冲突保留 source-aware diagnostics。
 - source graph、locked graph、build graph、registration image 与 runtime instance graph 必须分开；不能把未解析 range 或 Nickel function 带入 runtime。
 - package SemVer 不代替 ABI、schema、`EngineBuildId` 或 artifact hash；这些是独立相容坐标。
 
@@ -108,3 +110,5 @@ Cargo 能解决 Rust build 依赖，Bevy Plugin 能注册 runtime 系统，但�
 - [決策 0008：靜態與動態共用一圖](0008-static-and-dynamic-realizations-share-one-graph.md)
 - [套件管理架構](../architecture/package-management.md)
 - [版本與相容性](../architecture/versioning-and-compatibility.md)
+- [決策 0020：語義註冊與內容選擇](0020-semantic-registration-and-content-selection.md)
+- [語義註冊架構](../architecture/semantic-registration.md)

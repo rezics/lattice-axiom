@@ -6,6 +6,7 @@ updated: 2026-08-19
 decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0019-separate-package-and-registration-identities.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # Demo workspace 與 Terrenia 維度套件組織
@@ -147,6 +148,14 @@ terrenia
 它不复制所有方块、system 或 asset 注册。各子 package 产生自己的
 `RegistrationManifest`，package kernel 再合并 closure-wide `RegistrationImage`。
 
+`terrenia` **不是** Lattice Axiom 的固定基础设施、平台默认或第二个 core。它只是在当前
+profile 中被请求的普通模组：
+
+- host 与 `latticeaxiom.lib` 不引用任何 `terrenia:*` concrete content；
+- `latticeaxiom:*` 平台 semantic contracts 不由 Terrenia 定义或偷偷绑定到 Terrenia ID；
+- Terrenia 可以像第三方 package 一样贡献自己的对象到公开 extensible Tag／Map；
+- 另一个 root dimension package 必须能在不修改 host 的情况下替换整个 closure。
+
 概念上的主 package：
 
 ```nickel
@@ -163,7 +172,7 @@ terrenia
   namespaces = {
     authority = "terrenia",
     grants = [
-      { package = "@terrenia/blocks", patterns = ["terrenia:block/**", "terrenia:item/**"] },
+      { package = "@terrenia/blocks", patterns = ["terrenia:block/**", "terrenia:item/**", "terrenia:block-tag/**", "terrenia:block-role/**"] },
       { package = "@terrenia/worldgen", patterns = ["terrenia:worldgen/**", "terrenia:biome/**"] },
       { package = "@terrenia/gameplay", patterns = ["terrenia:system/**", "terrenia:schema/**"] },
       { package = "@terrenia/presentation", patterns = ["terrenia:asset/**", "terrenia:render-feature/**"] },
@@ -172,25 +181,27 @@ terrenia
 
   registrations = {
     dimensions = [{ id = "terrenia:dimension/terrenia" }],
-    bindings = {
-      empty_block = "terrenia:block/air",
-      terrain_surface = "terrenia:block/grass",
-      terrain_subsurface = "terrenia:block/dirt",
-      terrain_stone = "terrenia:block/stone",
-      worldgen = "terrenia:worldgen/default",
-    },
+  },
+
+  semantic.bindings = {
+    "terrenia:block-role/empty@1" = "terrenia:block/air",
+    "terrenia:block-role/terrain-surface@1" = "terrenia:block/grass",
+    "terrenia:block-role/terrain-subsurface@1" = "terrenia:block/dirt",
+    "terrenia:block-role/terrain-stone@1" = "terrenia:block/stone",
   },
 }
 ```
 
-这只是字段责任示例；`authority` 必须由 profile 的受信任 local source policy 或未来
+这只是字段责任示例；semantic constructors／contracts由`latticeaxiom.lib`提供，Role定义
+与binding按[语义注册架构](semantic-registration.md)验证。`authority` 必须由 profile 的受信任 local source policy 或未来
 registry 证明，不能靠 package 自我声明取得。最终 Nickel contract 仍由 schema 与
 conformance fixture 冻结。
 
 ### 子 package
 
 - `@terrenia/blocks`：方块、物品与相邻内容资料；直接声明完整
-  `terrenia:block/*` ID。
+  `terrenia:block/*` ID，并可贡献自身对象到`latticeaxiom:*`公开Tag／Map。它不能因为属于
+  Terrenia而取得平台semantic contract的定义权。
 - `@terrenia/worldgen`：Terrenia generator、biome／terrain provider 与
   generation revision。
 - `@terrenia/gameplay`：只属于该维度的玩法规则。跨维度通用规则应进入
@@ -246,7 +257,8 @@ logical package 层。
    stable ID 与 `declared_by`。
 5. 用 `packages/terrenia/main` 与并列子目录取代 `packages/official`，并建立 `terrenia` 聚合 package
    与 `@terrenia/*` 子包。
-6. 把 Rust host 对 stone／dirt／grass 的硬编码查找改为读取 Terrenia bindings。
+6. 把 Rust host 对 stone／dirt／grass 的硬编码查找改为读取当前 profile 已解析的
+   `ContentRole` bindings；Terrenia 只是该 profile 的普通 provider。
 7. 将 profile 的 root requests 与 source universe 分开，再生成新的
    `latticeaxiom.lock`、registration golden 与存档迁移 fixture。
 
@@ -257,6 +269,7 @@ logical package 层。
 - 测试 profile 可用另一个 dimension package 取代 Terrenia而无需修改 Rust host。
 - package、source path 与 stable ID 任意一项改变时，另外两项不会被隐式改写。
 - client／headless 对 Terrenia 的权威 registration hash 与 bindings 相同。
+- 以另一个root dimension package替换`terrenia`时，host与平台semantic schema无需修改。
 - generated directory 全部删除后可从 lock 与 source 确定性重建。
 
 ## 相關文件
@@ -264,4 +277,5 @@ logical package 层。
 - [决策 0019：Package 与 registration identity 分离](../decisions/0019-separate-package-and-registration-identities.md)
 - [套件内核](package-management.md)
 - [模组与注册组合](module-composition.md)
+- [语义注册、内容判定与选择](semantic-registration.md)
 - [第一个 demo 路线图](../planning/roadmap-first-demo.md)

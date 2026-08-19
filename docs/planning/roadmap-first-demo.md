@@ -24,6 +24,7 @@ decision:
 - Nickel `package.ncl`／`game.ncl` → typed `CompositionSpec`；
 - package SemVer、capability／realization resolution 与精确 lock；
 - `RegistrationManifest`／`RegistrationImage`；
+- Nickel-authored SemanticTag／Map／Predicate／Role 与 locked fallback ContentBundle；
 - `NativeStatic` 与 `PortableNative` ABI `0.x`；
 - Bevy `0.19.x` baseline，精确 patch／features 由 Cargo lock 固定；
 - client `DefaultPlugins`，headless 使用必要标准 profile；
@@ -31,6 +32,7 @@ decision:
 - voxel／physics／input／assets／diagnostics 先采用 Bevy／生态 upstream；
 - RocksDB 保存完整已物化 chunk snapshot；
 - Terrenia／test content 都经 package graph；host 没有内建默认维度；
+- `terrenia` 是普通可替换root模组；host与平台contract不引用Terrenia concrete content；
 - 无自研 ECS／scheduler／renderer／asset server。
 
 ## 两条同时验收的循环
@@ -61,6 +63,7 @@ decision:
 ### 交付
 
 - local Nickel profile／contracts；
+- `latticeaxiom.lib` semantic constructors／contracts／concat与binding overlay；
 - core／empty game packages；
 - deterministic SemVer／capability lock；
 - client／headless profile；
@@ -75,6 +78,7 @@ decision:
 - 没有 hidden hand-written first-party plugin／dimension list；
 - 没有自有 runner／ECS／renderer；
 - dependency／license 与 lock metadata可重建。
+- CLI／embedded Nickel对semantic intent产生相同typed output与source-aware conflict。
 
 ## D1：真实 Dual-Realization Gameplay Fixture
 
@@ -125,16 +129,22 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 - stable block ID、chunk revision、dirty／durability state；
 - `terrenia` 维度 closure／`@example/marker` test package；
 - validated content／schema registry；
+- typed Tag DAG／bitset、一个typed Map、shared StateProperty、Predicate与Role binding；
+- normal copper／obsidian fixture与一个声明式fallback ContentBundle；
 - `MemoryWorldStorage`／RocksDB；
 - snapshot envelope、atomic batch、checkpoint；
 - unload／reload、normal shutdown／crash fixtures；
 - world metadata的 required package／schema closure。
+- world metadata的authoritative semantic image、active bundle与frozen Role binding。
 
 ### 完成
 
 - 修改跨重启保留，已物化 chunk不重生；
 - stale async result不覆盖新 revision；
 - Terrenia／test packages无私有 registration；
+- 两个不同copper IDs可共享input Tag而保持identity；Role output在world command前解析成concrete ID；
+- broad obsidian Tag不自动授予portal-frame行为，明确mechanic semantic后才通过；
+- 新world可不激活fallback，旧world重开保持frozen activation；
 - discovery／load order不改变 IDs／save；
 - static／dynamic gameplay产生相同 snapshot bytes（排除允许的 diagnostic metadata）；
 - save不含 Bevy／ABI／physics handles；
@@ -149,6 +159,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 - deterministic height（`y`）与最小 cave／void；
 - generator package／capability；
 - revision／config hash／provenance；
+- terrain／structure content Predicate与placement Role receipt；
 - new chunk snapshot-first materialization。
 
 ### 完成
@@ -197,6 +208,8 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 - chunk revision race／queue bound；
 - Y-up mesh／raycast／collider six faces；
 - content discovery randomization；
+- semantic Tag／Map／Role／fallback conflict与order-randomization corpus；
+- frozen-world binding／bundle reopen；
 - render feature／provider composition；
 - 10 分钟 traversal memory／CPU／GPU／FFI metrics；
 - checkpoint restore。
@@ -231,6 +244,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 6. render feature／provider证明机制级扩充可组合。
 7. Bevy upgrade rehearsal证明 portable／engine-coupled分级。
 8. 性能、memory、queue、FFI／commands有基线数据。
+9. semantic input／output／fallback兼容闭环成立，且另一个测试维度可替换`terrenia`而无host special case。
 
 完成 demo 不自动等于 ABI 1.0；冻结仍需[执行期路线图](roadmap-game-engine.md)的完整 gates。
 
@@ -242,3 +256,4 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 - [原生 ABI](../architecture/native-module-abi.md)
 - [Bevy 執行期](../architecture/game-engine-runtime.md)
 - [待決問題](open-questions.md)
+- [語義註冊、內容判定與選擇](../architecture/semantic-registration.md)

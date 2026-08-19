@@ -9,13 +9,14 @@ decision:
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0019-separate-package-and-registration-identities.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # Nickel 驅動的套件內核與分發邊界
 
 ## 結論
 
-Lattice Axiom 的 package kernel 从第一個垂直切片起就是唯一组合控制平面。Nickel 描述 package、profile、overlay 与 realization intent；Rust 负责 SemVer／capability 解析、lock、build、验证、加载与 Bevy activation。
+Lattice Axiom 的 package kernel 从第一個垂直切片起就是唯一组合控制平面。Nickel 描述 package、profile、overlay、semantic registration 与 realization intent；Rust 负责 SemVer／capability 解析、全图 semantic validation、lock、build、加载与 Bevy activation。
 
 它不是第二个 ECS、scheduler、renderer 或 asset server。所有已解析模组最终由 host adapter 安装进一个正常的 Bevy App；Bevy 提供通用引擎能力，package kernel 决定**哪些逻辑套件、哪些版本、以哪种 realization、携带哪些权限与 schema**构成这次游戏。
 
@@ -79,6 +80,7 @@ package kernel 只另外记录 `declared_by`，不得从 package name、source p
 | `realizations` | data、`NativeStatic`、`PortableNative`、`EngineCoupledNative` 等候选 |
 | `schemas` | 持久化 component／message／asset schema owner |
 | `content` | stable content IDs 与资产根 |
+| `semantics` | Tag／Map contribution、StateProperty、Affordance、Predicate、Role 与 ContentBundle intent |
 | `parameters` | 由 Nickel contract 验证的纯资料输入 |
 | `trust` | realization 所需信任等级与主机 capability policy |
 
@@ -91,6 +93,10 @@ la.GameProfile & {
   packages = [
     { name = "terrenia", version = "~0.1", realization = 'auto },
   ],
+  semantic.bindings = {
+    "latticeaxiom:block-role/storage-block/copper@1"
+      = "terrenia:block/copper-block",
+  },
   overlays = [import "./local-world.ncl"],
 }
 ```
@@ -104,6 +110,8 @@ la.GameProfile & {
 - package／profile 的 record、function、defaults 与 overlay；
 - contract validation 与 source-aware diagnostics；
 - 纯资料参数化、capability／realization intent；
+- material family／structure helper、semantic Predicate AST 与 Role／fallback intent；
+- additive fragments 的显式 `concat`／`add`，以及 keyed binding 的 `default`／overlay merge；
 - 构造完整且可序列化的 `CompositionSpec`。
 
 ### Rust package kernel 負責
@@ -111,18 +119,19 @@ la.GameProfile & {
 - source fetch／path normalization／content hash；
 - SemVer range、pre-release 与唯一版本政策；
 - dependency／capability graph、cycle、exclusive provider 与 conflict；
+- semantic target kind、Tag DAG、typed Map merger、Role cardinality 与 fallback activation；
 - trust policy、target／profile 与 realization selection；
 - lock、artifact store／cache、Cargo build 与 dynamic load；
 - registration manifest 验证、numeric ID、schedule compilation；
 - lifecycle、诊断与 Bevy host activation。
 
-Nickel evaluator 不直接访问网络、时钟、随机数或 compiler。package kernel 先准备受控 source root，再在资源上限内求值。
+Nickel evaluator 不直接访问网络、时钟、随机数或 compiler。package kernel 先准备受控 source root，再在资源上限内求值。Nickel function可构造 semantic资料，但求值后的 function／source AST 不进入 `CompositionSpec`；普通 record merge也不被误用来隐式拼接 additive arrays。
 
 ## 五個語義產物
 
 ### `CompositionSpec`
 
-保留使用者意图与已通过 contract 的 package request、range、overlay、feature／parameter、realization preference 与 policy。它不含已下载 artifact、numeric ID 或 loaded function pointer。
+保留使用者意图与已通过 contract 的 package request、range、overlay、feature／parameter、realization preference、semantic bindings／bundle intent 与 policy。它不含已下载 artifact、numeric ID、未求值 Nickel function 或 loaded function pointer。
 
 ### `LockedGameGraph`
 
@@ -140,7 +149,7 @@ Nickel evaluator 不直接访问网络、时钟、随机数或 compiler。packag
 
 ### `RegistrationImage`
 
-把所有 package 的 `RegistrationManifest` 合并为 closure-wide 的稳定／numeric ID table、component／message layout、system stages、read／write set、ordering、capability、render slot 与 schema owner map。此产物在 code activation 前完成冲突验证。
+把所有 package 的 `RegistrationManifest` 合并为 closure-wide 的稳定／numeric ID table、component／message layout、system stages、read／write set、ordering、capability、render slot、schema owner与`SemanticCatalog`。它保存展开后的Tag／Map、compiled Predicate、Role binding、active bundle与provenance，并在 code activation 前完成冲突验证。
 
 ### `RuntimeImage`
 
@@ -207,7 +216,7 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 1. 读取 profile／lock；需要时在受控 source universe 重新 resolve。
 2. 验证 source／artifact hash、target、trust 与签章 policy（首阶段可只信任 local）。
 3. 读取所有 registration manifests，不执行模组 code。
-4. 合并 ID、schema、capability、schedule 与 render contracts；任何冲突均停止。
+4. 合并 ID、schema、capability、schedule、render与semantic contracts；编译Tag／Map／Predicate／Role，解析单轮fallback；任何冲突均停止。
 5. 构建／加载 realization；dynamic entry 只能协商 descriptor／interface。
 6. 验证 callback map 与 manifest hash，建立 `RuntimeImage`。
 7. 创建 EngineInstance 与 Bevy App，host adapter 安装 standard plugins、static systems 与 dynamic bridge systems。
@@ -229,12 +238,14 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 ### 首階段必須完成
 
 - Nickel contracts 与 typed `CompositionSpec`；
+- Nickel semantic constructors／contracts／overlay 与 Rust typed model conformance；
 - package SemVer、local source、deterministic resolution 与 lock；
 - capability／realization selection；
 - SDK-generated `RegistrationManifest`；
 - static／portable dynamic equivalence fixture；
 - ABI／manifest／artifact validation；
 - closure-wide ID／schema／schedule；
+- closure-wide SemanticCatalog、role bindings、active bundle lock与compiled hot-path tables；
 - Bevy host activation 与 diagnostics。
 
 ### 可延後
@@ -255,12 +266,15 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 - 官方与 test package 都只能经 graph 启动；不存在隐藏 plugin list。
 - static／dynamic realization 可互换且不改变 stable ID、schedule、save schema 与权威 state hash。
 - 随机化 source discovery／artifact load 顺序不改变结果。
+- 多个语义相似内容可共存；Tag input、Role output与fallback activation均不依赖注册顺序。
+- 用非 Terrenia root package替换维度 closure时，host与`latticeaxiom:*` semantic contracts不变。
 - range／capability／ABI／artifact 冲突在启动前给出 package chain、requested／available version 与可行动修复。
 - runtime hot path 不依赖 Nickel evaluator 或 resolver。
 
 ## 相關文件
 
 - [模組與內容組合](module-composition.md)
+- [語義註冊、內容判定與選擇](semantic-registration.md)
 - [原生模組 ABI](native-module-abi.md)
 - [版本與相容性](versioning-and-compatibility.md)
 - [首階段路線圖](../planning/roadmap-game-engine.md)

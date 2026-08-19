@@ -18,6 +18,7 @@ updated: 2026-08-19
 - [x] dynamic native使用 C bootstrap、versioned capability tables、batch ECS与command buffer；static直接Bevy/LTO，见[决策 0017](../decisions/0017-versioned-native-module-abi.md)。
 - [x] package kernel与ABI `0.x` 从第一个 vertical slice开始；只延后registry／marketplace／hot unload／WASM规模，见[决策 0018](../decisions/0018-package-kernel-from-first-vertical-slice.md)。
 - [x] logical package 使用 root `name`／scoped `@scope/name`，stable registration 使用独立的 `<namespace>:<kind>/<path>` 与显式 namespace grant；Terrenia 同时治理 root `terrenia` 与 scope `@terrenia`，并作为 package 定义的第一维度，见[决策 0019](../decisions/0019-separate-package-and-registration-identities.md)。
+- [x] exact ID与SemanticTag／Map、StateProperty、Affordance、Predicate、Role、fallback ContentBundle分层；Nickel负责authoring／overlay，Rust负责全图验证／lock／runtime compilation；Terrenia没有平台特权，见[决策 0020](../decisions/0020-semantic-registration-and-content-selection.md)。
 - [x] package compatibility使用SemVer；Bevy是core package内部tool，外部break仍需诚实版本化。
 - [x] 已物化world以RocksDB完整snapshot为权威，见[决策 0009](../decisions/0009-rocksdb-authoritative-world-snapshots.md)。
 - [x] 没有global version开关，见[决策 0003](../decisions/0003-no-global-version-switch.md)。
@@ -28,7 +29,7 @@ updated: 2026-08-19
 ## P0：Package 语义與 Nickel Contract
 
 - [ ] `latticeaxiom.lib` 第一版 `Package`／`GameProfile`／`Realization` contracts具体字段？
-- [ ] Nickel overlay的优先、default、force／conflict语义如何做到source-aware diagnostics？
+- [ ] Nickel field metadata／source span经typed conversion后如何保留到Role binding与semantic contribution diagnostics？
 - [ ] import roots、evaluation time／memory／recursion／output size上限？
 - [ ] `CompositionSpec`与Nickel contracts由何种single-source schema／fixture共同生成？
 - [ ] local source的canonical path／content hash／symlink policy？
@@ -38,7 +39,7 @@ updated: 2026-08-19
 
 ## P0：SDK 與 Registration
 
-- [ ] 第一版authoring API是proc macro、builder还是两者分层？
+- [ ] 第一版code-bound system／schema SDK authoring API是proc macro、builder还是两者分层？
 - [ ] 如何从一个business function生成typed Bevy query与dynamic batch adapter，不让作者手写两套？
 - [ ] 哪些system parameters可dual-realization，哪些compile-time标为static-only？
 - [ ] 哪些公开component必须生成`GeneratedSharedSchema` crate，哪些可保持`HostTyped`或`RuntimeDynamic`？typed dependency如何进入`BuildPlan`？
@@ -48,6 +49,12 @@ updated: 2026-08-19
 - [ ] system stage／set第一版最小集合，如何版本化？
 - [ ] dynamic read／write declaration如何与实际callback binding／Bevy access交叉验证？
 - [ ] static与dynamic equivalence的normative comparison：state hash、commands、messages、save bytes哪些必须相同？
+- [ ] `TagId<T>`／`MapId<T,V>`／`RoleId<T>`的Rust泛型与serialized target-kind discriminator如何single-source生成？
+- [ ] extensible Tag contribution的self-owned判定、integration dependency与profile foreign amendment provenance具体schema？
+- [ ] Tag bitset、SemanticMap dense／sparse table与Predicate bytecode的首版layout／budget？
+- [ ] 第一个numeric Map merger是否只做conflict，何种第二consumer证明需要associative custom merger？
+- [ ] frozen Role binding与active ContentBundle在lock／world metadata之间如何去重并保留resolution explanation？
+- [ ] Affordance callback的第一个真实consumer是什么；在出现前只实现static semantic fast path。
 
 ## P0：Native ABI `0.x`
 
@@ -122,6 +129,8 @@ updated: 2026-08-19
 ## P1：内容與资产
 
 - [ ] block／item／biome definition的最小schema？
+- [ ] 首批平台material Tag／Role vocabulary具体只包含哪些真实demo forms，如何避免提前建立通用ontology？
+- [ ] `physical@1` Map与shared block state keys哪些字段真正被voxel／physics／structure两个consumer共同需要？
 - [ ] data package、typed asset与code package如何分工？
 - [ ] Bevy AssetServer dependency与package artifact ownership如何双向诊断？
 - [ ] asset hot reload何时只重建presentation，何时需阻止authoritative state修改？
@@ -163,13 +172,15 @@ updated: 2026-08-19
 
 1. Nickel → typed `CompositionSpec` golden fixtures。
 2. SemVer／capability resolver conflict corpus与frozen lock。
-3. `@example/dual-gameplay` static／dynamic registration与state equivalence。
-4. static direct／dynamic batch／per-entity反例benchmark。
-5. package-driven Bevy client／headless smoke。
-6. upstream voxel／physics playable adoption report。
-7. RocksDB crash／revision-race／realization-switch save fixtures。
-8. render feature pair／exclusive provider fixtures。
-9. portable old binary／engine-coupled Bevy upgrade rehearsal。
+3. Nickel semantic constructors → typed Tag／Map／Predicate／Role golden与source-aware overlay conflict。
+4. copper／obsidian／portal、Tag cycle、Map conflict、Role ambiguity与fallback frozen-world corpus。
+5. `@example/dual-gameplay` static／dynamic registration与state equivalence。
+6. static direct／dynamic batch／per-entity反例benchmark。
+7. package-driven Bevy client／headless smoke与non-Terrenia dimension replacement。
+8. upstream voxel／physics playable adoption report。
+9. RocksDB crash／revision-race／realization-switch save fixtures。
+10. render feature pair／exclusive provider fixtures。
+11. portable old binary／engine-coupled Bevy upgrade rehearsal。
 
 ## 相關文件
 
@@ -177,4 +188,5 @@ updated: 2026-08-19
 - [第一個可玩 demo](roadmap-first-demo.md)
 - [套件內核](../architecture/package-management.md)
 - [原生 ABI](../architecture/native-module-abi.md)
+- [語義註冊、內容判定與選擇](../architecture/semantic-registration.md)
 - [渲染架構](../architecture/rendering.md)

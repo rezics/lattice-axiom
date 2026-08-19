@@ -8,6 +8,7 @@ decision:
   - ../decisions/0009-rocksdb-authoritative-world-snapshots.md
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # Bevy 世界持久化與 RocksDB World Store
@@ -35,6 +36,7 @@ RocksDB 保存已物化世界的权威快照；Bevy World／ECS 只保存目前 
 | 玩家／玩法狀態 | 是 | 修改、容器、機器、持久實體與 owner component |
 | 模擬續行 | 是 | 排定 tick、流體前緣、必要 RNG state、未完成權威工作 |
 | provenance | 是 | generator revision、config hash、規劃產物、schema |
+| semantic closure receipt | 是 | authoritative semantic image、active bundles、实际Role bindings |
 | 可重建衍生 | 否 | mesh、collider cache、physics broadphase、GPU asset、navigation cache |
 
 generator 只創造未物化空間。只要 snapshot 存在，載入就以 snapshot 為準；生成器更新或內容變更不得隱式重算。
@@ -69,6 +71,7 @@ column family 數量、compression、prefix extractor 和 compaction 由 benchma
 - persistent spatial entities 和 owner component envelopes；
 - 必要 scheduled work／simulation continuation；
 - generation provenance；
+- 该chunk generation实际使用的semantic contract／Role binding receipt；
 - optional integrity hash。
 - required package／schema owner identity（适合放在world／region metadata时不在每个chunk重复）。
 
@@ -121,7 +124,9 @@ I/O task reads and validates envelope
     ↓
 locked package / schema owners migrate to current DTO
     ↓
-content IDs resolve against RegistrationImage
+frozen semantic bindings / active bundles validate against RegistrationImage
+    ↓
+concrete content IDs resolve against RegistrationImage
     ↓
 main-world system instantiates chunk working set / ECS
     ↓
@@ -129,6 +134,11 @@ derived mesh and collider jobs start
 ```
 
 unknown schema、missing authoritative package／content、checksum error与migration failure要在修改Bevy World前识别。schema owner与migration来自已锁定package closure；realization可以改变，但logical owner／schema contract不能因此改变。可恢复情况可进入read-only recovery／placeholder policy；不可恢复时保持world未载入并提供诊断。
+
+world metadata保存semantic image fingerprint、authoritative contract majors、active content
+bundle set与实际使用的Role bindings。Tag／Role本身不写入voxel palette；palette始终保存concrete
+stable ID。安装新package造成候选增加时，旧world先恢复frozen binding和fallback activation，
+不能重新求值后让required ID消失。
 
 ## Chunk 卸載
 
@@ -204,10 +214,12 @@ RocksDB read snapshot 只提供程序內一致讀視圖，不是可攜備份。�
 - 存檔掃描不出現 Bevy Entity／Handle 或第三方 solver handle。
 - 同一gameplay package从static切换到portable dynamic realization后读取／写回相同schema fixture，normative snapshot bytes不变。
 - 缺少required package／schema时在world进入writable Bevy state前失败，并列出owner与相容range。
+- semantic contract／binding／active bundle不相容时在writable load前给出展开差异；新增candidate不自动重写旧chunk或停用旧fallback。
 
 ## 相關文件
 
 - [決策 0009：RocksDB 權威世界快照](../decisions/0009-rocksdb-authoritative-world-snapshots.md)
 - [Bevy 執行期架構](game-engine-runtime.md)
+- [語義註冊、內容判定與選擇](semantic-registration.md)
 - [套件與 ABI 版本](versioning-and-compatibility.md)
 - [世界生成](world-generation.md)

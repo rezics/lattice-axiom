@@ -9,6 +9,7 @@ decision:
   - ../decisions/0003-no-global-version-switch.md
   - ../decisions/0004-territorial-delegation-for-spatial-generation.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
 # 可組合世界生成架構
@@ -35,7 +36,7 @@ decision:
 概念上的資料流如下：
 
 ```text
-Validated ContentCatalog + WorldgenConfig + 世界種子
+Validated ContentCatalog／SemanticCatalog／RoleBindings + WorldgenConfig + 世界種子
         ↓
 WorldgenPlugin 建立不可變 GenerationPlan resource
         ↓
@@ -287,11 +288,17 @@ StructurePlan
 ├── 穩定 ID 與種子
 ├── 邊界體積
 ├── 語義子圖
+├── block／entity ContentPredicate 與 placement Role
 ├── 地形與水文約束
 └── 實體化提供者
 ```
 
 任一區塊只查詢與自身相交的計畫。城市、道路與文明可以在同一機制上建立更高階圖，再交由幾何與體素化能力實現。
+
+结构检查已有world时使用compiled `ContentPredicate`，例如机制owner定义的portal-frame Tag；
+结构实际放置新内容时使用已经锁定的`ContentRole → StableId` binding。禁止从registration
+namespace、package name或Tag成员顺序选择输出。计划／产物receipt记录实际predicate major、
+role binding与相关Map revision，使同一生成epoch可重现。
 
 ### 地形密度與材質
 
@@ -363,6 +370,8 @@ StructurePlan
 - 第一方與第三方內容使用同一公開能力。
 - 邊界能被直接查詢、視覺化與測試。
 - 同一產物依賴子圖能被識別並重現；完整根雜湊不同不會自動被解讀為整體不相容。
+- worldgen读取的authoritative Tag／Map／Role binding进入artifact dependency receipt；语义目录变化不隐式重算已物化chunk。
+- Terrenia worldgen只是普通package consumer；另一个维度closure可提供自己的Role／Predicate而无需host理解`terrenia:*`。
 
 ## 第一批原型與量測
 
@@ -406,3 +415,4 @@ StructurePlan
 - [現代地形與洞穴生成研究](../research/modern-terrain-and-cave-generation.md)
 - [待決問題](../planning/open-questions.md)
 - [詞彙表](../foundations/glossary.md)
+- [語義註冊、內容判定與選擇](semantic-registration.md)

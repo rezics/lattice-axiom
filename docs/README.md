@@ -18,6 +18,8 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 - Nickel `package.ncl`／`game.ncl` 产生 typed `CompositionSpec`；Rust package kernel负责 SemVer／capability、lock、build、load与activation。
 - 每次游戏由 `LockedGameGraph`／`RegistrationImage` 建立；第一方 package 与 Terrenia 维度不能绕过。
 - Logical package 使用 root `name` 或 scoped `@scope/name`；stable registration 使用独立的 `<namespace>:<kind>/<path>`，两者不得互相推导。
+- 精确 StableId、SemanticTag／Map、StateProperty、Affordance、Predicate、Role 与 fallback bundle 分层；Nickel 组合语义，Rust 验证并编译进 `RegistrationImage`。
+- `terrenia` 只是当前选择的普通维度聚合模组；平台 `latticeaxiom:*` contract 与 host 不以 Terrenia 作为固定基础设施。
 - 同一业务 package可生成 `NativeStatic`与`PortableNative`：static直接Bevy／LTO，dynamic经versioned C ABI／batch ECS。
 - dynamic另有诚实的`EngineCoupledNative`等级，以精确`EngineBuildId`换取低层host能力。
 - Bevy是core package内部tool；若外部contract真的因升级破坏，相关package／capability／schema仍按自己的版本规则升级。
@@ -32,29 +34,30 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 3. [技术栈与边界](foundations/technology-stack.md)
 4. [套件内核](architecture/package-management.md)
 5. [模组、注册清单与双实现](architecture/module-composition.md)
-6. [Demo workspace 与 Terrenia package 组织](architecture/demo-workspace-organization.md)
-7. [原生模组 ABI](architecture/native-module-abi.md)
-8. [套件驱动的 Bevy runtime](architecture/game-engine-runtime.md)
-9. [渲染 capability／pass／provider](architecture/rendering.md)
-10. [版本与相容性](architecture/versioning-and-compatibility.md)
-11. [第一个可玩 demo 路线图](planning/roadmap-first-demo.md)
-12. [执行期整合路线](planning/roadmap-game-engine.md)
-13. [世界持久化](architecture/world-persistence.md)
-14. [可组合世界生成](architecture/world-generation.md)
-15. [可组合洞穴生成](architecture/cave-generation.md)
-16. [实体、物理与表现](architecture/entity-physics-presentation.md)
-17. [资产语义](architecture/asset-semantics.md)
-18. [待决问题](planning/open-questions.md)
+6. [语义注册、内容判定与候选选择](architecture/semantic-registration.md)
+7. [Demo workspace 与 Terrenia package 组织](architecture/demo-workspace-organization.md)
+8. [原生模组 ABI](architecture/native-module-abi.md)
+9. [套件驱动的 Bevy runtime](architecture/game-engine-runtime.md)
+10. [渲染 capability／pass／provider](architecture/rendering.md)
+11. [版本与相容性](architecture/versioning-and-compatibility.md)
+12. [第一个可玩 demo 路线图](planning/roadmap-first-demo.md)
+13. [执行期整合路线](planning/roadmap-game-engine.md)
+14. [世界持久化](architecture/world-persistence.md)
+15. [可组合世界生成](architecture/world-generation.md)
+16. [可组合洞穴生成](architecture/cave-generation.md)
+17. [实体、物理与表现](architecture/entity-physics-presentation.md)
+18. [资产语义](architecture/asset-semantics.md)
+19. [待决问题](planning/open-questions.md)
 
 ## 文件地图
 
 | 分类 | 用途 | 入口 |
 | --- | --- | --- |
 | 基础 | 愿景、策略、技术与共同词汇 | [愿景](foundations/project-vision.md)、[策略](foundations/development-strategy.md)、[技术栈](foundations/technology-stack.md)、[词汇表](foundations/glossary.md) |
-| Package／ABI | 游戏如何组合、锁定、生成与加载 | [套件内核](architecture/package-management.md)、[模组组合](architecture/module-composition.md)、[demo组织](architecture/demo-workspace-organization.md)、[原生 ABI](architecture/native-module-abi.md)、[版本相容](architecture/versioning-and-compatibility.md) |
+| Package／ABI | 游戏如何组合、锁定、生成与加载 | [套件内核](architecture/package-management.md)、[模组组合](architecture/module-composition.md)、[语义注册](architecture/semantic-registration.md)、[demo组织](architecture/demo-workspace-organization.md)、[原生 ABI](architecture/native-module-abi.md)、[版本相容](architecture/versioning-and-compatibility.md) |
 | Bevy runtime | package closure如何成为一个Bevy App | [执行期](architecture/game-engine-runtime.md)、[渲染](architecture/rendering.md)、[实体／物理／表现](architecture/entity-physics-presentation.md)、[资产](architecture/asset-semantics.md) |
 | 世界 | Lattice Axiom的权威资料与生成差异层 | [持久化](architecture/world-persistence.md)、[世界生成](architecture/world-generation.md)、[洞穴](architecture/cave-generation.md)、[物理创作](architecture/physical-authoring.md) |
-| 研究 | 外部证据、候选与失败模式，不自动成为承诺 | [引擎采用](research/open-source-game-engine-adoption.md)、[原生外挂机制／渲染模组](research/native-plugin-and-render-mod-lessons.md)、[Bevy生态](research/renderer-physics-landscape.md)、[Godot工具对照](research/godot-toolchain-comparison.md)、[Minecraft世界生成](research/minecraft-world-generation-lessons.md)、[现代地形／洞穴](research/modern-terrain-and-cave-generation.md) |
+| 研究 | 外部证据、候选与失败模式，不自动成为承诺 | [引擎采用](research/open-source-game-engine-adoption.md)、[原生外挂机制／渲染模组](research/native-plugin-and-render-mod-lessons.md)、[Bevy生态](research/renderer-physics-landscape.md)、[Godot工具对照](research/godot-toolchain-comparison.md)、[Minecraft注册语义](research/minecraft-registration-semantics.md)、[Minecraft世界生成](research/minecraft-world-generation-lessons.md)、[现代地形／洞穴](research/modern-terrain-and-cave-generation.md) |
 | 规划 | 依赖顺序、可玩验收、待决问题 | [第一个demo](planning/roadmap-first-demo.md)、[runtime路线](planning/roadmap-game-engine.md)、[待决问题](planning/open-questions.md) |
 | 元文件 | 文档维护规则 | [组织方式](meta/documentation-organization.md) |
 
@@ -74,6 +77,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 | [0017](decisions/0017-versioned-native-module-abi.md) | Versioned C ABI／capability tables |
 | [0018](decisions/0018-package-kernel-from-first-vertical-slice.md) | 首个vertical slice交付package kernel与双实现 |
 | [0019](decisions/0019-separate-package-and-registration-identities.md) | Root／scoped package 与 stable registration identity 分离；Terrenia 为第一维度 |
+| [0020](decisions/0020-semantic-registration-and-content-selection.md) | 精确注册身份、内容语义、判定、候选选择与 fallback 分层 |
 
 ### Superseded Decisions
 

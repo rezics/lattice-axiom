@@ -33,6 +33,23 @@ updated: 2026-08-19
 | capability | versioned、具 cardinality 的 required／provided服务或机制，例如 `latticeaxiom:capability/render-visibility@1`；不是任意字串 hook。 |
 | provider | 提供一项 capability 的 package／realization。exclusive provider 必须由 graph 明确选择，不能 load-order-wins。 |
 
+## 註冊與內容語義
+
+| 词汇 | 本项目中的意思 |
+| --- | --- |
+| exact registration | 由 `StableId` 识别的具体内容／schema／system／contract row；duplicate exact ID 一律失败。 |
+| `SemanticCatalog` | `RegistrationImage` 中 closure-wide 的 Tag、typed Map、state key、Affordance、Predicate、Role、active bundle与provenance集合；不是第二个 registry。 |
+| `SemanticTag` | 绑定 target registry kind 的 versioned集合contract，例如`latticeaxiom:block-tag/storage-blocks/copper@1`；回答 membership，不回答数值或动态行为。 |
+| tag contribution | package 向 extensible Tag 添加自己拥有的 exact entry／nested Tag 的声明；与定义或注册 Tag contract 的 namespace authority 分开。 |
+| `SemanticMap<T>` | 从某一 registry entry到versioned typed value／relation的语义映射；owner定义value schema、cardinality与deterministic conflict merger。 |
+| `StatePropertyKey` | 已放置block instance的有限、可编码状态键；跨package查询的key使用stable／versioned contract，不与definition-level Tag／Map混用。 |
+| `Affordance` | versioned、带request／response与context的行为contract；资料可回答时编译为static fast path，必要时才使用typed／ABI callback。 |
+| `ContentPredicate` | 可序列化、带target kind的`Exact`／`InTag`／`MapMatches`／`StateEq`／`Supports`及boolean组合AST；Nickel构造，Rust验证／编译。 |
+| `ContentRole` | 从active content candidates中选择具体stable ID的versioned选择点，例如默认铜储存块；不是package capability。 |
+| role binding | profile／unique candidate／frozen world对Role作出的具体选择，含provenance与resolution explanation，并写入lock。 |
+| `ContentBundle` | 必须原子激活的一组registration与semantic contributions；v1可作为已选package内的声明式fallback，不能隐式改变package graph。 |
+| semantic image hash | authoritative／presentation semantic catalog、bindings与active bundles的canonical fingerprint；用于重现与诊断，不单独代理world compatibility。 |
+
 ## ABI 與執行期
 
 | 词汇 | 本项目中的意思 |
@@ -87,5 +104,6 @@ updated: 2026-08-19
 - [專案願景](project-vision.md)
 - [技術棧](technology-stack.md)
 - [套件內核](../architecture/package-management.md)
+- [語義註冊](../architecture/semantic-registration.md)
 - [原生 ABI](../architecture/native-module-abi.md)
 - [版本與相容性](../architecture/versioning-and-compatibility.md)
