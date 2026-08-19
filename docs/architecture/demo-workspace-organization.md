@@ -172,7 +172,7 @@ profile 中被请求的普通模组：
   namespaces = {
     authority = "terrenia",
     grants = [
-      { package = "@terrenia/blocks", patterns = ["terrenia:block/**", "terrenia:item/**", "terrenia:block-tag/**", "terrenia:block-role/**"] },
+      { package = "@terrenia/blocks", patterns = ["terrenia:block/**", "terrenia:fluid/**", "terrenia:item/**", "terrenia:block-tag/**", "terrenia:block-role/**"] },
       { package = "@terrenia/worldgen", patterns = ["terrenia:worldgen/**", "terrenia:biome/**"] },
       { package = "@terrenia/gameplay", patterns = ["terrenia:system/**", "terrenia:schema/**"] },
       { package = "@terrenia/presentation", patterns = ["terrenia:asset/**", "terrenia:render-feature/**"] },
@@ -197,9 +197,13 @@ profile 中被请求的普通模组：
 registry 证明，不能靠 package 自我声明取得。最终 Nickel contract 仍由 schema 与
 conformance fixture 冻结。
 
+这里的 air／grass／dirt／stone 是维度级 fallback Role 的最小示例，不是 Terrenia 的
+完整 shipped content 表。内容按 6 → 18 → 40 → 72 个 block definitions 分阶段交付，
+清单与不展开状态变体的规则见[Terrenia 方块内容规划](../planning/terrenia-block-catalog.md)。
+
 ### 子 package
 
-- `@terrenia/blocks`：方块、物品与相邻内容资料；直接声明完整
+- `@terrenia/blocks`：方块、流体、物品与相邻内容资料；直接声明完整
   `terrenia:block/*` ID，并可贡献自身对象到`latticeaxiom:*`公开Tag／Map。它不能因为属于
   Terrenia而取得平台semantic contract的定义权。
 - `@terrenia/worldgen`：Terrenia generator、biome／terrain provider 与
@@ -278,4 +282,5 @@ logical package 层。
 - [套件内核](package-management.md)
 - [模组与注册组合](module-composition.md)
 - [语义注册、内容判定与选择](semantic-registration.md)
+- [Terrenia 方块内容规划](../planning/terrenia-block-catalog.md)
 - [第一个 demo 路线图](../planning/roadmap-first-demo.md)

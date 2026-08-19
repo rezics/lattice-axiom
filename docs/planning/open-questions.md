@@ -19,6 +19,7 @@ updated: 2026-08-19
 - [x] package kernel与ABI `0.x` 从第一个 vertical slice开始；只延后registry／marketplace／hot unload／WASM规模，见[决策 0018](../decisions/0018-package-kernel-from-first-vertical-slice.md)。
 - [x] logical package 使用 root `name`／scoped `@scope/name`，stable registration 使用独立的 `<namespace>:<kind>/<path>` 与显式 namespace grant；Terrenia 同时治理 root `terrenia` 与 scope `@terrenia`，并作为 package 定义的第一维度，见[决策 0019](../decisions/0019-separate-package-and-registration-identities.md)。
 - [x] exact ID与SemanticTag／Map、StateProperty、Affordance、Predicate、Role、fallback ContentBundle分层；Nickel负责authoring／overlay，Rust负责全图验证／lock／runtime compilation；Terrenia没有平台特权，见[决策 0020](../decisions/0020-semantic-registration-and-content-selection.md)。
+- [x] Terrenia 内容规模采用6 → 18 → 40 → 72个方块定义的分阶段基线，water／lava为两个独立流体定义，有限状态与几何变体不复制StableId，见[Terrenia方块内容规划](terrenia-block-catalog.md)。
 - [x] package compatibility使用SemVer；Bevy是core package内部tool，外部break仍需诚实版本化。
 - [x] 已物化world以RocksDB完整snapshot为权威，见[决策 0009](../decisions/0009-rocksdb-authoritative-world-snapshots.md)。
 - [x] 没有global version开关，见[决策 0003](../decisions/0003-no-global-version-switch.md)。
@@ -128,9 +129,11 @@ updated: 2026-08-19
 
 ## P1：内容與资产
 
+- [ ] 72方块清单中各定义的最终显示名称、纹理、掉落、工具需求与数值平衡？
 - [ ] block／item／biome definition的最小schema？
 - [ ] 首批平台material Tag／Role vocabulary具体只包含哪些真实demo forms，如何避免提前建立通用ontology？
 - [ ] `physical@1` Map与shared block state keys哪些字段真正被voxel／physics／structure两个consumer共同需要？
+- [ ] fluid definition／state的最小schema，以及solid occupancy与fluid state在voxel palette／snapshot中的编码？
 - [ ] data package、typed asset与code package如何分工？
 - [ ] Bevy AssetServer dependency与package artifact ownership如何双向诊断？
 - [ ] asset hot reload何时只重建presentation，何时需阻止authoritative state修改？

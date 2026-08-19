@@ -127,6 +127,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 ### 交付
 
 - stable block ID、chunk revision、dirty／durability state；
+- Terrenia D3 六方块语义与持久化最小集：air／grass／dirt／stone／copper-block／obsidian；
 - `terrenia` 维度 closure／`@example/marker` test package；
 - validated content／schema registry；
 - typed Tag DAG／bitset、一个typed Map、shared StateProperty、Predicate与Role binding；
@@ -156,6 +157,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 
 - Terrenia world seed／`WorldgenConfig`；
 - 两个 placeholder terrain／biome styles；
+- Terrenia block catalog由D3的6个扩展到D4累计18个，使两种地表、浅层与基础洞穴可由材质辨认；
 - deterministic height（`y`）与最小 cave／void；
 - generator package／capability；
 - revision／config hash／provenance；
@@ -171,6 +173,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 - 玩家／package循环仍完整。
 
 不要求第一版完成 territory、hydrology、geology 或完整 cave topology。
+D3／D4的精确内容与后续40／72方块范围见[Terrenia 方块内容规划](terrenia-block-catalog.md)。
 
 ## D5：Render Composition 與 Upgrade Rehearsal
 
@@ -257,3 +260,4 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 - [Bevy 執行期](../architecture/game-engine-runtime.md)
 - [待決問題](open-questions.md)
 - [語義註冊、內容判定與選擇](../architecture/semantic-registration.md)
+- [Terrenia 方块内容规划](terrenia-block-catalog.md)
