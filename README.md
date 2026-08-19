@@ -14,18 +14,29 @@ The first R0 foundation is also present:
   preflight DTOs;
 - `nickel/latticeaxiom` contains the versioned R0 authoring contracts, while
   `fixtures/r0` pins positive canonical outputs and negative diagnostic intent;
+- the current authoring boundary is Nickel library contract 2, R0 authoring
+  corpus 2, package model 2, game-profile model 2, normalized composition
+  schema 2, and registration-manifest schema 1;
 - the composition crate embeds Nickel 0.18 for trusted typed evaluation and
-  provides a deterministic source-table preflight with NFC and case-fold
-  collision checks, raw-byte hashes, explicit whole-root scan budgets, and
-  conservative rejection of links and reparse points.
+  provides immutable raw-byte source snapshots, deterministic source-table
+  preflight, NFC and case-fold collision checks, explicit whole-root
+  acquisition budgets, and conservative rejection of links and reparse
+  points;
+- profile normalization preserves package-qualified features and namespace,
+  trust, override, and recovery policy in the typed `CompositionSpec`; target
+  triples and evaluator enforcement backends use validated identifiers;
+- the versioned diagnostic policy has deterministic ordering, exact
+  deduplication, and bounded truncation, while evaluation receipts distinguish
+  hard, soft, and unsupported deadline, memory, and recursion enforcement.
 
 These crates deliberately contain no Bevy or process-local handles. The client
 scene is still a temporary bootstrap; it is not yet the package-driven D0 host.
 The in-process evaluator does not yet enforce the frozen wall-clock, memory, or
-recursion limits and is not an untrusted-code boundary. Those gates require the
-source-table-backed import loader, worker supervisor, and evaluator
-instrumentation planned before R0 exit. Relative imports in the current
-trusted adapter use Nickel's ambient filesystem resolver.
+recursion limits and is not an untrusted-code boundary. Production R0 receipts
+therefore fail closed until the source-table-only Nickel loader, worker
+supervisor, OS memory containment, and evaluator call-frame instrumentation are
+present. Relative imports in the current trusted adapter still use Nickel's
+ambient filesystem resolver.
 
 ## First run
 

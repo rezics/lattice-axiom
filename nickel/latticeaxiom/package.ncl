@@ -52,7 +52,7 @@ let RealizationSpecContract = {
   id | C.RealizationId,
   kind | C.RealizationKind,
   domains | Array C.PackageDomain,
-  targets | Array String | default = [],
+  targets | Array C.TargetTriple | default = [],
   interfaces | { _ : InterfaceRequirementContract } | default = {},
   required_features | Array C.RealizationId | default = [],
   artifact | ArtifactIntentContract,
@@ -122,6 +122,8 @@ let make_package = fun value =>
 in
 
 {
+  library_contract_major = common.library_contract_major,
+  corpus_major = common.corpus_major,
   contract_major = common.contract_major,
   model_version = package_model_version,
   contracts = {

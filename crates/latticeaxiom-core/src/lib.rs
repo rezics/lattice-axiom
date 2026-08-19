@@ -14,7 +14,7 @@ pub use canonical::{
 };
 pub use identifier::{
     CapabilityId, IdentifierError, PackageName, PackageVersion, PackageVersionReq, SchemaId,
-    SourceId, StableId, VersionComparator, VersionComparatorOperator, WorldId,
+    SourceId, StableId, TargetTriple, VersionComparator, VersionComparatorOperator, WorldId,
 };
 pub use provenance::{
     SourceOrigin, SourceOriginKind, SourceProvenance, SourceProvenanceError, SourceSpan,

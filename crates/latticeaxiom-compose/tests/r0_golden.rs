@@ -8,13 +8,46 @@
 use std::{fs, path::Path};
 
 use latticeaxiom_compose::{
-    GameProfileSpec, NickelEvaluationError, NickelEvaluationLimits, PackageSpec,
-    evaluate_trusted_nickel_source,
+    COMPOSITION_SCHEMA_VERSION, CompositionSpec, GAME_PROFILE_MODEL_VERSION, GameProfileSpec,
+    NICKEL_LIBRARY_CONTRACT_MAJOR, NickelEvaluationError, NickelEvaluationLimits,
+    PACKAGE_MODEL_VERSION, PackageSpec, R0_AUTHORING_CORPUS_MAJOR,
+    REGISTRATION_MANIFEST_SCHEMA_VERSION, TrustClass, evaluate_trusted_nickel_source,
 };
-use latticeaxiom_core::canonical_json_bytes;
+use latticeaxiom_core::{CanonicalHash, SourceProvenance, TargetTriple, canonical_json_bytes};
 use serde::{Serialize, de::DeserializeOwned};
 
 const WORKSPACE_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
+#[test]
+fn embedded_version_axes_match_rust_constants_and_the_golden() {
+    let actual: serde_json::Value = evaluate_fixture("fixtures/r0/positive/version-axes.ncl");
+    let expected: serde_json::Value = read_json("fixtures/r0/positive/version-axes.golden.json");
+    assert_canonical_equal(&actual, &expected);
+
+    for (field, version) in [
+        ("library_contract_major", NICKEL_LIBRARY_CONTRACT_MAJOR),
+        ("corpus_major", R0_AUTHORING_CORPUS_MAJOR),
+        ("package_model", PACKAGE_MODEL_VERSION),
+        ("game_profile_model", GAME_PROFILE_MODEL_VERSION),
+        ("composition_schema", COMPOSITION_SCHEMA_VERSION),
+        (
+            "registration_manifest_schema",
+            REGISTRATION_MANIFEST_SCHEMA_VERSION,
+        ),
+    ] {
+        assert_eq!(
+            actual.get(field).and_then(serde_json::Value::as_u64),
+            Some(u64::from(version)),
+            "Nickel version axis `{field}` drifted from Rust"
+        );
+    }
+    assert_eq!(
+        actual
+            .get("contract_major_alias")
+            .and_then(serde_json::Value::as_u64),
+        Some(u64::from(NICKEL_LIBRARY_CONTRACT_MAJOR))
+    );
+}
 
 #[test]
 fn embedded_core_package_matches_the_normative_golden() {
@@ -44,7 +77,42 @@ fn embedded_headless_profile_matches_the_normative_golden() {
     actual
         .validate()
         .unwrap_or_else(|error| panic!("evaluated profile failed normative validation: {error}"));
+    assert!(
+        actual
+            .features
+            .values()
+            .any(|features| !features.is_empty())
+    );
+    assert!(!actual.policy.namespace_grants.is_empty());
+    assert_eq!(actual.policy.maximum_trust, TrustClass::Build);
+    assert!(actual.policy.allow_force_override);
+    assert!(actual.policy.allow_recovery);
     let expected: GameProfileSpec = read_json("fixtures/r0/positive/headless-profile.golden.json");
+    assert_canonical_equal(&actual, &expected);
+}
+
+#[test]
+fn embedded_headless_profile_normalizes_to_the_composition_golden() {
+    let logical_path = "fixtures/r0/positive/headless-profile.ncl";
+    let profile: GameProfileSpec = evaluate_fixture(logical_path);
+    let source = read_source(logical_path);
+    let source_id = profile.source_universe.first().map_or_else(
+        || panic!("headless profile fixture must declare one source"),
+        |candidate| candidate.source_id.clone(),
+    );
+    let provenance = SourceProvenance::new(
+        source_id,
+        logical_path,
+        CanonicalHash::digest(source.as_bytes()),
+        None,
+        Vec::new(),
+    )
+    .unwrap_or_else(|error| panic!("profile fixture provenance is invalid: {error}"));
+    let actual = profile
+        .into_composition(target("x86_64-unknown-linux-gnu"), provenance)
+        .unwrap_or_else(|error| panic!("profile did not normalize: {error}"));
+    let expected: CompositionSpec =
+        read_json("fixtures/r0/positive/headless-composition.golden.json");
     assert_canonical_equal(&actual, &expected);
 }
 
@@ -67,7 +135,9 @@ fn embedded_negative_corpus_retains_its_stable_diagnostic_intent() {
     assert_negative::<PackageSpec>("feature-domain-outside-package");
     assert_negative::<PackageSpec>("noncanonical-logical-path");
     assert_negative::<GameProfileSpec>("invalid-tool-evaluation-policy");
+    assert_negative::<GameProfileSpec>("foreign-tool-evaluation-policy");
     assert_negative::<GameProfileSpec>("unversioned-tool-evaluation-policy");
+    assert_negative::<PackageSpec>("invalid-target-triple");
 }
 
 #[test]
@@ -104,6 +174,22 @@ where
         physical_path.to_string_lossy(),
         NickelEvaluationLimits::default(),
     )
+}
+
+fn read_source(logical_path: &str) -> String {
+    let physical_path = Path::new(WORKSPACE_ROOT).join(logical_path);
+    fs::read_to_string(&physical_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to read fixture source {}: {error}",
+            physical_path.display()
+        )
+    })
+}
+
+fn target(value: &str) -> TargetTriple {
+    value
+        .parse()
+        .unwrap_or_else(|error| panic!("fixture target `{value}` is invalid: {error}"))
 }
 
 fn read_json<T>(logical_path: &str) -> T

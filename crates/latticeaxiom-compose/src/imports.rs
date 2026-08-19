@@ -11,6 +11,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use latticeaxiom_core::{CanonicalHash, SourceId};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
@@ -20,15 +21,19 @@ const SOURCE_TABLE_DOMAIN: &[u8] = b"latticeaxiom:canonical-source-table/r0\0";
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 /// The authority under which a filesystem root may be read by composition.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum AuthorizedRootKind {
     /// The package currently being evaluated.
+    #[serde(rename = "current-package")]
     Package,
     /// The versioned `latticeaxiom.lib` virtual or materialized root.
+    #[serde(rename = "versioned-library")]
     Library,
     /// A profile-authorized overlay root.
+    #[serde(rename = "profile-overlay")]
     Overlay,
     /// A fixture-authorized test root.
+    #[serde(rename = "test-fixture")]
     Test,
 }
 
@@ -85,11 +90,13 @@ impl AuthorizedRoot {
     }
 }
 
-/// Defensive limits for enumerating one complete declared source root.
+/// Acquisition budgets for enumerating one complete declared source root.
 ///
-/// These bounds cover every regular file in the root. They are deliberately
-/// separate from the frozen Nickel imported-closure counters, which can only
-/// be measured by a source-table-backed import resolver.
+/// These bounds cover every regular file acquired from the root, including
+/// files that evaluation never imports. They are whole-root acquisition
+/// budgets, not evaluator imported-closure meters, and must not be reported as
+/// satisfying the frozen Nickel closure limits. Closure depth, file count, and
+/// source bytes require a source-table-backed import resolver.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceScanLimits {
     /// Maximum number of regular files enumerated from the declared root.
@@ -99,7 +106,7 @@ pub struct SourceScanLimits {
 }
 
 /// Receipt for one regular file in a canonical source table.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FileReceipt {
     logical_path: String,
     byte_length: u64,
@@ -123,6 +130,284 @@ impl FileReceipt {
     #[must_use]
     pub const fn content_hash(&self) -> CanonicalHash {
         self.content_hash
+    }
+
+    /// Verifies the recorded length and digest against exact raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceSnapshotError::ByteLengthMismatch`] when the byte
+    /// length differs or [`SourceSnapshotError::ContentHashMismatch`] when
+    /// the SHA-256 digest differs.
+    pub fn verify_bytes(&self, bytes: &[u8]) -> Result<(), SourceSnapshotError> {
+        let actual_length =
+            u64::try_from(bytes.len()).map_err(|_| SourceSnapshotError::ByteLengthMismatch {
+                logical_path: self.logical_path.clone(),
+                receipt_length: self.byte_length,
+                actual_length: u64::MAX,
+            })?;
+        if actual_length != self.byte_length {
+            return Err(SourceSnapshotError::ByteLengthMismatch {
+                logical_path: self.logical_path.clone(),
+                receipt_length: self.byte_length,
+                actual_length,
+            });
+        }
+
+        let actual_hash = CanonicalHash::digest(bytes);
+        if actual_hash != self.content_hash {
+            return Err(SourceSnapshotError::ContentHashMismatch {
+                logical_path: self.logical_path.clone(),
+                receipt_hash: self.content_hash,
+                actual_hash,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for FileReceipt {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawFileReceipt {
+            logical_path: String,
+            byte_length: u64,
+            content_hash: CanonicalHash,
+        }
+
+        let raw = RawFileReceipt::deserialize(deserializer)?;
+        validate_canonical_snapshot_path(&raw.logical_path).map_err(de::Error::custom)?;
+        Ok(Self {
+            logical_path: raw.logical_path,
+            byte_length: raw.byte_length,
+            content_hash: raw.content_hash,
+        })
+    }
+}
+
+/// Immutable raw bytes and their canonical receipt for one source file.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SourceFileSnapshot {
+    receipt: FileReceipt,
+    bytes: Vec<u8>,
+}
+
+impl SourceFileSnapshot {
+    /// Returns the canonical receipt for these bytes.
+    #[must_use]
+    pub const fn receipt(&self) -> &FileReceipt {
+        &self.receipt
+    }
+
+    /// Returns the exact raw bytes read during source acquisition.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Revalidates the receipt against the retained raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceSnapshotError`] when the byte length or SHA-256 digest
+    /// does not match the receipt.
+    pub fn verify(&self) -> Result<(), SourceSnapshotError> {
+        self.receipt.verify_bytes(&self.bytes)
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceFileSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawSourceFileSnapshot {
+            receipt: FileReceipt,
+            bytes: Vec<u8>,
+        }
+
+        let raw = RawSourceFileSnapshot::deserialize(deserializer)?;
+        let snapshot = Self {
+            receipt: raw.receipt,
+            bytes: raw.bytes,
+        };
+        snapshot.verify().map_err(de::Error::custom)?;
+        Ok(snapshot)
+    }
+}
+
+/// Immutable, serializable snapshot of one complete authorized source root.
+///
+/// A snapshot retains the exact raw bytes read during acquisition. Its file
+/// map is a [`BTreeMap`], so serialization and verification use canonical
+/// logical-path byte order. Physical host paths are deliberately excluded
+/// from this process-external DTO.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SourceSnapshot {
+    source_id: SourceId,
+    root_kind: AuthorizedRootKind,
+    files: BTreeMap<String, SourceFileSnapshot>,
+    total_source_bytes: u64,
+    source_hash: CanonicalHash,
+}
+
+impl SourceSnapshot {
+    /// Returns the stable source-universe identity.
+    #[must_use]
+    pub const fn source_id(&self) -> &SourceId {
+        &self.source_id
+    }
+
+    /// Returns the authority class used for acquisition.
+    #[must_use]
+    pub const fn root_kind(&self) -> AuthorizedRootKind {
+        self.root_kind
+    }
+
+    /// Returns immutable files keyed in canonical logical-path byte order.
+    #[must_use]
+    pub const fn files(&self) -> &BTreeMap<String, SourceFileSnapshot> {
+        &self.files
+    }
+
+    /// Returns the aggregate number of retained raw source bytes.
+    #[must_use]
+    pub const fn total_source_bytes(&self) -> u64 {
+        self.total_source_bytes
+    }
+
+    /// Returns the source-content SHA-256 over the canonical file table.
+    #[must_use]
+    pub const fn source_hash(&self) -> CanonicalHash {
+        self.source_hash
+    }
+
+    /// Resolves a root-relative path to immutable receipt and raw bytes.
+    ///
+    /// This applies the same lexical normalization and root-escape rejection
+    /// as [`CanonicalSourceTable::resolve_path`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceScanError::InvalidLogicalPath`] for an unsafe path or
+    /// [`SourceScanError::PathNotFound`] when the snapshot has no file row.
+    pub fn resolve_path(&self, logical_path: &str) -> Result<&SourceFileSnapshot, SourceScanError> {
+        let canonical = canonical_logical_path(logical_path)?;
+        self.files
+            .get(&canonical)
+            .ok_or(SourceScanError::PathNotFound {
+                logical_path: canonical,
+            })
+    }
+
+    /// Revalidates every file receipt and the aggregate table receipt.
+    ///
+    /// Verification checks canonical and Unicode case-fold-unique map keys,
+    /// exact byte lengths, content hashes, aggregate byte count, and the
+    /// domain-separated source hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceSnapshotError`] when any retained byte or receipt field
+    /// is inconsistent.
+    pub fn verify(&self) -> Result<(), SourceSnapshotError> {
+        let mut receipts = BTreeMap::new();
+        let mut folded_paths = BTreeMap::new();
+        let mut total_source_bytes = 0_u64;
+        for (logical_path, file) in &self.files {
+            validate_canonical_snapshot_path(logical_path)?;
+            if logical_path != file.receipt.logical_path() {
+                return Err(SourceSnapshotError::FileKeyMismatch {
+                    map_key: logical_path.clone(),
+                    receipt_path: file.receipt.logical_path.clone(),
+                });
+            }
+            register_snapshot_case_fold_path(&mut folded_paths, logical_path)?;
+            file.verify()?;
+            total_source_bytes = total_source_bytes
+                .checked_add(file.receipt.byte_length())
+                .ok_or(SourceSnapshotError::TotalSourceBytesMismatch {
+                    receipt_bytes: self.total_source_bytes,
+                    actual_bytes: u64::MAX,
+                })?;
+            receipts.insert(logical_path.clone(), file.receipt.clone());
+        }
+
+        if total_source_bytes != self.total_source_bytes {
+            return Err(SourceSnapshotError::TotalSourceBytesMismatch {
+                receipt_bytes: self.total_source_bytes,
+                actual_bytes: total_source_bytes,
+            });
+        }
+        let actual_hash =
+            hash_file_table(&receipts).map_err(|_| SourceSnapshotError::CanonicalTableTooLarge)?;
+        if actual_hash != self.source_hash {
+            return Err(SourceSnapshotError::SourceHashMismatch {
+                receipt_hash: self.source_hash,
+                actual_hash,
+            });
+        }
+        Ok(())
+    }
+
+    /// Builds the receipt-only canonical table without reading the filesystem.
+    #[must_use]
+    pub fn source_table(&self) -> CanonicalSourceTable {
+        CanonicalSourceTable {
+            source_id: self.source_id.clone(),
+            root_kind: self.root_kind,
+            files: snapshot_receipts(&self.files),
+            total_source_bytes: self.total_source_bytes,
+            source_hash: self.source_hash,
+        }
+    }
+
+    fn into_source_table(self) -> CanonicalSourceTable {
+        CanonicalSourceTable {
+            source_id: self.source_id,
+            root_kind: self.root_kind,
+            files: self
+                .files
+                .into_iter()
+                .map(|(path, file)| (path, file.receipt))
+                .collect(),
+            total_source_bytes: self.total_source_bytes,
+            source_hash: self.source_hash,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawSourceSnapshot {
+            source_id: SourceId,
+            root_kind: AuthorizedRootKind,
+            files: BTreeMap<String, SourceFileSnapshot>,
+            total_source_bytes: u64,
+            source_hash: CanonicalHash,
+        }
+
+        let raw = RawSourceSnapshot::deserialize(deserializer)?;
+        let snapshot = Self {
+            source_id: raw.source_id,
+            root_kind: raw.root_kind,
+            files: raw.files,
+            total_source_bytes: raw.total_source_bytes,
+            source_hash: raw.source_hash,
+        };
+        snapshot.verify().map_err(de::Error::custom)?;
+        Ok(snapshot)
     }
 }
 
@@ -207,6 +492,30 @@ pub fn scan_source_root(
     root: &AuthorizedRoot,
     limits: SourceScanLimits,
 ) -> Result<CanonicalSourceTable, SourceScanError> {
+    scan_source_snapshot(root, limits).map(SourceSnapshot::into_source_table)
+}
+
+/// Acquires an immutable raw-byte snapshot of one authorized source root.
+///
+/// Every regular file is read exactly once. That same read supplies both the
+/// retained raw bytes and its [`FileReceipt`], so worker consumers need not
+/// reopen the acquisition root. Directory enumeration is deterministic and
+/// uses the same link, collision, and acquisition-budget checks as
+/// [`scan_source_root`].
+///
+/// This scanner is not a race-resistant security boundary against a process
+/// mutating the acquisition root concurrently. Once returned, however, the
+/// snapshot contains no host paths and all subsequent receipt verification can
+/// operate exclusively on its retained bytes.
+///
+/// # Errors
+///
+/// Returns [`SourceScanError`] for I/O failures, non-regular entries, links or
+/// reparse points, path collisions, or acquisition-budget violations.
+pub fn scan_source_snapshot(
+    root: &AuthorizedRoot,
+    limits: SourceScanLimits,
+) -> Result<SourceSnapshot, SourceScanError> {
     reject_linked_path_components(root.path())?;
     let metadata = metadata_without_following(root.path(), "inspect authorized root")?;
     if is_link_or_reparse(&metadata) {
@@ -222,8 +531,9 @@ pub fn scan_source_root(
 
     let mut state = ScanState::new(limits);
     state.visit_directory(root.path(), "")?;
-    let source_hash = hash_file_table(&state.files)?;
-    Ok(CanonicalSourceTable {
+    let receipts = snapshot_receipts(&state.files);
+    let source_hash = hash_file_table(&receipts)?;
+    Ok(SourceSnapshot {
         source_id: root.source_id.clone(),
         root_kind: root.kind,
         files: state.files,
@@ -242,7 +552,7 @@ struct PendingEntry {
 #[derive(Debug)]
 struct ScanState {
     limits: SourceScanLimits,
-    files: BTreeMap<String, FileReceipt>,
+    files: BTreeMap<String, SourceFileSnapshot>,
     total_source_bytes: u64,
     normalized_paths: BTreeMap<String, String>,
     folded_paths: BTreeMap<String, String>,
@@ -416,7 +726,8 @@ impl ScanState {
             byte_length,
             content_hash: CanonicalHash::digest(&bytes),
         };
-        self.files.insert(logical_path, receipt);
+        self.files
+            .insert(logical_path, SourceFileSnapshot { receipt, bytes });
         Ok(())
     }
 }
@@ -573,6 +884,53 @@ fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     }
 }
 
+fn snapshot_receipts(
+    files: &BTreeMap<String, SourceFileSnapshot>,
+) -> BTreeMap<String, FileReceipt> {
+    files
+        .iter()
+        .map(|(path, file)| (path.clone(), file.receipt.clone()))
+        .collect()
+}
+
+fn validate_canonical_snapshot_path(logical_path: &str) -> Result<(), SourceSnapshotError> {
+    let canonical = canonical_logical_path(logical_path).map_err(|_| {
+        SourceSnapshotError::NonCanonicalLogicalPath {
+            logical_path: logical_path.to_owned(),
+        }
+    })?;
+    if canonical != logical_path {
+        return Err(SourceSnapshotError::NonCanonicalLogicalPath {
+            logical_path: logical_path.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn register_snapshot_case_fold_path(
+    folded_paths: &mut BTreeMap<String, String>,
+    logical_path: &str,
+) -> Result<(), SourceSnapshotError> {
+    let mut prefix = String::new();
+    for segment in logical_path.split('/') {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(segment);
+        let folded_path = case_fold_key(&prefix);
+        if let Some(first) = folded_paths.insert(folded_path.clone(), prefix.clone())
+            && first != prefix
+        {
+            return Err(SourceSnapshotError::CaseFoldCollision {
+                folded_path,
+                first,
+                second: prefix,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn hash_file_table(
     files: &BTreeMap<String, FileReceipt>,
 ) -> Result<CanonicalHash, SourceScanError> {
@@ -588,6 +946,80 @@ fn hash_file_table(
         encoded.extend_from_slice(receipt.content_hash.as_bytes());
     }
     Ok(CanonicalHash::digest(encoded))
+}
+
+/// An integrity failure in a serialized or retained source snapshot.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum SourceSnapshotError {
+    /// A map key or file receipt contained a non-canonical logical path.
+    #[error("source snapshot path is not canonical: `{logical_path}`")]
+    NonCanonicalLogicalPath {
+        /// Rejected path.
+        logical_path: String,
+    },
+    /// A canonical map key did not equal its nested receipt path.
+    #[error("source snapshot key `{map_key}` does not match receipt path `{receipt_path}`")]
+    FileKeyMismatch {
+        /// Canonical key in the snapshot file map.
+        map_key: String,
+        /// Canonical logical path recorded by the receipt.
+        receipt_path: String,
+    },
+    /// Two canonical paths collide under full Unicode case folding.
+    #[error(
+        "source snapshot case-fold collision at `{folded_path}` between `{first}` and `{second}`"
+    )]
+    CaseFoldCollision {
+        /// NFC-normalized full Unicode case-fold key.
+        folded_path: String,
+        /// First canonical logical path in byte order.
+        first: String,
+        /// Second colliding canonical logical path in byte order.
+        second: String,
+    },
+    /// Retained raw bytes did not have the length recorded by their receipt.
+    #[error(
+        "source snapshot length mismatch for `{logical_path}`: receipt {receipt_length}, actual {actual_length}"
+    )]
+    ByteLengthMismatch {
+        /// Canonical logical path of the affected source file.
+        logical_path: String,
+        /// Length recorded by the file receipt.
+        receipt_length: u64,
+        /// Length of the retained bytes.
+        actual_length: u64,
+    },
+    /// Retained raw bytes did not have the digest recorded by their receipt.
+    #[error(
+        "source snapshot hash mismatch for `{logical_path}`: receipt {receipt_hash}, actual {actual_hash}"
+    )]
+    ContentHashMismatch {
+        /// Canonical logical path of the affected source file.
+        logical_path: String,
+        /// SHA-256 digest recorded by the file receipt.
+        receipt_hash: CanonicalHash,
+        /// SHA-256 digest computed from the retained bytes.
+        actual_hash: CanonicalHash,
+    },
+    /// Aggregate retained bytes did not match the snapshot receipt.
+    #[error("source snapshot total-byte mismatch: receipt {receipt_bytes}, actual {actual_bytes}")]
+    TotalSourceBytesMismatch {
+        /// Aggregate bytes recorded by the snapshot.
+        receipt_bytes: u64,
+        /// Aggregate bytes computed from file receipts.
+        actual_bytes: u64,
+    },
+    /// The canonical file table did not match the snapshot source hash.
+    #[error("source snapshot table hash mismatch: receipt {receipt_hash}, actual {actual_hash}")]
+    SourceHashMismatch {
+        /// Source hash recorded by the snapshot.
+        receipt_hash: CanonicalHash,
+        /// Source hash computed from sorted file receipts.
+        actual_hash: CanonicalHash,
+    },
+    /// The canonical table could not be length-framed on this host.
+    #[error("source snapshot canonical table exceeds supported length framing")]
+    CanonicalTableTooLarge,
 }
 
 /// A deterministic source-table or import-preflight failure.
@@ -725,6 +1157,30 @@ mod tests {
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
+    fn authorized_root_kind_uses_adr_wire_tokens() {
+        let cases = [
+            (AuthorizedRootKind::Package, "current-package"),
+            (AuthorizedRootKind::Library, "versioned-library"),
+            (AuthorizedRootKind::Overlay, "profile-overlay"),
+            (AuthorizedRootKind::Test, "test-fixture"),
+        ];
+        for (kind, token) in cases {
+            let encoded = serde_json::to_string(&kind)
+                .unwrap_or_else(|error| panic!("root kind serialization failed: {error}"));
+            assert_eq!(encoded, format!("\"{token}\""));
+            let decoded = serde_json::from_str::<AuthorizedRootKind>(&encoded)
+                .unwrap_or_else(|error| panic!("root kind deserialization failed: {error}"));
+            assert_eq!(decoded, kind);
+        }
+        for stale in ["package", "library", "overlay", "test", "current_package"] {
+            assert!(
+                serde_json::from_str::<AuthorizedRootKind>(&format!("\"{stale}\"")).is_err(),
+                "accepted stale root-kind token `{stale}`"
+            );
+        }
+    }
+
+    #[test]
     fn scan_is_stable_and_hashes_raw_bytes() {
         let first = TestDirectory::new("stable-first");
         first.write("z.ncl", b"z\r\n");
@@ -744,6 +1200,121 @@ mod tests {
                 .map(FileReceipt::content_hash),
             Some(CanonicalHash::digest(b"z\r\n"))
         );
+
+        let first_snapshot = scan_snapshot(&first, limits(8, 64));
+        let second_snapshot = scan_snapshot(&second, limits(8, 64));
+        assert_eq!(first_snapshot, second_snapshot);
+        assert_eq!(
+            serde_json::to_vec(&first_snapshot).ok(),
+            serde_json::to_vec(&second_snapshot).ok()
+        );
+        assert_eq!(
+            first_snapshot
+                .files()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["nested/a.ncl", "z.ncl"]
+        );
+    }
+
+    #[test]
+    fn snapshot_retains_exact_raw_bytes_and_round_trips_through_serde() {
+        let directory = TestDirectory::new("snapshot-roundtrip");
+        let raw_bytes = b"\0\xff\r\nnot utf-8";
+        directory.write("raw.bin", raw_bytes);
+        let snapshot = scan_snapshot(&directory, limits(8, 64));
+
+        let file = snapshot
+            .resolve_path("./raw.bin")
+            .unwrap_or_else(|error| panic!("snapshot lookup failed: {error}"));
+        assert_eq!(file.bytes(), raw_bytes);
+        assert!(file.verify().is_ok());
+        assert!(file.receipt().verify_bytes(raw_bytes).is_ok());
+        assert_eq!(
+            snapshot.source_table().source_hash(),
+            snapshot.source_hash()
+        );
+
+        let encoded = serde_json::to_vec(&snapshot)
+            .unwrap_or_else(|error| panic!("snapshot serialization failed: {error}"));
+        let decoded = serde_json::from_slice::<SourceSnapshot>(&encoded)
+            .unwrap_or_else(|error| panic!("snapshot deserialization failed: {error}"));
+        assert_eq!(decoded, snapshot);
+        assert!(decoded.verify().is_ok());
+    }
+
+    #[test]
+    fn snapshot_deserialization_rejects_tampering_and_unknown_fields() {
+        let directory = TestDirectory::new("snapshot-tamper");
+        directory.write("entry.ncl", b"original");
+        let snapshot = scan_snapshot(&directory, limits(8, 64));
+
+        let mut changed_bytes = snapshot.clone();
+        let file = changed_bytes
+            .files
+            .get_mut("entry.ncl")
+            .unwrap_or_else(|| panic!("fixture file is missing from snapshot"));
+        file.bytes[0] = b'O';
+        assert!(matches!(
+            changed_bytes.verify(),
+            Err(SourceSnapshotError::ContentHashMismatch { .. })
+        ));
+        let encoded = serde_json::to_vec(&changed_bytes)
+            .unwrap_or_else(|error| panic!("tampered snapshot serialization failed: {error}"));
+        assert!(serde_json::from_slice::<SourceSnapshot>(&encoded).is_err());
+
+        let mut changed_length = snapshot.clone();
+        let file = changed_length
+            .files
+            .get_mut("entry.ncl")
+            .unwrap_or_else(|| panic!("fixture file is missing from snapshot"));
+        file.bytes.push(b'!');
+        assert!(matches!(
+            changed_length.verify(),
+            Err(SourceSnapshotError::ByteLengthMismatch { .. })
+        ));
+
+        let mut changed_table_hash = snapshot.clone();
+        changed_table_hash.source_hash = CanonicalHash::digest(b"tampered table");
+        assert!(matches!(
+            changed_table_hash.verify(),
+            Err(SourceSnapshotError::SourceHashMismatch { .. })
+        ));
+
+        let mut value = serde_json::to_value(&snapshot)
+            .unwrap_or_else(|error| panic!("snapshot serialization failed: {error}"));
+        let serde_json::Value::Object(fields) = &mut value else {
+            panic!("source snapshot did not serialize as an object");
+        };
+        fields.insert("unexpected".to_owned(), serde_json::Value::Bool(true));
+        assert!(serde_json::from_value::<SourceSnapshot>(value).is_err());
+    }
+
+    #[test]
+    fn snapshot_deserialization_rejects_self_consistent_case_fold_collisions() {
+        for files in [
+            [
+                ("README.ncl", b"first".as_slice()),
+                ("readme.ncl", b"second".as_slice()),
+            ],
+            [
+                ("STRASSE.ncl", b"first".as_slice()),
+                ("Straße.ncl", b"second".as_slice()),
+            ],
+        ] {
+            let snapshot = self_consistent_snapshot(&files);
+            assert!(matches!(
+                snapshot.verify(),
+                Err(SourceSnapshotError::CaseFoldCollision { .. })
+            ));
+            let encoded = serde_json::to_vec(&snapshot)
+                .unwrap_or_else(|error| panic!("snapshot serialization failed: {error}"));
+            assert!(
+                serde_json::from_slice::<SourceSnapshot>(&encoded).is_err(),
+                "case-fold-colliding snapshot unexpectedly deserialized"
+            );
+        }
     }
 
     #[test]
@@ -843,8 +1414,49 @@ mod tests {
         }
     }
 
+    fn self_consistent_snapshot(files: &[(&str, &[u8])]) -> SourceSnapshot {
+        let files = files
+            .iter()
+            .map(|(logical_path, bytes)| {
+                let byte_length = u64::try_from(bytes.len())
+                    .unwrap_or_else(|error| panic!("fixture byte length is not portable: {error}"));
+                (
+                    (*logical_path).to_owned(),
+                    SourceFileSnapshot {
+                        receipt: FileReceipt {
+                            logical_path: (*logical_path).to_owned(),
+                            byte_length,
+                            content_hash: CanonicalHash::digest(bytes),
+                        },
+                        bytes: bytes.to_vec(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let total_source_bytes = files.values().fold(0_u64, |total, file| {
+            total.saturating_add(file.receipt.byte_length())
+        });
+        let receipts = snapshot_receipts(&files);
+        let source_hash = hash_file_table(&receipts)
+            .unwrap_or_else(|error| panic!("fixture source-table hash failed: {error}"));
+        SourceSnapshot {
+            source_id: "latticeaxiom:source/test"
+                .parse()
+                .unwrap_or_else(|error| panic!("fixture source ID is invalid: {error}")),
+            root_kind: AuthorizedRootKind::Test,
+            files,
+            total_source_bytes,
+            source_hash,
+        }
+    }
+
     fn scan(directory: &TestDirectory, limits: SourceScanLimits) -> CanonicalSourceTable {
         try_scan(directory, limits).unwrap_or_else(|error| panic!("source scan failed: {error}"))
+    }
+
+    fn scan_snapshot(directory: &TestDirectory, limits: SourceScanLimits) -> SourceSnapshot {
+        try_scan_snapshot(directory, limits)
+            .unwrap_or_else(|error| panic!("source snapshot scan failed: {error}"))
     }
 
     fn try_scan(
@@ -859,6 +1471,20 @@ mod tests {
             directory.path(),
         )?;
         scan_source_root(&root, limits)
+    }
+
+    fn try_scan_snapshot(
+        directory: &TestDirectory,
+        limits: SourceScanLimits,
+    ) -> Result<SourceSnapshot, SourceScanError> {
+        let root = AuthorizedRoot::new(
+            "latticeaxiom:source/test"
+                .parse()
+                .unwrap_or_else(|error| panic!("fixture source ID is invalid: {error}")),
+            AuthorizedRootKind::Test,
+            directory.path(),
+        )?;
+        scan_source_snapshot(&root, limits)
     }
 
     #[derive(Debug)]

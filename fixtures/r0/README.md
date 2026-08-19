@@ -1,9 +1,12 @@
 # R0 Nickel golden fixtures
 
-This initial corpus pins exported JSON and diagnostic intent for Nickel
-contract major 1. The Rust DTOs remain normative; golden JSON is compared as a
-JSON value, not by object-key order. It is the authoring-contract slice, not
-yet the controlled-import, resource-limit, or structured-provenance corpus.
+This corpus pins exported JSON and diagnostic intent for Nickel library
+contract 2 and R0 authoring corpus 2. Package and game-profile fixtures use
+model 2; the normalized composition fixture uses schema 2; the registration
+manifest remains schema 1. The Rust DTOs remain normative; golden JSON is
+compared as a JSON value, not by object-key order. It is the authoring-contract
+slice, not yet the controlled-import, resource-limit, or structured-provenance
+corpus.
 
 The fixtures target `nickel-lang-core` 0.18.x (Nickel CLI 1.17.x). From the
 repository root, evaluate the positive fixtures with:
@@ -13,6 +16,7 @@ nickel export --format json fixtures/r0/positive/core-empty-package.ncl
 nickel export --format json fixtures/r0/positive/headless-profile.ncl
 nickel export --format json fixtures/r0/positive/tool-profile.ncl
 nickel export --format json fixtures/r0/positive/unicode-provenance-package.ncl
+nickel export --format json fixtures/r0/positive/version-axes.ncl
 ```
 
 The results must equal the adjacent `.golden.json` files after JSON parsing.
@@ -22,6 +26,12 @@ normative Rust package invariant. The tool profile demonstrates the ADR 0021
 escape hatch for an explicit non-R0 policy with positive effective limits.
 The Unicode package proves that an NFC logical path is accepted across the
 Nickel authoring contract and normative Rust provenance validator.
+The embedded Rust corpus additionally normalizes the headless profile into the
+adjacent `headless-composition.golden.json`. Its package-qualified feature map,
+namespace grant, elevated trust ceiling, force-override permission, and
+recovery permission prove that graph inputs and policy survive the authoring
+boundary. This profile-to-composition normalization fixture is not a resolver
+conformance pair with the separately minimal, feature-empty core package.
 
 Every `.ncl` file under `negative/` must exit unsuccessfully. Its adjacent
 `.expected.txt` lists stable diagnostic substrings rather than source spans or
@@ -36,7 +46,9 @@ rendering details, which Nickel may improve without changing the contract.
 | `feature-domain-outside-package.ncl` | Feature domains cannot escape package domains. |
 | `noncanonical-logical-path.ncl` | Logical provenance paths reject dot segments. |
 | `invalid-tool-evaluation-policy.ncl` | Tool policies must use the owned policy kind. |
+| `foreign-tool-evaluation-policy.ncl` | Tool policies must use the `latticeaxiom` policy namespace. |
 | `unversioned-tool-evaluation-policy.ncl` | Tool policies require an explicit major. |
+| `invalid-target-triple.ncl` | Realization targets must use the typed lowercase target-triple grammar, which allows `_` and `.` within components. |
 
 These failures intentionally retain upstream Nickel message substrings for
 authoring feedback. Stable Lattice diagnostic codes and source provenance are

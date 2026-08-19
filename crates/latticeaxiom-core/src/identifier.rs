@@ -64,6 +64,14 @@ pub enum IdentifierError {
         /// The parser diagnostic.
         reason: String,
     },
+    /// A build target triple violated the stable cross-boundary grammar.
+    #[error("invalid target triple `{value}`: {reason}")]
+    InvalidTargetTriple {
+        /// The rejected target triple.
+        value: String,
+        /// A description of the violated grammar rule.
+        reason: &'static str,
+    },
     /// A world identifier was not a UUID.
     #[error("invalid world ID `{value}`: {reason}")]
     InvalidWorldId {
@@ -630,6 +638,59 @@ impl<'de> Deserialize<'de> for PackageVersionReq {
     }
 }
 
+/// A stable lowercase Rust-style build target triple.
+///
+/// The first release accepts two or more non-empty `-`-separated components.
+/// Components contain lowercase ASCII letters, digits, `_`, or `.`. This
+/// covers the supported built-in targets while preventing host-path and
+/// display strings from crossing composition, plan, and lock boundaries as
+/// target identity.
+#[repr(transparent)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TargetTriple(String);
+
+impl TargetTriple {
+    /// Returns the canonical target triple text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TargetTriple {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for TargetTriple {
+    type Err = IdentifierError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        validate_target_triple(value)?;
+        Ok(Self(value.to_owned()))
+    }
+}
+
+impl Serialize for TargetTriple {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for TargetTriple {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(de::Error::custom)
+    }
+}
+
 /// A persistent UUID identifying one world independently of its display name.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -721,6 +782,38 @@ fn validate_package_name(value: &str) -> Result<(), IdentifierError> {
         return Err(invalid("a root name must be a canonical lowercase segment"));
     }
     Ok(())
+}
+
+fn validate_target_triple(value: &str) -> Result<(), IdentifierError> {
+    let invalid = |reason| IdentifierError::InvalidTargetTriple {
+        value: value.to_owned(),
+        reason,
+    };
+    let mut components = value.split('-');
+    let Some(first) = components.next() else {
+        return Err(invalid("a target triple cannot be empty"));
+    };
+    let Some(second) = components.next() else {
+        return Err(invalid(
+            "a target triple requires at least two hyphen-separated components",
+        ));
+    };
+    if !is_target_component(first)
+        || !is_target_component(second)
+        || !components.all(is_target_component)
+    {
+        return Err(invalid(
+            "components must be non-empty lowercase ASCII letters, digits, `_`, or `.`",
+        ));
+    }
+    Ok(())
+}
+
+fn is_target_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'.')
+        })
 }
 
 fn parse_stable_id(value: &str) -> Result<StableId, IdentifierError> {
@@ -1135,6 +1228,31 @@ mod tests {
         assert!(explicit_pre.matches(&version("1.1.0-beta.1")));
         assert!(!explicit_pre.matches(&version("1.2.0-alpha.1")));
         assert!(explicit_pre.matches(&version("1.2.0")));
+    }
+
+    #[test]
+    fn target_triples_are_typed_and_revalidated_by_serde() {
+        for value in [
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "wasm32-unknown",
+            "thumbv8m.main-none-eabi",
+        ] {
+            let target = TargetTriple::from_str(value)
+                .unwrap_or_else(|error| panic!("valid target `{value}` was rejected: {error}"));
+            assert_eq!(target.as_str(), value);
+            assert_eq!(json_round_trip(&target), target);
+        }
+        for invalid in [
+            "",
+            "x86_64",
+            "X86_64-pc-windows-msvc",
+            "x86_64--linux",
+            "x86_64/unknown/linux",
+        ] {
+            assert!(TargetTriple::from_str(invalid).is_err());
+        }
     }
 
     #[test]

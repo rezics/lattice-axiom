@@ -13,7 +13,9 @@ mod observability;
 mod registration;
 mod semantic;
 mod settings;
+mod source_closure;
 mod versioning;
+mod worker_policy;
 mod world;
 
 pub use composition::*;
@@ -26,5 +28,7 @@ pub use observability::*;
 pub use registration::*;
 pub use semantic::*;
 pub use settings::*;
+pub use source_closure::*;
 pub use versioning::*;
+pub use worker_policy::*;
 pub use world::*;

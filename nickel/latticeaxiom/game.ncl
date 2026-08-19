@@ -129,6 +129,8 @@ let make_profile = fun value =>
 in
 
 {
+  library_contract_major = common.library_contract_major,
+  corpus_major = common.corpus_major,
   contract_major = common.contract_major,
   model_version = profile_model_version,
   r0_evaluation_policy = common.r0_evaluation_policy,

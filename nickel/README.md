@@ -12,8 +12,10 @@ These modules provide the R0 authoring surface for Nickel configurations:
   contracts.
 
 The modules target `nickel-lang-core` 0.18.x, shipped by Nickel CLI 1.17.x.
-They expose `contract_major = 1`. A consumer must reject an unsupported
-contract major instead of guessing compatibility.
+They expose `library_contract_major = 2` and `corpus_major = 2`. The legacy
+`contract_major` field is an explicit alias for the library contract axis, not
+the corpus axis. A consumer must reject unsupported majors instead of guessing
+compatibility.
 
 ## Authority and compatibility
 
@@ -23,12 +25,18 @@ feedback and deterministic defaults, but successful Nickel evaluation is not
 authorization to resolve, load, or persist a package. The exported JSON must
 still deserialize and validate through Rust.
 
-The initial R0 golden corpus in `../fixtures/r0` is the executable authoring
-receipt for contract major 1. The later controlled evaluator corpus adds
+The R0 golden corpus in `../fixtures/r0` is the executable authoring receipt
+for library contract 2 and corpus 2. Package model 2 carries the typed
+target-triple acceptance boundary; game-profile model 2 carries the narrowed
+canonical source-path acceptance boundary; registration-manifest schema 1
+remains wire-compatible. Composition schema 2 records the normalized target
+and complete profile policy outside the Nickel authoring model. The later
+controlled evaluator corpus adds
 import-policy, resource-limit, and structured-provenance coverage. A breaking
-field, encoding, default, or invariant change requires a new golden contract
-major and coordinated Rust support. Additive diagnostics that do not change
-exported JSON may remain within the same major.
+field, encoding, default, or invariant change requires a coordinated major
+bump of every affected library, corpus, model, or schema axis and matching
+Rust support. Additive diagnostics that do not change exported JSON may remain
+within the same majors.
 
 Nickel checks the lexical shape of logical paths and accepts Unicode text. The
 normative Rust DTO boundary performs the Unicode NFC check because Nickel 0.18

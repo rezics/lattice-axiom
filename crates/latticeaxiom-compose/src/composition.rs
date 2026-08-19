@@ -6,20 +6,27 @@ use std::str::FromStr;
 
 use latticeaxiom_core::{
     CanonicalHash, CanonicalJsonError, PackageName, PackageVersion, PackageVersionReq, SourceId,
-    SourceProvenance, StableId, canonical_json_hash,
+    SourceProvenance, StableId, TargetTriple, canonical_json_hash,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 /// Current schema version for [`CompositionSpec`].
-pub const COMPOSITION_SCHEMA_VERSION: u32 = 1;
+pub const COMPOSITION_SCHEMA_VERSION: u32 = 2;
 
 /// Current model version for [`PackageSpec`].
-pub const PACKAGE_MODEL_VERSION: u32 = 1;
+pub const PACKAGE_MODEL_VERSION: u32 = 2;
 
 /// Current model version for [`GameProfileSpec`].
-pub const GAME_PROFILE_MODEL_VERSION: u32 = 1;
+pub const GAME_PROFILE_MODEL_VERSION: u32 = 2;
+
+/// Major version of the `latticeaxiom.lib` Nickel contract surface.
+pub const NICKEL_LIBRARY_CONTRACT_MAJOR: u32 = 2;
+
+/// Major version of the executable R0 authoring corpus.
+pub const R0_AUTHORING_CORPUS_MAJOR: u32 = 2;
 
 /// Exact Nickel policy implemented by the R0 evaluator contract.
 pub const R0_NICKEL_EVALUATION_POLICY: &str = "latticeaxiom:nickel-evaluation-policy/r0@1";
@@ -214,7 +221,7 @@ pub struct SourceCandidate {
     pub package: PackageName,
     /// Exact source version.
     pub version: PackageVersion,
-    /// Slash-normalized path used only for acquisition and diagnostics.
+    /// NFC, slash-separated, root-relative path used for acquisition and diagnostics.
     pub path: String,
     /// SHA-256 identity of the normalized source content.
     pub content_hash: CanonicalHash,
@@ -239,11 +246,17 @@ pub struct OverlaySpec {
 #[serde(deny_unknown_fields)]
 pub struct CompositionPolicy {
     /// Target triple used for realization planning.
-    pub target: String,
+    pub target: TargetTriple,
     /// Ordered automatic realization preference.
     pub realization_order: Vec<RealizationKind>,
-    /// Whether trusted native realizations may be selected.
-    pub allow_trusted_native: bool,
+    /// Registration namespace grants keyed by namespace.
+    pub namespace_grants: BTreeMap<String, BTreeSet<String>>,
+    /// Highest package trust accepted by this composition.
+    pub maximum_trust: TrustClass,
+    /// Whether trusted policy overlays may force a conflicting value.
+    pub allow_force_override: bool,
+    /// Whether read-only recovery actions are allowed.
+    pub allow_recovery: bool,
     /// Evaluation policy whose exact effective limits are recorded in the lock.
     pub evaluation_policy: StableId,
     /// Effective evaluator resource limits used for this composition.
@@ -329,6 +342,9 @@ pub struct CompositionSpec {
     /// Versioned capabilities requested directly by the profile.
     #[serde(default)]
     pub capabilities: BTreeMap<latticeaxiom_core::CapabilityId, CapabilityRequirement>,
+    /// Package-qualified feature selections.
+    #[serde(default)]
+    pub features: BTreeMap<PackageName, BTreeSet<String>>,
     /// Graph-affecting, fully evaluated finite parameters.
     #[serde(default)]
     pub parameters: BTreeMap<StableId, Value>,
@@ -352,7 +368,8 @@ impl CompositionSpec {
     /// # Errors
     ///
     /// Returns [`CompositionError`] when the schema is unsupported, a source
-    /// candidate is duplicated, or a policy has no automatic realization.
+    /// candidate is duplicated or malformed, or a policy has no automatic
+    /// realization.
     pub fn validate(&self) -> Result<(), CompositionError> {
         if self.schema_version != COMPOSITION_SCHEMA_VERSION {
             return Err(CompositionError::UnsupportedSchema {
@@ -377,12 +394,7 @@ impl CompositionSpec {
                     source_id: source.source_id.clone(),
                 });
             }
-            if source.provenance.source_id() != &source.source_id {
-                return Err(CompositionError::SourceProvenanceMismatch {
-                    candidate: source.source_id.to_string(),
-                    provenance: source.provenance.source_id().to_string(),
-                });
-            }
+            validate_source_candidate(source)?;
         }
         let mut realization_kinds = BTreeSet::new();
         for kind in &self.policy.realization_order {
@@ -403,14 +415,31 @@ impl CompositionSpec {
 
     /// Hashes normalized semantic intent.
     ///
-    /// Source paths and provenance are excluded, so relocating an identical
-    /// source root cannot change the semantic composition identity.
+    /// Source paths, IDs, content receipts, and provenance are excluded, so
+    /// relocating an identical source root cannot change semantic identity.
+    /// Resolver-semantic package, version, and priority fields are included in
+    /// deterministic order.
     ///
     /// # Errors
     ///
     /// Returns [`CanonicalJsonError`] if the canonical JSON payload cannot be
     /// encoded.
     pub fn semantic_hash(&self) -> Result<CanonicalHash, CanonicalJsonError> {
+        let mut sources = self
+            .sources
+            .iter()
+            .map(|source| CompositionSourceIdentity {
+                package: &source.package,
+                version: &source.version,
+                priority: source.priority,
+            })
+            .collect::<Vec<_>>();
+        sources.sort_unstable_by(|left, right| {
+            left.package
+                .cmp(right.package)
+                .then_with(|| left.version.exact_cmp(right.version))
+                .then_with(|| left.priority.cmp(&right.priority))
+        });
         canonical_json_hash(&CompositionIdentity {
             schema_version: self.schema_version,
             profile: &self.profile,
@@ -418,6 +447,8 @@ impl CompositionSpec {
             projection_domains: &self.projection_domains,
             roots: &self.roots,
             capabilities: &self.capabilities,
+            features: &self.features,
+            sources,
             parameters: &self.parameters,
             semantic_bindings: &self.semantic_bindings,
             overlay_hashes: self
@@ -459,10 +490,19 @@ struct CompositionIdentity<'a> {
     projection_domains: &'a BTreeSet<PackageDomain>,
     roots: &'a BTreeMap<PackageName, PackageRequest>,
     capabilities: &'a BTreeMap<latticeaxiom_core::CapabilityId, CapabilityRequirement>,
+    features: &'a BTreeMap<PackageName, BTreeSet<String>>,
+    sources: Vec<CompositionSourceIdentity<'a>>,
     parameters: &'a BTreeMap<StableId, Value>,
     semantic_bindings: &'a BTreeMap<StableId, StableId>,
     overlay_hashes: Vec<&'a CanonicalHash>,
     policy: &'a CompositionPolicy,
+}
+
+#[derive(Serialize)]
+struct CompositionSourceIdentity<'a> {
+    package: &'a PackageName,
+    version: &'a PackageVersion,
+    priority: i32,
 }
 
 #[derive(Serialize)]
@@ -564,7 +604,7 @@ pub struct RealizationSpec {
     pub domains: BTreeSet<PackageDomain>,
     /// Target triples supported by the realization, empty for target-neutral data.
     #[serde(default)]
-    pub targets: BTreeSet<String>,
+    pub targets: BTreeSet<TargetTriple>,
     /// Required and optional versioned dynamic interfaces.
     pub interfaces: BTreeMap<StableId, InterfaceRequirement>,
     /// Features that must be active before this candidate is eligible.
@@ -886,7 +926,7 @@ impl GameProfileSpec {
                     source_id: source.source_id.clone(),
                 });
             }
-            validate_source_provenance(source)?;
+            validate_source_candidate(source)?;
         }
         let mut realization_kinds = BTreeSet::new();
         for kind in &self.realization_policy {
@@ -904,17 +944,113 @@ impl GameProfileSpec {
         }
         Ok(())
     }
+
+    /// Normalizes a validated authoring profile into resolver input.
+    ///
+    /// The target and profile provenance are kernel-owned inputs rather than
+    /// author-authored identity. All graph-affecting profile fields are carried
+    /// into the resulting [`CompositionSpec`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CompositionError`] if either the authoring profile or the
+    /// normalized composition violates its schema invariants.
+    pub fn into_composition(
+        self,
+        target: TargetTriple,
+        provenance: SourceProvenance,
+    ) -> Result<CompositionSpec, CompositionError> {
+        self.validate()?;
+        let Self {
+            model_version: _,
+            profile,
+            projection,
+            projection_domains,
+            roots,
+            capabilities,
+            source_universe,
+            features,
+            parameters,
+            realization_policy,
+            semantic_bindings,
+            overlays,
+            evaluation_policy,
+            evaluation_limits,
+            policy,
+        } = self;
+        let composition = CompositionSpec {
+            schema_version: COMPOSITION_SCHEMA_VERSION,
+            profile,
+            profile_kind: projection,
+            projection_domains,
+            roots,
+            capabilities,
+            features,
+            parameters,
+            semantic_bindings,
+            overlays,
+            sources: source_universe,
+            policy: CompositionPolicy {
+                target,
+                realization_order: realization_policy,
+                namespace_grants: policy.namespace_grants,
+                maximum_trust: policy.maximum_trust,
+                allow_force_override: policy.allow_force_override,
+                allow_recovery: policy.allow_recovery,
+                evaluation_policy,
+                evaluation_limits,
+            },
+            provenance,
+        };
+        composition.validate()?;
+        Ok(composition)
+    }
 }
 
-fn validate_source_provenance(source: &SourceCandidate) -> Result<(), CompositionError> {
-    if source.provenance.source_id() == &source.source_id {
-        Ok(())
-    } else {
-        Err(CompositionError::SourceProvenanceMismatch {
+fn validate_source_candidate(source: &SourceCandidate) -> Result<(), CompositionError> {
+    validate_source_candidate_path(&source.path).map_err(|reason| {
+        CompositionError::InvalidSourceCandidatePath {
+            source_id: source.source_id.clone(),
+            path: source.path.clone(),
+            reason,
+        }
+    })?;
+    if source.provenance.source_id() != &source.source_id {
+        return Err(CompositionError::SourceProvenanceMismatch {
             candidate: source.source_id.to_string(),
             provenance: source.provenance.source_id().to_string(),
-        })
+        });
     }
+    Ok(())
+}
+
+fn validate_source_candidate_path(path: &str) -> Result<(), &'static str> {
+    if path.is_empty() {
+        return Err("the path cannot be empty");
+    }
+    if path.starts_with('/') {
+        return Err("the path must be root-relative");
+    }
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Err("the path cannot contain a Windows drive prefix");
+    }
+    if path.contains('\\') {
+        return Err("the path must use `/` separators");
+    }
+    if path.contains('\0') {
+        return Err("the path cannot contain NUL");
+    }
+    if !path.nfc().eq(path.chars()) {
+        return Err("the path must already be NFC");
+    }
+    if path
+        .split('/')
+        .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err("path segments cannot be empty, `.` or `..`");
+    }
+    Ok(())
 }
 
 fn validate_projection_domains(
@@ -945,6 +1081,11 @@ fn validate_evaluation_policy(
     policy: &StableId,
     limits: &NickelEvaluationLimits,
 ) -> Result<(), CompositionError> {
+    if policy.namespace() != "latticeaxiom" {
+        return Err(CompositionError::UnsupportedEvaluationPolicy {
+            policy: policy.to_string(),
+        });
+    }
     if policy.as_str() == R0_NICKEL_EVALUATION_POLICY {
         if limits == &NickelEvaluationLimits::default() {
             Ok(())
@@ -1089,6 +1230,16 @@ pub enum CompositionError {
         /// Source ID recorded by provenance.
         provenance: String,
     },
+    /// A source candidate used a non-canonical or escaping logical root path.
+    #[error("source candidate {source_id} has invalid path `{path}`: {reason}")]
+    InvalidSourceCandidatePath {
+        /// Source candidate carrying the invalid path.
+        source_id: SourceId,
+        /// Rejected logical root path.
+        path: String,
+        /// Violated canonical-path rule.
+        reason: &'static str,
+    },
     /// One effective evaluator limit was zero.
     #[error("Nickel evaluation limit `{field}` must be nonzero")]
     ZeroEvaluationLimit {
@@ -1198,6 +1349,73 @@ mod tests {
         assert!(second.validate().is_ok());
         assert_eq!(first.semantic_hash().ok(), second.semantic_hash().ok());
         assert_ne!(first.provenance_hash().ok(), second.provenance_hash().ok());
+
+        let mut changed_features = first.clone();
+        changed_features.features.insert(
+            package_name("terrenia"),
+            BTreeSet::from(["worldgen".to_owned()]),
+        );
+        assert_ne!(
+            first.semantic_hash().ok(),
+            changed_features.semantic_hash().ok()
+        );
+
+        let mut changed_permissions = first.clone();
+        changed_permissions.policy.maximum_trust = TrustClass::DataOnly;
+        assert_ne!(
+            first.semantic_hash().ok(),
+            changed_permissions.semantic_hash().ok()
+        );
+
+        let mut changed_source_package = first.clone();
+        changed_source_package.sources[0].package = package_name("@terrenia/alternate");
+        assert_ne!(
+            first.semantic_hash().ok(),
+            changed_source_package.semantic_hash().ok()
+        );
+
+        let mut changed_source_version = first.clone();
+        changed_source_version.sources[0].version = version("0.2.0");
+        assert_ne!(
+            first.semantic_hash().ok(),
+            changed_source_version.semantic_hash().ok()
+        );
+
+        let mut changed_source_priority = first.clone();
+        changed_source_priority.sources[0].priority = 10;
+        assert_ne!(
+            first.semantic_hash().ok(),
+            changed_source_priority.semantic_hash().ok()
+        );
+
+        let mut ordered_sources = first.clone();
+        let mut additional_source = ordered_sources.sources[0].clone();
+        additional_source.source_id = parse_source_id("latticeaxiom:source/additional");
+        additional_source.package = package_name("@terrenia/additional");
+        additional_source.version = version("1.0.0");
+        additional_source.path = "packages/additional".to_owned();
+        additional_source.priority = -5;
+        additional_source.provenance = provenance(
+            "latticeaxiom:source/additional",
+            "packages/additional/package.ncl",
+        );
+        ordered_sources.sources.push(additional_source);
+        assert!(ordered_sources.validate().is_ok());
+        let mut reversed_sources = ordered_sources.clone();
+        reversed_sources.sources.reverse();
+        assert_eq!(
+            ordered_sources.semantic_hash().ok(),
+            reversed_sources.semantic_hash().ok()
+        );
+    }
+
+    #[test]
+    fn breaking_model_boundaries_use_coordinated_majors() {
+        assert_eq!(COMPOSITION_SCHEMA_VERSION, 2);
+        assert_eq!(PACKAGE_MODEL_VERSION, 2);
+        assert_eq!(GAME_PROFILE_MODEL_VERSION, 2);
+        assert_eq!(NICKEL_LIBRARY_CONTRACT_MAJOR, 2);
+        assert_eq!(R0_AUTHORING_CORPUS_MAJOR, 2);
     }
 
     #[test]
@@ -1309,6 +1527,40 @@ mod tests {
     }
 
     #[test]
+    fn source_candidate_path_must_be_canonical_and_root_relative() {
+        let baseline = composition(
+            "latticeaxiom:source/one",
+            "profiles/dev.ncl",
+            "packages/one",
+        );
+        let mut composed_unicode = baseline.clone();
+        composed_unicode.sources[0].path = "packages/café".to_owned();
+        assert!(composed_unicode.validate().is_ok());
+        for invalid_path in [
+            "",
+            ".",
+            "/packages/one",
+            "C:/packages/one",
+            "packages\\one",
+            "packages/./one",
+            "packages/../one",
+            "packages//one",
+            "packages/\0one",
+            "packages/cafe\u{301}",
+        ] {
+            let mut invalid = baseline.clone();
+            invalid.sources[0].path = invalid_path.to_owned();
+            assert!(
+                matches!(
+                    invalid.validate(),
+                    Err(CompositionError::InvalidSourceCandidatePath { .. })
+                ),
+                "accepted invalid source candidate path `{invalid_path}`"
+            );
+        }
+    }
+
+    #[test]
     fn game_profile_validates_policy_limits_and_sources() {
         let composition = composition(
             "latticeaxiom:source/one",
@@ -1339,6 +1591,35 @@ mod tests {
         };
         assert!(profile.validate().is_ok());
 
+        let root = profile
+            .roots
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| panic!("profile fixture must contain one root"));
+        profile
+            .features
+            .insert(root, BTreeSet::from(["worldgen".to_owned()]));
+        profile.policy.namespace_grants.insert(
+            "terrenia".to_owned(),
+            BTreeSet::from(["block/**".to_owned()]),
+        );
+        let normalized = profile
+            .clone()
+            .into_composition(
+                target("x86_64-unknown-linux-gnu"),
+                provenance("latticeaxiom:source/profile", "profiles/headless.ncl"),
+            )
+            .unwrap_or_else(|error| panic!("valid profile must normalize: {error}"));
+        assert_eq!(normalized.features, profile.features);
+        assert_eq!(
+            normalized.policy.namespace_grants,
+            profile.policy.namespace_grants
+        );
+        assert_eq!(normalized.policy.maximum_trust, TrustClass::DataOnly);
+        assert!(!normalized.policy.allow_force_override);
+        assert!(normalized.policy.allow_recovery);
+
         profile.evaluation_limits.import_depth = 0;
         assert!(matches!(
             profile.validate(),
@@ -1350,6 +1631,19 @@ mod tests {
         assert!(matches!(
             profile.validate(),
             Err(CompositionError::InvalidProjectionDomains { .. })
+        ));
+    }
+
+    #[test]
+    fn evaluation_policy_requires_the_latticeaxiom_namespace() {
+        let foreign_policy = stable_id("foreign:nickel-evaluation-policy/developer@1");
+        assert!(matches!(
+            validate_evaluation_policy(
+                ProfileKind::Tool,
+                &foreign_policy,
+                &NickelEvaluationLimits::default(),
+            ),
+            Err(CompositionError::UnsupportedEvaluationPolicy { .. })
         ));
     }
 
@@ -1425,6 +1719,7 @@ mod tests {
                 },
             )]),
             capabilities: BTreeMap::new(),
+            features: BTreeMap::new(),
             parameters: BTreeMap::new(),
             semantic_bindings: BTreeMap::new(),
             overlays: Vec::new(),
@@ -1438,9 +1733,12 @@ mod tests {
                 provenance: source_provenance.clone(),
             }],
             policy: CompositionPolicy {
-                target: "x86_64-pc-windows-msvc".to_owned(),
+                target: target("x86_64-pc-windows-msvc"),
                 realization_order: vec![RealizationKind::Data, RealizationKind::NativeStatic],
-                allow_trusted_native: true,
+                namespace_grants: BTreeMap::new(),
+                maximum_trust: TrustClass::TrustedNative,
+                allow_force_override: false,
+                allow_recovery: true,
                 evaluation_policy: stable_id("latticeaxiom:nickel-evaluation-policy/r0@1"),
                 evaluation_limits: NickelEvaluationLimits::default(),
             },
@@ -1537,5 +1835,11 @@ mod tests {
         value
             .parse()
             .unwrap_or_else(|error| panic!("fixture range `{value}` is invalid: {error}"))
+    }
+
+    fn target(value: &str) -> TargetTriple {
+        value
+            .parse()
+            .unwrap_or_else(|error| panic!("fixture target `{value}` is invalid: {error}"))
     }
 }

@@ -17,7 +17,7 @@ in
   roots = {
     core = {
       version = "=0.1.0",
-      features = [],
+      features = ["headless"],
       realization = {
         mode = "exact",
         kind = "data",
@@ -35,11 +35,17 @@ in
       provenance = source_provenance,
     },
   ],
+  features = {
+    core = ["headless"],
+  },
   realization_policy = ["data"],
   evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1",
   policy = {
-    maximum_trust = "data-only",
-    allow_force_override = false,
-    allow_recovery = false,
+    namespace_grants = {
+      core = ["block/**"],
+    },
+    maximum_trust = "build",
+    allow_force_override = true,
+    allow_recovery = true,
   },
 }

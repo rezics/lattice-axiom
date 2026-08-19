@@ -12,7 +12,7 @@
   },
   "evaluation_policy": "latticeaxiom:nickel-evaluation-policy/developer@1",
   "features": {},
-  "model_version": 1,
+  "model_version": 2,
   "overlays": [],
   "parameters": {},
   "policy": {

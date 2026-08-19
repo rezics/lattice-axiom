@@ -51,6 +51,8 @@ let make_fragment = fun value => value | RegistrationFragmentContract in
 let make_manifest = fun value => value | RegistrationManifestContract in
 
 {
+  library_contract_major = common.library_contract_major,
+  corpus_major = common.corpus_major,
   contract_major = common.contract_major,
   schema_version = manifest_schema_version,
   contracts = {

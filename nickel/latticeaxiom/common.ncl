@@ -2,9 +2,11 @@
 #
 # These contracts target nickel-lang-core 0.18 and emit the string encodings
 # consumed by latticeaxiom-core. Rust remains the normative validator.
-let contract_major_value = 1 in
-let package_model_version = 1 in
-let game_profile_model_version = 1 in
+let library_contract_major_value = 2 in
+let corpus_major_value = 2 in
+let package_model_version = 2 in
+let game_profile_model_version = 2 in
+let composition_schema_version = 2 in
 let registration_manifest_schema_version = 1 in
 let r0_evaluation_policy_id = "latticeaxiom:nickel-evaluation-policy/r0@1" in
 
@@ -14,7 +16,7 @@ in
 let stable_path = "%{identifier_segment}(/%{identifier_segment})*" in
 let stable_id_pattern = "^%{identifier_segment}:%{identifier_segment}/%{stable_path}(@[1-9][0-9]*)?$"
 in
-let evaluation_policy_pattern = "^%{identifier_segment}:nickel-evaluation-policy/%{stable_path}@[1-9][0-9]*$"
+let evaluation_policy_pattern = "^latticeaxiom:nickel-evaluation-policy/%{stable_path}@[1-9][0-9]*$"
 in
 let source_id_pattern = "^%{identifier_segment}:source/%{stable_path}$"
 in
@@ -24,6 +26,7 @@ let schema_id_pattern = "^%{identifier_segment}:schema/%{stable_path}(@[1-9][0-9
 in
 let realization_id_pattern = "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$"
 in
+let target_triple_pattern = "^[a-z0-9_.]+(-[a-z0-9_.]+)+$" in
 
 # This is the SemVer 2.0 grammar, including the leading-zero rule for numeric
 # prerelease identifiers. Build metadata is retained as exact identity data.
@@ -55,6 +58,7 @@ let SourceIdContract = std.string.Matches source_id_pattern in
 let CapabilityIdContract = std.string.Matches capability_id_pattern in
 let SchemaIdContract = std.string.Matches schema_id_pattern in
 let RealizationIdContract = std.string.Matches realization_id_pattern in
+let TargetTripleContract = std.string.Matches target_triple_pattern in
 let StrictSemVerContract = std.string.Matches "^%{semver}$" in
 let VersionReqContract = std.string.Matches version_req_pattern in
 let CanonicalHashContract = std.string.Matches "^[0-9a-f]{64}$" in
@@ -114,10 +118,15 @@ let SourceProvenanceContract = {
 in
 
 {
-  contract_major = contract_major_value,
+  library_contract_major = library_contract_major_value,
+  corpus_major = corpus_major_value,
+  # Compatibility alias for the library contract axis. New consumers should
+  # read `library_contract_major` and `corpus_major` explicitly.
+  contract_major = library_contract_major_value,
   model_versions = {
     package = package_model_version,
     game_profile = game_profile_model_version,
+    composition = composition_schema_version,
     registration_manifest = registration_manifest_schema_version,
   },
   r0_evaluation_policy = r0_evaluation_policy_id,
@@ -126,6 +135,7 @@ in
     stable_id = stable_id_pattern,
     source_id = source_id_pattern,
     realization_id = realization_id_pattern,
+    target_triple = target_triple_pattern,
     evaluation_policy = evaluation_policy_pattern,
   },
   contracts = {
@@ -136,6 +146,7 @@ in
     CapabilityId = CapabilityIdContract,
     SchemaId = SchemaIdContract,
     RealizationId = RealizationIdContract,
+    TargetTriple = TargetTripleContract,
     StrictSemVer = StrictSemVerContract,
     VersionReq = VersionReqContract,
     CanonicalHash = CanonicalHashContract,

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use latticeaxiom_core::{
     CanonicalHash, CanonicalJsonError, CapabilityId, PackageName, PackageVersion,
-    PackageVersionReq, SchemaId, SourceId, StableId, canonical_json_hash,
+    PackageVersionReq, SchemaId, SourceId, StableId, TargetTriple, canonical_json_hash,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -353,7 +353,7 @@ pub struct BuildPlan {
     /// Lock graph hash used as the generated-artifact directory key.
     pub graph_hash: CanonicalHash,
     /// Target triple.
-    pub target: String,
+    pub target: TargetTriple,
     /// Toolchain identity.
     pub toolchain: String,
     /// Build units keyed by package name.
