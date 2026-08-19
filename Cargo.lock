@@ -771,6 +771,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "latticeaxiom-voxel-mesh"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "latticeaxiom-xtask"
 version = "0.1.0"
 

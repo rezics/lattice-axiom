@@ -49,7 +49,7 @@ crates/
 ├── latticeaxiom-cli              M2  check / lock / build / pack / doctor (placeholder)
 ├── latticeaxiom-storage          M3  WorldStorage contract + in-memory impl (placeholder)
 ├── latticeaxiom-storage-rocksdb  M3  the only crate allowed to depend on rocksdb (placeholder)
-└── latticeaxiom-voxel-mesh       M3  in-house voxel meshing (culling + greedy) (placeholder)
+└── latticeaxiom-voxel-mesh       M3  in-house voxel meshing (culling + greedy); implemented, integrates at M3
 nickel/       M2  versioned latticeaxiom.lib Nickel contracts
 packages/     M3+ content package sources (official content is an ordinary package)
 profiles/     M2  game.ncl root profiles

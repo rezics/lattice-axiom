@@ -6,6 +6,7 @@ members = [
     "crates/latticeaxiom-render-headless",
     "crates/latticeaxiom-render-wgpu",
     "crates/latticeaxiom-demo",
+    "crates/latticeaxiom-voxel-mesh",
     "tools/xtask",
 ]
 
@@ -25,6 +26,7 @@ latticeaxiom-core = { path = "crates/latticeaxiom-core" }
 latticeaxiom-render = { path = "crates/latticeaxiom-render" }
 latticeaxiom-render-headless = { path = "crates/latticeaxiom-render-headless" }
 latticeaxiom-render-wgpu = { path = "crates/latticeaxiom-render-wgpu" }
+latticeaxiom-voxel-mesh = { path = "crates/latticeaxiom-voxel-mesh" }
 
 # External crates (milestone 1).
 anyhow = "1.0.104"
