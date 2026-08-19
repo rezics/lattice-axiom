@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/latticeaxiom-engine"]
+members = [
+  "crates/latticeaxiom-compose",
+  "crates/latticeaxiom-core",
+  "crates/latticeaxiom-engine",
+]
 default-members = ["crates/latticeaxiom-engine"]
 
 [workspace.package]
@@ -14,6 +18,13 @@ repository = "https://github.com/rezics/lattice-axiom-demo"
 # ADR 0014 fixes the implementation baseline at Bevy 0.19.x. Cargo.lock is
 # the authoritative dependency record, so upgrades are deliberate migrations.
 bevy = "=0.19.1"
+hex = "0.4.3"
+semver = "1.0.28"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
+sha2 = "0.10.9"
+thiserror = "2.0.20"
+uuid = { version = "1.24.1", features = ["v4"] }
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"

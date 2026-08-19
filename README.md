@@ -1,9 +1,20 @@
-# Lattice Axiom engine bootstrap
+# Lattice Axiom demo workspace
 
 This repository is the implementation workspace for
 [Lattice Axiom](https://github.com/rezics/lattice-axiom). The previous custom
 runtime and renderer have been removed. The current bootstrap is a standard
 [Bevy](https://github.com/bevyengine/bevy) application pinned to `0.19.1`.
+
+The first R0 foundation is also present:
+
+- `latticeaxiom-core` defines validated stable identifiers, the project SemVer
+  range grammar, canonical JSON/SHA-256, and source provenance;
+- `latticeaxiom-compose` defines the engine-independent composition, lock,
+  registration, semantic, settings, observability, runtime-image, and world
+  preflight DTOs.
+
+These crates deliberately contain no Bevy or process-local handles. The client
+scene is still a temporary bootstrap; it is not yet the package-driven D0 host.
 
 ## First run
 
@@ -24,6 +35,15 @@ cargo build --release --no-default-features
 ```
 
 Do not add a project-owned App, ECS, scheduler, renderer, asset, input, or task
-facade. Product-specific package, world, persistence, and ABI contracts will
-be introduced through the vertical-slice roadmap in the documentation
-repository.
+facade. Remaining package, world, persistence, and ABI behavior is introduced
+only through the vertical-slice roadmap in the documentation repository.
+
+## Headless checks
+
+```powershell
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets
+```
+
+The model tests are headless and do not create a window or GPU device.
