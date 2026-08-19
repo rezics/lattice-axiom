@@ -158,6 +158,11 @@ request至少包含 protocol／catalog／model／library／corpus major、target
 snapshots、package aliases、policy ID與全部effective limits。response是 success typed canonical
 `CompositionSpec`與receipts，或 failure diagnostics與receipts的tagged union；兩者不能同時存在。
 
+protocol v1 的 wire frame 是四個 byte 的 unsigned big-endian payload length，後接該長度的 JSON DTO；
+payload hard cap 是 256 MiB，不含四個 byte header。短 header、declared length 超限、payload EOF、
+frame 後 trailing byte 與 JSON unknown field 都是 `compose.worker_protocol`。controller／worker 不得在
+同一 stream 疊第二層 frame，也不得以 platform `usize` 或 native endian 改寫 wire length。
+
 worker啟動後 stdout只承載一個有明文長度上限的protocol frame；log只到有界stderr。controller重驗
 protocol version、frame length、canonical source receipts、policy receipt、typed payload、canonical bytes
 與hash。worker宣告的 enforcement capability至少分 `hard`、`soft`、`unsupported`；R0 production policy
