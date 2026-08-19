@@ -49,7 +49,7 @@ Ancient Dragon
 - 有裝備插槽；
 - 支援某種 presentation reaction。
 
-系統查詢它需要的 component，而不是辨識「這是不是龍」。官方與外部 content plugin 都使用相同 component／bundle／registration API。
+系统查询所需component，而不是识别“这是不是龙”。官方与外部content packages使用相同stable component／registration contract：static realization生成typed Bevy bundle／system，dynamic realization生成ABI-POD batch／command adapter；两者不要求共享Bevy Rust type。
 
 ## 物理採用順序
 
@@ -62,7 +62,7 @@ Ancient Dragon
 - fast-moving entity、坡面、台階與 chunk 邊界；
 - active chunk 數下的 CPU、memory 和 collider rebuild latency。
 
-Gameplay 可直接使用物理 plugin 的 Bevy component 和 query API。只有以下長期邊界需要專案 DTO：
+Core host与`NativeStatic` gameplay可直接使用physics plugin的Bevy component／query API；portable dynamic gameplay经Lattice spatial／physics capability或稳定gameplay components访问所需资料，不穿越solver Rust layout。以下长期边界必须使用项目DTO／stable schema：
 
 - 存檔中需要恢復的 pose、velocity、sleep 或 constraint 語義；
 - 未來網路 snapshot；
@@ -126,7 +126,7 @@ base animation
 ## 驗收
 
 - player 可在 Y-up voxel world 行走、跳躍、raycast、挖掘和放置。
-- official entity 與 test content entity 只用公開 Bevy component／registration path。
+- official entity与test content entity只经package manifest／公开registration contract；static／dynamic realization产生相同stable IDs与schema。
 - render frame rate 改變不影響固定 tick gameplay 結果。
 - collider rebuild 的過期結果不覆蓋新 chunk revision。
 - 保存／載入不序列化 Bevy Entity 或物理 plugin handle。

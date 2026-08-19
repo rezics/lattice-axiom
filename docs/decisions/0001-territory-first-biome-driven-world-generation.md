@@ -6,7 +6,7 @@ updated: 2026-08-19
 amended_by:
   - 0003-no-global-version-switch.md
   - 0004-territorial-delegation-for-spatial-generation.md
-  - 0016-stage-content-composition-on-bevy.md
+  - 0010-nickel-driven-package-system.md
 ---
 
 # 採用領地優先、群系驅動、約束求解的世界生成
@@ -23,11 +23,11 @@ Lattice Axiom 的世界生成採用以下方向：
 
 1. 世界生成是世界種子、座標與可識別生成輸入的確定性查詢；各輸入由 stable content ID、generator revision 與組態雜湊識別，不依賴全域世界版本，也不依賴鄰近區塊先生成或後生成。
 2. 先建立不帶氣候語義的多尺度空間領地圖譜，再為領地指定群系；不以固定環境向量作為群系註冊槽位。
-3. 群系以穩定識別碼參與與註冊順序無關的加權仲裁，不依靠載入順序、可碰撞數值 ID 或模組專屬地理區域解決衝突。
+3. 群系以stable ID参与与registration／artifact load order无关的加权仲裁，不依靠load order、可碰撞numeric ID或package专属地理区域解决conflict。
 4. 群系是可執行的環境定義程式：它輸出地形、氣候、水文、地質、生態、資源、氣氛與其他通道的目標場、約束或生成能力。
 5. 河流、岩層、地形密度與其他必須跨群系連續的系統由通用求解器整合各內容意圖；群系不任意覆寫不受治理的最終方塊。
 6. 不同生成能力透過有型別的通道、依賴關係與合成規則組成生成圖，而不是依賴一條所有遊戲都必須使用的硬編碼流程。
-7. 官方內容與第三方內容使用同一套領地、欄位、計畫與約束介面。
+7. 官方与第三方packages使用同一套versioned territory／field／plan／constraint capabilities，并经同一`LockedGameGraph`注册。
 8. 世界保存目前 `WorldgenConfig` 與產物級 generation provenance；內容增刪、演算法升級與既有產物遷移必須沿實際依賴子圖顯式處理，不能用單一 `worldVersion` 默默改寫未生成區域。
 
 ## 決策範圍
@@ -50,7 +50,7 @@ Lattice Axiom 的世界生成採用以下方向：
 
 ### 每個模組擁有獨立地理區域
 
-可以隔離單一內容集合內的群系，但會使 plugin／內容集合邊界變成世界邊界，並導致權重稀釋、領地截斷和不同規模內容包之間的分配問題。
+可以隔离单一content set内的biomes，但会使package／content set边界变成world boundary，并导致weight dilution、territory truncation与不同规模packages之间的allocation问题。
 
 ### 群系直接產生全部最終內容
 

@@ -1,127 +1,300 @@
 ---
-title: Bevy 渲染架構與擴充邊界
+title: Bevy 渲染能力、Pass 與 Provider 組合
 status: proposed
 type: architecture
 updated: 2026-08-19
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../decisions/0017-versioned-native-module-abi.md
 ---
 
-# Bevy 渲染架構與擴充邊界
+# Bevy 渲染能力、Pass 與 Provider 組合
 
 ## 結論
 
-Lattice Axiom 使用 Bevy renderer。wgpu、render graph、GPU device、window surface 和資源上傳是 Bevy 的實作與擴充領域；專案不在外面建立 renderer facade，也不維護 headless renderer。
+Lattice Axiom 使用 Bevy renderer，并让 package 以 versioned render capability 扩充资料、shader、pass 与特定机制。普通模组不依赖 Bevy内部 Rust layout；package kernel 先把声明式 slot、resource、ordering、GPU requirement 与 provider conflict 编译为 `RegistrationImage`，host 再映射到 Bevy render-world ECS schedules。
 
-第一個 demo 的渲染目標是讓體素世界清楚可玩並能量測 chunk streaming，不是證明專案能自行畫出立方體。
+这同时满足两种需要：
+
+- **上游优先**：window、surface、device、asset、extraction、pipeline cache、render schedules 与大部分 PBR 由 Bevy 提供；
+- **可扩充机制**：模组可以加入 post effect、特殊材质、compute、visibility／terrain pipeline，甚至替换一个明确 provider，而不是靠 patch／Mixin 改写任意 renderer 内部。
+
+## 不變邊界
+
+- Bevy renderer 是唯一 runtime renderer；不建立平行 `latticeaxiom-render` backend。
+- 权威 world／gameplay 不直接呼叫 GPU，也不依赖 render success。
+- Mesh、Material、Image、buffer、visibility 与 render entity 都是可重建 presentation。
+- render package 必须声明 capability 与资源契约；不能按 load order 注入任意 code。
+- static、portable dynamic 与 engine-coupled realization 可以有不同调用机制，但共用同一个 `RegistrationManifest`／render semantic contract。
 
 ## 預設資料流
 
 ```text
 authoritative chunk / gameplay state
-                ↓
-     revision-checked derived work
-                ↓
- Bevy Mesh / Material / Transform / Visibility
-                ↓
-       Bevy render extraction
-                ↓
-        Bevy RenderApp + wgpu
+                 ↓ revision-checked derived work
+       presentation / RenderData components
+                 ↓ Bevy ExtractSchedule
+              render world
+                 ↓ registered feature / pass systems
+       prepare → queue → render → cleanup
+                 ↓
+          Bevy renderer / wgpu
 ```
 
-玩法系統不呼叫 raw GPU API。它修改權威狀態、產生需要重建的 chunk revision 或更新正常 Bevy presentation component；Bevy 負責 extraction、prepare、queue 和 render。
+Bevy 0.19 已将许多 render graph 工作转为 ECS systems／schedules；Lattice 的 render contract 应编译到这些公开语义位置，不复制另一张通用 render graph。
 
-## 體素 chunk presentation
+## 四級擴充模型
 
-首個 spike 優先使用 `bevy_voxel_world` 的既有 streaming、editing、raycast 與 meshing 路徑。如果它的資料模型無法承擔權威世界，應讓它作 presentation／interaction adapter，而不是立刻 fork 整個 plugin。
+### Level 0：`RenderData`
 
-若需要自有 chunk mesh job，背景工作產生 CPU-side vertex attributes、index、bounds 和來源 `ChunkRevision`；主 World system 驗證 revision 後建立或更新 Bevy `Mesh` asset。每個可見 chunk 通常只需要粗粒度 presentation entity，不為每個 voxel 建 entity。
+提供 renderer 已理解的资料，不改变 pipeline 机制：
 
-必須量測：
+- Mesh／Material／Transform／Visibility；
+- voxel chunk presentation descriptor；
+- light、camera、particle emitter、animation／audio presentation state；
+- debug gizmo／overlay data。
 
-- visible／resident chunk 數；
-- mesh job queue、取消率、P50／P95 latency；
-- 每 chunk vertex／triangle／byte 數；
-- 每 frame mesh apply／asset upload 預算；
-- 編輯後可見更新延遲；
-- 快速移動時的 frame time、顯存與 RAM 高水位。
+这是普通 content／gameplay package 的默认。dynamic package 可以注册 ABI-POD presentation component 或通过 command buffer 提交 stable render-data command；host 转成 Bevy assets／components。
 
-greedy meshing、face culling、LOD、occlusion 與 meshlet 都是量測後的優化，不是第一階段自研平台。
+### Level 1：`RenderFeature`
 
-## 材質與 shader
+增加可组合 shader／compute／post-processing 功能：
 
-採用順序：
+- Material extension；
+- outline、fog、color grading、screen-space effect；
+- particle simulation、procedural texture、specialized pipeline；
+- extraction／prepare／queue systems。
 
-1. Bevy 內建 PBR／unlit material；
-2. Bevy `Material` extension 與 WGSL shader asset；
-3. instancing、specialized pipeline 或 render phase 等公開 Bevy extension；
-4. `RenderApp` extraction／prepare／queue system；
-5. 只有證據門檻通過後才接觸更低層 wgpu 或替換 renderer。
+feature 声明 input／output semantic slots、resource access、format／sample constraints、GPU features、ordering 与 fallback。多个 feature 默认可以共存，但 graph compiler 必须证明资源与顺序有效。
 
-方塊 atlas、texture array、vertex packing 和材質分組由 spike 量測決定。不要為假想的第二後端建立自有 shader IR。
+### Level 2：`RenderPass`
 
-## 相機、座標與精度
+建立新的明确 pass／phase 或插入已知 slot：
 
-所有 Transform 使用 Bevy 原生右手 Y-up：`+X` 右、`+Y` 上、forward `-Z`。資產、physics 和 raycast 共用這套空間。
+- `after.opaque`、`before.tonemap`、`after.tonemap`；
+- shadow／depth／visibility consumer；
+- compute-to-indirect-draw；
+- portal／reflection／custom transparency phase。
 
-無限世界可能超過單一全域 `f32` Transform 的精度。處理順序是：
+package 不引用「某个 Bevy私有 node index」。它依赖 versioned semantic slot；host adapter 负责映射当前 Bevy schedule／set。slot 不存在且无 fallback 时，closure 在启动前失败。
 
-1. 以 chunk 整數座標保存權威位置；
-2. 只讓目前 working set 使用相機附近的局部 `Transform`；
-3. 量測可見抖動、physics 穩定性與 rebase 成本；
-4. 優先評估 Bevy 生態中維護中的 large-world／floating-origin 方案；
-5. 只有候選都無法達成已定精度預算時才做專案擴充。
+### Level 3：`RenderProvider`
 
-## 權威與表現隔離
+替换一项 exclusive 机制，而不是整个 renderer：
 
-Mesh、Material、Image、GPU buffer、visibility 和 render entity 都是可重建表現。device loss、shader reload、render frame drop 或 mesh job 失敗不得修改 voxel／gameplay state。
+- terrain mesh source；
+- chunk visibility／occlusion；
+- terrain draw backend；
+- shadow provider；
+- upscaler／anti-alias provider。
 
-chunk presentation component 應記住來源 revision。收到舊 mesh 時直接丟棄；卸載 chunk 時撤除 presentation entity／asset 引用，但不刪除權威 snapshot。
+provider capability 通常是 `exactly-one`。两个套件同时提供同一 exclusive capability，resolver 必须要求 profile 明确选择，不能 last-loaded-wins。provider 可以依赖其他 stable capabilities，例如 terrain draw backend 消费 visibility provider 与 material table。
+
+## Capability 與 Cardinality
+
+候选命名：
+
+```text
+render.data.voxel-chunk@1          multi
+render.material.block@1            multi
+render.post-effect@1               multi
+render.semantic-slot.core3d@1      singleton host capability
+render.terrain.mesh-source@1       exactly-one
+render.visibility@1                exactly-one
+render.terrain.backend@1           exactly-one
+render.debug-overlay@1             multi, dev profile
+```
+
+每项 declaration 至少含：
+
+- required／provided capability range；
+- cardinality 与 profile condition；
+- inputs／outputs semantic IDs；
+- resource read／write／create；
+- stage／slot／before／after；
+- GPU feature／limit／format requirement；
+- fallback／degraded mode；
+- static／portable／engine-coupled realization support。
+
+## Render Graph 編譯
+
+package kernel 在不加载 code 的情况下：
+
+1. 选择 exclusive providers；
+2. 验证 capability／slot version；
+3. 建立 semantic resource graph；
+4. 检测 writer conflict、cycle、format／sample mismatch；
+5. 验证 GPU requirement 或选择 fallback；
+6. 产生 deterministic render plan／numeric handles；
+7. 把 plan 写入 `RegistrationImage`。
+
+host adapter 再映射到 Bevy：
+
+| Lattice semantic | Bevy host mapping（当前基线） |
+| --- | --- |
+| main-world presentation data | Bevy components／assets |
+| extraction | `ExtractSchedule`／extract systems |
+| render-world prepare／queue | Bevy `Render` schedule sets |
+| Core 3D slots | `Core3d` 相关公开 sets／resources |
+| shader／pipeline | Bevy shader assets、pipeline cache、specialization |
+| GPU resource | Bevy／wgpu-owned opaque handle |
+
+映射是 core host implementation，可以随 Bevy 升级而改变；Lattice semantic contract 若保持不变，portable package 不需因此重编。
+
+## Static Render Package
+
+`NativeStatic` 可以直接：
+
+- 注册 `Material`／`ExtendedMaterial`；
+- 添加 Bevy extraction／render systems；
+- 使用 shader asset、pipeline specialization 与公开 render resources；
+- 在证据门槛下使用更低层 Bevy／wgpu extension。
+
+它仍要输出 manifest，声明 capability、slot、resource access 与 fallback；完整 Rust 能力不等于可绕过 graph 冲突诊断。若实现需要任意 `RenderApp`／Rust generic，这就是正确的 realization。
+
+## Portable Dynamic Render Package
+
+portable dynamic module 不接收 `RenderDevice`、`RenderQueue`、wgpu handle 或 Bevy RenderWorld。它可经 ABI：
+
+- 注册 stable RenderData／buffer schema；
+- 处理 extraction 后的 ABI-POD batches；
+- 产生 compact `RenderCommandList`；
+- 填充 host-provided upload／storage slices；
+- 选择已注册 shader／pipeline／resource opaque handles；
+- 发布 feature-local diagnostics／timing markers。
+
+command list 是受限指令，不是重新发明完整图形 API。候选指令仅覆盖真实 feature 所需的 bind semantic resource、dispatch、draw indirect、copy／barrier request；host 验证：
+
+- handle generation／owner／usage；
+- offset／size／alignment／bounds；
+- pass 允许的 pipeline／resource；
+- feature capability 与 GPU limits；
+- command count／upload bytes／CPU time budget。
+
+host 翻译成 Bevy／wgpu work，并保留实际 resource state 所有权。若需求无法在窄 command contract 中表达，先评估 static；不能无限扩张 portable API 直到等同 raw wgpu。
+
+## Engine-Coupled Render Package
+
+`EngineCoupledNative` 用于确实需要预编译动态部署、又必须接近当前 renderer internals 的可信代码。它：
+
+- 仍只经 C table／opaque handle；
+- 必须匹配精确 `EngineBuildId`；
+- internal interface 另行版本化；
+- 每次 Bevy／render host 变化可能重建；
+- 必须提供 disabled／fallback 体验，避免整个 world 因纯 presentation provider 缺失而无法恢复。
+
+若 C table 只是把每个 Bevy type 逐项镜像，说明这个 realization 选错了；应改为 `NativeStatic`。
+
+## 體素渲染機制
+
+默认 baseline 先采用 Bevy／生态 voxel plugin，量测后才升级机制。package model 为优化保留明确 provider seam：
+
+```text
+authoritative chunks
+  → render.terrain.mesh-source@1
+  → render.visibility@1
+  → render.terrain.backend@1
+  → Bevy Core3d / presentation
+```
+
+可能的 provider 演进：
+
+1. **CPU mesh baseline**：face culling／greedy meshing、chunk mesh、frustum culling；
+2. **异步与增量**：revision-aware job、优先队列、upload budget、dirty subregion；
+3. **LOD／远景**：层级 chunk representation、transition seam、impostor／coarse mesh；
+4. **occlusion**：hierarchical visibility／software or GPU-assisted occlusion；
+5. **GPU-driven**：compact chunk data、compute culling、indirect draw／meshlet-like path。
+
+这些机制不能全在第一版同时实现。每次 provider 更换必须保持：
+
+- 权威 world／save 不变；
+- source chunk revision 验证；
+- stable material／content semantics；
+- clear fallback 与 target capability matrix；
+- profiler／capture／visual regression 可比较。
+
+## 从 Minecraft 模组只吸收问题形状
+
+Minecraft 渲染模组说明了玩家会要求批次、chunk rebuild、occlusion、LOD、shader pipeline 与 alternate backend；也说明了依靠 bytecode patch／Mixin、版本特定内部结构与模组间非结构化注入，会造成大版本破裂、组合冲突与高维护成本。
+
+Lattice Axiom 不复制其 loader／patch 模型：
+
+- 不允许 arbitrary method patch；
+- 不以游戏／Bevy内部 class／Rust type 作为模组 API；
+- 不按 load order 解决 renderer ownership；
+- provider／feature 都经 capability graph、semantic slots 与 manifest；
+- portable／engine-coupled 相容承诺明确分级；
+- common optimization 进入 upstream／core capability，而不是每个模组各自 hook。
+
+因此 Minecraft 只提供需求与失败案例，不是架构模板。相关调查见[原生模組與渲染模組調查](../research/native-plugin-and-render-mod-lessons.md)。
+
+## 座標、精度與資產
+
+所有 runtime Transform／physics／raycast 使用 Bevy 原生右手 Y-up：`+X` 右、`+Y` 上、forward `-Z`。package render schema 中的空间资料必须标记 coordinate semantic，不能带来源工具的隐式轴向。
+
+无限世界：
+
+1. 权威位置用整数 chunk anchor + local position；
+2. render working set 使用 camera-local Bevy Transform；
+3. provider 声明 origin／precision capability；
+4. 先评估维护中的 Bevy large-world 方案；
+5. 以可重现 jitter／physics／culling measurement 决定是否扩充。
 
 ## Headless
 
-headless app 不加入 window／render plugin，也不建立 `Mesh`／GPU 資源。worldgen、gameplay、physics（若伺服器需要）與 persistence 必須能在這個組合運作。
+headless profile 不安装 window／render plugins，不建立 GPU resource。package graph 可保留 render declaration 作 closure validation／server-to-client negotiation，但不实例化 presentation callbacks。
 
-需要測試 mesher 時，直接測試其純 CPU 輸出與 winding／normal／bounds，不以「null renderer 收到 submit」作替代驗證。
+纯 CPU mesher／command builder 可独立测试：vertex／index、bounds、winding、normal、revision 与 command validation。无需自制 null renderer 来证明 submit 次数。
 
-## Debug 與觀測
+## 故障與回退
 
-優先使用 Bevy diagnostics、gizmos、wireframe／debug render 和現有 inspector／profiler integration。開發 overlay 至少顯示：
+| 失败 | 处理 |
+| --- | --- |
+| exclusive provider conflict | resolve 阶段失败并要求明确选择 |
+| required semantic slot missing | activation 前失败或选择声明的 fallback |
+| optional GPU feature unavailable | degraded realization／disable feature |
+| dynamic command invalid | 拒绝当前 command list，记录 package diagnostic；不污染权威 world |
+| shader／pipeline compile failure | feature-specific fallback／error material |
+| device loss | 重建 presentation resources；权威 state 不变 |
+| engine-coupled build mismatch | 不加载 artifact，提示 exact rebuild／fallback |
 
-- FPS／frame time 與 fixed tick debt；
-- camera chunk 與 active／resident chunk；
-- mesh queue、過期結果與 upload bytes；
-- triangle／draw／material count；
-- world load／save latency。
+纯 presentation package 缺失时，world loader 应尽量允许 safe fallback；若 package 同时拥有权威 schema，则按权威 missing-content policy 处理，不能用「这是 renderer mod」笼统跳过。
 
-若標準 Bevy UI 足以呈現，不加入另一個 UI framework。只有真實工具工作流需要 richer widgets 時才評估 egui 生態。
+## 觀測與預算
 
-## 何時允許客製 RenderApp
+至少记录：
 
-只有下列條件同時成立：
+- per feature／pass CPU time；
+- extraction／prepare／queue／render time；
+- dynamic callback count／batch size／command bytes；
+- visible／resident chunks、triangle／draw／material count；
+- mesh queue、cancellation、P50／P95 latency；
+- upload／readback bytes、VRAM／RAM high-water；
+- occlusion／LOD effectiveness；
+- invalid／fallback command count；
+- edit-to-visible latency 与 stale revision drops。
 
-- 第一個可玩 demo 已存在；
-- 需求不能由 Mesh／Material／shader／正常 Bevy plugin 實現；
-- profiler 證明瓶頸位於 render pipeline；
-- 有 render test 或可重現 capture；
-- extension 僅接入必要的 extract／prepare／queue／render node；
-- 有 Bevy 升級 owner 與 fallback。
-
-客製 RenderApp system 仍是 Bevy extension，不自動構成自有渲染器。
+budget 可以由 profile 声明，但 host 负责强制上限与 diagnostics。模组不能以无限 command／upload 绕过背压。
 
 ## 驗收
 
-- 不直接依賴 raw wgpu 即可完成可玩體素世界。
-- 六個 Y-up voxel 面的 normal、winding、ray hit 與材質方向一致。
-- 編輯方塊後，只有 matching revision 的 mesh 被顯示。
-- headless 測試不載入 renderer，仍可完成相同世界修改與保存。
-- device／window／presentation 重建不改變權威 world hash。
+- 默认体素世界只使用 Bevy／生态公开能力即可运行；没有平行 renderer。
+- 两个 post-effect packages 同时安装，semantic slot 顺序确定且资源无冲突。
+- 两个 terrain backend packages 同时提供 exclusive capability 时，resolver 在加载 code 前给出清楚冲突；profile 选择后只有一个激活。
+- 同一 render feature 的 static／portable dynamic realization 产生语义相同 frame fixture；static path 不经 command ABI。
+- engine-coupled artifact 在 `EngineBuildId` 不匹配时精确失败并回退。
+- headless 不建立 GPU，仍能验证 package／schema 与 CPU derived work。
+- device loss、shader failure 或 render module failure 不改变权威 world hash。
+
+## 外部依據
+
+- [Bevy 0.19：Render Graph as ECS systems](https://bevy.org/news/bevy-0-19/#render-graph-as-systems)
+- [Bevy render extraction](https://docs.rs/bevy/latest/bevy/render/extract_plugin/index.html)
 
 ## 相關文件
 
-- [Bevy 執行期架構](game-engine-runtime.md)
-- [實體、物理與表現層](entity-physics-presentation.md)
+- [Bevy 執行期](game-engine-runtime.md)
+- [原生模組 ABI](native-module-abi.md)
 - [資產語義](asset-semantics.md)
-- [技術棧](../foundations/technology-stack.md)
-- [渲染與物理候選](../research/renderer-physics-landscape.md)
+- [渲染生態調查](../research/renderer-physics-landscape.md)

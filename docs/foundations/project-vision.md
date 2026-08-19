@@ -9,75 +9,105 @@ updated: 2026-08-19
 
 ## 一句話願景
 
-Lattice Axiom 是一款以可演進體素世界、可組合內容和長期世界狀態為核心的遊戲；它建在 Bevy 之上，不以開發一套遊戲引擎為產品目標。
+Lattice Axiom 是一款以可演进体素世界、可组合套件生态与长期世界状态为核心的游戏：它以 Nickel／SemVer 定义游戏闭包，以静态与动态双 realization 交付内容，并建立在 Bevy 的完整上游引擎能力之上。
 
-第一個原型要回答的是玩家能否在程序世界中行走、挖掘、放置並在重啟後看見相同結果。只有這個縱切成立，模組化、世界生成與長期平台能力才有可驗證的地基。
+项目不以重做通用游戏引擎为目标；package identity、组合、ABI、world semantics 与 persistence 则是产品本身，不能被降级成未来再补的外围工具。
 
 ## 最高工程原則
 
 > 默认使用完整上游能力；只有当一个真实可玩的原型证明现有方案无法满足不可妥协的产品需求时，才允许自研替代。
 
-Bevy 提供遊戲執行期；Lattice Axiom 提供遊戲。任何抽象、替換或工具開發都必須說明它改善哪個已存在的玩家或作者工作流。
+这条原则原文是所有 upstream 例外申请的硬门槛。它要求我们直接采用 Bevy 的 App、ECS、schedule、render、asset、input 与 tasks，也要求 package kernel／ABI 尽量采用 Nickel、Cargo、平台 C ABI 与成熟库。它不表示放弃 Lattice Axiom 独有的产品契约。
 
 ## 設計支柱
 
-### 玩家價值先於平台完整度
+### 游戏是一个已锁定套件闭包
 
-路線圖以可玩的垂直切片排序，不以引擎子系統清單排序。能開窗、渲染立方體或完成抽象平台工作都不是單獨的產品里程碑。
+每次 client、server、headless test 与 tool 启动，都对应一个可审查的 `LockedGameGraph`。官方内容、测试内容与第三方模组拥有相同 package ID、SemVer、dependency、capability、schema 与 conflict rules；不存在官方私有加载捷径。
 
-### 善用 Bevy，而不是把 Bevy 藏起來
+### 静态与动态是 realization，不是两个生态
 
-遊戲內部直接使用 Bevy 的 App、Plugin、ECS、schedule、asset、scene、render 與 diagnostics。只有存檔、網路、內容 ID 等需要跨程序或長期演進的資料邊界，才隔離 process-local Bevy 識別與型別。
+同一逻辑 package 可静态编入 host，也可由已验证的动态 artifact 加载。二者共用 registration manifest、stable ID、schedule 与持久化语义；静态直接使用 Rust／Bevy 与 LTO，动态使用批次 C ABI。统一不以牺牲静态性能为代价。
 
-### 只擁有產品特有語義
+### Bevy 是引擎，也是核心 package 的内部工具
 
-Lattice Axiom 應自行定義：
+游戏内部与 static realization 善用 Bevy type，不建立逐项镜像 facade。portable dynamic contract 则属于 Lattice Axiom，不能暴露 Bevy／Rust ABI。Bevy 升级通常只是 core host 的受控迁移；若外部行为真的破坏，必须在相关 package／capability／schema owner 上诚实版本化。
 
-- 權威體素區塊資料與區塊生命週期；
-- 世界生成的領地、地形、洞穴與 provenance；
-- 已物化世界的持久化與遷移；
-- 玩法規則、內容穩定 ID 與公開註冊契約；
-- 無限世界精度與串流的產品約束。
+### 玩家价值与基础契约同步验证
 
-ECS、渲染器、視窗、工作池、輸入、資產服務、通用物理與除錯 UI 不因「可能日後替換」而重做。
+第一个纵切同时证明两件事：
 
-### 官方內容與外部內容走同一條路
+1. 玩家能进入程序体素世界、挖掘、放置并跨重启保存；
+2. 一个真实 gameplay package 可由同一业务代码生成 static／portable dynamic realization，并得到相同注册与权威结果。
 
-官方方塊、物品與世界生成內容以正常 Bevy plugin 和公開 domain registry 註冊，不依賴私有初始化捷徑。首階段用第二個測試內容 plugin 證明邊界；動態載入與內容市場不是前置條件。
+只做 package manager demo 不够；先让官方内容绕过 graph 做完游戏也不够。正确顺序是最窄基础闭环立即服务真实玩法。
 
-### 作者描述語義，系統產生反應
+### 只自研产品差异层
 
-內容作者描述材質、能力、碰撞與表現語義；共用玩法、物理與表現系統將它們組合成結果。避免每種生物或方塊複製一套特殊流程。
+Lattice Axiom 自行定义：
 
-### 權威資料與可重建資料分離
+- Nickel package／profile contract 与 Rust package kernel；
+- package SemVer、capability、realization 与 native ABI；
+- stable content／schema identity 与 official／external parity；
+- 权威体素区块、世界生成、provenance 与持久化；
+- render feature／provider 的可组合产品契约；
+- 无限世界精度、串流与玩家体验预算。
 
-已物化區塊、玩家修改與必要續行狀態是權威資料；網格、GPU 資源、物理 broadphase 和其他快取可以由權威資料重建。Bevy ECS 是執行中的工作集，不是永久存檔格式。
+Bevy 提供 App、ECS、scheduler、renderer、window、input、assets、task pools、UI 与 diagnostics；通用物理优先采用 Bevy 生态。
 
-## 分階段的平台願景
+### 作者描述语义，系统产生机制
 
-可組合內容仍是長期方向，但按證據逐步增加能力：
+作者声明 package、依赖、capability、component／message schema、system access、render slot 与 fallback。package kernel 验证并编译 closure；Bevy host 执行。模组不靠 load order、method patch 或私有 type 猜测另一个模组行为。
 
-1. Cargo workspace + Bevy plugins + typed assets；
-2. 官方內容與第二內容集合共用公開註冊路徑；
-3. 真實作者與分發需求出現後，再評估既有內容工具、資料包或沙箱；
-4. 只有 upstream 無法滿足已證明需求時，才研究自訂套件執行期。
+### 权威资料与可重建资料分离
 
-「遊戲可以被組合」是產品假說，不等於「必須先自製包管理器」。
+已物化 chunk、玩家修改、persistent entity 与必要续行状态是权威资料。Mesh、GPU resource、physics broadphase、runtime handle 与 cache 都可重建。Bevy ECS 是 active working set，不是永久存档格式；ABI handle 也不能持久化。
+
+### 相容性按 owner 分域
+
+package SemVer、capability／ABI、`EngineBuildId`、schema、stable content ID、generator revision 与 asset format 各自版本化。没有全域 `engineVersion` 能替代实际相容判断。
+
+## 首階段核心與延後規模
+
+### 首階段核心
+
+- Nickel composition 与 typed `CompositionSpec`；
+- SemVer graph、capability／realization selection 与精确 lock；
+- SDK／proc macro 与 `RegistrationManifest`；
+- `NativeStatic` + `PortableNative` ABI `0.x`；
+- registration／artifact／ABI validation；
+- Bevy host adapter 与可玩／持久化纵切；
+- render feature／provider 最小组合 fixture。
+
+### 延後規模／營運能力
+
+- public／federated registry；
+- 通用大型 graph resolver；
+- marketplace／自动更新 UI；
+- 多平台预建 farm 与分散式 cache；
+- native hot unload；
+- 不可信 WASM／process ecosystem；
+- 完整视觉 world editor。
+
+延后这些项目不会延后核心 package identity、ABI 或统一 graph。
 
 ## 目前尚未形成的產品定義
 
-- 長期核心循環與世界觀；
-- 單人、合作與持久伺服器的優先順序；
-- 哪種第二內容集合最能證明公開擴充邊界；
-- 創作者需要的最小工具與分發體驗；
-- 開放創作、安全性、一致性與效能如何排序。
+- 长期核心循环、世界观与社交形态；
+- 第一目标 OS／GPU／server matrix；
+- 对第三方 native code 的发布／信任政策；
+- ABI 1.0 的性能与 support window；
+- 哪些 component 可成为 ABI-POD；
+- creator tooling 与 registry 的最小可用体验；
+- 哪些 rendering mechanism 应成为 stable provider capability。
 
-這些問題集中在[待決問題](../planning/open-questions.md)，由原型和玩家測試回答。
+这些问题集中在[待决问题](../planning/open-questions.md)，由 vertical slice、old-binary fixtures 与创作者测试回答。
 
 ## 相關文件
 
-- [決策 0014：採用 Bevy 並以上游能力為預設](../decisions/0014-adopt-bevy-upstream-first.md)
+- [決策 0010：Nickel 套件系統](../decisions/0010-nickel-driven-package-system.md)
+- [決策 0014：Bevy／上游優先](../decisions/0014-adopt-bevy-upstream-first.md)
+- [決策 0017：原生模組 ABI](../decisions/0017-versioned-native-module-abi.md)
+- [決策 0018：首階段交付套件內核](../decisions/0018-package-kernel-from-first-vertical-slice.md)
 - [開發策略](development-strategy.md)
-- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
-- [模組與內容組合](../architecture/module-composition.md)
-- [第一個可玩 demo 路線圖](../planning/roadmap-first-demo.md)
+- [執行期架構](../architecture/game-engine-runtime.md)

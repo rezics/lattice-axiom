@@ -11,7 +11,7 @@ decision:
 
 # 可組合洞穴生成架構
 
-> [洞穴採共享拓撲與群系形態的混合模型](../decisions/0002-hybrid-cave-generation-composition.md)與[依領地遞迴委派地形／洞穴能力](../decisions/0004-territorial-delegation-for-spatial-generation.md)已獲採納。本頁把責任邊界展開成候選介面、資料流與可驗證原型；具體演算法和參數仍待實驗。這些通道實作為 `WorldgenPlugin` 的 typed domain registry／resource 與 Bevy task，不是平行 plugin runtime。
+> [洞穴採共享拓撲與群系形態的混合模型](../decisions/0002-hybrid-cave-generation-composition.md)與[依領地遞迴委派地形／洞穴能力](../decisions/0004-territorial-delegation-for-spatial-generation.md)已獲採納。本頁把責任邊界展開成候選介面、資料流與可驗證原型；具體演算法和參數仍待實驗。这些通道由worldgen packages注册versioned capabilities；static realization使用typed Bevy registry／tasks，dynamic realization使用batch／task interfaces，最终都进入同一Bevy runtime。
 
 ## 目標
 

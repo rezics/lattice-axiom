@@ -1,106 +1,248 @@
 ---
-title: 內容分發與套件系統的分階段邊界
-status: exploration
+title: Nickel 驅動的套件內核與分發邊界
+status: proposed
 type: architecture
 updated: 2026-08-19
 decision:
-  - ../decisions/0016-stage-content-composition-on-bevy.md
+  - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
+  - ../decisions/0010-nickel-driven-package-system.md
+  - ../decisions/0017-versioned-native-module-abi.md
+  - ../decisions/0018-package-kernel-from-first-vertical-slice.md
 ---
 
-# 內容分發與套件系統的分階段邊界
+# Nickel 驅動的套件內核與分發邊界
 
 ## 結論
 
-Lattice Axiom 現在沒有自訂套件管理器。第一個可玩 demo 使用 Cargo、`Cargo.lock`、Bevy plugin 與 typed asset；在出現真實創作者、分發、安全或部署問題前，不設計 resolver、registry、動態 ABI、沙箱或新的組合語言。
+Lattice Axiom 的 package kernel 从第一個垂直切片起就是唯一组合控制平面。Nickel 描述 package、profile、overlay 与 realization intent；Rust 负责 SemVer／capability 解析、lock、build、验证、加载与 Bevy activation。
 
-「沒有自訂套件系統」不是放棄可組合內容，而是先用 Bevy 已有機制驗證內容邊界。
+它不是第二个 ECS、scheduler、renderer 或 asset server。所有已解析模组最终由 host adapter 安装进一个正常的 Bevy App；Bevy 提供通用引擎能力，package kernel 决定**哪些逻辑套件、哪些版本、以哪种 realization、携带哪些权限与 schema**构成这次游戏。
 
-## Phase 0：可玩原型
+## 核心管線
 
-| 問題 | 解法 |
+```text
+package.ncl / game.ncl / overlays / latticeaxiom.lib
+                         │
+                         ▼
+             Nickel merge + contracts
+                         │ direct typed conversion
+                         ▼
+                  CompositionSpec
+                         │ source + SemVer + capability resolution
+                         ▼
+                 LockedGameGraph
+                         │ realization and target planning
+                         ▼
+                     BuildPlan
+             ┌───────────┴───────────┐
+             ▼                       ▼
+   static source/glue          data/dynamic artifacts
+             └───────────┬───────────┘
+                         ▼
+          RegistrationImage + RuntimeImage
+                         │ Bevy host adapter
+                         ▼
+                      Bevy App
+```
+
+没有任何官方 `add_plugins(...)` 清单可以绕过这条管线成为第二份真相。测试可以用 in-memory source 与预构建 fixture 缩短 I/O，但仍产生相同语义型别与验证结果。
+
+## 套件模型
+
+每个逻辑 package 至少声明：
+
+| 字段 | 语义 |
 | --- | --- |
-| Rust 相依 | Cargo workspace、SemVer manifest、`Cargo.lock` |
-| App 組合 | Bevy `Plugin`／`PluginGroup` |
-| 資料內容 | Bevy typed asset、serde 支援格式與現有 loader |
-| 官方／測試內容 | 兩個獨立 content plugin，共用公開 registration |
-| 建置重現 | toolchain file、`Cargo.lock`、CI artifact metadata |
-| 存檔相容 | stable content ID、schema owner 與 migration |
+| `id` | 全域稳定 package 身分，例如 `latticeaxiom.world` |
+| `version` | package 的 SemVer |
+| `dependencies` | package ID、SemVer range、optional／feature 条件 |
+| `requires`／`provides` | versioned capability 与 cardinality |
+| `realizations` | data、`NativeStatic`、`PortableNative`、`EngineCoupledNative` 等候选 |
+| `schemas` | 持久化 component／message／asset schema owner |
+| `content` | stable content IDs 与资产根 |
+| `parameters` | 由 Nickel contract 验证的纯资料输入 |
+| `trust` | realization 所需信任等级与主机 capability policy |
 
-本階段不需要 manifest DSL、package store、lock graph 的第二份實現或 binary loader。
+概念上的 Nickel profile：
 
-## Phase 1：真實第二內容集合
+```nickel
+let la = import "latticeaxiom/lib.ncl" in
 
-在第一個 demo 可玩後，由一個與官方內容不同的內容集合驗證：
+la.GameProfile & {
+  packages = [
+    { id = "latticeaxiom.core", version = "^0.1" },
+    { id = "example.marker", version = "~0.1", realization = 'auto },
+  ],
+  overlays = [import "./local-world.ncl"],
+}
+```
 
-- 能否只用公開 API 註冊內容；
-- content ID、asset path 與 schema 是否足夠；
-- 是否必須修改 domain core；
-- Cargo build／feature 組合對主要開發者是否可接受；
-- 非程式內容能否只靠 typed assets 加入；
-- 缺失、衝突、升級與移除診斷是否可理解。
+这只是语义示例，不冻结最终 Nickel API。最终 contract 必须由 `latticeaxiom.lib` 与 Rust conformance fixtures 共同定义。
 
-若這些問題可由改進 Bevy plugin／asset API 解決，就停在 Phase 1，不建立 package platform。
+## Nickel 與 Rust 的邊界
 
-## Phase 2：只有證據才能啟動的研究
+### Nickel 負責
 
-至少出現一項真實失敗後，才建立新的 ADR：
+- package／profile 的 record、function、defaults 与 overlay；
+- contract validation 与 source-aware diagnostics；
+- 纯资料参数化、capability／realization intent；
+- 构造完整且可序列化的 `CompositionSpec`。
 
-| 觀察到的需求 | 先調查的 upstream 類別 |
-| --- | --- |
-| 非開發者安裝資料內容 | Bevy asset／scene 生態、資料包工具、一般 archive／manifest 標準 |
-| 伺服器選擇權威內容而不重編 client | 網路內容協商、server plugin deployment、container／artifact distribution |
-| 不可信程式內容 | WASM／sandbox plugin 生態、能力安全模型 |
-| 多平台預建內容 | Cargo distribution、artifact registry、簽章與供應鏈工具 |
-| 大型內容集合組合 | 既有 package manager／dependency resolver，而非從零寫一般求解器 |
+### Rust package kernel 負責
 
-研究必須先寫清楚 user story、信任邊界、可分發單位、相容承諾、平台矩陣與退出策略。
+- source fetch／path normalization／content hash；
+- SemVer range、pre-release 与唯一版本政策；
+- dependency／capability graph、cycle、exclusive provider 与 conflict；
+- trust policy、target／profile 与 realization selection；
+- lock、artifact store／cache、Cargo build 与 dynamic load；
+- registration manifest 验证、numeric ID、schedule compilation；
+- lifecycle、诊断与 Bevy host activation。
 
-## 即使未來建立套件層，也保持的邊界
+Nickel evaluator 不直接访问网络、时钟、随机数或 compiler。package kernel 先准备受控 source root，再在资源上限内求值。
 
-- Bevy 是正常 Cargo 相依，不是內容 graph 裡可任意替換的 engine package。
-- runtime extension 最終仍是 Bevy plugin、asset 或經明確 adapter 進入 Bevy。
-- 存檔相容依 schema owner 與 stable content ID，不由 package manager 的單一版本判斷。
-- package metadata 不進每 tick、每 entity 或每 voxel 熱路徑。
-- 權威程式碼與不可信內容的能力必須在載入前確定，不能以字串在執行途中索取主機權限。
-- 動態 Rust ABI 不作預設；Rust compiler／crate ABI 不是穩定 plugin ABI。
+## 五個語義產物
 
-## 現在明確不設計
+### `CompositionSpec`
 
-- 自訂 registry protocol；
-- 一般版本求解器；
-- 內容定址 store；
-- 動態 native library 掃描與卸載；
-- WASM host capability surface；
-- 另一份 build graph 或 runtime image；
-- 自訂宣告／組合語言；
-- 用 Godot package／scene 取代 Bevy runtime。
+保留使用者意图与已通过 contract 的 package request、range、overlay、feature／parameter、realization preference 与 policy。它不含已下载 artifact、numeric ID 或 loaded function pointer。
 
-這些項目只有在 Phase 2 ADR 中重新取得授權後才回到路線圖。
+### `LockedGameGraph`
 
-## 可逆性
+保存确定的 package version、source identity、content hash、dependency edge、capability provider、schema owner 与 resolution explanation。相同输入与 source universe 必须产生确定结果。
 
-Phase 0 的選擇應為未來保留合理出口，但不支付完整平台成本：
+### `BuildPlan`
 
-- stable content ID 不綁 Rust type name；
-- schema owner 不綁 Cargo version；
-- content definitions 可從 Rust literal 移到 typed asset；
-- domain registration API 不依官方內容；
-- Bevy `Entity`／`Handle` 不進存檔；
-- build artifact 可記錄 Cargo lock hash 供診斷。
+为每个节点选择 realization、target、profile、toolchain、预建 artifact 或 source build，并记录：
 
-這些是正常的長期資料衛生，不是預先實作包管理器。
+- `NativeStatic` glue／Cargo unit；
+- dynamic ABI／required interface range；
+- `EngineBuildId`（仅 engine-coupled）；
+- asset processing 与 manifest generation；
+- artifact dependency 与预期 hash。
+
+### `RegistrationImage`
+
+把所有 package 的 `RegistrationManifest` 合并为 closure-wide 的稳定／numeric ID table、component／message layout、system stages、read／write set、ordering、capability、render slot 与 schema owner map。此产物在 code activation 前完成冲突验证。
+
+### `RuntimeImage`
+
+保存这次 EngineInstance 实际可执行的 static direct functions、dynamic callback tables、asset roots、instance factories 与 lifecycle state，并指向完全匹配的 `RegistrationImage`。它不保留 Nickel AST 或未解析 range。
+
+## SemVer 與解析政策
+
+SemVer 是逻辑 package 的外部版本语言。首阶段不需要先实现公开 registry 或通用求解器规模，但必须真实处理：
+
+- exact／caret／tilde／bounded ranges 与 pre-release 规则；
+- 一个 closure 内同 package ID 的唯一版本政策；
+- optional dependency／feature activation；
+- versioned capability provider 与 exclusive／multiple cardinality；
+- cycle、missing provider、conflicting provider 与 realization unavailable；
+- deterministic tie-break 与完整 resolution explanation；
+- 精确 lock，后续启动默认不重新选择较新版本。
+
+首阶段可以采用简单、可解释的 deterministic resolver；当真实 graph 证明 backtracking 成本或错误质量不足时，再引入 PubGrub／SAT 类实现。**延后一般求解器不等于延后 SemVer、lock 或 conflict semantics。**
+
+## Capability 模型
+
+dependency 表达「我需要某个 package 的公开 contract」；capability 表达「我需要一个提供者」。两者不可混为模糊字串 hook。
+
+每个 capability 至少包含 stable ID、interface major／minor range、cardinality 与 profile／target 条件：
+
+```text
+render.terrain.mesh-source@1     exactly-one
+render.visibility@1              exactly-one
+render.post-effect@1             zero-or-more
+worldgen.terrain-provider@2      exactly-one
+gameplay.damage-observer@1       zero-or-more
+```
+
+exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provider 的确定顺序来自显式 dependency／priority policy，不来自目录或动态库加载顺序。
+
+## Realization 選擇
+
+| realization | 构建／加载 | 相容边界 | 适合 |
+| --- | --- | --- | --- |
+| data | 验证并加载 assets／definitions | package／schema | 纯内容 |
+| `NativeStatic` | Cargo 从 source 编入 host | source API + rebuild | 官方／可信 code、最大性能、完整 Bevy 能力 |
+| `PortableNative` | 验证后加载 `cdylib` | stable Lattice ABI／capability | 可分发可信 native mod |
+| `EngineCoupledNative` | 精确 host build 加载 | `EngineBuildId` + internal interface | 低层 engine／renderer integration |
+| `WasmComponent` | 未来独立 runtime | component／capability contract | 不可信或跨平台生态；不在首阶段 |
+
+`auto` policy 可以偏好已验证 portable artifact、否则 source static build；最终选择必须写入 lock。服务器／client profile 可以选择不同 realization 或可选 presentation package，但所有权威 package／schema closure 必须明确协商。
+
+## Source、lock 與 artifact
+
+首阶段来源只需支持 workspace／local directory 与测试 fixture；每个 source 都规范化并 content-addressed。lock 至少保存：
+
+- package ID／version／source／source hash；
+- dependency 与 capability resolution；
+- selected realization／target／profile；
+- manifest schema／hash；
+- ABI／interface range、`EngineBuildId`（如适用）；
+- artifact hash、producer／toolchain fingerprint；
+- `latticeaxiom.lib` 与核心模型版本。
+
+`.rlib` 不作为稳定分发 artifact。static cache 只能以完整 toolchain、target、features、source 与 `EngineBuildId` 作 exact cache key；cache miss 就重建。dynamic artifact 必须与发布描述符／manifest hash 一致。
+
+## 啟動交易
+
+1. 读取 profile／lock；需要时在受控 source universe 重新 resolve。
+2. 验证 source／artifact hash、target、trust 与签章 policy（首阶段可只信任 local）。
+3. 读取所有 registration manifests，不执行模组 code。
+4. 合并 ID、schema、capability、schedule 与 render contracts；任何冲突均停止。
+5. 构建／加载 realization；dynamic entry 只能协商 descriptor／interface。
+6. 验证 callback map 与 manifest hash，建立 `RuntimeImage`。
+7. 创建 EngineInstance 与 Bevy App，host adapter 安装 standard plugins、static systems 与 dynamic bridge systems。
+8. 执行 module `create／start`，完成 assets／world validation 后才进入 `Playing`。
+
+任何失败都必须保持「尚未进入可修改世界」；不能加载一半后以 last-writer-wins 继续。
+
+## 信任與安全
+
+首阶段 native realization 都是可信 process code。package metadata 与 ABI validation 只能防止误配，不能沙箱恶意动态库。
+
+- `NativeStatic`：构建时信任 source 与 build script。
+- `PortableNative`／`EngineCoupledNative`：加载即授予进程级能力；需要来源 allowlist 与清楚 UI／日志。
+- Nickel：在受控 import root 与资源限制内求值，不继承 native code 信任。
+- 未来 `WasmComponent`／process isolation：另行定义 capability security、资源计量与持久化 owner。
+
+## 首階段與延後範圍
+
+### 首階段必須完成
+
+- Nickel contracts 与 typed `CompositionSpec`；
+- package SemVer、local source、deterministic resolution 与 lock；
+- capability／realization selection；
+- SDK-generated `RegistrationManifest`；
+- static／portable dynamic equivalence fixture；
+- ABI／manifest／artifact validation；
+- closure-wide ID／schema／schedule；
+- Bevy host activation 与 diagnostics。
+
+### 可延後
+
+- public／federated registry；
+- 通用大型 graph 求解器；
+- remote marketplace／自动更新 UI；
+- 签章透明日志、组织信任 delegation；
+- 多平台预建服务与分散式 artifact cache；
+- native hot unload；
+- WASM sandbox ecosystem。
+
+这条边界把核心语义与规模／营运功能分开，不再把整个 package system 延后。
 
 ## 驗收
 
-- 第一個 demo 不含自訂 package resolver 或 runtime loader。
-- 官方與測試 content plugin 可以由 Cargo feature／workspace 組合。
-- 新增純資料內容不需要修改 Bevy lifecycle。
-- 只有可重現的 Phase 1 失敗才能建立 Phase 2 ADR。
-- 任何未來方案都先列出已評估的 upstream 選擇。
+- 同一 Nickel profile 在 CLI／headless／client 得到同一 lock 与 registration hash。
+- 官方与 test package 都只能经 graph 启动；不存在隐藏 plugin list。
+- static／dynamic realization 可互换且不改变 stable ID、schedule、save schema 与权威 state hash。
+- 随机化 source discovery／artifact load 顺序不改变结果。
+- range／capability／ABI／artifact 冲突在启动前给出 package chain、requested／available version 与可行动修复。
+- runtime hot path 不依赖 Nickel evaluator 或 resolver。
 
 ## 相關文件
 
-- [決策 0016：以 Bevy 插件起步](../decisions/0016-stage-content-composition-on-bevy.md)
 - [模組與內容組合](module-composition.md)
+- [原生模組 ABI](native-module-abi.md)
 - [版本與相容性](versioning-and-compatibility.md)
-- [開發策略](../foundations/development-strategy.md)
+- [首階段路線圖](../planning/roadmap-game-engine.md)

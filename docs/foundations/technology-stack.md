@@ -1,88 +1,150 @@
 ---
-title: Bevy-first 技術棧與採用邊界
+title: Package-first／Bevy-first 技術棧與採用邊界
 status: active
 type: reference
 updated: 2026-08-19
 ---
 
-# Bevy-first 技術棧與採用邊界
+# Package-first／Bevy-first 技術棧與採用邊界
 
-本頁是目前實作技術的單一入口。`accepted` 是已採納基線；`spike candidate` 只允許進入短期可玩原型，必須以相容性、維護狀態、授權和量測結果決定是否鎖定。
+本页是目前实作技术的单一入口。`accepted` 表示架构方向已采用；精确 crate patch、feature 与 source 仍需由开始实作时的 manifests／lock 固定。`spike candidate` 只允许进入有时限、可玩的评估。
 
 ## 採用原則
 
-- Bevy 是引擎，不在專案內再建立一層對等引擎 API。
-- Rust／Bevy 型別可以在執行期內部自由使用；只有存檔、網路與穩定內容契約隔離 process-local 型別。
-- 先使用 upstream 預設，再組合、擴充、最小 fork；自研替代受[決策 0014](../decisions/0014-adopt-bevy-upstream-first.md)的證據門檻約束。
-- crate 精確版本、feature 與來源在開始實作時寫入 Cargo manifest／`Cargo.lock`；本頁只記錄選型與理由。
-- 一個外部依賴若只服務單一領域，就在該領域做薄整合，不建立全專案 provider facade。
+- Bevy 是游戏引擎，不在项目内建立一层对等 engine API。
+- Nickel + Rust package kernel 是游戏组合控制平面，不复制 Bevy runtime。
+- static host／realization 可直接使用 Rust／Bevy type；portable dynamic 边界只使用 generated C ABI／stable IDs。
+- package SemVer、ABI、`EngineBuildId`、schema 与 artifact hash 分域管理。
+- package metadata／Nickel 不进入 tick hot path。
+- 先使用 upstream default、公开 extension、生态 plugin 与最小 fork；自研通用替代受[决策 0014](../decisions/0014-adopt-bevy-upstream-first.md)的证据门槛约束。
 
 ## 已接受基線
 
-| 能力 | 選擇 | 使用方式 | 狀態 |
+| 能力 | 选择 | 使用方式 | 状态 |
 | --- | --- | --- | --- |
-| 語言與建置 | Rust stable、Cargo workspace、`Cargo.lock` | 遊戲與內容 plugin 靜態組合；CI 鎖定 toolchain | accepted |
-| 遊戲引擎 | [Bevy](https://github.com/bevyengine/bevy) `0.19.x` | client 使用 `DefaultPlugins`；headless／測試使用 `MinimalPlugins` 加必要標準 plugin | accepted |
-| ECS 與 App | Bevy ECS、App、Plugin、States、Schedules、SystemSet | 直接使用，不建立 `latticeaxiom-ecs` 或自研 lifecycle／scheduler | accepted |
-| 時間與工作池 | Bevy Time、`FixedUpdate`、TaskPool | 固定玩法 tick；背景 job 回主世界時驗證 revision／epoch | accepted |
-| 渲染與視窗 | Bevy Render／PBR／UI／winit integration | wgpu、winit 是 Bevy 實作細節；專案不直接建立 render facade | accepted |
-| 資產 | Bevy `AssetServer`、`AssetLoader`、glTF 與 typed asset | 依賴追蹤、載入狀態與熱重載沿 Bevy；權威資料不保存 `Handle` | accepted |
-| 座標 | Bevy 原生右手 Y-up | `+X` 右、`+Y` 上、forward `-Z`；公尺／弧度 | accepted |
-| 世界儲存 | RocksDB + memory test implementation | 完整已物化區塊快照與原子 write batch；由 domain storage 邊界隔離 | accepted |
-| 序列化 | serde 生態 | schema owner 定義穩定 DTO；實際 wire／disk encoding 由原型鎖定 | accepted |
-| 觀測 | Bevy diagnostics + `tracing` 生態 | 先用標準 diagnostics、log 與 profiler 整合 | accepted |
+| 语言 | Rust stable | core host、package kernel、SDK、static／dynamic modules | accepted |
+| 建置 | Cargo workspace、`Cargo.lock` | core／static source build；toolchain／target／features 精确锁定 | accepted |
+| 组合语言 | [Nickel](https://nickel-lang.org/) | `package.ncl`／`game.ncl`／overlays／contracts；只在控制平面 | accepted |
+| Package version | [SemVer 2.0.0](https://semver.org/) | logical package dependencies；lock 选择精确 version／source／artifact | accepted |
+| Package kernel | project Rust crates | source、resolve、capability、lock、plan、build、load、activation | accepted |
+| Code generation | Rust proc macro／build tooling | 单一业务声明生成 manifest、static glue、C binding／batch shim | accepted |
+| Dynamic native | platform `cdylib` + C ABI | 单一 entry、versioned interface tables、POD batches、opaque handles | accepted |
+| 游戏引擎 | [Bevy](https://github.com/bevyengine/bevy) `0.19.x` baseline | client `DefaultPlugins`；headless／test 使用最小标准 profile | accepted |
+| ECS／App／schedule | Bevy ECS、App、Plugin、States、Schedules、SystemSet | 唯一 runtime model；dynamic bridge 安装进同一 schedule | accepted |
+| 时间／任务 | Bevy Time、`FixedUpdate`、TaskPool | fixed gameplay；jobs 按 instance／revision／budget 治理 | accepted |
+| Rendering／window | Bevy Render／PBR／UI／winit／wgpu | Bevy 拥有 device／render schedules；package 使用 feature／provider contract | accepted |
+| Assets | Bevy `AssetServer`、`AssetLoader`、glTF、typed assets | package 拥有 stable identity；Bevy handle 只在 process 内 | accepted |
+| 座标 | Bevy 原生右手 Y-up | `+X` 右、`+Y` 上、forward `-Z`；公尺／弧度 | accepted |
+| 世界储存 | RocksDB + memory test implementation | 完整已物化 snapshot、atomic batch、schema owner | accepted |
+| 序列化 | serde 生态 | typed model／schema envelope；具体 encoding 由 fixture锁定 | accepted |
+| 观测 | Bevy diagnostics + `tracing` | package／ABI／world／render structured diagnostics | accepted |
 
-Bevy `0.19.x` 是本次文件重構的相容系列，不代表允許自動漂移。實作提交必須固定精確 patch；任何 minor 升級都視為顯式遷移工作。
+Bevy `0.19.x` 是 2026-08-19 文件基线，不允许自动漂移。实作 commit 必须固定精确 patch；新的 Bevy release 经过 migration／ABI／save／performance gate 后才能成为基线。
+
+## Package／ABI 產物
+
+| 产物 | 格式／owner | 用途 |
+| --- | --- | --- |
+| `CompositionSpec` | typed Rust model from Nickel | 使用者组合意图 |
+| `LockedGameGraph` | typed model + canonical lock encoding | 精确 package／capability closure |
+| `BuildPlan` | typed Rust model | realization／target／artifact work |
+| `RegistrationManifest` | SDK-generated versioned data | package schema／system／render declarations |
+| `RegistrationImage` | package kernel | closure-wide IDs／schedule／capabilities |
+| `RuntimeImage` | loader／host | static functions、dynamic tables、instances |
+| C headers／Rust bindings | generated from ABI schema | portable／engine-coupled dynamic boundary |
+| `EngineBuildId` | core build metadata | exact engine-coupled compatibility |
+
+这些是分层语义，不以一份 arbitrary JSON dictionary 贯穿所有阶段。
+
+## Realization 技術矩陣
+
+| realization | 技术 | 优势 | 明确成本 |
+| --- | --- | --- | --- |
+| data | typed assets／definitions | 无 native code、容易组合 | 不能加入任意 behavior |
+| `NativeStatic` | Rust source + generated Bevy glue + Cargo／LTO | 完整 Bevy、inline、generic、最佳性能 | 需要重建 host；不分发 `.rlib` ABI |
+| `PortableNative` | `cdylib` + stable Lattice C tables | 不随 Bevy内部版本自动重建 | API 较窄、indirect／FFI、trusted code |
+| `EngineCoupledNative` | `cdylib` + exact-build internal tables | 预编译部署与较低层能力 | `EngineBuildId` 改变即可能重建 |
+| `WasmComponent` | 未选择 runtime／component model | 未来 sandbox／跨平台 | 不在首阶段，需威胁模型与性能证据 |
+
+## ABI 基本型別邊界
+
+可以跨 portable ABI：
+
+- fixed-width scalar；
+- SDK-defined C-layout headers／tables；
+- pointer + length 的 callback-lifetime views；
+- ABI-POD column batches；
+- opaque／generational handles；
+- versioned serialized payload；
+- function pointer + context pointer。
+
+不得跨 portable ABI：
+
+- Rust `String`、`Vec`、slice reference、trait object、closure；
+- panic／unwind；
+- Bevy `World`、`Entity`、`Handle<T>`、`TypeId`、system parameter；
+- wgpu／physics raw handles；
+- 需要跨 allocator drop 的任意 Rust value。
 
 ## 首個可玩原型候選
 
-| 能力 | 首選候選 | 原型要回答的問題 | 回退順序 | 狀態 |
+| 能力 | 首选候选 | 原型要回答 | 回退顺序 | 状态 |
 | --- | --- | --- | --- | --- |
-| 體素世界 | [`bevy_voxel_world`](https://github.com/splashdust/bevy_voxel_world) `0.17`（Bevy 0.19） | chunk streaming、編輯、raycast、mesh job 與材質能否支撐 demo；其硬編碼假設能否被設定或薄擴充吸收 | plugin 擴充／貢獻上游 → 直接採用 `block-mesh` 等小型 mesher | spike candidate |
-| 物理 | [Avian](https://github.com/avianphysics/avian) `0.7`（Bevy 0.19） | 固定 tick、character movement、voxel collider、raycast 與 local-origin 能否達到預算 | Bevy 生態另一維護方案 → 最小 domain-specific collision | spike candidate |
-| 動作輸入 | [Leafwing Input Manager](https://github.com/Leafwing-Studios/leafwing-input-manager) `0.21`（Bevy 0.19） | action mapping、重綁、測試注入是否比 Bevy 原生輸入更省工作 | Bevy 原生 input resources | spike candidate |
-| 資產載入狀態 | [`bevy_asset_loader`](https://github.com/NiklasEi/bevy_asset_loader) `0.27`（Bevy 0.19） | 是否真的需要 state-aware collection；標準 `AssetServer` 是否已足夠 | Bevy `AssetServer` 直接管理 | optional spike |
+| 体素世界 | [`bevy_voxel_world`](https://github.com/splashdust/bevy_voxel_world) 适配 Bevy 0.19 的 release | streaming、edit、raycast、meshing 能否接 stable ID／revision／package render data | 上游扩充 → 最小权威 adapter → 局部替换 | spike candidate |
+| 物理 | [Avian](https://github.com/avianphysics/avian) 对应 Bevy 0.19 的 release | fixed tick、character、voxel collider、raycast 与预算 | 另一维护中 Bevy plugin → domain-specific collision | spike candidate |
+| 动作输入 | [Leafwing Input Manager](https://github.com/Leafwing-Studios/leafwing-input-manager) 对应 release | action mapping／test injection 是否比原生 input 省总成本 | Bevy 原生 input | spike candidate |
+| loading orchestration | [`bevy_asset_loader`](https://github.com/NiklasEi/bevy_asset_loader) 对应 release | package activation／asset state 是否真的需要额外层 | Bevy `AssetServer` | optional spike |
 
-候選不是承諾。第一個 spike 應盡量保持 upstream 原貌，先確認能力，再決定是否保留依賴。
+候选版本必须在 spike 当天重新核对，不凭本页自动加入 Cargo lock。
 
-## 明確採用的上游邊界
+## 明確上游邊界
 
-- 程序入口是正常 Bevy `App`。
-- ECS 使用 Bevy ECS。
-- 排程與固定時間使用 Bevy schedules、`FixedUpdate` 與 `Time<Fixed>`。
-- 渲染使用 Bevy renderer；headless profile 不安裝 render plugin。
-- 資產使用 Bevy `AssetServer` 與 typed assets。
-- 非同步工作使用 Bevy task pools。
-- 內容組合使用 Cargo、Bevy plugins 與 typed assets；後續分發需求另立研究。
-- 所有空間資料直接使用 Bevy 原生 Y-up。
+- executable 最终运行正常 Bevy App；package bootstrap 不拥有 game loop。
+- ECS／schedule／fixed time／tasks 使用 Bevy。
+- renderer／window／GPU resource 使用 Bevy；dynamic command 由 host 翻译。
+- assets runtime graph 使用 Bevy；package lock管理 package ownership／artifact closure。
+- physics／input／voxel 先采用维护中的 Bevy生态。
+- Nickel evaluator 只构造 `CompositionSpec`；副作用与 runtime 由 Rust。
+- platform loader 只负责打开已验证 artifact；所有 ABI／lifecycle policy 由 Lattice loader。
 
-## Bevy 型別邊界
+## Bevy Type 使用邊界
 
-可以直接使用 Bevy 型別的區域：
+直接使用 Bevy type：
 
-- plugin 之間的執行期整合；
-- ECS component、resource、system parameter 與 event／message；
-- Transform、Mesh、Material、Image、Animation、Audio 與 asset handle；
-- render extraction、diagnostics 與開發工具。
+- core host 与 `NativeStatic` realization；
+- ECS components／resources／systems；
+- Transform、Mesh、Material、Image、Animation、Audio；
+- render extraction／`RenderApp` static extension；
+- diagnostics／development tools。
 
-必須轉成專案穩定 DTO／ID 的邊界：
+转换成 Lattice stable contract：
 
-- RocksDB record 與備份；
-- 未來網路協定；
-- 生成 provenance；
-- 跨重啟內容引用；
-- 需要獨立遷移承諾的公開資料格式。
+- dynamic native ABI；
+- RocksDB records／backup；
+- future network protocol；
+- generation provenance；
+- cross-restart content／asset references；
+- package manifests／lock；
+- 需要独立 migration 承诺的公开 formats。
 
-Bevy `Entity`、`Handle`、Rust `TypeId`、反射註冊順序與 GPU resource ID 都不得進入這些長期邊界。
+这条边界按 lifetime／distribution contract 划分，不是假装 Bevy 可替换。
+
+## 供應鏈與信任
+
+- core／static source build：审查 source、build script、Cargo dependencies 与 license；
+- dynamic native：验证 descriptor／hash／target／ABI，但仍标记 trusted process code；
+- Nickel：受控 imports、evaluation limits、无隐式网络／host access；
+- lock／artifact：记录 source、producer、toolchain、hash 与 future signature slot；
+- public signature／registry policy 延后到有分发 consumer 时，但 data model预留明确 owner，不实现假安全。
 
 ## Godot 的位置
 
-Godot 只作未來工具鏈對照組，不作 runtime、第二渲染後端或內容格式真相來源。若 Blender + glTF + Bevy 工具不足，依[Godot 工具鏈對照](../research/godot-toolchain-comparison.md)做限時 spike，再決定是否需要場景／資產橋接。
+Godot 只作未来 authoring／import toolchain 对照，不作 runtime、renderer、package manager 或权威 scene format。触发 gate 见[Godot 工具链对照](../research/godot-toolchain-comparison.md)。
 
 ## 相關文件
 
-- [決策 0014：採用 Bevy 並以上游能力為預設](../decisions/0014-adopt-bevy-upstream-first.md)
-- [決策 0015：Bevy 原生 Y-up](../decisions/0015-bevy-native-y-up-world-coordinates.md)
-- [決策 0016：以 Bevy 插件起步](../decisions/0016-stage-content-composition-on-bevy.md)
-- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
-- [渲染與物理候選](../research/renderer-physics-landscape.md)
+- [套件內核](../architecture/package-management.md)
+- [原生 ABI](../architecture/native-module-abi.md)
+- [Bevy 執行期](../architecture/game-engine-runtime.md)
+- [版本與相容性](../architecture/versioning-and-compatibility.md)
+- [外掛／渲染模組調查](../research/native-plugin-and-render-mod-lessons.md)

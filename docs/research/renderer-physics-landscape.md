@@ -11,13 +11,15 @@ updated: 2026-08-19
 
 引擎選型已結束：Lattice Axiom 採用 Bevy。本頁不再比較替代 renderer／ECS／完整引擎，而是記錄 Bevy 內建能力與生態 plugin 能否用最少專案程式完成第一個可玩 demo。
 
-截至 2026-08-19，文件基線為 Bevy `0.19.x`，當時 docs.rs 的最新 patch 為 `0.19.1`。Bevy 約每三個月可能有 breaking release，因此精確 patch 和生態 plugin 對應版本必須在實作時由 `Cargo.lock` 固定，不能只憑本頁自動升級。
+这项adoption调查不负责package／ABI选型。external Bevy plugins可由core／static host直接采用；可分发dynamic packages另经Lattice C ABI与host adapter，不能把生态crate的Rust API误写成portable contract。
+
+截至 2026-08-19，文件基線為 Bevy `0.19.x`，當時 docs.rs 的最新正式版為 `0.19.0`。Bevy 約每三個月可能有 breaking release，因此精確 patch 和生態 plugin 對應版本必須在實作時由 `Cargo.lock` 固定，不能只憑本頁自動升級。
 
 ## Bevy 已直接提供的能力
 
 | 需求 | Bevy 上游能力 | 對 Lattice Axiom 的含義 |
 | --- | --- | --- |
-| App／組合 | `App`、`Plugin`、`PluginGroup`、custom runner、`SubApp` | 使用正常 App；不做 launcher／host runtime |
+| App／組合 | `App`、`Plugin`、`PluginGroup`、custom runner、`SubApp` | package closure最终建立正常App；不做平行game loop／engine host |
 | ECS／排程 | Bevy ECS、schedules、SystemSet、states | 直接採用完整上游模型 |
 | 固定時間 | `FixedUpdate`、`Time<Fixed>` | gameplay tick 直接使用上游 |
 | Headless | `MinimalPlugins` 與可選標準 plugin | 不安裝 renderer；不做 null renderer |
@@ -30,6 +32,7 @@ updated: 2026-08-19
 
 - [Bevy repository and feature overview](https://github.com/bevyengine/bevy)
 - [Bevy 0.19 release](https://bevy.org/news/bevy-0-19/)
+- [Bevy `0.19.0` crate record](https://docs.rs/crate/bevy/0.19.0)
 - [Bevy `App` API](https://docs.rs/bevy/latest/bevy/app/struct.App.html)
 - [`MinimalPlugins` API](https://docs.rs/bevy/latest/bevy/prelude/struct.MinimalPlugins.html)
 - [`FixedUpdate` API](https://docs.rs/bevy/latest/bevy/prelude/struct.FixedUpdate.html)
@@ -134,3 +137,4 @@ Godot 不參與 renderer／physics runtime 選型。它只在實際作者工作�
 - [Bevy 執行期架構](../architecture/game-engine-runtime.md)
 - [渲染架構](../architecture/rendering.md)
 - [Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
+- [原生外掛與渲染模組教訓](native-plugin-and-render-mod-lessons.md)

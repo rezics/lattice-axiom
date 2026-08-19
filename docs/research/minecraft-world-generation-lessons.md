@@ -2,12 +2,12 @@
 title: Minecraft 世界生成與洞穴模組的設計教訓
 status: exploration
 type: research
-updated: 2026-08-09
+updated: 2026-08-19
 ---
 
 # Minecraft 世界生成與洞穴模組的設計教訓
 
-> 本頁保存外部調查與由此推導的設計教訓，不是下載量排行榜，也不表示 Lattice Axiom 會複製任一模組。下載數跨平台、版本與專案年代不可直接比較；玩家回饋是質性樣本，不是統計調查。
+> 本页只把Minecraft及其模组当作worldgen需求／失败案例，不把其mod loader、版本相容、性能或internal patch模式当作架构范本。Lattice Axiom不会复制任一模组；下载数跨平台、版本与项目年代不可直接比较，玩家反馈也是质性样本而非统计调查。
 
 ## 調查問題
 

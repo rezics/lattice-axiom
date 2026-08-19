@@ -13,7 +13,7 @@ decision:
 
 # 可組合世界生成架構
 
-> [領地優先、群系驅動、約束求解](../decisions/0001-territory-first-biome-driven-world-generation.md)、[混合洞穴組合模型](../decisions/0002-hybrid-cave-generation-composition.md)、[無全域版本開關](../decisions/0003-no-global-version-switch.md)、[領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)與[Bevy 原生 Y-up](../decisions/0015-bevy-native-y-up-world-coordinates.md)的方向已採納。本頁提出具體責任、資料流與候選介面；演算法與參數仍需原型驗證。世界生成實作為 Bevy domain plugin，非另一套引擎或 package runtime。
+> [領地優先、群系驅動、約束求解](../decisions/0001-territory-first-biome-driven-world-generation.md)、[混合洞穴組合模型](../decisions/0002-hybrid-cave-generation-composition.md)、[無全域版本開關](../decisions/0003-no-global-version-switch.md)、[領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)與[Bevy 原生 Y-up](../decisions/0015-bevy-native-y-up-world-coordinates.md)的方向已採納。本頁提出具體責任、資料流與候選介面；演算法與參數仍需原型驗證。世界生成是versioned package／capability，经host adapter执行于Bevy，不建立第二套engine runtime。
 
 ## 目標與非目標
 
@@ -185,7 +185,7 @@ winner = argmin t(b,c)
 1. 世界或整合包先決定 `BiomePack` 的份額。
 2. 獲勝內容集合再用集合內權重選擇群系。
 
-這讓含有一百個群系的內容集合不會只因項目數量壓倒含有五個群系的集合，同時不會在地圖上製造連續的「模組專屬區域」。集合份額應由世界組態治理，content plugin 不能以任意極大權重自行取得全世界。
+这让含有一百个biomes的content package不会只因项目数量压倒含有五个biomes的package，同时不会在地图上制造连续的“package专属区域”。集合份额由Nickel world profile／locked graph治理；package不能以任意极大权重自行取得全世界。
 
 ### 數量上限的精確含義
 

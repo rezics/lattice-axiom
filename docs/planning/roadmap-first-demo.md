@@ -1,180 +1,242 @@
 ---
-title: 第一個 Bevy 可玩 demo 路線圖
+title: 第一個套件驅動的 Bevy 可玩 demo 路線圖
 status: active
 type: roadmap
 updated: 2026-08-19
 decision:
+  - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0014-adopt-bevy-upstream-first.md
-  - ../decisions/0016-stage-content-composition-on-bevy.md
+  - ../decisions/0017-versioned-native-module-abi.md
+  - ../decisions/0018-package-kernel-from-first-vertical-slice.md
 ---
 
-# 第一個 Bevy 可玩 demo 路線圖
+# 第一個套件驅動的 Bevy 可玩 demo 路線圖
 
 ## Demo 定義
 
-> 玩家走進程序生成的體素世界，挖掉並放回一個方塊；退出再進入後，世界仍保留變更。官方內容經公開 Bevy plugin 路徑加入。
+> 玩家从一个已锁定 package closure 进入程序生成的 Y-up 体素世界，挖掉并放回方块；退出再进入后世界仍保留修改。同一最小 gameplay package 可切换 static／portable dynamic realization，而 registration、玩法结果与存档不变。
 
-這是一個玩家可操作的 vertical slice，不是引擎展示、package manager 展示或純技術 benchmark。
+这是可玩的 vertical slice，也是 package／ABI 的第一个真实 conformance consumer。它不是 package manager UI、空动态库 loader 或 renderer benchmark。
 
 ## 固定基線
 
-- Bevy `0.19.x`，精確 patch 與 feature 由 `Cargo.lock` 固定；
-- client 使用 `DefaultPlugins`；
-- headless／整合測試使用 `MinimalPlugins` 加必要標準 plugin；
+- Nickel `package.ncl`／`game.ncl` → typed `CompositionSpec`；
+- package SemVer、capability／realization resolution 与精确 lock；
+- `RegistrationManifest`／`RegistrationImage`；
+- `NativeStatic` 与 `PortableNative` ABI `0.x`；
+- Bevy `0.19.x` baseline，精确 patch／features 由 Cargo lock 固定；
+- client `DefaultPlugins`，headless 使用必要标准 profile；
 - Bevy 原生右手 Y-up；
-- voxel、physics、input、assets 和 diagnostics 先用 Bevy／生態 upstream；
+- voxel／physics／input／assets／diagnostics 先采用 Bevy／生态 upstream；
 - RocksDB 保存完整已物化 chunk snapshot；
-- 官方與 test content 使用普通 Bevy plugin；
-- 不含自研 engine facade、動態 ABI、套件內核或一般 resolver。
+- official／test content 都经 package graph；
+- 无自研 ECS／scheduler／renderer／asset server。
 
-## 玩家循環
+## 两条同时验收的循环
 
-1. 建立或載入一個 world。
-2. 在 Y-up 體素地形出生。
-3. 使用滑鼠／鍵盤移動、觀看和跳躍。
-4. raycast 指向方塊並挖掉它。
-5. 選擇可放置方塊並放回。
-6. 看見 mesh／collision 在合理延遲內更新。
-7. 正常退出或被測試強制終止。
-8. 重啟後看見已確認保存的修改。
+### 玩家循环
 
-任何里程碑若不能縮短到這個循環的距離，就不進 demo 範圍。
+1. 选择／创建 world。
+2. 从 lock 建立游戏 closure。
+3. 在 Y-up voxel terrain出生。
+4. walk／look／jump、raycast、break／place。
+5. mesh／collision 在预算内更新。
+6. 退出／crash fixture后重启。
+7. 已 durable修改正确恢复。
 
-## D0：Bevy smoke
+### Package 循环
+
+1. Nickel profile 选择 `example.dual-gameplay`。
+2. 以 `NativeStatic` 启动并记录 lock／registration／state hash。
+3. 只切换 realization 为 `PortableNative`。
+4. loader 验证 artifact／ABI／manifest。
+5. 执行同一 action fixture。
+6. 比较 IDs、schedule、state、save 与 diagnostics。
+
+任一循环失败，demo 均未完成。
+
+## D0：Composition／Lock／Bevy Smoke
 
 ### 交付
 
-- client／headless 兩個 App profile；
-- placeholder camera、light、ground／cube fixture；
-- manual fixed-time test；
-- diagnostics、log 和 CI；
-- Y-up glTF／voxel orientation tests。
+- local Nickel profile／contracts；
+- core／empty game packages；
+- deterministic SemVer／capability lock；
+- client／headless profile；
+- package-driven Bevy App；
+- placeholder camera／light／cube；
+- Y-up orientation、manual fixed-time、diagnostics／CI。
 
 ### 完成
 
-- client 可操作相機並退出；
-- headless 不建立 GPU，可推進固定 tick；
-- 無自有 lifecycle、renderer 或 ECS layer。
+- 同一 lock 可建立 client／headless的 compatible authoritative closure；
+- client 显示场景并退出；headless无 GPU推进 fixed tick；
+- 没有 hidden hand-written official plugin list；
+- 没有自有 runner／ECS／renderer；
+- dependency／license 与 lock metadata可重建。
 
-## D1：Upstream voxel playground
+## D1：真实 Dual-Realization Gameplay Fixture
 
 ### 交付
 
-- `bevy_voxel_world` 優先 spike；
-- Avian 優先 physics spike；
-- Bevy input 或 Leafwing 二選一；
+- SDK／proc macro prototype；
+- `example.dual-gameplay` 的一个真实 component + fixed system + command；
+- generated manifest／static glue／C binding／dynamic batch shim；
+- portable ABI entry、instance lifecycle、batch／command／diagnostics；
+- equivalence harness 与 static／dynamic／per-entity反例 benchmark。
+
+### 完成
+
+- single-source business code 同时构建两种 realization；
+- registration hash、IDs、schedule 与 N ticks state hash一致；
+- static direct path 不经 C ABI／可启用 LTO；
+- dynamic FFI 次数随 system／batch，不随 entity线性往返；
+- wrong ABI／manifest／panic／stop-after-callback 有 deterministic test；
+- native library不卸载。
+
+D1 不是空 `hello_plugin`；system 必须读写 gameplay-shaped data并发 command。
+
+## D2：Upstream Voxel Playground
+
+### 交付
+
+- `bevy_voxel_world` 优先 spike；
+- Avian 优先 physics spike；
+- Bevy input／Leafwing 二选一；
 - walk／look／jump、raycast、break／place；
-- chunk／mesh／collider diagnostics。
+- chunk／mesh／collider diagnostics；
+- dual gameplay package驱动 break／place 的一项真实规则。
 
 ### 完成
 
-- 另一位測試者可取得 build 並完成挖掘／放置；
-- chunk 邊界行為正確；
-- edit-to-visible latency、frame time、memory 與 task queue 有測量；
-- 對每個 upstream 缺口有可重現記錄。
+- 另一位测试者可取得 build并完成操作；
+- chunk boundary／six Y-up faces正确；
+- edit-to-visible、frame、fixed tick、memory、queues 已量测；
+- 每个 upstream缺口有 reproduction／adoption结论；
+- static／dynamic切换仍完成同一操作。
 
-D1 之前不寫自有 voxel renderer、mesher 或 physics。
+D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走 upstream gate。
 
-## D2：權威 chunk 與保存
+## D3：Authoritative Chunk、Package Content 與 Persistence
 
 ### 交付
 
-- 根據 D1 adoption report 選擇直接採用或最小 adapter；
-- stable block ID、chunk revision、dirty state；
+- stable block ID、chunk revision、dirty／durability state；
+- `latticeaxiom.official-content`／`example.marker` packages；
+- validated content／schema registry；
 - `MemoryWorldStorage`／RocksDB；
-- snapshot envelope、atomic batch、durability；
-- chunk unload／reload；
-- normal shutdown 和 crash test。
+- snapshot envelope、atomic batch、checkpoint；
+- unload／reload、normal shutdown／crash fixtures；
+- world metadata的 required package／schema closure。
 
 ### 完成
 
-- 修改跨重啟保留；
-- 舊 async result 不覆蓋新 revision；
-- 已物化 chunk 不重新生成；
-- checkpoint 可在獨立目錄恢復；
-- 存檔沒有 Bevy Entity、Handle 或 solver handle。
-
-## D3：公開內容路徑
-
-### 交付
-
-- validated `ContentCatalog`；
-- `OfficialContentPlugin`：最小 stone／dirt／placeable item；
-- `TestContentPlugin`：另一 namespace 的 marker block；
-- stable ID duplicate／missing diagnostics；
-- headless content composition test。
-
-### 完成
-
-- 官方內容只用公共 registration；
-- plugin 加入順序不改變內容 ID；
-- test content 可獨立啟動；
-- 缺失權威 ID 不 silent remap。
+- 修改跨重启保留，已物化 chunk不重生；
+- stale async result不覆盖新 revision；
+- official／test packages无私有 registration；
+- discovery／load order不改变 IDs／save；
+- static／dynamic gameplay产生相同 snapshot bytes（排除允许的 diagnostic metadata）；
+- save不含 Bevy／ABI／physics handles；
+- missing authoritative content有明确 recovery／拒绝。
 
 ## D4：最小程序世界
 
 ### 交付
 
-- world seed 與 `WorldgenConfig`；
-- 兩個 placeholder biome 或 terrain style；
-- deterministic terrain height（`y`）與最小洞穴／空洞；
-- generator revision、config hash 和 chunk provenance；
-- 新區塊生成後立即 snapshot。
+- world seed／`WorldgenConfig`；
+- 两个 placeholder terrain／biome styles；
+- deterministic height（`y`）与最小 cave／void；
+- generator package／capability；
+- revision／config hash／provenance；
+- new chunk snapshot-first materialization。
 
 ### 完成
 
-- 相同 seed／`(x, z)`／config 在 headless 測試產生相同權威 chunk；
-- 不同 task／chunk 順序不改變結果；
-- generator 更新不改變舊 chunk；
-- 玩家循環仍完整。
+- 相同 seed／`(x, z)`／config／locked provider 产生相同 chunk；
+- task／chunk ordering不改变结果；
+- generator更新不改变 old snapshot；
+- exclusive terrain provider conflict fail-fast；
+- 玩家／package循环仍完整。
 
-不要求第一版就實作完整領地、水文、地質或洞穴拓撲架構。
+不要求第一版完成 territory、hydrology、geology 或完整 cave topology。
 
-## D5：交付與回歸
+## D5：Render Composition 與 Upgrade Rehearsal
 
-### 自動驗收
+### 交付
 
-- client 可玩 smoke；
-- headless fixed-tick gameplay；
-- save round-trip／old-schema fixture；
-- RocksDB crash／atomicity；
-- chunk revision race；
-- Y-up six-face mesh／raycast／collider；
-- official／test content order randomization；
-- 10 分鐘 traversal memory／queue bound；
+- RenderData／Feature／Pass／Provider registration；
+- 两个 composable post／compute fixtures；
+- default + fake hardware-specific terrain backend providers；
+- GPU requirement／fallback；
+- portable dynamic compact render command prototype；
+- `EngineCoupledNative` exact-build fixture；
+- 一次 Bevy upgrade branch rehearsal；
+- portable old binary保留不重编。
+
+### 完成
+
+- feature pair 顺序／resource graph稳定；
+- exclusive provider conflict在 code load前失败；
+- unsupported GPU选 fallback；
+- render failure不改变 world hash；
+- portable old binary跨升级按 contract工作；
+- engine-coupled old artifact因 `EngineBuildId`拒绝，重编后通过；
+- 未因 Bevy内部更新无故提升所有 package major。
+
+## D6：交付與回歸
+
+### 自动验收
+
+- client playable／headless fixed-tick；
+- Nickel／typed model／lock golden；
+- SemVer／capability conflict matrix；
+- static／dynamic equivalence；
+- old-binary／bad-ABI／panic／lifecycle；
+- save round-trip／old schema／crash atomicity；
+- chunk revision race／queue bound；
+- Y-up mesh／raycast／collider six faces；
+- content discovery randomization；
+- render feature／provider composition；
+- 10 分钟 traversal memory／CPU／GPU／FFI metrics；
 - checkpoint restore。
 
-### 人工驗收
+### 人工验收
 
-- 新測試者不看原始碼能在 5 分鐘內完成挖掘、放置、退出與重載；
-- 畫面清楚區分目標方塊、選中方塊和保存狀態；
-- crash／missing content／存檔失敗有可理解診斷；
-- build 與操作說明可重複。
+- 新测试者 5 分钟内完成 break／place／restart；
+- package／ABI／missing content错误可理解且有修复动作；
+- static／dynamic切换无需修改业务 package source；
+- profiler清楚标示 dynamic bridge／batch overhead；
+- build／profile／lock／world recovery说明可重复。
 
 ## Demo 明確不做
 
-- 動態模組載入、registry、mod marketplace、WASM sandbox；
-- 多人、rollback 或 lockstep；
-- 自研 renderer／physics／ECS／scheduler／asset system；
-- 完整 terrain graph、文明、水文或世界編輯器；
-- 正式角色美術、複雜動畫、柔體與進階 PBR；
-- 以 Godot 作第二 runtime。
+- public／federated registry、marketplace／auto-update；
+- general large-scale resolver；
+- multi-platform build farm／distributed cache；
+- native hot unload；
+- production WASM sandbox／untrusted mod market；
+- multiplayer rollback／lockstep；
+- custom renderer／physics／ECS／scheduler／asset system；
+- 完整 world editor／civilization／hydrology；
+- Godot runtime。
 
-## Demo 完成定義
+## Demo 完成定义
 
-以下條件全部成立才算完成：
+1. 真实玩家完成完整循环。
+2. 所有 profile只从 package graph启动。
+3. 一个真实 system 的 static／portable realization等价，static性能优势未被抹平。
+4. save／crash证明权威 revision正确。
+5. upstream adoption report没有猜测性自研替代。
+6. render feature／provider证明机制级扩充可组合。
+7. Bevy upgrade rehearsal证明 portable／engine-coupled分级。
+8. 性能、memory、queue、FFI／commands有基线数据。
 
-1. 一個真實玩家可完成完整循環。
-2. client 與 headless 使用相同權威 gameplay／world／persistence plugin。
-3. 保存與 crash 測試證明已確認 revision 不遺失、不半寫。
-4. 官方內容證明公共 Bevy plugin 路徑。
-5. upstream adoption report 沒有以猜測支持的自研替代。
-6. 性能、記憶體和 queue 有基線數據，可供下一階段比較。
+完成 demo 不自动等于 ABI 1.0；冻结仍需[执行期路线图](roadmap-game-engine.md)的完整 gates。
 
 ## 相關文件
 
-- [Bevy 執行期整合路線](roadmap-game-engine.md)
-- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
-- [世界持久化](../architecture/world-persistence.md)
-- [模組與內容組合](../architecture/module-composition.md)
+- [執行期整合路線](roadmap-game-engine.md)
+- [套件內核](../architecture/package-management.md)
+- [原生 ABI](../architecture/native-module-abi.md)
+- [Bevy 執行期](../architecture/game-engine-runtime.md)
 - [待決問題](open-questions.md)

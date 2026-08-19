@@ -12,7 +12,7 @@ decision:
 
 ## 結論
 
-資產預設走 Bevy `AssetServer`、標準 loader 和 glTF 管線。Lattice Axiom 不先建立平行 asset database／compiler；只有遊戲特有且無法由現有格式保存的語義，才加入小型 typed asset、sidecar 或 importer extension。
+资产runtime默认走Bevy `AssetServer`、standard loaders与glTF pipeline。package manifest／lock负责stable asset identity、owner、source／artifact hash与profile availability；它不复制Bevy asset dependency graph。只有游戏特有且无法由现有格式保存的语义，才加入小型typed asset、sidecar或importer extension。
 
 ## 三種資料不要混用
 
@@ -30,6 +30,7 @@ decision:
 source authoring file
         ↓ export
 glTF / image / audio / typed data asset
+        ↓ package ownership / stable asset ID validation
         ↓ Bevy AssetServer + loaders
 Bevy assets and dependency graph
         ↓ handles used by ECS presentation
@@ -75,12 +76,13 @@ sidecar 應以 stable semantic name 對應 glTF node，不保存 Bevy `Entity`�
 
 | 識別 | 生命週期 | 可否持久化 |
 | --- | --- | --- |
-| stable content／asset ID | 由內容 owner 維護，跨發行遷移 | 可以 |
+| stable content／asset ID | 由logical package／schema owner维护，跨发行迁移 | 可以 |
 | logical asset path／label | 專案資產圖內可診斷引用 | 視格式契約而定 |
 | Bevy `Handle<A>` | 目前 App／AssetServer 執行期 | 不可以 |
+| ABI opaque asset handle | 目前EngineInstance／assets interface | 不可以 |
 | GPU resource／render entity | 目前 device／frame | 不可以 |
 
-存檔保存 stable content ID 和必要版本；載入時由目前 content catalog 解析成 asset path／handle。缺失內容要產生可診斷錯誤或明確 placeholder policy，不能保存 raw handle 期待下次有效。
+存档保存stable content／asset ID与必要schema；加载时由`RegistrationImage`解析owner／package-relative asset，再由Bevy AssetServer产生handle。dynamic module只取得ABI opaque handle。缺失内容要产生package-aware诊断或明确placeholder policy，不能保存raw handle期待下次有效。
 
 ## Hot reload
 
@@ -107,6 +109,7 @@ Godot 可以在未來作視覺 authoring／import workflow 對照，但不是 ru
 - client 由 `AssetServer` 載入資產；headless 不必載入純視覺資產也能解析權威 content ID。
 - hot reload 視覺材質不改變 world hash；修改 collision semantic 必須走顯式權威更新。
 - 重啟後 stable content ID 能重新解析，存檔中不存在 Bevy handle。
+- static／dynamic realization引用同一stable asset ID，manifest／lock可定位相同owner与artifact hash。
 - custom asset type 必須有 malformed-input、version 和 round-trip test。
 
 ## 相關文件

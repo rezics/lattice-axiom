@@ -9,7 +9,7 @@ updated: 2026-08-19
 
 ## 背景
 
-Lattice Axiom 的世界生成由可更換的 content plugin、generator revision 與組態組成。若只保存種子與玩家差異，生成器更新或內容移除後，同一座標可能得到完全不同的地形；已被探索的世界便不再穩定。另一方面，空間資料主要按區塊載入與卸載，不適合在 demo 中把每個方塊或一般世界實體做成關聯式資料列。
+Lattice Axiom的世界生成由可更换的content／generator packages、locked capability provider、generator revision与config组成。若只保存seed与玩家差异，package／generator更新或内容移除后，同一coordinate可能得到完全不同terrain；已探索world便不稳定。另一方面，spatial data主要按chunk加载／卸载，不适合在demo中把每个block或一般world entity做成关系资料列。
 
 先自研 Region File 再遷移到嵌入式資料庫，會建立一套只使用一個階段、仍需自行處理索引、原子寫入、損壞復原與備份的格式。既然 World Store 的長期本機實現已選定 RocksDB，demo 直接使用它。
 
@@ -19,7 +19,7 @@ Lattice Axiom 的世界生成由可更換的 content plugin、generator revision
 2. 區塊第一次生成完成後立即保存完整可讀快照。之後只要快照存在便直接載入，不因目前生成器、內容或組態變更而隱式重算。
 3. generator 是創造新世界資料的工具，不是已存在世界的資料來源。種子與 provenance 用於解釋、比較與顯式重建，不能取代已保存快照。
 4. demo 的生產實現直接採 RocksDB，不建立自訂 Region File、SQLite 或其他過渡 World Store。另提供 `MemoryWorldStorage` 給單元與 property test。
-5. 核心只依賴 `WorldStorage` 契約；RocksDB 鍵、column family、壓實與備份型別不得滲入世界生成、ECS 或內容模組。
+5. Core／packages只依赖`WorldStorage` product contract；RocksDB key、column family、compaction与backup types不得渗入worldgen、ECS或dynamic ABI。
 6. 以世界、維度與區塊座標形成穩定且可做前綴／範圍掃描的鍵空間。區塊快照、空間實體、模擬續行狀態與產物生成記錄是邏輯上分離的資料類別；實際 column family 數量由原型量測決定。
 7. 一次區塊提交涉及的快照、空間實體索引、續行狀態與 provenance 使用同一原子 write batch。耐久等級與同步策略必須由 API 顯式表達並有崩潰測試。
 8. 同一個世界在任一時刻只有一個權威寫入者。RocksDB 是嵌入式儲存引擎，不作為多個遊戲節點共同遠端寫入的共享資料庫。
@@ -45,7 +45,7 @@ Lattice Axiom 的世界生成由可更換的 content plugin、generator revision
 - 座標與建立時間；
 - generation epoch 或等價標識；
 - 正規化生成組態雜湊；
-- 相關 stable content ID、generator revision 與精確實現雜湊；
+- 相关stable content／package IDs、generator revision、schema owner与locked realization／implementation fingerprint；
 - 上游規劃產物與邊界契約識別；
 - 快照 schema 與擁有者 schema 版本。
 

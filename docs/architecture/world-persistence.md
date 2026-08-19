@@ -6,6 +6,7 @@ updated: 2026-08-19
 decision:
   - ../decisions/0003-no-global-version-switch.md
   - ../decisions/0009-rocksdb-authoritative-world-snapshots.md
+  - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
 ---
 
@@ -13,7 +14,7 @@ decision:
 
 ## 結論
 
-RocksDB 保存已物化世界的權威快照；Bevy World／ECS 只保存目前 active working set。`PersistencePlugin` 透過 Bevy schedule 和 task pool 捕捉、寫入與確認 snapshot，但長期格式不序列化 Bevy 或 RocksDB 的 process-local 型別。
+RocksDB 保存已物化世界的权威快照；Bevy World／ECS 只保存目前 active working set。persistence domain package／host adapter透过Bevy schedule与task pool捕捉、写入与确认snapshot，但长期格式不序列化Bevy、dynamic ABI或RocksDB的process-local型别。world metadata记录实际需要的package／content／schema closure，而不是一个global engine version。
 
 ## 資料所有權
 
@@ -69,12 +70,13 @@ column family 數量、compression、prefix extractor 和 compaction 由 benchma
 - 必要 scheduled work／simulation continuation；
 - generation provenance；
 - optional integrity hash。
+- required package／schema owner identity（适合放在world／region metadata时不在每个chunk重复）。
 
-Bevy `Entity`、`Handle`、Rust `TypeId`、物理 solver handle、asset server index 和 GPU ID 都不允許出現在 payload。
+Bevy `Entity`、`Handle`、Rust `TypeId`、ABI generational handle、dynamic callback key、物理solver handle、asset server index与GPU ID都不允许出现在payload。
 
 ## Bevy schedule 中的 commit
 
-`PersistencePlugin` 定義少量 domain SystemSet：
+persistence host adapter定义少量versioned semantic stages，并映射到Bevy `SystemSet`：
 
 ```text
 FixedUpdate
@@ -117,16 +119,16 @@ request chunk
     ↓
 I/O task reads and validates envelope
     ↓
-schema owners migrate to current DTO
+locked package / schema owners migrate to current DTO
     ↓
-content IDs resolve against validated ContentCatalog
+content IDs resolve against RegistrationImage
     ↓
 main-world system instantiates chunk working set / ECS
     ↓
 derived mesh and collider jobs start
 ```
 
-未知 schema、缺失權威內容、checksum error 和 migration failure 要在修改 Bevy World 前被辨識。可恢復情況可進 read-only recovery／placeholder policy；不可恢復時保持 world 未載入並提供診斷。
+unknown schema、missing authoritative package／content、checksum error与migration failure要在修改Bevy World前识别。schema owner与migration来自已锁定package closure；realization可以改变，但logical owner／schema contract不能因此改变。可恢复情况可进入read-only recovery／placeholder policy；不可恢复时保持world未载入并提供诊断。
 
 ## Chunk 卸載
 
@@ -146,10 +148,11 @@ chunk 只有在以下條件成立時才能離開 working set：
 正常退出進入 `ShuttingDown` state：
 
 1. 停止接收會產生新 dirty state 的 gameplay action；
-2. capture 所有 dirty chunk 的最新 revision；
-3. 等待有界 I/O drain；
-4. 寫入 world metadata／clean-shutdown marker；
-5. 到達 durability 要求後才發送 Bevy `AppExit`。
+2. quiesce package instances并取消会产生新权威command的tasks；
+3. capture 所有 dirty chunk 的最新 revision；
+4. 等待有界 I/O drain；
+5. 寫入 world metadata／clean-shutdown marker；
+6. 到達 durability 要求後才停止module instances并发送Bevy `AppExit`。
 
 若 deadline 超時，保留 WAL 可恢復狀態並報告未確認 revision。程序 crash／kill test 必須證明每個 atomic batch 要麼完整存在、要麼完全不存在；正常退出流程不能替代這項測試。
 
@@ -199,10 +202,12 @@ RocksDB read snapshot 只提供程序內一致讀視圖，不是可攜備份。�
 - `MemoryWorldStorage` 與 RocksDB 通過相同 domain contract tests。
 - checkpoint 可在獨立目錄恢復並進入 headless world。
 - 存檔掃描不出現 Bevy Entity／Handle 或第三方 solver handle。
+- 同一gameplay package从static切换到portable dynamic realization后读取／写回相同schema fixture，normative snapshot bytes不变。
+- 缺少required package／schema时在world进入writable Bevy state前失败，并列出owner与相容range。
 
 ## 相關文件
 
 - [決策 0009：RocksDB 權威世界快照](../decisions/0009-rocksdb-authoritative-world-snapshots.md)
-- [版本與相容性](versioning-and-compatibility.md)
 - [Bevy 執行期架構](game-engine-runtime.md)
+- [套件與 ABI 版本](versioning-and-compatibility.md)
 - [世界生成](world-generation.md)

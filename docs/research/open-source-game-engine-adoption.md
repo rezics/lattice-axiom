@@ -11,7 +11,7 @@ updated: 2026-08-19
 
 開源遊戲引擎不是只有 renderer，也不是必須接管產品的一個封閉黑盒。它是一組已被大量遊戲共同需要的 runtime、資料模型、平台整合、內容管線、診斷和擴充機制。
 
-Lattice Axiom 沒有「無法接入完整引擎」的證據。Bevy 本身以 Rust crate、App 和 Plugin 組合，正好允許專案直接採用完整上游能力，再以 domain plugin 加入世界生成、持久化和玩法。過去需要自研引擎的結論來自預先假設的抽象邊界，不是可玩原型證明的限制。
+Lattice Axiom没有“无法接入完整引擎”的证据。Bevy本身以Rust crate、App与Plugin组合，正好允许项目采用完整上游能力，再由package-generated domain adapters加入worldgen、persistence与gameplay。过去需要自研engine的结论来自预先假设的抽象边界，不是可玩prototype证明的限制。
 
 ## 一個現代遊戲引擎通常提供什麼
 
@@ -41,13 +41,13 @@ Lattice Axiom 沒有「無法接入完整引擎」的證據。Bevy 本身以 Rus
 遊戲 binary 正常依賴引擎 crate，自己建立 App 並選擇 plugin。Bevy 屬這種模式：
 
 ```rust
-App::new()
-    .add_plugins(DefaultPlugins)
-    .add_plugins(LatticeAxiomPluginGroup)
-    .run();
+let images = package_kernel.realize(profile_or_lock)?;
+let mut app = App::new();
+host_adapter.install(&mut app, images)?;
+app.run();
 ```
 
-這不是把遊戲「塞進外部主程式」，而是用上游 crate 組成自己的 Rust application。client、headless、test 和 tool 可以選擇不同 plugin profile，domain gameplay 仍是同一套。
+这不是把游戏“塞进外部主程序”，而是用upstream crates组成自己的Rust application。package kernel只在启动控制平面决定closure；host adapter仍建立正常Bevy App。client、headless、test与tool可选择不同package／standard-plugin profiles，authoritative gameplay仍是同一套。
 
 ### Source fork
 
@@ -61,7 +61,7 @@ App::new()
 - `DefaultPlugins` 提供標準 client；`MinimalPlugins` 和 feature 組合支援 headless／test。
 - renderer 已把 main simulation world 與 render world extraction 分開，無需先造 render facade。
 - AssetServer／AssetLoader 提供正常 typed asset extension。
-- 普通遊戲程式可以直接使用 Bevy type；只有存檔、網路和 stable content ID 需要長期 DTO。
+- Core host与static package可以直接使用Bevy type；dynamic ABI、存档、网络与stable content ID使用Lattice-owned contract。
 - Bevy 生態已有物理、輸入、體素、資產載入與 tooling 候選，可先 spike。
 
 這些特性不是宣稱 Bevy 永遠沒有缺口，而是說「可以完整接入」已成立；缺口必須在接入後由可玩原型逐項證明。
@@ -78,7 +78,9 @@ App::new()
 | generic diagnostics | worldgen／persistence／chunk domain 指標 |
 | glTF／標準 loader | 領地、地形、洞穴與 generation provenance |
 
-邊界依資料壽命與產品語義劃分，不依「第三方型別一律不得出現」劃分。Bevy type 在 runtime 內部是正確工具；只有跨重啟／跨程序資料需要隔離。
+Package kernel是Lattice Axiom额外拥有的产品控制平面：它决定package／SemVer／capability／realization closure，但不取代表格左侧的Bevy engine能力。
+
+边界依资料寿命、distribution与产品语义划分，不依“第三方型别一律不得出现”划分。Bevy type在core／static runtime内部是正确工具；跨dynamic library、restart／process与长期资料则隔离。
 
 ## 「無法接入」必須如何證明
 
@@ -123,3 +125,4 @@ Godot 提供另一種成熟的 engine-hosted／editor-first 模式，適合作�
 - [Bevy 執行期架構](../architecture/game-engine-runtime.md)
 - [技術棧](../foundations/technology-stack.md)
 - [Bevy 生態調查](renderer-physics-landscape.md)
+- [原生外掛與渲染模組教訓](native-plugin-and-render-mod-lessons.md)
