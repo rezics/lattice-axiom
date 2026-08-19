@@ -20,6 +20,7 @@ updated: 2026-08-19
 - Rust package kernel 解析同一 `LockedGameGraph`，支援靜態建置與資料夾動態載入；
 - wgpu 藏在渲染門面後，另有 headless 實現；
 - RocksDB 從 demo 起就是生產 World Store，另有記憶體測試實現；
+- 世界空間採用右手笛卡兒座標系，`XY` 為水平面、`+Z` 向上，長度單位為公尺；
 - 官方內容只使用公開模組路徑。
 
 ## 里程碑
@@ -42,13 +43,13 @@ updated: 2026-08-19
 
 ### 1：空宿主與渲染門面
 
-建立 `lattice-core`、`lattice-render`、`lattice-render-wgpu`、`lattice-render-headless` 與 `lattice-demo`。能開窗、控制相機、上傳並畫一個立方體；headless 只驗證 `RenderWorld`，不建立 GPU。
+建立 `latticeaxiom-core`、`latticeaxiom-render`、`latticeaxiom-render-wgpu`、`latticeaxiom-render-headless` 與 `latticeaxiom-demo`。能開窗、控制相機、上傳並畫一個立方體；headless 只驗證 `RenderWorld`，不建立 GPU。
 
 不做區塊、模組與物理。若 crate 邊界或編譯時間已不合理，在這一步修正。
 
 ### 2：薄組合核心
 
-加入 `lattice-compose`、`lattice-packages`、`lattice-modules` 與 `lattice-cli`：`lattice.lib` 合約、Nickel 完整求值、直接 serde 轉換、精確來源 lock、能力解析、`LockedGameGraph`、穩定數值 ID 與靜態膠水 crate 產生。
+加入 `latticeaxiom-compose`、`latticeaxiom-packages`、`latticeaxiom-modules` 與 `latticeaxiom-cli`：`latticeaxiom.lib` 合約、Nickel 完整求值、直接 serde 轉換、精確來源 lock、能力解析、`LockedGameGraph`、穩定數值 ID 與靜態膠水 crate 產生。
 
 不做 registry、一般 SemVer 求解器、二進位快取、WASM 或卸載。
 

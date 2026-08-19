@@ -2,7 +2,9 @@
 title: 資產管線與模型語義
 status: exploration
 type: explanation
-updated: 2026-08-09
+updated: 2026-08-19
+decision:
+  - ../decisions/0011-right-handed-z-up-world-coordinates.md
 ---
 
 # 資產管線與模型語義
@@ -41,6 +43,8 @@ glTF / GLB + 遊戲語義擴充
 glTF 2.0 能攜帶網格、PBR 材質、貼圖、節點階層、skin/joint、骨架動畫與 morph target，且有公開規格與擴充機制。它適合作為 runtime delivery 導向的交換格式候選。
 
 `.blend` 更適合作為 Blender 創作來源，不適合直接成為所有工具都必須理解的遊戲 ABI。
+
+不論創作工具或交換格式使用哪種基底，資產編譯器都必須將其顯式轉換成專案的[右手 Z-up 規範執行期基底](../decisions/0011-right-handed-z-up-world-coordinates.md)。來源的 `forward_axis` 等欄位用於解釋和轉換作者資料；它們不允許不同軸約定繼續滲入執行期、物理或存檔。
 
 OpenUSD 的 scene composition、layering、reference 與大型 DCC 管線能力值得研究；它可能位於大型內容製作的上游，而非每個一般模組的最終交付格式。這個角色分工仍需用實際工作流驗證。
 

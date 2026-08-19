@@ -29,12 +29,12 @@ Lattice Axiom 不是「先啟動一個固定遊戲，再從資料夾附加 mod�
 
 值得採用的是「宣告語言直接參與構造設定、套件與建置圖，package kernel 掌握來源、lock、store 與實現」的分工，而不是複製 Nix 語言、Nix store 路徑或 NixOS module library。
 
-JSON 可以作為 lock file 或對外輸出；它不應成為求值器、resolver、builder 與 loader 之間的內部語義總線。Lattice 的內部邊界由有版本的 Rust 型別與其不變量定義。
+JSON 可以作為 lock file 或對外輸出；它不應成為求值器、resolver、builder 與 loader 之間的內部語義總線。Lattice Axiom 的內部邊界由有版本的 Rust 型別與其不變量定義。
 
 ## 四層語義模型
 
 ```text
-package.ncl + game.ncl + overlays + lattice.lib
+package.ncl + game.ncl + overlays + latticeaxiom.lib
                          ↓
             Nickel 合併、合約、完整求值
                          ↓ direct serde conversion
@@ -81,13 +81,13 @@ CompositionSpec {
 
 ## Nickel 套件介面
 
-專案提供版本化的 `lattice.lib`，而不是讓每個工具自行解讀欄位。概念上的套件宣告如下：
+專案提供版本化的 `latticeaxiom.lib`，而不是讓每個工具自行解讀欄位。概念上的套件宣告如下：
 
 ```nickel
-let lattice = import "lattice/package.ncl" in
+let latticeaxiom = import "latticeaxiom/package.ncl" in
 {
   package = {
-    id = "lattice.official",
+    id = "latticeaxiom.official",
     version = "0.1.0",
   },
   provides = {
@@ -99,23 +99,23 @@ let lattice = import "lattice/package.ncl" in
     ],
   },
   dependencies = {
-    "lattice.core" = { version = "=0.1.0" },
+    "latticeaxiom.core" = { version = "=0.1.0" },
   },
   realizations = ['NativeStatic, 'NativeDynamic, 'Data],
-} | lattice.Package
+} | latticeaxiom.Package
 ```
 
 根 game profile 選擇套件、來源、實現偏好與政策：
 
 ```nickel
-let lattice = import "lattice/game.ncl" in
+let latticeaxiom = import "latticeaxiom/game.ncl" in
 {
   game = {
-    id = "lattice.official-game",
+    id = "latticeaxiom.official-game",
     version = "2026.8",
   },
   packages = {
-    "lattice.official" = {
+    "latticeaxiom.official" = {
       source = 'Registry { registry = "official", version = "=0.1.0" },
       realization = 'NativeStatic,
     },
@@ -128,7 +128,7 @@ let lattice = import "lattice/game.ncl" in
     native_code = 'TrustedOnly,
     authoritative = ["simulation.*", "worldgen.*"],
   },
-} | lattice.GameProfile
+} | latticeaxiom.GameProfile
 ```
 
 函式、預設值、overlay 與合併只存在於求值過程；進入 `CompositionSpec` 的結果必須是有限、完整且符合合約的值。
@@ -137,9 +137,9 @@ let lattice = import "lattice/game.ncl" in
 
 遠端存取不是 Nickel import 的隱含能力。v1 採兩階段控制：
 
-1. Rust package kernel 先求值只依賴本機根檔與 `lattice.lib` 的 game profile，再以其來源請求與既有 lock 找出要取得的本機路徑、registry 物件或 Git 內容，驗證雜湊後放入受控來源根。
+1. Rust package kernel 先求值只依賴本機根檔與 `latticeaxiom.lib` 的 game profile，再以其來源請求與既有 lock 找出要取得的本機路徑、registry 物件或 Git 內容，驗證雜湊後放入受控來源根。
 2. 逐一求值已取得套件的 `package.ncl` 以發現相依要求；package kernel 取得新增來源並重複，直到候選圖閉合，再執行全圖解析。
-3. Nickel 只能 import 根 profile、本套件內容、`lattice.lib` 與已解析的宣告式函式庫；求值器不能自行連網或讀取未宣告主機路徑。
+3. Nickel 只能 import 根 profile、本套件內容、`latticeaxiom.lib` 與已解析的宣告式函式庫；求值器不能自行連網或讀取未宣告主機路徑。
 
 套件 manifest 輸出相依要求，不以 `import` 執行跨遊戲套件載入。這避免「必須先執行不可信套件，才能知道要下載什麼」的循環。若未來需要可發布的 Nickel 函式庫，另設與遊戲套件圖分離的工具鏈輸入圖。
 
@@ -152,11 +152,11 @@ Nickel 合約回答「單一宣告的形狀與局部語義是否合法」；Rust
 3. 選出具名能力提供者，檢查唯一性、衝突、adapter 與 fallback；
 4. 驗證實現方式、信任政策、平台、ABI 與工具鏈；
 5. 依穩定鍵配置登錄順序與數值 ID；
-6. 輸出 `LockedGameGraph` 和持久化 `lattice.lock`。
+6. 輸出 `LockedGameGraph` 和持久化 `latticeaxiom.lock`。
 
 第一版不建立通用 registry 或 SAT／PubGrub 類求解器。profile 使用精確版本或既有 lock；等真實套件衝突出現後，再決定版本範圍與治理規則。
 
-`lattice.lock` 是機器產物，可以採 canonical JSON 以便審查、diff 與外部工具使用。雜湊以規範化的強型別內容計算；人工修改在下一次 `lock` 時被覆寫或拒絕。lock 的檔案格式不等同於內部 API，也不允許下游繞過型別驗證直接查任意 JSON 欄位。
+`latticeaxiom.lock` 是機器產物，可以採 canonical JSON 以便審查、diff 與外部工具使用。雜湊以規範化的強型別內容計算；人工修改在下一次 `lock` 時被覆寫或拒絕。lock 的檔案格式不等同於內部 API，也不允許下游繞過型別驗證直接查任意 JSON 欄位。
 
 ## 實現方式
 
@@ -188,12 +188,12 @@ game closure = binaries + assets + lock + descriptors
 ```text
 packages/
 └── dragon/
-    ├── lattice-package.json
+    ├── latticeaxiom-package.json
     ├── dragon.dll
     └── assets/
 ```
 
-`lattice-package.json` 是 `PublishedPackageDescriptor` 強型別的版本化封裝表示，不是另一套作者 manifest。發布工具由 `LockedGameGraph` 與建置結果生成它，並記錄 schema、套件內容雜湊、ABI、目標平台與工具鏈。loader 先解碼並驗證成 Rust 型別，再把候選交給同一 resolver；不能讓業務邏輯散落成 JSON path 查詢。
+`latticeaxiom-package.json` 是 `PublishedPackageDescriptor` 強型別的版本化封裝表示，不是另一套作者 manifest。發布工具由 `LockedGameGraph` 與建置結果生成它，並記錄 schema、套件內容雜湊、ABI、目標平台與工具鏈。loader 先解碼並驗證成 Rust 型別，再把候選交給同一 resolver；不能讓業務邏輯散落成 JSON path 查詢。
 
 啟動流程為：掃描候選目錄、驗證描述符與內容、解析同一套件圖、載入動態函式庫或純資料、消化註冊載荷、建立 `RuntimeImage`。使用者不需在本機求值 Nickel 或編譯預建模組；代價是發布者必須為目標平台與工具鏈提供產物。
 
@@ -210,16 +210,16 @@ packages/
 
 ## Nickel 上游 package manager 的邊界
 
-Nickel 上游 package manager 管理的是可由 Nickel `import` 的函式庫，現階段仍屬實驗功能且官方發行版預設停用。Lattice v1 不使用它解析遊戲套件、下載原生產物或治理 registry。
+Nickel 上游 package manager 管理的是可由 Nickel `import` 的函式庫，現階段仍屬實驗功能且官方發行版預設停用。Lattice Axiom v1 不使用它解析遊戲套件、下載原生產物或治理 registry。
 
-可以借鑑或日後重用的部分包括 manifest 合約、Git／index 來源、精確 lock 與最小版本選擇；任何直接依賴都必須先證明能與 Lattice 的能力、realization、信任、資產與世界相容性模型對齊。
+可以借鑑或日後重用的部分包括 manifest 合約、Git／index 來源、精確 lock 與最小版本選擇；任何直接依賴都必須先證明能與 Lattice Axiom 的能力、realization、信任、資產與世界相容性模型對齊。
 
 ## CLI 最小範圍
 
-`lattice-cli` 第一版需要：
+`latticeaxiom-cli` 第一版需要：
 
 - `check`：求值 Nickel、執行合約並建立 `CompositionSpec`；
-- `lock`：取得精確來源、解析能力並寫 `lattice.lock`；
+- `lock`：取得精確來源、解析能力並寫 `latticeaxiom.lock`；
 - `build`：建立 `BuildPlan`、產生靜態膠水並呼叫受控工具鏈；
 - `pack`：產生發布描述符、內容雜湊與套件目錄；
 - `doctor`：檢查來源、內容雜湊、平台、工具鏈、ABI 與 lock 漂移。

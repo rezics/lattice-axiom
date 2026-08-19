@@ -6,6 +6,7 @@ updated: 2026-08-19
 decision:
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md
   - ../decisions/0009-rocksdb-authoritative-world-snapshots.md
+  - ../decisions/0011-right-handed-z-up-world-coordinates.md
 ---
 
 # 世界持久化與 RocksDB World Store
@@ -169,7 +170,7 @@ demo 先把所有隨區塊載入的持久物件放在 RocksDB。平台期只有�
 - 依 package/schema 找出全部待遷移物件；
 - 平台服務在世界未載入時仍需查詢。
 
-若採用 PostgreSQL，資料以 `PersistentWorldObject` 與有 owner schema 的 component 模型組織，並以 `(world_id, dimension_id, chunk_x, chunk_z)` 作主要載入索引，一次取得整個區塊的物件，避免 N+1 查詢。
+若採用 PostgreSQL，資料以 `PersistentWorldObject` 與有 owner schema 的 component 模型組織，並以 `(world_id, dimension_id, chunk_x, chunk_y, chunk_z)` 作主要載入索引，一次取得整個區塊的物件，避免 N+1 查詢。三軸含義、順序與負座標分區遵守[決策 0011](../decisions/0011-right-handed-z-up-world-coordinates.md)，其中 `chunk_z` 是垂直索引。
 
 跨 RocksDB 與 PostgreSQL 的 regenerate 不是單一 write batch。平台期必須採 staged replacement、journal/outbox、冪等提交與補償恢復等明確協定；在此協定完成前，不把物件拆到兩個權威儲存。
 

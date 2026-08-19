@@ -55,23 +55,23 @@ decision:
 ## Nickel 根設定檔
 
 ```nickel
-let lattice = import "lattice/game.ncl" in
+let latticeaxiom = import "latticeaxiom/game.ncl" in
 {
   game = {
-    id = "lattice.official-game",
+    id = "latticeaxiom.official-game",
     version = "2026.8",
   },
   packages = {
-    "lattice.runtime" = {
+    "latticeaxiom.runtime" = {
       source = 'Registry { registry = "official", version = "=0.1.0" },
     },
-    "lattice.cave.contract" = {
+    "latticeaxiom.cave.contract" = {
       source = 'Registry { registry = "official", version = "=2.1.0" },
     },
-    "lattice.cave.topology.geodesic" = {
+    "latticeaxiom.cave.topology.geodesic" = {
       source = 'Registry { registry = "official", version = "=1.4.0" },
     },
-    "lattice.biomes.official" = {
+    "latticeaxiom.biomes.official" = {
       source = 'Registry { registry = "official", version = "=3.0.0" },
     },
   },
@@ -85,10 +85,10 @@ let lattice = import "lattice/game.ncl" in
     authoritative = ["simulation.*", "worldgen.*"],
     presentationMayDiffer = ["render.*", "audio.*"],
   },
-} | lattice.GameProfile
+} | latticeaxiom.GameProfile
 ```
 
-`lattice.official-game@2026.8` 只識別這份根設定的發布。若兩個實例解析出不同根版本但權威能力子圖相容，它們不應只因標籤不同而被拒絕。
+`latticeaxiom.official-game@2026.8` 只識別這份根設定的發布。若兩個實例解析出不同根版本但權威能力子圖相容，它們不應只因標籤不同而被拒絕。
 
 v1 profile 使用精確版本或已鎖定來源，不先承諾一般版本求解器。Nickel 完整求值後直接轉成 Rust `CompositionSpec`，再由 package kernel 建立 `LockedGameGraph`；`.ncl` 原始文字本身不是 lock graph。
 
@@ -185,7 +185,7 @@ World {
 
 ## 尚待設計
 
-- `CompositionSpec`、`LockedGameGraph` 與持久化 `lattice.lock` 的實際 schema、canonicalization 與演進規則。
+- `CompositionSpec`、`LockedGameGraph` 與持久化 `latticeaxiom.lock` 的實際 schema、canonicalization 與演進規則。
 - 能力契約使用 SemVer、結構相容或自訂版本代數的範圍。
 - 舊原生生成器的封存與安全執行方式。
 - 產物生成記錄的儲存粒度、去重與垃圾回收。

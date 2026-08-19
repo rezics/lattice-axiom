@@ -5,11 +5,12 @@ type: explanation
 updated: 2026-08-19
 decision:
   - ../decisions/0006-wgpu-behind-rendering-facade.md
+  - ../decisions/0011-right-handed-z-up-world-coordinates.md
 ---
 
 # 渲染架構與擴充邊界
 
-> demo 唯一 GPU 後端採 wgpu、第一階段直接使用 WGSL，並以 `lattice-render` 門面及 headless 實現隔離，已由[決策 0006](../decisions/0006-wgpu-behind-rendering-facade.md)採納。長期 shader IR、Render Feature 與 Render Graph 擴充仍在探索。
+> demo 唯一 GPU 後端採 wgpu、第一階段直接使用 WGSL，並以 `latticeaxiom-render` 門面及 headless 實現隔離，已由[決策 0006](../decisions/0006-wgpu-behind-rendering-facade.md)採納。長期 shader IR、Render Feature 與 Render Graph 擴充仍在探索。
 
 ## 核心原則
 
@@ -17,17 +18,19 @@ decision:
 
 普通內容模組不應直接發送 GPU 命令。若每個實體或模組自行 `draw()`，渲染器便難以全域排序、剔除、批次化、實例化、管理資源生命週期與安排同步。
 
+`RenderWorld` 中的位置、方向與變換使用[規範世界座標](../decisions/0011-right-handed-z-up-world-coordinates.md)。wgpu 的裁剪空間與深度範圍只在相機／後端邊界轉換，不改變模擬、剔除或持久化座標。
+
 ## demo 邊界
 
 ```text
-lattice-core / content
+latticeaxiom-core / content
         │ produces RenderWorld
         ▼
-   lattice-render
-    ┌──────┴──────┐
-    ▼             ▼
-lattice-render-  lattice-render-
-wgpu             headless
+      latticeaxiom-render
+       ┌──────┴──────┐
+       ▼             ▼
+latticeaxiom-      latticeaxiom-
+render-wgpu        render-headless
 ```
 
 門面第一版只包含相機、區塊網格實例、一般實體實例、`MeshId`、`MaterialId`、網格與材質上傳，以及 `submit`。核心流程固定為「模擬 tick → 擷取 `RenderWorld` → `renderer.submit`」；渲染 crate 不訂閱玩法事件，內容 crate 編譯期依賴不到 wgpu。

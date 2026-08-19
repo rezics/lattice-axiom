@@ -8,11 +8,12 @@ decision:
   - ../decisions/0002-hybrid-cave-generation-composition.md
   - ../decisions/0003-no-global-version-package-scoped-compatibility.md
   - ../decisions/0004-territorial-delegation-for-spatial-generation.md
+  - ../decisions/0011-right-handed-z-up-world-coordinates.md
 ---
 
 # 可組合世界生成架構
 
-> [領地優先、群系驅動、約束求解](../decisions/0001-territory-first-biome-driven-world-generation.md)、[混合洞穴組合模型](../decisions/0002-hybrid-cave-generation-composition.md)、[無全域大版本](../decisions/0003-no-global-version-package-scoped-compatibility.md)與[領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)的方向已採納。本頁提出具體責任、資料流與候選介面；演算法與參數仍需原型驗證。
+> [領地優先、群系驅動、約束求解](../decisions/0001-territory-first-biome-driven-world-generation.md)、[混合洞穴組合模型](../decisions/0002-hybrid-cave-generation-composition.md)、[無全域大版本](../decisions/0003-no-global-version-package-scoped-compatibility.md)、[領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)與[右手 Z-up 世界座標](../decisions/0011-right-handed-z-up-world-coordinates.md)的方向已採納。本頁提出具體責任、資料流與候選介面；演算法與參數仍需原型驗證。
 
 ## 目標與非目標
 

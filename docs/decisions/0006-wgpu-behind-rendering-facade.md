@@ -14,7 +14,7 @@ updated: 2026-08-19
 ## 決策
 
 1. demo 唯一 GPU 後端採 wgpu；第一階段直接使用 WGSL。
-2. 建立 `lattice-render` 門面、`lattice-render-wgpu` GPU 實現與 `lattice-render-headless` 空提交實現。
+2. 建立 `latticeaxiom-render` 門面、`latticeaxiom-render-wgpu` GPU 實現與 `latticeaxiom-render-headless` 空提交實現。
 3. 核心每幀依序執行模擬、渲染擷取、填入 `RenderWorld`，再呼叫 `Renderer::submit`。渲染 crate 不訂閱玩法事件。
 4. 門面第一版只暴露相機、區塊網格實例、一般實體實例，以及 `MeshId`、`MaterialId` 等不透明控制代碼；wgpu 型別不得穿過門面。
 5. demo 只開放第一級「渲染資料」擴充。自訂 shader、Render Feature、Render Graph 擴充、raw GPU 存取與第二後端延後。

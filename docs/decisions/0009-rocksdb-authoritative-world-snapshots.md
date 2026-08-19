@@ -25,7 +25,7 @@ Lattice Axiom 的世界生成由可更換套件與組態組成。若只保存種
 8. 同一個世界在任一時刻只有一個權威寫入者。RocksDB 是嵌入式儲存引擎，不作為多個遊戲節點共同遠端寫入的共享資料庫。
 9. `/regenerate` 是顯式破壞性 World Transaction：選定範圍、generation lock、保留政策與備份點後，建立新快照並處理該範圍的生成物件、玩家物件及邊界。demo 內同一 RocksDB 的變更以 write batch 原子提交。
 10. RocksDB 的執行期 read snapshot 不等於可恢復備份。可攜備份使用 checkpoint／backup 流程，平台期再上傳物件儲存並驗證還原。
-11. PostgreSQL 不進入 demo 的區塊載入路徑。平台期若將 Persistent World Object 放入關聯庫，必須按 `(world, dimension, chunk_x, chunk_z)` 批量載入，並另行設計跨 RocksDB／PostgreSQL 的協調、補償與恢復；不得假裝存在免費的跨庫原子交易。
+11. PostgreSQL 不進入 demo 的區塊載入路徑。平台期若將 Persistent World Object 放入關聯庫，必須按 `(world, dimension, chunk_x, chunk_y, chunk_z)` 批量載入，並另行設計跨 RocksDB／PostgreSQL 的協調、補償與恢復；不得假裝存在免費的跨庫原子交易。
 
 ## 快照內容
 

@@ -129,14 +129,14 @@ BuildPlan → RuntimeImage
 官方遊戲、伺服器規則集與整合包是一份描述「這個遊戲由什麼構成」的 Nickel 根設定檔，而不只是 `mods/` 目錄：
 
 ```nickel
-let lattice = import "lattice/game.ncl" in
+let latticeaxiom = import "latticeaxiom/game.ncl" in
 {
   packages = {
-    "lattice.runtime" = {
+    "latticeaxiom.runtime" = {
       source = 'Registry { registry = "official", version = "=0.1.0" },
       realization = 'NativeStatic,
     },
-    "lattice.official" = {
+    "latticeaxiom.official" = {
       source = 'Registry { registry = "official", version = "=0.1.0" },
       realization = 'NativeStatic,
     },
@@ -145,7 +145,7 @@ let lattice = import "lattice/game.ncl" in
       realization = 'NativeDynamic,
     },
   },
-} | lattice.GameProfile
+} | latticeaxiom.GameProfile
 ```
 
 Nickel 負責套件宣告、合約、合併、overlay 與參數化；求值結果透過嵌入 API 直接轉成有版本的 Rust `CompositionSpec`，再由 package kernel 解析為 `LockedGameGraph`。完整模型與雙路徑見[Nickel 驅動的套件系統與雙實現路徑](package-management.md)。

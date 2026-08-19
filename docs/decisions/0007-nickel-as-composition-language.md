@@ -21,12 +21,12 @@ Nickel 以記錄、函式、合約與合併為核心，並能匯出 JSON。這�
 
 1. `module.ncl` 與 `game.ncl` 採 Nickel；模組與遊戲設定檔分別套用專案提供的 `Module` 與 `GameProfile` 合約。
 2. 基礎 profile、整合包與使用者覆寫使用 Nickel 的記錄合併、預設值與函式組合，不另造一套合併語言。
-3. `lattice-compose` 是唯一 Nickel 求值邊界。CLI 與宿主共用同一 Rust 嵌入介面與同一組合測試，不各自呼叫不同語義的外部流程。
+3. `latticeaxiom-compose` 是唯一 Nickel 求值邊界。CLI 與宿主共用同一 Rust 嵌入介面與同一組合測試，不各自呼叫不同語義的外部流程。
 4. 求值結果立即轉成有版本的內部模型，並序列化為正規化 JSON。解析器、lock graph、膠水 crate 產生器與動態載入器只讀該模型。
 5. Nickel 只存在於組合期；每 tick、每實體、每區塊取樣與渲染熱路徑不得求值 Nickel 或查詢 Nickel AST。
 6. lock graph 保存正規化輸入、求值器版本、合約版本與內容雜湊，使組合結果可診斷與重建。
 7. 發行的資料夾模組應攜帶已匯出的 `module.json`；開發模式可直接求值 `module.ncl`，但兩者必須得到相同的正規化模型。
-8. 若 Nickel 工具鏈日後不再適合，只替換 `lattice-compose` 的來源語言前端；內部模型、解析器與執行期契約不隨之重寫。
+8. 若 Nickel 工具鏈日後不再適合，只替換 `latticeaxiom-compose` 的來源語言前端；內部模型、解析器與執行期契約不隨之重寫。
 
 ## 護欄
 

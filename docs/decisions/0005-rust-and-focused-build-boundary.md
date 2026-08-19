@@ -34,7 +34,7 @@ Lattice Axiom 需要自行定義模組組合、無限體素世界、區塊生命
 | 世界儲存語義 | 自研 `WorldStorage` 介面；RocksDB 實現 |
 | GPU、視窗、數學 | wgpu、winit、glam |
 | ECS 資料儲存 | hecs；排程保持簡單且由核心控制 |
-| 體素網格與噪聲 | block-mesh 與既有噪聲函式庫 |
+| 體素網格與噪聲 | 自研 `latticeaxiom-voxel-mesh`（參考 block-mesh 演算法）與既有噪聲函式庫 |
 | 序列化與除錯 UI | serde + bincode（置於自有 schema envelope）、egui |
 
 ## 結果
