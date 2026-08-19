@@ -1,3 +1,5 @@
+//! Bevy client host for the Lattice Axiom engine bootstrap.
+
 use bevy::prelude::*;
 
 fn main() {
@@ -15,9 +17,9 @@ fn main() {
 }
 
 fn setup_scene(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands<'_, '_>,
+    mut meshes: ResMut<'_, Assets<Mesh>>,
+    mut materials: ResMut<'_, Assets<StandardMaterial>>,
 ) {
     commands.spawn((
         Name::new("Ground"),
@@ -41,7 +43,7 @@ fn setup_scene(
 
     commands.spawn((
         Name::new("Main Camera"),
-        Camera3d,
+        Camera3d::default(),
         Transform::from_xyz(5.0, 4.0, 8.0).looking_at(Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
     ));
 }
