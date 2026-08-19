@@ -6,11 +6,19 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+nickel-evaluator = ["dep:malachite-base", "dep:nickel-lang-core"]
+
 [dependencies]
 latticeaxiom-core = { path = "../latticeaxiom-core" }
+malachite-base = { workspace = true, optional = true }
+nickel-lang-core = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+unicode-casefold.workspace = true
+unicode-normalization.workspace = true
 
 [lints]
 workspace = true

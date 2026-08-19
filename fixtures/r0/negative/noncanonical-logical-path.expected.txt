@@ -1,0 +1,1 @@
+expected a root-relative canonical logical path

@@ -1,0 +1,35 @@
+{
+  "capabilities": {},
+  "evaluation_limits": {
+    "import_depth": 64,
+    "imported_files": 4096,
+    "memory_bytes": 268435456,
+    "output_bytes": 16777216,
+    "recursion_depth": 512,
+    "retained_diagnostics": 256,
+    "source_bytes": 16777216,
+    "wall_clock_ms": 20000
+  },
+  "evaluation_policy": "latticeaxiom:nickel-evaluation-policy/developer@1",
+  "features": {},
+  "model_version": 1,
+  "overlays": [],
+  "parameters": {},
+  "policy": {
+    "allow_force_override": false,
+    "allow_recovery": false,
+    "maximum_trust": "data-only",
+    "namespace_grants": {}
+  },
+  "profile": "latticeaxiom:profile/content-audit@1",
+  "projection": "tool",
+  "projection_domains": [
+    "tool"
+  ],
+  "realization_policy": [
+    "data"
+  ],
+  "roots": {},
+  "semantic_bindings": {},
+  "source_universe": []
+}

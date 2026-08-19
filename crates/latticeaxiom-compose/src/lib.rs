@@ -4,17 +4,27 @@
 //! is loaded. They intentionally contain no Bevy or process-local types.
 
 mod composition;
+mod diagnostics;
+#[cfg(feature = "nickel-evaluator")]
+mod evaluation;
 mod graph;
+mod imports;
 mod observability;
 mod registration;
 mod semantic;
 mod settings;
+mod versioning;
 mod world;
 
 pub use composition::*;
+pub use diagnostics::*;
+#[cfg(feature = "nickel-evaluator")]
+pub use evaluation::*;
 pub use graph::*;
+pub use imports::*;
 pub use observability::*;
 pub use registration::*;
 pub use semantic::*;
 pub use settings::*;
+pub use versioning::*;
 pub use world::*;

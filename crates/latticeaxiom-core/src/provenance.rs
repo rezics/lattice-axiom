@@ -1,5 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::canonical::{CanonicalHash, CanonicalJsonError, canonical_json_hash};
 use crate::identifier::SourceId;
@@ -368,6 +369,9 @@ fn validate_logical_path(path: &str) -> Result<(), SourceProvenanceError> {
     if path.contains('\0') {
         return Err(invalid("the path cannot contain a NUL byte"));
     }
+    if !path.nfc().eq(path.chars()) {
+        return Err(invalid("the path must use Unicode NFC normalization"));
+    }
     if path
         .split('/')
         .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
@@ -438,6 +442,7 @@ mod tests {
             "packages/../package.ncl",
             "packages/./package.ncl",
             "packages//package.ncl",
+            "packages/cafe\u{301}.ncl",
         ] {
             let result = SourceProvenance::new(
                 "latticeaxiom:source/test"
@@ -450,6 +455,19 @@ mod tests {
             );
             assert!(result.is_err(), "expected `{path}` to be rejected");
         }
+
+        assert!(
+            SourceProvenance::new(
+                "latticeaxiom:source/test"
+                    .parse()
+                    .unwrap_or_else(|error| panic!("fixture source ID is invalid: {error}")),
+                "packages/café.ncl",
+                CanonicalHash::digest(b"source"),
+                None,
+                Vec::new(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
