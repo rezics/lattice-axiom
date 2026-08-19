@@ -15,7 +15,7 @@ decision:
 
 ## Demo 定義
 
-> 玩家从一个已锁定 package closure 进入由 `@rezics/terrenia` 定义的 Terrenia Y-up 体素维度，挖掉并放回方块；退出再进入后世界仍保留修改。同一最小 gameplay package 可切换 static／portable dynamic realization，而 registration、玩法结果与存档不变。
+> 玩家从一个已锁定 package closure 进入由 `terrenia` 定义的 Terrenia Y-up 体素维度，挖掉并放回方块；退出再进入后世界仍保留修改。同一最小 gameplay package 可切换 static／portable dynamic realization，而 registration、玩法结果与存档不变。
 
 这是可玩的 vertical slice，也是 package／ABI 的第一个真实 conformance consumer。它不是 package manager UI、空动态库 loader 或 renderer benchmark。
 
@@ -123,7 +123,7 @@ D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走
 ### 交付
 
 - stable block ID、chunk revision、dirty／durability state；
-- `@rezics/terrenia` 维度 closure／`@example/marker` test package；
+- `terrenia` 维度 closure／`@example/marker` test package；
 - validated content／schema registry；
 - `MemoryWorldStorage`／RocksDB；
 - snapshot envelope、atomic batch、checkpoint；

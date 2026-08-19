@@ -90,7 +90,7 @@ ABI require: native bootstrap 1, ecs.batch @1.3+
 
 Bevy crate version 由核心 host 的 Cargo manifest／lock 固定。模组通常依赖：
 
-- `@rezics/backend` package／capability range；
+- Lattice host／SDK capability range，例如 `latticeaxiom:capability/backend@1`；
 - Lattice SDK／schema version；
 - 对 dynamic realization 的 Lattice ABI／interfaces。
 

@@ -11,11 +11,11 @@ updated: 2026-08-19
 
 | 词汇 | 本项目中的意思 |
 | --- | --- |
-| logical package | 以 scoped `PackageName`／SemVer 识别的产品单元；拥有 dependency、capability、schema 与一种或多种 realization。不是 Cargo crate、注册命名域或动态库的同义词。 |
-| `PackageName` | package graph 使用的 `@scope/name` 身份，例如 `@rezics/terrenia-worldgen`；负责版本、依赖、来源与分发，不参与 stable ID 的语法。 |
+| logical package | 以 root／scoped `PackageName`／SemVer 识别的产品单元；拥有 dependency、capability、schema 与一种或多种 realization。不是 Cargo crate、注册命名域或动态库的同义词。 |
+| `PackageName` | package graph 使用的 root `name` 或 scoped `@scope/name`，例如 `terrenia` 与 `@terrenia/worldgen`；负责版本、依赖、来源与分发，不参与 stable ID 的语法。 |
 | `StableId` | 统一 registration identity：`<namespace>:<kind>/<path>`，例如 `terrenia:block/stone`；由 manifest 完整声明，不从 package name 或目录推导。 |
 | namespace grant | 授权某个 `PackageName` 注册指定 namespace／kind／path pattern 的 closure-wide 规则；名称相似不自动取得授权。 |
-| Terrenia | Lattice Axiom 由 `@rezics/terrenia` package closure 定义的第一个维度；不是产品别名或 host 内建主世界。 |
+| Terrenia | Lattice Axiom 由 root `terrenia` 与 `@terrenia/*` package closure 定义的第一个维度；不是产品别名或 host 内建主世界。 |
 | package kernel | 以 Rust 实作的控制平面；负责 source、SemVer／capability resolution、lock、realization planning、build、load、activation 与诊断。它不拥有游戏 ECS／renderer。 |
 | `latticeaxiom.lib` | 提供 `Package`、`GameProfile`、`Capability`、`Realization` 等 contract／组合函数的 versioned Nickel library。 |
 | `CompositionSpec` | Nickel 完整求值后直接转换的强型别组合意图；仍可含 version range 与 realization preference。 |
@@ -30,7 +30,7 @@ updated: 2026-08-19
 | `EngineCoupledNative` | 依赖精确 `EngineBuildId` 内部 interfaces 的动态原生 realization；接受随 host／Bevy 变化重建。 |
 | `WasmComponent` | 未来用于 sandbox／跨语言的独立 realization 类别；当前只是预留方向，不是首阶段能力。 |
 | package SemVer | logical package 的外部相容语言；不代替 ABI、schema、artifact hash 或 `EngineBuildId`。 |
-| capability | versioned、具 cardinality 的 required／provided服务或机制，例如 `rezics:capability/render-visibility@1`；不是任意字串 hook。 |
+| capability | versioned、具 cardinality 的 required／provided服务或机制，例如 `latticeaxiom:capability/render-visibility@1`；不是任意字串 hook。 |
 | provider | 提供一项 capability 的 package／realization。exclusive provider 必须由 graph 明确选择，不能 load-order-wins。 |
 
 ## ABI 與執行期

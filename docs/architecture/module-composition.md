@@ -254,7 +254,7 @@ discover / compose
 
 至少维护三个 consumers：
 
-1. `@rezics/terrenia`：第一个维度的聚合 package，依赖最小方块／世界生成／玩法／表现 closure；
+1. `terrenia`：第一个维度的聚合 root package，依赖 `@terrenia/*` 方块／世界生成／玩法／表现 closure；
 2. `@example/marker`：独立 package name 与 registration namespace 的测试 package；
 3. `@example/dual-gameplay`：同一业务代码同时构建 static／portable dynamic 的 equivalence fixture。
 

@@ -53,11 +53,12 @@ package.ncl / game.ncl / overlays / latticeaxiom.lib
 Package identity 与 runtime／persistent registration identity 是两个正交坐标：
 
 ```text
-PackageName("@rezics/terrenia-blocks")
+PackageName("@terrenia/blocks")
 StableId("terrenia:block/stone")
 ```
 
-`PackageName` 使用 `@scope/name`，负责 SemVer、依赖、来源、分发与 realization。
+`PackageName` 使用 root `name` 或 scoped `@scope/name`，负责 SemVer、依赖、来源、
+分发与 realization。`terrenia` 是聚合根，`@terrenia/blocks` 是其 scope 下的子包。
 `StableId` 使用 `<namespace>:<kind>/<path>`，负责内容、维度、schema、system、
 capability 与 render contract 的长期引用。manifest 必须直接声明完整 stable ID；
 package kernel 只另外记录 `declared_by`，不得从 package name、source path 或 crate name
@@ -71,7 +72,7 @@ package kernel 只另外记录 `declared_by`，不得从 package name、source p
 
 | 字段 | 语义 |
 | --- | --- |
-| `name` | scoped package 身分，例如 `@rezics/terrenia-worldgen` |
+| `name` | root／scoped package 身分，例如 `terrenia`、`@terrenia/worldgen` |
 | `version` | package 的 SemVer |
 | `dependencies` | package name、SemVer range、optional／feature 条件 |
 | `requires`／`provides` | versioned capability 与 cardinality |
@@ -88,8 +89,7 @@ let la = import "latticeaxiom/lib.ncl" in
 
 la.GameProfile & {
   packages = [
-    { name = "@rezics/backend", version = "^0.1" },
-    { name = "@rezics/terrenia", version = "~0.1", realization = 'auto },
+    { name = "terrenia", version = "~0.1", realization = 'auto },
   ],
   overlays = [import "./local-world.ncl"],
 }
@@ -167,11 +167,11 @@ dependency 表达「我需要某个 package 的公开 contract」；capability �
 每个 capability 至少包含 stable ID、interface major／minor range、cardinality 与 profile／target 条件：
 
 ```text
-rezics:capability/render-terrain-mesh-source@1  exactly-one
-rezics:capability/render-visibility@1           exactly-one
-rezics:capability/render-post-effect@1          zero-or-more
-rezics:capability/worldgen-terrain-provider@2   exactly-one
-rezics:capability/gameplay-damage-observer@1    zero-or-more
+latticeaxiom:capability/render-terrain-mesh-source@1  exactly-one
+latticeaxiom:capability/render-visibility@1           exactly-one
+latticeaxiom:capability/render-post-effect@1          zero-or-more
+latticeaxiom:capability/worldgen-terrain-provider@2   exactly-one
+latticeaxiom:capability/gameplay-damage-observer@1    zero-or-more
 ```
 
 exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provider 的确定顺序来自显式 dependency／priority policy，不来自目录或动态库加载顺序。

@@ -23,7 +23,7 @@ Lattice Axiom 是一款以可演进体素世界、可组合套件生态与长期
 
 ### 游戏是一个已锁定套件闭包
 
-每次 client、server、headless test 与 tool 启动，都对应一个可审查的 `LockedGameGraph`。Terrenia、其他第一方内容、测试内容与第三方模组拥有相同 scoped package name、SemVer、dependency、capability、schema 与 conflict rules；不存在第一方私有加载捷径。
+每次 client、server、headless test 与 tool 启动，都对应一个可审查的 `LockedGameGraph`。Terrenia、其他第一方内容、测试内容与第三方模组拥有相同 root／scoped package name、SemVer、dependency、capability、schema 与 conflict rules；不存在第一方私有加载捷径。
 
 ### 静态与动态是 realization，不是两个生态
 

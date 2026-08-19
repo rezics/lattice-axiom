@@ -17,7 +17,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 - runtime 使用一个正常 Bevy App；不重做 ECS、scheduler、renderer、assets、input 或 tasks。
 - Nickel `package.ncl`／`game.ncl` 产生 typed `CompositionSpec`；Rust package kernel负责 SemVer／capability、lock、build、load与activation。
 - 每次游戏由 `LockedGameGraph`／`RegistrationImage` 建立；第一方 package 与 Terrenia 维度不能绕过。
-- Logical package 使用 `@scope/name`；stable registration 使用独立的 `<namespace>:<kind>/<path>`，两者不得互相推导。
+- Logical package 使用 root `name` 或 scoped `@scope/name`；stable registration 使用独立的 `<namespace>:<kind>/<path>`，两者不得互相推导。
 - 同一业务 package可生成 `NativeStatic`与`PortableNative`：static直接Bevy／LTO，dynamic经versioned C ABI／batch ECS。
 - dynamic另有诚实的`EngineCoupledNative`等级，以精确`EngineBuildId`换取低层host能力。
 - Bevy是core package内部tool；若外部contract真的因升级破坏，相关package／capability／schema仍按自己的版本规则升级。
@@ -73,7 +73,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 | [0015](decisions/0015-bevy-native-y-up-world-coordinates.md) | Bevy原生右手Y-up |
 | [0017](decisions/0017-versioned-native-module-abi.md) | Versioned C ABI／capability tables |
 | [0018](decisions/0018-package-kernel-from-first-vertical-slice.md) | 首个vertical slice交付package kernel与双实现 |
-| [0019](decisions/0019-separate-package-and-registration-identities.md) | Scoped package 与 stable registration identity 分离；Terrenia 为第一维度 |
+| [0019](decisions/0019-separate-package-and-registration-identities.md) | Root／scoped package 与 stable registration identity 分离；Terrenia 为第一维度 |
 
 ### Superseded Decisions
 
