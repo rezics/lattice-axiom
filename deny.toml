@@ -1,0 +1,64 @@
+# cargo-deny configuration.
+#
+# Besides license and advisory auditing, this file mechanically enforces the
+# facade boundaries from the architecture docs: backend crates (wgpu, winit,
+# rocksdb) may only ever be direct dependencies of their dedicated facade
+# implementation crates. A violation fails CI instead of relying on review.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Unmaintained *transitive* dependencies are upstream's to replace; we still
+# fail on unmaintained direct dependencies and on actual vulnerabilities.
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+]
+confidence-threshold = 0.9
+# Workspace crates are unpublished and their license is still undecided
+# (tracked in README); auditing applies to external dependencies.
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal path dependencies carry no version by design; Cargo.lock pins them.
+allow-wildcard-paths = true
+
+# --- Facade boundary enforcement -------------------------------------------
+# `wrappers` lists the only crates allowed to depend on the banned crate
+# directly. Extend the wrapper lists deliberately (e.g. egui-wgpu/egui-winit at
+# milestone 3) instead of weakening the ban.
+
+[[bans.deny]]
+name = "wgpu"
+reason = "GPU access is confined to the render backend crate (ADR 0006)."
+wrappers = ["latticeaxiom-render-wgpu"]
+
+[[bans.deny]]
+name = "winit"
+reason = "Windowing and input are host concerns; only the demo host may use winit."
+wrappers = ["latticeaxiom-demo"]
+
+[[bans.deny]]
+name = "rocksdb"
+reason = "Storage access is confined to the storage backend crate (ADR 0009); arrives at milestone 3."
+wrappers = ["latticeaxiom-storage-rocksdb"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

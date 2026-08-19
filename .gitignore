@@ -1,0 +1,5 @@
+# Build artifacts.
+/target
+
+# Local runtime working directory (world data, dynamically scanned packages).
+/run

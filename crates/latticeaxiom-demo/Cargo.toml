@@ -1,0 +1,23 @@
+[package]
+name = "latticeaxiom-demo"
+description = "Executable demo host: window, input, camera, and scene assembly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-core.workspace = true
+latticeaxiom-render.workspace = true
+latticeaxiom-render-headless.workspace = true
+latticeaxiom-render-wgpu.workspace = true
+
+anyhow.workspace = true
+glam.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true

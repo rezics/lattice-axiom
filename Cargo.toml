@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/latticeaxiom-core",
+    "crates/latticeaxiom-render",
+    "crates/latticeaxiom-render-headless",
+    "crates/latticeaxiom-render-wgpu",
+    "crates/latticeaxiom-demo",
+    "tools/xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+repository = "https://github.com/rezics/lattice-axiom-demo"
+
+# Single source of truth for dependency versions. Exact versions below were
+# verified as the latest stable releases on crates.io on 2026-08-19; Cargo.lock
+# is the authoritative pin. Upgrades happen at roadmap milestones only.
+[workspace.dependencies]
+# Internal crates.
+latticeaxiom-core = { path = "crates/latticeaxiom-core" }
+latticeaxiom-render = { path = "crates/latticeaxiom-render" }
+latticeaxiom-render-headless = { path = "crates/latticeaxiom-render-headless" }
+latticeaxiom-render-wgpu = { path = "crates/latticeaxiom-render-wgpu" }
+
+# External crates (milestone 1).
+anyhow = "1.0.104"
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.33.4"
+pollster = "0.4"
+thiserror = "2.0.20"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wgpu = "30.0.0"
+winit = "0.30.13"
+
+# Test-only.
+proptest = "1.11.0"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+expect_used = "warn"
+# Facade types intentionally share stems with their module names.
+module_name_repetitions = "allow"
+print_stdout = "deny"
+todo = "warn"
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+
+# The demo binary is not performance-tuned yet; keep dev builds fast and give
+# dependencies (wgpu, shader translation) enough optimization to be usable.
+[profile.dev.package."*"]
+opt-level = 2
