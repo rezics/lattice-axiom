@@ -2,7 +2,7 @@
 title: 待決問題
 status: active
 type: planning
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # 待決問題
@@ -26,17 +26,14 @@ updated: 2026-08-19
 - [x] native code是trusted process code；ABI validation不构成sandbox。
 - [x] v1不卸载native library。
 - [x] Godot只作有触发条件的toolchain对照，不作第二runtime。
-
-## P0：Package 语义與 Nickel Contract
-
-- [ ] `latticeaxiom.lib` 第一版 `Package`／`GameProfile`／`Realization` contracts具体字段？
-- [ ] Nickel field metadata／source span经typed conversion后如何保留到Role binding与semantic contribution diagnostics？
-- [ ] import roots、evaluation time／memory／recursion／output size上限？
-- [ ] `CompositionSpec`与Nickel contracts由何种single-source schema／fixture共同生成？
-- [ ] local source的canonical path／content hash／symlink policy？
-- [ ] package pre-1.0 SemVer是否完全沿Cargo左侧非零规则，还是严格SemVer ranges？
-- [ ] v1 resolver的deterministic tie-break／minimal vs highest compatible policy？
-- [ ] client-only／server-only／authoritative package与feature条件如何表达？
+- [x] R0／R1的`PackageSpec`／`GameProfileSpec`／`RealizationSpec`最小字段与版本规则已经冻结，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#2-packagespec-最小欄位)、[profile contract](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#3-gameprofilespec-最小欄位)与[realization contract](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#4-realizationspec-最小欄位)。
+- [x] `SourceSpan`／origin provenance进入diagnostics但不进入semantic hash；source rename只改变provenance，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#6-sourcespansemantic-hash-與-provenance-hash-分離)。
+- [x] Nickel只使用受控import roots；R0默认time／memory／recursion／import／output limits与version policy已经冻结，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#7-受控-import-roots-與-nickel-resource-policy)。
+- [x] Rust serde model与正／负golden corpus是single source；Nickel contracts与schema docs验证同一corpus，首版不做双向codegen，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#1-rust-serde-model-與-golden-corpus-是-normative-source)。
+- [x] local source使用canonical root-relative path与SHA-256；symlink采用follow-target hash且不得逃逸root，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#8-canonical-pathsha-256-與-symlink-policy)。
+- [x] package range使用项目公开的strict SemVer 2.0 grammar；`0.x`不沿Cargo left-most-nonzero caret，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#9-strict-semver-20-與-range)。
+- [x] resolver选择最高compatible version，以stable source／realization tuple打破等价候选；有效frozen lock优先且不隐式重解，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#10-deterministic-resolution-與-frozen-lock)。
+- [x] package domain使用`authoritative`／`client`／`server`／`tool` markers并由profile projection机械裁剪，见[决策 0021](../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md#5-domain-markers-與-profile-projection)。
 
 ## P0：SDK 與 Registration
 
