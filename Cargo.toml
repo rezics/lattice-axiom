@@ -5,6 +5,9 @@ members = [
   "crates/latticeaxiom-compose",
   "crates/latticeaxiom-core",
   "crates/latticeaxiom-engine",
+  "crates/latticeaxiom-registration",
+  "crates/latticeaxiom-sdk",
+  "crates/latticeaxiom-sdk-macros",
 ]
 default-members = ["crates/latticeaxiom-engine"]
 
@@ -23,10 +26,14 @@ bevy = "=0.19.1"
 hex = "0.4.3"
 malachite-base = "=0.9.2"
 nickel-lang-core = { version = "=0.18.0", default-features = false }
+proc-macro2 = "1.0.107"
+proptest = "1.9"
+quote = "1.0.47"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
 sha2 = "0.10.9"
+syn = { version = "2.0.119", features = ["full", "parsing"] }
 thiserror = "2.0.20"
 unicode-casefold = "0.2.0"
 unicode-normalization = "0.1.25"

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "package": "@example/dual-gameplay",
+  "callbacks": {
+    "example:callback/dampen@1": {
+      "owner": "@example/dual-gameplay",
+      "system": "example:system/dampen",
+      "signature_hash": "126d8b3ccd0625281a12a9d92d732b54c11169e66f5bdca47644830078cb2572",
+      "portability": {
+        "kind": "dual"
+      }
+    },
+    "example:callback/integrate@1": {
+      "owner": "@example/dual-gameplay",
+      "system": "example:system/integrate",
+      "signature_hash": "b107366f24673c951a93a65f8788d66b2a88941f848816127fb9158a6c107ca1",
+      "portability": {
+        "kind": "dual"
+      }
+    }
+  },
+  "callback_map_hash": "fadbbbd79d4fc997abd7fc424e25ade126a28dd33288fb9c6c38b71d08875b35"
+}
