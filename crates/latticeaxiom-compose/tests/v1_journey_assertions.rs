@@ -27,6 +27,9 @@ const REQUIRED_STEP_IDS: [&str; 11] = [
     "reopen",
 ];
 const FINITE_FIXTURE_SMOKE_STEPS: [&str; 4] = ["create", "spawn", "explore", "place"];
+/// In-memory production host steps evidenced by headless host tests.
+/// These flags are not a durable-writer or crash-recovery claim.
+const MEMORY_HOST_IMPLEMENTED_STEPS: [&str; 5] = ["explore", "gather", "craft", "mine", "place"];
 const REQUIRED_ASSERTION_PHRASES: [&str; 9] = [
     "frozen lock preflight",
     "Y-up",
@@ -95,9 +98,10 @@ fn v1_journey_assertions_fixture_records_v0_without_production_claims() {
     );
 
     for step in &fixture.steps {
-        assert!(
-            !step.implemented,
-            "V0 step `{}` must not claim production implementation",
+        let memory_implemented = MEMORY_HOST_IMPLEMENTED_STEPS.contains(&step.id.as_str());
+        assert_eq!(
+            step.implemented, memory_implemented,
+            "step `{}` implemented flag must match the memory production host",
             step.id
         );
         assert!(

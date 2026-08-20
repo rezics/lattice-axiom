@@ -35,7 +35,7 @@
         "Negative X/Z coordinates are first-class; normal play exposes no authored world edge.",
         "Inspection reports the authoritative targeted block without mutating world state."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "enter-cave",
@@ -59,7 +59,7 @@
         "Drop and pickup conservation holds for every gathered stack.",
         "Full-inventory gathering does not destroy the source drop or the existing inventory."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "craft",
@@ -71,7 +71,7 @@
         "Removing the tools package fails required-dependency preflight before any writer opens.",
         "Recipe output is independent of source discovery order."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "mine",
@@ -84,7 +84,7 @@
         "Correct-tool drop predicates are independent from mining-speed predicates.",
         "A block that requires a missing tool class or tier fails explicitly without a drop."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "place",
@@ -96,7 +96,7 @@
         "Placed and broken blocks remain authoritative independent of mesh or collider rebuilds.",
         "The current finite -8..8 playable fixture is a non-production smoke only and does not claim a durable writer."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "checkpoint",
