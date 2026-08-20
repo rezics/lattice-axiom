@@ -10,9 +10,11 @@ members = [
   "crates/latticeaxiom-sdk",
   "crates/latticeaxiom-sdk-macros",
   "crates/latticeaxiom-storage",
+  "crates/latticeaxiom-territory",
   "crates/latticeaxiom-world-catalog",
   "crates/latticeaxiom-world-db",
   "crates/latticeaxiom-world-wire",
+  "crates/latticeaxiom-worldgen",
 ]
 default-members = ["crates/latticeaxiom-engine"]
 
@@ -28,6 +30,7 @@ repository = "https://github.com/rezics/lattice-axiom-demo"
 # ADR 0014 fixes the implementation baseline at Bevy 0.19.x. Cargo.lock is
 # the authoritative dependency record, so upgrades are deliberate migrations.
 bevy = "=0.19.1"
+criterion = "0.8"
 hex = "0.4.3"
 malachite-base = "=0.9.2"
 nickel-lang-core = { version = "=0.18.0", default-features = false }
