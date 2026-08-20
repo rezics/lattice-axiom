@@ -720,10 +720,30 @@ impl WorldId {
         Self(Uuid::new_v4())
     }
 
-    /// Creates a world identifier from an already validated UUID.
+    /// Creates a world identifier from an externally supplied UUID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentifierError::InvalidWorldId`] unless `value` is an RFC
+    /// 4122 variant UUID version 4.
+    pub fn from_uuid(value: Uuid) -> Result<Self, IdentifierError> {
+        value.try_into()
+    }
+
+    /// Creates a world identifier from RFC 4122 network-order raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentifierError::InvalidWorldId`] unless the bytes encode an
+    /// RFC 4122 variant UUID version 4.
+    pub fn from_bytes(value: [u8; 16]) -> Result<Self, IdentifierError> {
+        value.try_into()
+    }
+
+    /// Returns the RFC 4122 network-order raw bytes.
     #[must_use]
-    pub const fn from_uuid(value: Uuid) -> Self {
-        Self(value)
+    pub fn as_bytes(self) -> [u8; 16] {
+        *self.0.as_bytes()
     }
 
     /// Returns the underlying UUID.
@@ -753,7 +773,23 @@ impl FromStr for WorldId {
                 reason: "a world ID must use canonical lowercase hyphenated UUID text".to_owned(),
             });
         }
-        Ok(Self(parsed))
+        Self::from_uuid(parsed)
+    }
+}
+impl TryFrom<Uuid> for WorldId {
+    type Error = IdentifierError;
+
+    fn try_from(value: Uuid) -> Result<Self, Self::Error> {
+        validate_world_uuid(value)?;
+        Ok(Self(value))
+    }
+}
+
+impl TryFrom<[u8; 16]> for WorldId {
+    type Error = IdentifierError;
+
+    fn try_from(value: [u8; 16]) -> Result<Self, Self::Error> {
+        Uuid::from_bytes(value).try_into()
     }
 }
 
@@ -774,6 +810,25 @@ impl<'de> Deserialize<'de> for WorldId {
         let value = String::deserialize(deserializer)?;
         value.parse().map_err(de::Error::custom)
     }
+}
+fn validate_world_uuid(value: Uuid) -> Result<(), IdentifierError> {
+    const VERSION_MASK: u8 = 0b1111_0000;
+    const VERSION_4: u8 = 0b0100_0000;
+    const VARIANT_MASK: u8 = 0b1100_0000;
+    const RFC_4122_VARIANT: u8 = 0b1000_0000;
+
+    let invalid = |reason: &'static str| IdentifierError::InvalidWorldId {
+        value: value.hyphenated().to_string(),
+        reason: reason.to_owned(),
+    };
+    let bytes = value.as_bytes();
+    if bytes[6] & VERSION_MASK != VERSION_4 {
+        return Err(invalid("a world ID must be UUID version 4"));
+    }
+    if bytes[8] & VARIANT_MASK != RFC_4122_VARIANT {
+        return Err(invalid("a world ID must use the RFC 4122 variant"));
+    }
+    Ok(())
 }
 
 fn validate_package_name(value: &str) -> Result<(), IdentifierError> {
@@ -1296,27 +1351,69 @@ mod tests {
     }
 
     #[test]
-    fn world_id_displays_and_round_trips_as_a_uuid() {
-        const TEXT: &str = "018f5f3c-7c45-7e89-b321-0123456789ab";
+    fn world_id_enforces_canonical_rfc4122_uuid_v4_at_every_boundary() {
+        const TEXT: &str = "018f5f3c-7c45-4e89-b321-0123456789ab";
         let parsed = WorldId::from_str(TEXT);
         assert!(parsed.is_ok());
-        let world_id = parsed.unwrap_or_else(|error| panic!("valid UUID was rejected: {error}"));
+        let world_id = parsed.unwrap_or_else(|error| panic!("valid UUIDv4 was rejected: {error}"));
         assert_eq!(world_id.to_string(), TEXT);
+        assert_eq!(WorldId::from_uuid(world_id.as_uuid()).ok(), Some(world_id));
+        assert_eq!(
+            WorldId::from_bytes(world_id.as_bytes()).ok(),
+            Some(world_id)
+        );
+        assert_eq!(WorldId::try_from(world_id.as_uuid()).ok(), Some(world_id));
+        assert_eq!(WorldId::try_from(world_id.as_bytes()).ok(), Some(world_id));
+
+        let generated = WorldId::new_v4();
+        assert_eq!(
+            WorldId::from_uuid(generated.as_uuid()).ok(),
+            Some(generated)
+        );
+        assert_eq!(
+            WorldId::from_bytes(generated.as_bytes()).ok(),
+            Some(generated)
+        );
 
         let encoded = serde_json::to_string(&world_id).unwrap_or_default();
-        let decoded = serde_json::from_str::<WorldId>(&encoded);
-        assert_eq!(decoded.ok(), Some(world_id));
-        assert!(serde_json::from_str::<WorldId>(r#""not-a-uuid""#).is_err());
-        for noncanonical in [
-            "018F5F3C-7C45-7E89-B321-0123456789AB",
-            "018f5f3c7c457e89b3210123456789ab",
-            "{018f5f3c-7c45-7e89-b321-0123456789ab}",
-            "urn:uuid:018f5f3c-7c45-7e89-b321-0123456789ab",
+        assert_eq!(
+            serde_json::from_str::<WorldId>(&encoded).ok(),
+            Some(world_id)
+        );
+
+        for rejected_text in [
+            "not-a-uuid",
+            "018F5F3C-7C45-4E89-B321-0123456789AB",
+            "018f5f3c7c454e89b3210123456789ab",
+            "{018f5f3c-7c45-4e89-b321-0123456789ab}",
+            "urn:uuid:018f5f3c-7c45-4e89-b321-0123456789ab",
+            "018f5f3c-7c45-1e89-b321-0123456789ab",
+            "018f5f3c-7c45-7e89-b321-0123456789ab",
+            "018f5f3c-7c45-4e89-7321-0123456789ab",
         ] {
             assert!(
-                WorldId::from_str(noncanonical).is_err(),
-                "expected noncanonical world ID `{noncanonical}` to be rejected"
+                WorldId::from_str(rejected_text).is_err(),
+                "expected world ID `{rejected_text}` to be rejected"
             );
+            let rejected_json = serde_json::to_string(rejected_text).unwrap_or_default();
+            assert!(
+                serde_json::from_str::<WorldId>(&rejected_json).is_err(),
+                "serde accepted rejected world ID `{rejected_text}`"
+            );
+        }
+
+        for rejected_uuid_text in [
+            "018f5f3c-7c45-1e89-b321-0123456789ab",
+            "018f5f3c-7c45-7e89-b321-0123456789ab",
+            "018f5f3c-7c45-4e89-7321-0123456789ab",
+        ] {
+            let rejected_uuid = Uuid::parse_str(rejected_uuid_text)
+                .unwrap_or_else(|error| panic!("test UUID was invalid: {error}"));
+            let rejected_bytes = *rejected_uuid.as_bytes();
+            assert!(WorldId::from_uuid(rejected_uuid).is_err());
+            assert!(WorldId::try_from(rejected_uuid).is_err());
+            assert!(WorldId::from_bytes(rejected_bytes).is_err());
+            assert!(WorldId::try_from(rejected_bytes).is_err());
         }
     }
 
