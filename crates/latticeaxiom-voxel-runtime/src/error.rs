@@ -105,6 +105,15 @@ pub enum RuntimeError {
         /// Affected coordinate.
         coordinate: ChunkCoordinate,
     },
+    /// A dirty edited chunk is pinned in the bounded resident set.
+    #[error("dirty edited chunk {coordinate:?} cannot be evicted")]
+    DirtyChunkPinned {
+        /// Pinned coordinate.
+        coordinate: ChunkCoordinate,
+    },
+    /// Clean-outside-interest eviction requires a streaming interest window.
+    #[error("interest window is required to evict clean generated chunks")]
+    InterestWindowRequired,
 
     /// A world-space voxel coordinate cannot map into the canonical i32 chunk range.
     #[error("world voxel coordinate {coordinate:?} exceeds the canonical chunk range")]

@@ -854,6 +854,62 @@ impl RuntimeLimits {
         self.collider
     }
 }
+
+/// Inclusive Chebyshev cube of chunks retained around a streaming interest center.
+///
+/// Radius is measured in chunk units with Bevy-native `(x, y, z)` order. A
+/// radius of zero keeps only the center chunk in interest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InterestWindow {
+    center: ChunkCoordinate,
+    radius_chunks: u32,
+}
+
+impl InterestWindow {
+    /// Creates an inclusive Chebyshev interest cube.
+    #[must_use]
+    pub const fn new(center: ChunkCoordinate, radius_chunks: u32) -> Self {
+        Self {
+            center,
+            radius_chunks,
+        }
+    }
+
+    /// Interest center in canonical chunk coordinates.
+    #[must_use]
+    pub const fn center(self) -> ChunkCoordinate {
+        self.center
+    }
+
+    /// Inclusive Chebyshev radius in chunk units.
+    #[must_use]
+    pub const fn radius_chunks(self) -> u32 {
+        self.radius_chunks
+    }
+
+    /// Returns whether `coordinate` is inside this inclusive cube.
+    #[must_use]
+    pub const fn contains(self, coordinate: ChunkCoordinate) -> bool {
+        self.chebyshev_distance(coordinate) <= self.radius_chunks
+    }
+
+    /// Chebyshev distance from the interest center to `coordinate`.
+    #[must_use]
+    pub const fn chebyshev_distance(self, coordinate: ChunkCoordinate) -> u32 {
+        let dx = self.center.x.abs_diff(coordinate.x);
+        let dy = self.center.y.abs_diff(coordinate.y);
+        let dz = self.center.z.abs_diff(coordinate.z);
+        let mut distance = dx;
+        if dy > distance {
+            distance = dy;
+        }
+        if dz > distance {
+            distance = dz;
+        }
+        distance
+    }
+}
+
 /// Result of requesting one derived job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnqueueDecision {

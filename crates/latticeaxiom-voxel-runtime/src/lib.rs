@@ -25,10 +25,10 @@ pub use model::{
     DerivedKind, DerivedMemoryBudget, DerivedOwner, DerivedPriority, DerivedQueueLimits,
     DerivedRequest, DerivedRequestSet, DerivedSemanticFingerprint, DerivedSourceFingerprint,
     DerivedTicket, DispatchOutcome, EnqueueDecision, EvictionLeaseGeneration, EvictionPermit,
-    EvictionReceipt, FixedTick, LocalVoxelCoordinate, MAX_AUTHORITATIVE_REACH_METERS, MemoryStage,
-    MeshSemanticFingerprint, NeighborRevision, NeighborRevisions, ProjectionDecision,
-    ProjectionEvidence, ProjectionReceipt, RetainedBytes, RuntimeGeneration, RuntimeLimits,
-    StaleReason, VoxelCoordinate, WorkingSetScope, WorldEpoch,
+    EvictionReceipt, FixedTick, InterestWindow, LocalVoxelCoordinate,
+    MAX_AUTHORITATIVE_REACH_METERS, MemoryStage, MeshSemanticFingerprint, NeighborRevision,
+    NeighborRevisions, ProjectionDecision, ProjectionEvidence, ProjectionReceipt, RetainedBytes,
+    RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate, WorkingSetScope, WorldEpoch,
 };
 pub use working_set::VoxelRuntime;
 

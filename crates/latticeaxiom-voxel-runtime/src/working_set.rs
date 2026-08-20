@@ -21,10 +21,10 @@ use crate::{
     CompletionOutcome, DerivedApplyReceipt, DerivedEnqueueReceipt, DerivedInput, DerivedJobId,
     DerivedJobKey, DerivedKind, DerivedRequest, DerivedRequestSet, DerivedSemanticFingerprint,
     DerivedSourceFingerprint, DispatchOutcome, EnqueueDecision, EvictionLeaseGeneration,
-    EvictionPermit, EvictionReceipt, FixedTick, MemoryStage, MeshSemanticFingerprint,
-    NeighborRevision, NeighborRevisions, ProjectionDecision, ProjectionReceipt, RetainedBytes,
-    RuntimeDiagnostics, RuntimeError, RuntimeGeneration, RuntimeLimits, RuntimeResult, StaleReason,
-    VoxelCoordinate, WorkingSetScope,
+    EvictionPermit, EvictionReceipt, FixedTick, InterestWindow, MemoryStage,
+    MeshSemanticFingerprint, NeighborRevision, NeighborRevisions, ProjectionDecision,
+    ProjectionReceipt, RetainedBytes, RuntimeDiagnostics, RuntimeError, RuntimeGeneration,
+    RuntimeLimits, RuntimeResult, StaleReason, VoxelCoordinate, WorkingSetScope,
     model::ProjectionParts,
     queue::{DerivedQueue, JobState, PendingJob},
 };
@@ -76,8 +76,11 @@ pub struct VoxelRuntime<V> {
     empty: V,
     limits: RuntimeLimits,
     chunks: BTreeMap<ChunkCoordinate, RuntimeChunk<V>>,
+    dirty: BTreeSet<ChunkCoordinate>,
+    interest: Option<InterestWindow>,
     queues: [DerivedQueue; 2],
     next_job_id: u64,
+    next_eviction_lease: u64,
     diagnostics: RuntimeDiagnostics,
 }
 
@@ -108,11 +111,14 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             empty,
             limits,
             chunks: BTreeMap::new(),
+            dirty: BTreeSet::new(),
+            interest: None,
             queues: [
                 DerivedQueue::new(limits.mesh()),
                 DerivedQueue::new(limits.collider()),
             ],
             next_job_id: 0,
+            next_eviction_lease: 1,
             diagnostics: RuntimeDiagnostics::default(),
         })
     }
@@ -152,6 +158,25 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             .values()
             .filter(|chunk| !matches!(chunk.collider_safety, ColliderSafetyState::Ready { .. }))
             .count();
+        diagnostics.visible_chunks = self
+            .chunks
+            .values()
+            .filter(|chunk| chunk.last_applied[DerivedKind::Mesh.index()].is_some())
+            .count();
+        diagnostics.active_chunks = self
+            .chunks
+            .values()
+            .filter(|chunk| {
+                chunk.last_applied[DerivedKind::Mesh.index()].is_some()
+                    && chunk.last_applied[DerivedKind::Collider.index()].is_some()
+            })
+            .count();
+        diagnostics.in_flight_chunks = diagnostics
+            .mesh
+            .in_flight()
+            .saturating_add(diagnostics.collider.in_flight());
+        diagnostics.saving_chunks = 0;
+        diagnostics.byte_budget = self.limits.max_combined_reserved_bytes();
         diagnostics
     }
 
@@ -159,6 +184,50 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
     #[must_use]
     pub fn is_resident(&self, coordinate: ChunkCoordinate) -> bool {
         self.chunks.contains_key(&coordinate)
+    }
+
+    /// Returns whether a resident projection is pinned by an edit.
+    #[must_use]
+    pub fn is_dirty(&self, coordinate: ChunkCoordinate) -> bool {
+        self.dirty.contains(&coordinate)
+    }
+
+    /// Resident coordinates in canonical `(x, y, z)` order.
+    pub fn resident_coordinates(&self) -> impl Iterator<Item = ChunkCoordinate> + '_ {
+        self.chunks.keys().copied()
+    }
+
+    /// Dirty edited coordinates in canonical `(x, y, z)` order.
+    pub fn dirty_coordinates(&self) -> impl Iterator<Item = ChunkCoordinate> + '_ {
+        self.dirty.iter().copied()
+    }
+
+    /// Current streaming interest window, if the host has set one.
+    #[must_use]
+    pub const fn interest(&self) -> Option<InterestWindow> {
+        self.interest
+    }
+
+    /// Sets the inclusive Chebyshev cube used to choose clean eviction victims.
+    pub fn set_interest(&mut self, interest: InterestWindow) {
+        self.interest = Some(interest);
+    }
+
+    /// Pins a resident edited chunk so streaming eviction cannot drop it.
+    ///
+    /// Dirty membership is bounded by [`RuntimeLimits::max_resident_chunks`]: a
+    /// pinned chunk occupies a resident slot until the host unloads the world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::ChunkNotResident`] when the target is absent.
+    pub fn mark_dirty(&mut self, coordinate: ChunkCoordinate) -> RuntimeResult<()> {
+        if !self.chunks.contains_key(&coordinate) {
+            return Err(RuntimeError::ChunkNotResident { coordinate });
+        }
+        self.dirty.insert(coordinate);
+        self.refresh_resident_diagnostics();
+        Ok(())
     }
 
     /// Returns storage publication, total, and voxel-domain revisions.
@@ -260,13 +329,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
                 actual: projection.edge(),
             });
         }
-        if !self.chunks.contains_key(&coordinate)
-            && self.chunks.len() >= self.limits.max_resident_chunks()
-        {
-            return Err(RuntimeError::ResidentLimitExceeded {
-                limit: self.limits.max_resident_chunks(),
-            });
-        }
+        self.make_room_for_admission(coordinate, tick, requests)?;
 
         let parts = projection.into_parts();
         let existing = self.chunks.get(&coordinate);
@@ -374,6 +437,9 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             replacement.collider_safety = previous;
         }
         self.chunks.insert(coordinate, replacement);
+        if decision == ProjectionDecision::Updated && changed_cells > 0 {
+            self.dirty.insert(coordinate);
+        }
         self.diagnostics.projected_commits = self.diagnostics.projected_commits.saturating_add(1);
         self.refresh_resident_diagnostics();
 
@@ -406,13 +472,15 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
 
     /// Creates a single-use permit for the exact clean committed projection.
     ///
-    /// This cache has no authoritative edit API, so a resident projection is
-    /// clean by construction. The caller-supplied lifecycle generation lets
-    /// higher-level streaming reject a permit after lease ownership changes.
+    /// Generated projections start clean. A voxel-changing update or
+    /// [`Self::mark_dirty`] pins the chunk in the bounded dirty set. The
+    /// caller-supplied lifecycle generation lets higher-level streaming reject
+    /// a permit after lease ownership changes.
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::ChunkNotResident`] when the target is absent.
+    /// Returns [`RuntimeError::ChunkNotResident`] when the target is absent, or
+    /// [`RuntimeError::DirtyChunkPinned`] when the projection was edited.
     pub fn prepare_eviction(
         &self,
         coordinate: ChunkCoordinate,
@@ -422,6 +490,9 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             .chunks
             .get(&coordinate)
             .ok_or(RuntimeError::ChunkNotResident { coordinate })?;
+        if self.dirty.contains(&coordinate) {
+            return Err(RuntimeError::DirtyChunkPinned { coordinate });
+        }
         Ok(EvictionPermit {
             key: latticeaxiom_storage::ChunkKey::new(
                 self.scope.world(),
@@ -466,9 +537,13 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         {
             return Err(RuntimeError::StaleEvictionPermit { coordinate });
         }
+        if self.dirty.contains(&coordinate) {
+            return Err(RuntimeError::DirtyChunkPinned { coordinate });
+        }
 
         let neighbors = self.resident_face_neighbors(coordinate);
         self.chunks.remove(&coordinate);
+        self.dirty.remove(&coordinate);
         self.diagnostics.evictions = self.diagnostics.evictions.saturating_add(1);
         self.refresh_resident_diagnostics();
 
@@ -491,6 +566,37 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             cancellations,
             derived,
         })
+    }
+
+    /// Evicts every clean generated projection currently outside interest.
+    ///
+    /// Dirty edited chunks remain resident even when they leave the interest
+    /// cube. This does not retain every visited chunk: clean generated
+    /// projections are discarded and may later be regenerated identically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::InterestWindowRequired`] when the host has not
+    /// set interest, or an eviction error if a selected victim becomes stale.
+    pub fn evict_clean_outside_interest(
+        &mut self,
+        lease: EvictionLeaseGeneration,
+        tick: FixedTick,
+        requests: DerivedRequestSet,
+    ) -> RuntimeResult<Vec<EvictionReceipt>> {
+        if self.interest.is_none() {
+            return Err(RuntimeError::InterestWindowRequired);
+        }
+        let victims = self.clean_outside_interest_victims();
+        let mut receipts = Vec::with_capacity(victims.len());
+        for coordinate in victims {
+            if !self.chunks.contains_key(&coordinate) || self.dirty.contains(&coordinate) {
+                continue;
+            }
+            let permit = self.prepare_eviction(coordinate, lease)?;
+            receipts.push(self.evict_committed(permit, tick, requests)?);
+        }
+        Ok(receipts)
     }
 
     /// Explicitly requests current derived work for a resident projection.
@@ -1065,6 +1171,55 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             .diagnostics
             .resident_high_water
             .max(self.diagnostics.resident_chunks);
+        self.diagnostics.dirty_chunks = self.dirty.len();
+    }
+
+    fn make_room_for_admission(
+        &mut self,
+        incoming: ChunkCoordinate,
+        tick: FixedTick,
+        requests: DerivedRequestSet,
+    ) -> RuntimeResult<()> {
+        if self.chunks.contains_key(&incoming) {
+            return Ok(());
+        }
+        while self.chunks.len() >= self.limits.max_resident_chunks() {
+            let Some(victim) = self.next_clean_outside_interest_victim() else {
+                return Err(RuntimeError::ResidentLimitExceeded {
+                    limit: self.limits.max_resident_chunks(),
+                });
+            };
+            let lease = EvictionLeaseGeneration::new(self.next_eviction_lease);
+            self.next_eviction_lease = self.next_eviction_lease.saturating_add(1);
+            let permit = self.prepare_eviction(victim, lease)?;
+            self.evict_committed(permit, tick, requests)?;
+        }
+        Ok(())
+    }
+
+    fn next_clean_outside_interest_victim(&self) -> Option<ChunkCoordinate> {
+        self.clean_outside_interest_victims().into_iter().next()
+    }
+
+    fn clean_outside_interest_victims(&self) -> Vec<ChunkCoordinate> {
+        let Some(interest) = self.interest else {
+            return Vec::new();
+        };
+        let mut victims: Vec<ChunkCoordinate> = self
+            .chunks
+            .keys()
+            .copied()
+            .filter(|coordinate| {
+                !self.dirty.contains(coordinate) && !interest.contains(*coordinate)
+            })
+            .collect();
+        victims.sort_by(|left, right| {
+            interest
+                .chebyshev_distance(*right)
+                .cmp(&interest.chebyshev_distance(*left))
+                .then_with(|| left.cmp(right))
+        });
+        victims
     }
 }
 

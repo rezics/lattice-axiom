@@ -20,10 +20,10 @@ use crate::{
     ColliderFailure, ColliderSafetyState, ColliderSemanticFingerprint, CommittedChunkProjection,
     CompletionOutcome, DdaOrigin, DdaOutcome, DdaQuery, DerivedInput, DerivedKind,
     DerivedMemoryBudget, DerivedOwner, DerivedPriority, DerivedQueueLimits, DerivedRequest,
-    DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, FixedTick, MemoryStage,
-    MeshSemanticFingerprint, ProjectionDecision, ProjectionEvidence, RetainedBytes, RuntimeError,
-    RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate, VoxelRuntime, WorkingSetScope,
-    WorldEpoch,
+    DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, FixedTick, InterestWindow,
+    MemoryStage, MeshSemanticFingerprint, ProjectionDecision, ProjectionEvidence, RetainedBytes,
+    RuntimeError, RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate, VoxelRuntime,
+    WorkingSetScope, WorldEpoch,
 };
 
 const EDGE: u16 = 4;
@@ -594,6 +594,283 @@ fn stale_eviction_permit_and_foreign_runtime_cannot_release_owner_state() {
         }
     ));
     assert_eq!(owner.diagnostics().combined_reserved_bytes(), 0);
+}
+
+fn seeded_cells(seed: u8, coordinate: ChunkCoordinate) -> Vec<u8> {
+    (0..CELL_COUNT)
+        .map(|index| {
+            seed.wrapping_add(coordinate.x.to_le_bytes()[0])
+                .wrapping_add(coordinate.y.to_le_bytes()[0])
+                .wrapping_add(coordinate.z.to_le_bytes()[0])
+                .wrapping_add(u8::try_from(index).expect("cell index fits u8"))
+        })
+        .collect()
+}
+
+#[test]
+fn dirty_edited_chunk_cannot_be_evicted() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let coordinate = ChunkCoordinate::new(0, 0, 0);
+    let (_, stored) = commit_chunk(
+        &storage,
+        &runtime_scope,
+        coordinate,
+        seeded_cells(1, coordinate),
+        1,
+    );
+    let mut runtime = runtime();
+    project_stored(&mut runtime, &stored, 0, 1, 1);
+    assert!(matches!(
+        runtime.evict_clean_outside_interest(
+            EvictionLeaseGeneration::new(2),
+            FixedTick::new(0),
+            requests(),
+        ),
+        Err(RuntimeError::InterestWindowRequired)
+    ));
+    runtime
+        .mark_dirty(coordinate)
+        .expect("resident generated chunk can be pinned");
+    assert!(runtime.is_dirty(coordinate));
+    assert!(matches!(
+        runtime.prepare_eviction(coordinate, EvictionLeaseGeneration::new(1)),
+        Err(RuntimeError::DirtyChunkPinned { .. })
+    ));
+}
+
+#[test]
+fn voxel_changing_update_pins_the_edited_projection() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let coordinate = ChunkCoordinate::new(0, 0, 0);
+    let (_, first) = commit_chunk(
+        &storage,
+        &runtime_scope,
+        coordinate,
+        seeded_cells(1, coordinate),
+        1,
+    );
+    let mut runtime = runtime();
+    project_stored(&mut runtime, &first, 0, 1, 1);
+    assert!(!runtime.is_dirty(coordinate));
+    let (_, edited) = commit_chunk(
+        &storage,
+        &runtime_scope,
+        coordinate,
+        seeded_cells(2, coordinate),
+        2,
+    );
+    project_stored(&mut runtime, &edited, 1, 1, 1);
+    assert!(runtime.is_dirty(coordinate));
+    assert!(matches!(
+        runtime.prepare_eviction(coordinate, EvictionLeaseGeneration::new(1)),
+        Err(RuntimeError::DirtyChunkPinned { .. })
+    ));
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one test covers cap, dirty pin, eviction, and identical regeneration"
+)]
+fn bounded_residency_evicts_clean_chunks_and_regenerates_identically() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let seed = 7_u8;
+    let cap = 4;
+    let max_in_flight = 2;
+    let queue = queue_limits(32, max_in_flight, 1024 * 1024);
+    let limits = RuntimeLimits::new(cap, 2 * 1024 * 1024, queue, queue)
+        .expect("fixture limits are positive");
+    let mut runtime = VoxelRuntime::new(
+        runtime_scope.clone(),
+        RuntimeGeneration::new(1),
+        EDGE,
+        0_u8,
+        limits,
+    )
+    .expect("runtime is valid");
+    let origin = ChunkCoordinate::new(0, 0, 0);
+    runtime.set_interest(InterestWindow::new(origin, 0));
+
+    let origin_cells = seeded_cells(seed, origin);
+    let (_, origin_stored) =
+        commit_chunk(&storage, &runtime_scope, origin, origin_cells.clone(), 1);
+    project_stored(&mut runtime, &origin_stored, 0, 1, 1);
+    runtime.mark_dirty(origin).expect("origin edit is pinned");
+    assert_eq!(
+        runtime.dirty_coordinates().collect::<Vec<_>>(),
+        vec![origin]
+    );
+
+    let mut generated = BTreeMap::new();
+    let mut stored_by_coordinate = BTreeMap::new();
+    generated.insert(origin, origin_cells);
+    stored_by_coordinate.insert(origin, origin_stored);
+    let mut transaction = 2_u128;
+    for x in 1_i32..=8 {
+        let coordinate = ChunkCoordinate::new(x, 0, 0);
+        let cells = seeded_cells(seed, coordinate);
+        generated.insert(coordinate, cells.clone());
+        let (_, stored) = commit_chunk(&storage, &runtime_scope, coordinate, cells, transaction);
+        transaction = transaction.saturating_add(1);
+        stored_by_coordinate.insert(coordinate, stored.clone());
+        project_stored(
+            &mut runtime,
+            &stored,
+            u64::from(u32::try_from(x).expect("x fits u32")),
+            1,
+            1,
+        );
+        assert!(runtime.diagnostics().resident_chunks() <= cap);
+        assert!(runtime.diagnostics().mesh().in_flight() <= max_in_flight);
+        assert!(runtime.diagnostics().collider().in_flight() <= max_in_flight);
+        assert!(runtime.diagnostics().in_flight_chunks() <= max_in_flight.saturating_mul(2));
+        assert!(runtime.diagnostics().active_chunks() <= runtime.diagnostics().resident_chunks());
+        assert!(runtime.diagnostics().visible_chunks() <= runtime.diagnostics().resident_chunks());
+        assert_eq!(runtime.diagnostics().saving_chunks(), 0);
+        assert_eq!(runtime.diagnostics().byte_budget(), 2 * 1024 * 1024);
+    }
+
+    assert_eq!(runtime.diagnostics().resident_high_water(), cap);
+    assert!(runtime.diagnostics().resident_high_water() <= cap);
+    assert!(runtime.is_resident(origin));
+    assert!(runtime.is_dirty(origin));
+    assert_eq!(runtime.diagnostics().dirty_chunks(), 1);
+    assert_eq!(runtime.diagnostics().saving_chunks(), 0);
+    assert_eq!(runtime.diagnostics().byte_budget(), 2 * 1024 * 1024);
+    assert!(!runtime.is_resident(ChunkCoordinate::new(3, 0, 0)));
+
+    let mut started = Vec::new();
+    loop {
+        match runtime
+            .dispatch_next(DerivedKind::Mesh)
+            .expect("job identity remains in range")
+        {
+            DispatchOutcome::Started(input) => {
+                assert!(runtime.diagnostics().mesh().in_flight() <= max_in_flight);
+                started.push(input);
+            }
+            DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
+            DispatchOutcome::MemoryContractViolation { .. } => {
+                panic!("fixture halo estimate must cover actual input bytes")
+            }
+        }
+    }
+    assert!(runtime.diagnostics().mesh().in_flight_high_water() <= max_in_flight);
+    for input in started {
+        assert!(matches!(
+            runtime.complete_derived(
+                input,
+                0_u8,
+                ApplyByteDeclaration::new(0),
+                FixedTick::new(20),
+                |_| Ok::<(), ()>(()),
+            ),
+            CompletionOutcome::Applied { .. }
+                | CompletionOutcome::Cancelled { .. }
+                | CompletionOutcome::StaleRejected { .. }
+        ));
+    }
+
+    let evicted = runtime
+        .evict_clean_outside_interest(
+            EvictionLeaseGeneration::new(99),
+            FixedTick::new(21),
+            requests(),
+        )
+        .expect("interest window is set");
+    assert!(!evicted.is_empty());
+    assert_eq!(runtime.diagnostics().resident_chunks(), 1);
+    assert!(runtime.is_resident(origin));
+    assert!(runtime.is_dirty(origin));
+    assert!(
+        runtime
+            .prepare_eviction(origin, EvictionLeaseGeneration::new(100))
+            .is_err()
+    );
+
+    let regenerated = ChunkCoordinate::new(5, 0, 0);
+    let original = generated
+        .get(&regenerated)
+        .expect("original generated bytes were captured")
+        .clone();
+    let again = seeded_cells(seed, regenerated);
+    assert_eq!(original, again);
+    let restored = stored_by_coordinate
+        .get(&regenerated)
+        .expect("first publication remains available after runtime eviction");
+    project_stored(&mut runtime, restored, 30, 1, 1);
+    assert!(runtime.is_resident(regenerated));
+    assert!(!runtime.is_dirty(regenerated));
+    assert_eq!(
+        runtime
+            .cell(VoxelCoordinate::new(
+                i64::from(regenerated.x) * i64::from(EDGE),
+                0,
+                0
+            ))
+            .expect("regenerated cell is resident"),
+        &again[0]
+    );
+}
+
+#[test]
+fn in_interest_clean_chunks_are_not_auto_evicted_at_capacity() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let queue = queue_limits(8, 2, 1024 * 1024);
+    let limits =
+        RuntimeLimits::new(2, 2 * 1024 * 1024, queue, queue).expect("fixture limits are positive");
+    let mut runtime = VoxelRuntime::new(
+        runtime_scope.clone(),
+        RuntimeGeneration::new(1),
+        EDGE,
+        0_u8,
+        limits,
+    )
+    .expect("runtime is valid");
+    let origin = ChunkCoordinate::new(0, 0, 0);
+    runtime.set_interest(InterestWindow::new(origin, 1));
+    for (index, coordinate) in [origin, ChunkCoordinate::new(1, 0, 0)]
+        .into_iter()
+        .enumerate()
+    {
+        let (_, stored) = commit_chunk(
+            &storage,
+            &runtime_scope,
+            coordinate,
+            seeded_cells(3, coordinate),
+            u128::try_from(index).expect("index fits") + 1,
+        );
+        project_stored(
+            &mut runtime,
+            &stored,
+            u64::try_from(index).expect("index fits u64"),
+            1,
+            1,
+        );
+    }
+    let outside = ChunkCoordinate::new(2, 0, 0);
+    let (_, stored) = commit_chunk(
+        &storage,
+        &runtime_scope,
+        outside,
+        seeded_cells(3, outside),
+        3,
+    );
+    assert!(matches!(
+        runtime.project_committed(
+            projection_from_stored(&stored, 1, 1),
+            FixedTick::new(3),
+            requests(),
+        ),
+        Err(RuntimeError::ResidentLimitExceeded { limit: 2 })
+    ));
+    assert!(runtime.is_resident(origin));
+    assert!(runtime.is_resident(ChunkCoordinate::new(1, 0, 0)));
+    assert!(!runtime.is_resident(outside));
 }
 
 #[test]
