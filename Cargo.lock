@@ -4037,6 +4037,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "latticeaxiom-compose",
+ "latticeaxiom-content",
  "latticeaxiom-core",
  "latticeaxiom-gameplay",
  "latticeaxiom-launcher",

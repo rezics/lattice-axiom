@@ -9,6 +9,9 @@ use std::{
     num::{NonZeroU8, NonZeroU32},
 };
 
+use latticeaxiom_content::{
+    ContentCatalogInputV1, ContentCatalogLimitsV1, ContentCatalogV1, FluidDefinitionV1,
+};
 use latticeaxiom_core::StableId;
 use latticeaxiom_gameplay::{
     BlockDefinitionV1, BlockId, CatalogLimits, FrozenItemRoleBindingV1, GameplayCatalog,
@@ -35,6 +38,8 @@ const AUTHORED_TOOLS_JSON: &str =
     include_str!("../../../../packages/terrenia/tools/data/authored-tools-v1.json");
 const AUTHORED_BINDINGS_JSON: &str =
     include_str!("../../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json");
+const D9_BLOCK_IDS: &str =
+    include_str!("../../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
 
 /// Worldgen identities compiled from the package catalog.
 #[derive(Clone, Debug)]
@@ -56,8 +61,10 @@ pub(super) struct HostWorldgenCatalog {
 /// Returns [`ProductionHostError`] when authored JSON is invalid or a required
 /// item, block, tool, or recipe definition is missing.
 pub fn authored_gameplay_catalog() -> Result<GameplayCatalog, ProductionHostError> {
-    GameplayCatalog::compile(authored_gameplay_source()?, CatalogLimits::default())
-        .map_err(ProductionHostError::from)
+    let catalog = GameplayCatalog::compile(authored_gameplay_source()?, CatalogLimits::default())
+        .map_err(ProductionHostError::from)?;
+    require_compiled_gameplay_covers_d9(&catalog)?;
+    Ok(catalog)
 }
 
 /// Compiles an empty gameplay catalog for hosts that only edit voxels.
@@ -72,9 +79,73 @@ pub fn empty_gameplay_catalog() -> Result<GameplayCatalog, ProductionHostError> 
     )?)
 }
 
+/// Compiles the authored D9 block and fluid catalog used by occupancy.
+///
+/// # Errors
+///
+/// Returns [`ProductionHostError`] when the package JSON is invalid or the
+/// compiler rejects a definition.
+pub fn authored_content_catalog() -> Result<ContentCatalogV1, ProductionHostError> {
+    let authored = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
+    let blocks = json_array(&authored, "blocks")?
+        .iter()
+        .map(|row| {
+            decode_catalog_row::<latticeaxiom_content::BlockDefinitionV1>(row, "block-definition")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let fluids = json_array(&authored, "fluids")?
+        .iter()
+        .map(|row| decode_catalog_row::<FluidDefinitionV1>(row, "fluid-definition"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let material_role_bindings = match authored.get("material_role_bindings") {
+        Some(value) => serde_json::from_value(value.clone()).map_err(|source| {
+            ProductionHostError::InvalidAuthoredCatalog {
+                name: "material-role-bindings",
+                source,
+            }
+        })?,
+        None => Vec::new(),
+    };
+    let catalog = ContentCatalogV1::compile(
+        ContentCatalogInputV1 {
+            schema_major: 1,
+            blocks,
+            fluids,
+            biomes: Vec::new(),
+            material_role_bindings,
+        },
+        ContentCatalogLimitsV1::default(),
+    )?;
+    require_d9_golden_block_ids(
+        &catalog
+            .blocks()
+            .iter()
+            .map(|block| block.definition().header.stable_id.clone())
+            .collect(),
+    )?;
+    Ok(catalog)
+}
+
+fn decode_catalog_row<T>(row: &Value, name: &'static str) -> Result<T, ProductionHostError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let definition =
+        row.get("definition")
+            .cloned()
+            .ok_or(ProductionHostError::InvalidCatalogField {
+                field: "definition",
+            })?;
+    serde_json::from_value(definition)
+        .map_err(|source| ProductionHostError::InvalidAuthoredCatalog { name, source })
+}
+
 pub(super) fn host_worldgen_catalog(
     images: &LockVerifiedComposeImages,
 ) -> Result<HostWorldgenCatalog, ProductionHostError> {
+    let catalog_ids =
+        authored_catalog_block_ids(&parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?)?;
+    require_d9_golden_block_ids(&catalog_ids)?;
     let authored: AuthoredBlockBindings =
         serde_json::from_str(AUTHORED_BINDINGS_JSON).map_err(|source| {
             ProductionHostError::InvalidAuthoredCatalog {
@@ -89,7 +160,6 @@ pub(super) fn host_worldgen_catalog(
         });
     }
 
-    let mut candidates = BTreeSet::new();
     let mut roles_by_path = BTreeMap::<String, (StableId, StableId)>::new();
     for row in &authored.roles {
         let role: StableId = row.id.parse()?;
@@ -100,13 +170,12 @@ pub(super) fn host_worldgen_catalog(
                 id: row.id.clone(),
             });
         }
-        if candidate.kind() != "block" {
+        if candidate.kind() != "block" || !catalog_ids.contains(&candidate) {
             return Err(ProductionHostError::MissingCatalogDefinition {
                 kind: "block",
                 id: row.candidate.clone(),
             });
         }
-        candidates.insert(candidate.clone());
         if roles_by_path
             .insert(role.path().to_owned(), (role, candidate))
             .is_some()
@@ -131,7 +200,7 @@ pub(super) fn host_worldgen_catalog(
         binding_entries.push((role.clone(), target.clone()));
     }
 
-    let block_catalog = D4BlockCatalogClosureV1::new(candidates)?;
+    let block_catalog = D4BlockCatalogClosureV1::new(catalog_ids)?;
     let palette = block_catalog
         .blocks()
         .iter()
@@ -221,8 +290,123 @@ fn catalog_namespace_dimension(palette: &[BlockId]) -> Result<DimensionId, Produ
         .map_err(ProductionHostError::from)
 }
 
+fn d9_golden_block_ids() -> Result<BTreeSet<StableId>, ProductionHostError> {
+    let mut ids = BTreeSet::new();
+    for line in D9_BLOCK_IDS.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let id: StableId = line.parse()?;
+        if id.kind() != "block" {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "block",
+                id: line.to_owned(),
+            });
+        }
+        if !ids.insert(id) {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "unique-d9-block",
+                id: line.to_owned(),
+            });
+        }
+    }
+    if ids.is_empty() {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "d9-block",
+            id: "goldens/d9-block-ids.txt".to_owned(),
+        });
+    }
+    Ok(ids)
+}
+
+fn authored_catalog_block_ids(catalog: &Value) -> Result<BTreeSet<StableId>, ProductionHostError> {
+    let mut ids = BTreeSet::new();
+    for row in json_array(catalog, "blocks")? {
+        let definition = row
+            .get("definition")
+            .ok_or(ProductionHostError::InvalidCatalogField {
+                field: "definition",
+            })?;
+        let header = definition
+            .get("header")
+            .ok_or(ProductionHostError::InvalidCatalogField { field: "header" })?;
+        let text = json_text(header, "stable_id")?;
+        let id: StableId = text.parse()?;
+        if id.kind() != "block" {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "block",
+                id: text.to_owned(),
+            });
+        }
+        if !ids.insert(id) {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "unique-block",
+                id: text.to_owned(),
+            });
+        }
+    }
+    Ok(ids)
+}
+
+fn require_d9_golden_block_ids(present: &BTreeSet<StableId>) -> Result<(), ProductionHostError> {
+    missing_catalog_ids(
+        "d9-block",
+        d9_golden_block_ids()?
+            .into_iter()
+            .filter(|id| !present.contains(id))
+            .map(|id| id.as_str().to_owned()),
+    )
+}
+
+fn require_compiled_gameplay_covers_d9(
+    catalog: &GameplayCatalog,
+) -> Result<(), ProductionHostError> {
+    let blocks = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
+    let mut unmineable = BTreeSet::new();
+    for row in json_array(&blocks, "blocks")? {
+        if row
+            .pointer("/physical/hardness_ticks")
+            .and_then(Value::as_u64)
+            != Some(0)
+        {
+            continue;
+        }
+        if let Some(id) = row
+            .pointer("/definition/header/stable_id")
+            .and_then(Value::as_str)
+        {
+            unmineable.insert(id.to_owned());
+        }
+    }
+    let mut missing = Vec::new();
+    for id in d9_golden_block_ids()? {
+        let block = BlockId::parse(id.as_str())?;
+        if catalog.block(&block).is_none() && !unmineable.contains(id.as_str()) {
+            missing.push(id.as_str().to_owned());
+        }
+    }
+    missing_catalog_ids("gameplay-block", missing)
+}
+
+fn missing_catalog_ids(
+    kind: &'static str,
+    missing: impl IntoIterator<Item = String>,
+) -> Result<(), ProductionHostError> {
+    let missing = missing.into_iter().collect::<Vec<_>>();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(ProductionHostError::MissingCatalogDefinition {
+            kind,
+            id: missing.join(","),
+        })
+    }
+}
+
 fn authored_gameplay_source() -> Result<GameplayCatalogSourceV1, ProductionHostError> {
     let blocks = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
+    require_d9_golden_block_ids(&authored_catalog_block_ids(&blocks)?)?;
     let rules = parse_json_object(AUTHORED_RULES_JSON, "gameplay-rules")?;
     let tools = parse_json_object(AUTHORED_TOOLS_JSON, "tools")?;
     let mut items = BTreeMap::new();
@@ -484,20 +668,29 @@ fn compile_blocks(
             .get("header")
             .ok_or(ProductionHostError::InvalidCatalogField { field: "header" })?;
         let id = json_text(header, "stable_id")?;
-        let hardness = row
+        let ticks = row
             .pointer("/physical/hardness_ticks")
             .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .and_then(NonZeroU32::new);
-        let Some(hardness) = hardness else {
+            .ok_or(ProductionHostError::InvalidCatalogField {
+                field: "hardness_ticks",
+            })?;
+        if ticks == 0 {
             continue;
-        };
+        }
+        let hardness = u32::try_from(ticks).ok().and_then(NonZeroU32::new).ok_or(
+            ProductionHostError::InvalidCatalogField {
+                field: "hardness_ticks",
+            },
+        )?;
         let rules = definition
             .get("rules")
             .ok_or(ProductionHostError::InvalidCatalogField { field: "rules" })?;
         let drop_id = json_text(rules, "drop_table")?;
         let Some(drop) = drop_tables.get(drop_id).cloned() else {
-            continue;
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "drop-table",
+                id: drop_id.to_owned(),
+            });
         };
         let tool_id = json_text(row, "tool_requirement")?;
         let tool = tool_requirements.get(tool_id).cloned().ok_or_else(|| {
@@ -633,4 +826,81 @@ struct AuthoredBlockBindings {
 struct AuthoredRoleRow {
     id: String,
     candidate: String,
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{
+        AUTHORED_BLOCKS_JSON, authored_catalog_block_ids, authored_content_catalog,
+        authored_gameplay_catalog, d9_golden_block_ids, parse_json_object,
+    };
+    use latticeaxiom_gameplay::BlockId;
+
+    #[test]
+    fn d9_golden_block_ids_are_present_in_authored_catalog() {
+        let authored = authored_catalog_block_ids(
+            &parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")
+                .expect("Terrenia authored catalog is valid JSON"),
+        )
+        .expect("authored catalog block IDs are valid");
+        let golden = d9_golden_block_ids().expect("D9 golden IDs are valid");
+        assert_eq!(golden.len(), 72);
+        let missing = golden
+            .iter()
+            .filter(|id| !authored.contains(*id))
+            .map(|id| id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "authored catalog is missing golden IDs: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn compiled_gameplay_catalog_contains_every_d9_golden_id() {
+        let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+        let golden = d9_golden_block_ids().expect("D9 golden IDs are valid");
+        let missing = golden
+            .iter()
+            .filter_map(|id| {
+                let block = BlockId::parse(id.as_str())
+                    .expect("golden block IDs satisfy the gameplay-ID contract");
+                catalog
+                    .block(&block)
+                    .is_none()
+                    .then(|| id.as_str().to_owned())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            missing,
+            vec!["terrenia:block/air".to_owned()],
+            "compiled GameplayCatalog is missing golden IDs: {missing:?}"
+        );
+        assert_eq!(catalog.blocks().len(), golden.len() - missing.len());
+    }
+
+    #[test]
+    fn compiled_content_catalog_contains_every_d9_golden_id() {
+        let catalog = authored_content_catalog().expect("package content catalog must compile");
+        let golden = d9_golden_block_ids().expect("D9 golden IDs are valid");
+        let compiled = catalog
+            .blocks()
+            .iter()
+            .map(|block| block.definition().header.stable_id.clone())
+            .collect::<BTreeSet<_>>();
+        let missing = golden
+            .iter()
+            .filter(|id| !compiled.contains(*id))
+            .map(|id| id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "compiled content catalog is missing golden IDs: {missing:?}"
+        );
+        assert_eq!(golden.len(), 72);
+        assert_eq!(compiled, golden);
+    }
 }

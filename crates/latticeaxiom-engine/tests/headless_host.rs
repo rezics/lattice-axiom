@@ -31,14 +31,15 @@ use latticeaxiom_core::{
     TargetTriple, canonical_json_bytes,
 };
 use latticeaxiom_engine::{
-    ActionAxis2V1, AuthoritativeTransactionKernel, ChunkCoordinate, ChunkLifecycle,
-    ChunkMeshCursor, ChunkPresentation, ContainerId, DropEntityId, EngineInstance,
-    EngineInstanceError, GameplayReject, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId,
-    ItemStackV1, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1,
-    PlayerActionFrameV1, PlayerActionV1, PreparationError, ProductionInspectSurface,
-    ProductionMemoryStart, ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId,
-    SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
-    WorkingSetDiagnosticsV1, WorkstationId, authored_gameplay_catalog, empty_gameplay_catalog,
+    ActionAxis2V1, AuthoritativeTransactionKernel, CellOccupancyV1, ChunkCoordinate,
+    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ContainerId, DropEntityId, EngineInstance,
+    EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayReject,
+    HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1, LockVerifiedComposeImages,
+    MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
+    PreparationError, ProductionInspectSurface, ProductionMemoryStart, ProductionSpine,
+    ProductionWorldList, ProductionWorldStorage, RecipeId, SlotIndex,
+    StructurallyValidatedComposeImages, VerifiedProductLockHash, WorkingSetDiagnosticsV1,
+    WorkstationId, authored_gameplay_catalog, empty_gameplay_catalog,
 };
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_launcher::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
@@ -328,7 +329,7 @@ fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
         .voxels()
         .bytes()
         .len()
-        / 2;
+        / 4;
     assert!(
         chunk_entities < voxel_count,
         "presentation must not spawn one entity per block (chunks={chunk_entities}, voxels/chunk={voxel_count})"
@@ -559,6 +560,88 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     });
     assert_eq!(success.position, inspected.observation.position);
     assert_eq!(success.old_content.as_ref(), Some(&inspected.block_id));
+}
+
+#[test]
+fn production_spine_headless_water_and_lava_occupancy_round_trips_at_signed_xz() {
+    let boot = lock_boot_fixture();
+    let images = boot.prepared();
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        images,
+        SPINE_TIMESTEP,
+        empty_gameplay_catalog().expect("empty gameplay catalog compiles"),
+    )
+    .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let occupancy = instance
+        .app()
+        .world()
+        .get_resource::<WorkingSetDiagnosticsV1>()
+        .copied()
+        .expect("working-set diagnostics remain installed");
+    assert_eq!(
+        occupancy.saving(),
+        0,
+        "occupancy host must not open a writer"
+    );
+
+    let water = stable_id("terrenia:fluid/water");
+    let lava = stable_id("terrenia:fluid/lava");
+    let source = FluidStateV1 {
+        level: FluidLevelV1::SOURCE,
+        flow: FluidFlowV1::Still,
+    };
+    let positive = first_direct_fluid_cell(&spine, true);
+    let negative = first_direct_fluid_cell(&spine, false);
+    assert!(
+        positive.x > 0 && positive.z > 0,
+        "water cell must be in +XZ, got {positive:?}"
+    );
+    assert!(
+        negative.x < 0 && negative.z < 0,
+        "lava cell must be in -XZ, got {negative:?}"
+    );
+
+    let water_placed = place_and_inspect_fluid(&spine, positive, &water, source);
+    let lava_placed = place_and_inspect_fluid(&spine, negative, &lava, source);
+    assert_occupancy_payloads(&spine, &[positive, negative]);
+    assert_eq!(
+        spine
+            .inspect_occupancy(positive)
+            .expect("water still inspects"),
+        water_placed
+    );
+    assert_eq!(
+        spine
+            .inspect_occupancy(negative)
+            .expect("lava still inspects"),
+        lava_placed
+    );
+    assert!(
+        matches!(
+            spine.place_fluid_occupancy(
+                latticeaxiom_gameplay::BlockPosition {
+                    x: -1,
+                    y: 30,
+                    z: -1,
+                },
+                &water,
+                source,
+            ),
+            Err(BlockEditRejectV1::NotReplaceable)
+        ),
+        "stone probe occupancy must reject fluid writes"
+    );
+    assert_eq!(
+        spine.working_set_diagnostics().saving(),
+        0,
+        "fluid occupancy must stay on the memory kernel"
+    );
 }
 
 #[test]
@@ -969,6 +1052,128 @@ fn inspect_frame(generation: u64) -> PlayerActionFrameV1 {
         started,
         ..PlayerActionFrameV1::default()
     }
+}
+
+fn first_direct_fluid_cell(
+    spine: &ProductionSpine,
+    positive_xz: bool,
+) -> latticeaxiom_gameplay::BlockPosition {
+    let edge = i32::from(spine.chunk_edge());
+    for coordinate in spine.resident_chunks() {
+        for ly in (0..edge).rev() {
+            for lz in 0..edge {
+                for lx in 0..edge {
+                    let position = latticeaxiom_gameplay::BlockPosition {
+                        x: coordinate.x.saturating_mul(edge).saturating_add(lx),
+                        y: coordinate.y.saturating_mul(edge).saturating_add(ly),
+                        z: coordinate.z.saturating_mul(edge).saturating_add(lz),
+                    };
+                    let xz_ok = if positive_xz {
+                        position.x > 0 && position.z > 0
+                    } else {
+                        position.x < 0 && position.z < 0
+                    };
+                    if !xz_ok {
+                        continue;
+                    }
+                    let Ok(occupancy) = spine.inspect_occupancy(position) else {
+                        continue;
+                    };
+                    if occupancy.fluid.is_none()
+                        && occupancy.fluid_occupancy.as_str() == "terrenia:fluid-occupancy/direct@1"
+                    {
+                        return position;
+                    }
+                }
+            }
+        }
+    }
+    panic!(
+        "no direct fluid-occupancy air cell with {} XZ in {:?}",
+        if positive_xz { "positive" } else { "negative" },
+        spine.resident_chunks()
+    );
+}
+
+fn place_and_inspect_fluid(
+    spine: &ProductionSpine,
+    position: latticeaxiom_gameplay::BlockPosition,
+    fluid: &latticeaxiom_core::StableId,
+    state: FluidStateV1,
+) -> CellOccupancyV1 {
+    let placed = spine
+        .place_fluid_occupancy(position, fluid, state)
+        .unwrap_or_else(|reject| panic!("{fluid} occupancy must place, reject={reject:?}"));
+    assert_fluid_occupancy(&placed, position, fluid, state);
+    let inspected = spine
+        .inspect_occupancy(position)
+        .unwrap_or_else(|reject| panic!("{fluid} occupancy must inspect, reject={reject:?}"));
+    assert_eq!(inspected, placed);
+    placed
+}
+
+fn assert_occupancy_payloads(
+    spine: &ProductionSpine,
+    positions: &[latticeaxiom_gameplay::BlockPosition],
+) {
+    let world_id = spine.world_id().expect("spine owns a world identity");
+    let snapshot = spine
+        .kernel()
+        .reference_snapshot(world_id)
+        .expect("memory kernel exposes a reference snapshot");
+    let expected = usize::from(spine.chunk_edge()).pow(3).saturating_mul(4);
+    for position in positions {
+        let coordinate = spine
+            .chunk_of(*position)
+            .unwrap_or_else(|| panic!("{position:?} maps to a host chunk"));
+        let stored = snapshot
+            .chunks()
+            .find(|(key, _)| key.coordinate == coordinate)
+            .map_or_else(
+                || panic!("committed occupancy chunk {coordinate:?} is missing"),
+                |(_, stored)| stored,
+            );
+        assert_eq!(
+            stored.data().voxels().bytes().len(),
+            expected,
+            "occupancy payload must round-trip solid and fluid indices"
+        );
+    }
+}
+
+fn assert_fluid_occupancy(
+    occupancy: &CellOccupancyV1,
+    position: latticeaxiom_gameplay::BlockPosition,
+    fluid: &latticeaxiom_core::StableId,
+    state: FluidStateV1,
+) {
+    assert_eq!(occupancy.position, position);
+    assert_eq!(
+        occupancy.solid_occupancy.as_str(),
+        "terrenia:solid-occupancy/empty@1"
+    );
+    assert_eq!(
+        occupancy.fluid_occupancy.as_str(),
+        "terrenia:fluid-occupancy/direct@1"
+    );
+    assert_eq!(occupancy.fluid.as_ref(), Some(fluid));
+    assert_eq!(occupancy.fluid_state, Some(state));
+    assert_eq!(
+        occupancy.collision_policy.as_str(),
+        if fluid.as_str() == "terrenia:fluid/lava" {
+            "terrenia:fluid-collision-policy/lava@1"
+        } else {
+            "terrenia:fluid-collision-policy/water@1"
+        }
+    );
+    assert_eq!(
+        occupancy.selection_policy.as_str(),
+        if fluid.as_str() == "terrenia:fluid/lava" {
+            "terrenia:fluid-selection-policy/lava@1"
+        } else {
+            "terrenia:fluid-selection-policy/water@1"
+        }
+    );
 }
 
 fn enqueue_look_then_walk(

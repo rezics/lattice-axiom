@@ -34,16 +34,18 @@ pub use client::{
     run_client_host_from_workspace,
 };
 pub use host::{
-    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, HOTBAR_SLOTS, INVENTORY_SLOTS,
-    ProductionHostError, ProductionHostPlugin, ProductionInspectSurface, ProductionInventoryView,
-    ProductionMemoryStart, ProductionMemoryStartError, ProductionPlayerPose, ProductionSpine,
-    ProductionWorldList, ProductionWorldStorage, WorkingSetDiagnosticsV1,
-    authored_gameplay_catalog, empty_gameplay_catalog,
+    CellOccupancyV1, ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, HOTBAR_SLOTS,
+    INVENTORY_SLOTS, ProductionHostError, ProductionHostPlugin, ProductionInspectSurface,
+    ProductionInventoryView, ProductionMemoryStart, ProductionMemoryStartError,
+    ProductionPlayerPose, ProductionSpine, ProductionWorldList, ProductionWorldStorage,
+    WorkingSetDiagnosticsV1, authored_content_catalog, authored_gameplay_catalog,
+    empty_gameplay_catalog,
 };
 pub use instance::{
     EngineInstance, EngineInstanceError, EngineProfile, FixedTickCount, MAX_TICKS_PER_ADVANCE,
     VerifiedProductLockHash,
 };
+pub use latticeaxiom_content::{FluidFlowV1, FluidLevelV1, FluidStateV1};
 pub use latticeaxiom_gameplay::{
     CommandOutcomeV1, ContainerId, DropEntityId, GameplayCatalog, GameplayReject, ItemId,
     ItemStackV1, ItemStateV1, RecipeId, SlotIndex, WorkstationId,

@@ -9,7 +9,12 @@ use std::{
 use avian3d::prelude::Collider;
 use bevy::prelude::{Quat, Resource, Vec3};
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
-use latticeaxiom_core::{SchemaId, WorldId};
+use latticeaxiom_content::{
+    CompiledFluidPaletteV1, CompiledSolidPaletteEntryV1, CompiledSolidPaletteV1, ContentCatalogV1,
+    FluidFlowV1, FluidLevelV1, FluidPaletteEntryV1, FluidStateV1, PaletteLimitsV1,
+    SolidPaletteEntryV1,
+};
+use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
     BlockId, BlockPosition, CommandOutcomeV1, ContainerId, DimensionChunkKey, DropEntityId,
     GameplayCatalog, GameplayReject, ItemStackV1, PlayerId, RecipeId, SlotIndex, WorkstationId,
@@ -44,7 +49,7 @@ use latticeaxiom_worldgen::{
 
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
-    catalog::{authored_gameplay_catalog, host_worldgen_catalog},
+    catalog::{authored_content_catalog, authored_gameplay_catalog, host_worldgen_catalog},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
     worldgen::{compile_plan, host_hard_limits, spine_config},
@@ -55,8 +60,11 @@ const MESH_SEMANTICS: MeshSemanticFingerprint = MeshSemanticFingerprint::new([0x
 const COLLIDER_SEMANTICS: ColliderSemanticFingerprint =
     ColliderSemanticFingerprint::new([0xC1; 32]);
 const VOXEL_SCHEMA: &str = "latticeaxiom:schema/chunk-voxels@1";
+const VOXEL_SCHEMA_VERSION: u32 = 2;
+const CELL_OCCUPANCY_BYTES: usize = 4;
 const WORLD_ID: &str = "00000000-0000-4000-8000-0000000000b1";
 const REACH_MM: u16 = 5_000;
+const FLUID_OCCUPANCY_REJECT: &str = "terrenia:fluid-occupancy/reject@1";
 
 /// Production [`MemoryTransactionKernel`] installed behind the storage trait.
 #[derive(Clone, Debug, Resource)]
@@ -188,11 +196,38 @@ fn count_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
+/// Versioned solid and orthogonal fluid occupancy of one committed cell.
+///
+/// Collision and selection identities are catalog-owned policy references. This
+/// host does not apply them to physics or DDA until a consumer is ready.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CellOccupancyV1 {
+    /// Inspected voxel in world cells.
+    pub position: BlockPosition,
+    /// Solid palette identity, including empty air.
+    pub solid: Option<BlockId>,
+    /// Versioned solid-occupancy policy from the solid's default state.
+    pub solid_occupancy: StableId,
+    /// Versioned orthogonal fluid-occupancy policy from the solid's default state.
+    pub fluid_occupancy: StableId,
+    /// Fluid palette identity when the cell is not canonically empty.
+    pub fluid: Option<StableId>,
+    /// Authoritative per-cell fluid state when a fluid occupies the cell.
+    pub fluid_state: Option<FluidStateV1>,
+    /// Versioned collision policy; unused by this host's physics.
+    pub collision_policy: StableId,
+    /// Versioned selection policy; unused by this host's DDA.
+    pub selection_policy: StableId,
+}
+
 pub(super) struct ProductionSpineInner {
     runtime: VoxelRuntime<HostVoxel>,
     plan: GenerationPlanV1,
     clamps: StreamClamps,
+    content: ContentCatalogV1,
     palette: Vec<BlockId>,
+    solid_palette: CompiledSolidPaletteV1,
+    fluid_palette: CompiledFluidPaletteV1,
     empty: HostVoxel,
     chunk_edge: u16,
     world: WorldId,
@@ -237,6 +272,16 @@ struct ChunkDerived {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct HostVoxel {
     palette_index: u16,
+    fluid_palette_index: u16,
+}
+
+impl HostVoxel {
+    const fn from_solid(palette_index: u16) -> Self {
+        Self {
+            palette_index,
+            fluid_palette_index: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -309,16 +354,19 @@ impl ProductionSpine {
         )?;
         let dimension = worldgen.dimension.clone();
         let kernel = Arc::new(MemoryTransactionKernel::new());
+        let content = authored_content_catalog()?;
         let palette = worldgen.palette.clone();
-        let empty = HostVoxel {
-            palette_index: palette_index(&palette, &worldgen.empty)
+        let solid_palette = compile_host_solid_palette(&content, &palette)?;
+        let fluid_palette = compile_host_fluid_palette(&content)?;
+        let empty = HostVoxel::from_solid(
+            palette_index(&palette, &worldgen.empty)
                 .ok_or(ProductionHostError::UnknownDraftBlock)?,
-        };
+        );
         let placement_content = worldgen.placement_content.clone();
         let probe_content = worldgen.probe_content.clone();
         let voxel_schema: SchemaId = VOXEL_SCHEMA.parse()?;
         let voxel_schema_version =
-            PayloadSchemaVersion::new(1).map_err(ProductionHostError::from)?;
+            PayloadSchemaVersion::new(VOXEL_SCHEMA_VERSION).map_err(ProductionHostError::from)?;
         let clamps = StreamClamps::new(host_hard_limits()?, &config)?;
         let scope = WorkingSetScope::new(world, dimension.clone(), WorldEpoch::new(1));
         let limits = runtime_limits(clamps.hard_limits)?;
@@ -329,7 +377,10 @@ impl ProductionSpine {
             runtime,
             plan,
             clamps,
+            content,
             palette,
+            solid_palette,
+            fluid_palette,
             empty,
             chunk_edge,
             world,
@@ -855,6 +906,46 @@ impl ProductionSpine {
             .and_then(|inner| inner.last_inspect.clone())
     }
 
+    /// Places one water or lava occupancy cell without running fluid simulation.
+    ///
+    /// The solid layer is preserved. Placement is rejected when the solid's
+    /// authored `fluid_occupancy` policy is `reject`. This path does not open a
+    /// world writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlockEditRejectV1`] when the cell is not resident, the fluid is
+    /// unknown, occupancy is rejected, or memory publication fails.
+    pub fn place_fluid_occupancy(
+        &self,
+        position: BlockPosition,
+        fluid: &StableId,
+        state: FluidStateV1,
+    ) -> Result<CellOccupancyV1, BlockEditRejectV1> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        inner.place_fluid_occupancy(self.storage.kernel(), position, fluid, state)
+    }
+
+    /// Inspects versioned solid and fluid occupancy at an exact cell.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TargetInspectRejectV1`] when the cell is not resident or the
+    /// catalog occupancy row is missing.
+    pub fn inspect_occupancy(
+        &self,
+        position: BlockPosition,
+    ) -> Result<CellOccupancyV1, TargetInspectRejectV1> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| TargetInspectRejectV1::StorageUnavailable)?;
+        inner.occupancy_at(position)
+    }
+
     /// Reruns authoritative Y-up DDA and records the inspect result.
     ///
     /// Client observations are ignored as hits. The selected voxel identity
@@ -1142,7 +1233,13 @@ impl ProductionSpineInner {
                 .ok_or(BlockEditRejectV1::NoPlacementContent)?;
             let palette_index = palette_index(&self.palette, &placement)
                 .ok_or(BlockEditRejectV1::ContentUnavailable)?;
-            return self.commit_cell(kernel, fixed_tick, target, old, HostVoxel { palette_index });
+            return self.commit_cell(
+                kernel,
+                fixed_tick,
+                target,
+                old,
+                HostVoxel::from_solid(palette_index),
+            );
         }
         self.sync_gameplay_world(kernel)
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
@@ -1170,7 +1267,7 @@ impl ProductionSpineInner {
             self,
             kernel,
             transaction,
-            Some((target, HostVoxel { palette_index })),
+            Some((target, HostVoxel::from_solid(palette_index))),
             fixed_tick,
         )?;
         let published = kernel
@@ -1331,6 +1428,120 @@ impl ProductionSpineInner {
         } else {
             self.palette.get(usize::from(voxel.palette_index)).cloned()
         }
+    }
+
+    fn place_fluid_occupancy(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        position: BlockPosition,
+        fluid: &StableId,
+        state: FluidStateV1,
+    ) -> Result<CellOccupancyV1, BlockEditRejectV1> {
+        let current = *self
+            .runtime
+            .cell(VoxelCoordinate::new(
+                i64::from(position.x),
+                i64::from(position.y),
+                i64::from(position.z),
+            ))
+            .map_err(|_| BlockEditRejectV1::PermissionDenied)?;
+        let occupancy = self
+            .occupancy_from_voxel(position, current)
+            .map_err(|_| BlockEditRejectV1::ContentUnavailable)?;
+        if occupancy.fluid_occupancy.as_str() == FLUID_OCCUPANCY_REJECT {
+            return Err(BlockEditRejectV1::NotReplaceable);
+        }
+        let fluid_palette_index = fluid_palette_index(&self.fluid_palette, fluid, state)
+            .ok_or(BlockEditRejectV1::ContentUnavailable)?;
+        let placed = HostVoxel {
+            palette_index: current.palette_index,
+            fluid_palette_index,
+        };
+        self.commit_cell(kernel, 0, position, current, placed)?;
+        self.occupancy_from_voxel(position, placed)
+            .map_err(|_| BlockEditRejectV1::ContentUnavailable)
+    }
+
+    fn occupancy_at(
+        &self,
+        position: BlockPosition,
+    ) -> Result<CellOccupancyV1, TargetInspectRejectV1> {
+        let voxel = *self
+            .runtime
+            .cell(VoxelCoordinate::new(
+                i64::from(position.x),
+                i64::from(position.y),
+                i64::from(position.z),
+            ))
+            .map_err(|_| TargetInspectRejectV1::StorageUnavailable)?;
+        self.occupancy_from_voxel(position, voxel)
+    }
+
+    fn occupancy_from_voxel(
+        &self,
+        position: BlockPosition,
+        voxel: HostVoxel,
+    ) -> Result<CellOccupancyV1, TargetInspectRejectV1> {
+        let solid = self.palette.get(usize::from(voxel.palette_index)).cloned();
+        let solid_id = solid
+            .as_ref()
+            .map(|block| block.as_str().parse::<StableId>())
+            .transpose()
+            .map_err(|_| TargetInspectRejectV1::ContentUnavailable)?;
+        let semantics = solid_id
+            .as_ref()
+            .and_then(|id| self.block_semantics(id))
+            .ok_or(TargetInspectRejectV1::ContentUnavailable)?;
+        let fluid_entry = self
+            .fluid_palette
+            .entries()
+            .get(usize::from(voxel.fluid_palette_index));
+        let (fluid, fluid_state) = match fluid_entry {
+            Some(entry) if !entry.is_empty() => (entry.fluid().cloned(), entry.state().copied()),
+            _ => (None, None),
+        };
+        let (collision_policy, selection_policy) = if let Some(fluid_id) = fluid.as_ref() {
+            let definition = self
+                .content
+                .fluid(fluid_id)
+                .ok_or(TargetInspectRejectV1::ContentUnavailable)?;
+            (
+                definition.collision_policy.as_stable_id().clone(),
+                definition.selection_policy.as_stable_id().clone(),
+            )
+        } else {
+            (
+                semantics.collision.as_stable_id().clone(),
+                semantics.selection.as_stable_id().clone(),
+            )
+        };
+        Ok(CellOccupancyV1 {
+            position,
+            solid,
+            solid_occupancy: semantics.solid_occupancy.as_stable_id().clone(),
+            fluid_occupancy: semantics.fluid_occupancy.as_stable_id().clone(),
+            fluid,
+            fluid_state,
+            collision_policy,
+            selection_policy,
+        })
+    }
+
+    fn block_semantics(
+        &self,
+        block: &StableId,
+    ) -> Option<&latticeaxiom_content::BlockStateSemanticsV1> {
+        let definition = self.content.block(block)?;
+        let state = self
+            .solid_palette
+            .entries()
+            .iter()
+            .find(|entry| entry.block() == block)
+            .map_or(
+                &definition.definition().default_state,
+                CompiledSolidPaletteEntryV1::state,
+            );
+        definition.states().iter().find(|row| &row.state == state)
     }
 
     fn inspect_from_eye(
@@ -1867,7 +2078,7 @@ fn draft_cells(
                 let block_id = BlockId::parse(block.as_str())?;
                 let palette_index = palette_index(palette, &block_id)
                     .ok_or(ProductionHostError::UnknownDraftBlock)?;
-                cells.push(HostVoxel { palette_index });
+                cells.push(HostVoxel::from_solid(palette_index));
             }
         }
     }
@@ -1913,9 +2124,10 @@ fn voxel_payload(
     schema_version: PayloadSchemaVersion,
     cells: &[HostVoxel],
 ) -> VersionedPayload {
-    let mut bytes = Vec::with_capacity(cells.len().saturating_mul(2));
+    let mut bytes = Vec::with_capacity(cells.len().saturating_mul(CELL_OCCUPANCY_BYTES));
     for cell in cells {
         bytes.extend_from_slice(&cell.palette_index.to_le_bytes());
+        bytes.extend_from_slice(&cell.fluid_palette_index.to_le_bytes());
     }
     VersionedPayload::new(schema.clone(), schema_version, bytes)
 }
@@ -1950,17 +2162,78 @@ fn capture_continuation(coordinate: ChunkCoordinate) -> ContinuationId {
 fn decode_cells(bytes: &[u8], edge: u16) -> Result<Vec<HostVoxel>, ProductionHostError> {
     let expected = usize::from(edge)
         .checked_pow(3)
-        .and_then(|count| count.checked_mul(2))
+        .and_then(|count| count.checked_mul(CELL_OCCUPANCY_BYTES))
         .ok_or(ProductionHostError::PayloadLength)?;
     if bytes.len() != expected {
         return Err(ProductionHostError::PayloadLength);
     }
     Ok(bytes
-        .chunks_exact(2)
-        .map(|pair| HostVoxel {
-            palette_index: u16::from_le_bytes([pair[0], pair[1]]),
+        .chunks_exact(CELL_OCCUPANCY_BYTES)
+        .map(|cell| HostVoxel {
+            palette_index: u16::from_le_bytes([cell[0], cell[1]]),
+            fluid_palette_index: u16::from_le_bytes([cell[2], cell[3]]),
         })
         .collect())
+}
+
+fn compile_host_solid_palette(
+    catalog: &ContentCatalogV1,
+    palette: &[BlockId],
+) -> Result<CompiledSolidPaletteV1, ProductionHostError> {
+    let mut entries = Vec::with_capacity(palette.len());
+    for block in palette {
+        let id: StableId = block.as_str().parse()?;
+        let definition =
+            catalog
+                .block(&id)
+                .ok_or_else(|| ProductionHostError::MissingCatalogDefinition {
+                    kind: "block",
+                    id: id.to_string(),
+                })?;
+        entries.push(SolidPaletteEntryV1 {
+            block: id,
+            state: definition.definition().default_state.clone(),
+        });
+    }
+    CompiledSolidPaletteV1::compile(catalog, entries, PaletteLimitsV1::default())
+        .map_err(ProductionHostError::from)
+}
+
+fn compile_host_fluid_palette(
+    catalog: &ContentCatalogV1,
+) -> Result<CompiledFluidPaletteV1, ProductionHostError> {
+    if catalog.fluids().len() != 2 {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "fluid",
+            id: "terrenia:fluid/water+lava".to_owned(),
+        });
+    }
+    let source = FluidStateV1 {
+        level: FluidLevelV1::SOURCE,
+        flow: FluidFlowV1::Still,
+    };
+    let entries = catalog
+        .fluids()
+        .iter()
+        .map(|definition| FluidPaletteEntryV1::Fluid {
+            fluid: definition.header.stable_id.clone(),
+            state: source,
+        })
+        .collect();
+    CompiledFluidPaletteV1::compile(catalog, entries, PaletteLimitsV1::default())
+        .map_err(ProductionHostError::from)
+}
+
+fn fluid_palette_index(
+    palette: &CompiledFluidPaletteV1,
+    fluid: &StableId,
+    state: FluidStateV1,
+) -> Option<u16> {
+    palette
+        .entries()
+        .iter()
+        .position(|entry| entry.fluid() == Some(fluid) && entry.state() == Some(&state))
+        .and_then(|index| u16::try_from(index).ok())
 }
 
 fn palette_index(palette: &[BlockId], block: &BlockId) -> Option<u16> {
@@ -2008,15 +2281,7 @@ fn place_exposed_probe(
         z: -1,
     };
     inner
-        .commit_cell(
-            kernel,
-            0,
-            probe,
-            inner.empty,
-            HostVoxel {
-                palette_index: stone,
-            },
-        )
+        .commit_cell(kernel, 0, probe, inner.empty, HostVoxel::from_solid(stone))
         .map_err(|_| ProductionHostError::NoSafeSpawn)?;
     Ok(())
 }

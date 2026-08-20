@@ -53,9 +53,11 @@ use latticeaxiom_voxel_runtime::RuntimeError;
 use latticeaxiom_worldgen::WorldgenError;
 use thiserror::Error;
 
-pub use catalog::{authored_gameplay_catalog, empty_gameplay_catalog};
+pub use catalog::{authored_content_catalog, authored_gameplay_catalog, empty_gameplay_catalog};
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
-pub use spine::{ProductionSpine, ProductionWorldStorage, WorkingSetDiagnosticsV1};
+pub use spine::{
+    CellOccupancyV1, ProductionSpine, ProductionWorldStorage, WorkingSetDiagnosticsV1,
+};
 pub use start::{ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList};
 pub use stream::ChunkLifecycle;
 
@@ -566,6 +568,9 @@ pub enum ProductionHostError {
     /// D4 generation or plan compilation failed.
     #[error(transparent)]
     Worldgen(#[from] WorldgenError),
+    /// Authored D9 content catalog compilation failed.
+    #[error(transparent)]
+    Content(Box<latticeaxiom_content::ContentError>),
     /// The production memory kernel rejected a transaction.
     #[error(transparent)]
     Storage(#[from] StorageError),
@@ -654,6 +659,18 @@ pub enum ProductionHostError {
     /// The registration image named more than one dimension.
     #[error("registration image names more than one dimension")]
     AmbiguousDimension,
+    /// Compiled occupancy palettes rejected an authored content row.
+    #[error("authored content catalog is invalid: {reason}")]
+    InvalidContentCatalog {
+        /// Compiler diagnostic.
+        reason: String,
+    },
+}
+
+impl From<latticeaxiom_content::ContentError> for ProductionHostError {
+    fn from(error: latticeaxiom_content::ContentError) -> Self {
+        Self::Content(Box::new(error))
+    }
 }
 
 impl fmt::Debug for ProductionSpine {
