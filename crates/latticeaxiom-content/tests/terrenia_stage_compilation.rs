@@ -99,6 +99,20 @@ fn every_stage_compiles_to_a_discovery_order_independent_image() {
         }
         let reversed = ContentCatalogV1::compile(reversed, ContentCatalogLimitsV1::default())
             .unwrap_or_else(|error| panic!("{stage} reversed catalog failed: {error}"));
+        let compiled_ids = expected
+            .blocks()
+            .iter()
+            .map(|block| block.definition().header.stable_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing = ids
+            .iter()
+            .copied()
+            .filter(|id| !compiled_ids.contains(id))
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "{stage} compiled catalog is missing golden IDs: {missing:?}"
+        );
         assert_eq!(expected.blocks().len(), ids.len(), "{stage}");
         assert_eq!(
             expected

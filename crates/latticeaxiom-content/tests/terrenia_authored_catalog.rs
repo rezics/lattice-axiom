@@ -173,6 +173,28 @@ fn full_catalog_compiles_with_finite_state_palettes_not_variant_ids() {
 }
 
 #[test]
+fn every_d9_golden_id_is_present_in_compiled_content_catalog() {
+    let catalog = compile(authored_input());
+    let compiled = catalog
+        .blocks()
+        .iter()
+        .map(|block| block.definition().header.stable_id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let expected = golden_ids(D9_IDS);
+    let missing = expected
+        .iter()
+        .filter(|id| !compiled.contains(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "compiled catalog is missing golden IDs: {missing:?}"
+    );
+    assert_eq!(expected.len(), 72);
+    assert_eq!(compiled, expected);
+}
+
+#[test]
 fn discovery_permutations_and_headless_projection_preserve_authoritative_hash() {
     let input = authored_input();
     let expected = compile(input.clone());
