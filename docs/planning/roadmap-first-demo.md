@@ -2,7 +2,7 @@
 title: 第一個套件驅動的 Bevy 可玩 demo 路線圖
 status: active
 type: roadmap
-updated: 2026-08-20
+updated: 2026-08-21
 decision:
   - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0014-adopt-bevy-upstream-first.md
@@ -35,6 +35,38 @@ decision:
 D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它推进到Terrenia 40自然世界、
 通用sandbox systems、72方块＋2流体内容基线与自动sandbox完成旅程。D11是D10后的群系扩充轨。
 后续阶段继承而不旁路D0–D6的package、semantic、persistence、upstream-first与dual-realization门禁。
+
+## v1 playable freeze (V0–V9)
+
+**v1 playable** is D0–D10 sandbox completion on this roadmap. It is not ABI 1.0,
+a public registry, multiplayer, or a complete content catalog. This document
+does not grant world-writer authority and does not replace
+`ActivationEvidenceUnavailable`.
+
+V0–V9 are the implementation sequence for those existing gates. They do not
+rewrite D0–D10, skip D1–D6, or pull D11 into v1:
+
+- **V0** freezes the playable fixture, world-session contract, journey fixture,
+  crate/package reuse-adapt-replace inventory, and this mapping. It is not a
+  D-phase delivery.
+- **V1** closes **D0** lock and launcher execution.
+- **V2** is the production spine: **D1** dual-realization gameplay and **D2**
+  voxel playground, replacing the in-memory fixture as the playable path.
+- **V4** closes sparse **D4** streaming / operationally unbounded generation
+  *before* durable save. Content stays thin; dirty chunks stay resident.
+- **V3** closes **D3** durable world lifecycle on that already-streaming world.
+  Writer activation remains unauthorized until a sealed receipt exists.
+- **V5–V6** close **D7** complete terrain and caves on the V4 coordinator.
+- **V7** closes **D8** tools and gameplay.
+- **V8** closes **D9** content and UX.
+- **V9** closes **D6** delivery/regression and **D10** budgets and release.
+  **D5** render composition remains a D0–D6 gate and is accepted with D6 at V9.
+
+Execution order: `V0 → V1 → V2 → V4 → V3 → V5 → V6 → V7 → V8 → V9`.
+
+v1 also does not require infinite vertical terrain; dungeons, mobs, combat, or
+seasons; or iron/copper tool ladders, weapons, armor, enchantments, or repair.
+D11 remains a post-baseline biome expansion track after V9.
 
 ## 固定基線
 

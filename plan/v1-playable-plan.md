@@ -1,8 +1,8 @@
 # Lattice Axiom v1 Playable Delivery Plan
 
-Status: planning draft only  
+Status: active; sparse infinite streaming precedes durability  
 Repository baseline: `0c38407` (`feat(engine): add playable host and dual fixture`)  
-Date: 2026-08-20
+Date: 2026-08-21
 
 ## 1. Purpose
 
@@ -24,6 +24,7 @@ complete long-term content catalog.
 
 The repository already contains substantial component evidence, but the
 production player journey does not exist.
+
 
 | Area | Present now | Missing for v1 |
 | --- | --- | --- |
@@ -327,6 +328,14 @@ Each milestone ends with a runnable client slice and a headless command-input
 slice from the same authoritative closure. Component tests alone do not close a
 milestone.
 
+Execution order is not numeric order. Sparse operationally unbounded streaming
+(V4) is the playable core and follows the package-driven spine (V2) immediately.
+Complete terrain and caves (V5–V6) are content layers on that core. Durable
+save/recovery (V3) still requires a sealed writer-activation receipt and lands
+after streaming so eviction can become durable without blocking the first
+unbounded traversal. Milestone numbers stay aligned with D0–D10; do not read
+V3 as a prerequisite of V4.
+
 ### V0 — Freeze scope and preserve the current fixture
 
 **Goal:** establish the v1 contract and a reproducible baseline without adding
@@ -394,6 +403,7 @@ Deliverables:
 - Retire entity-per-block presentation from the production path.
 - Keep the start UI, loading stages, HUD, inspect, and diagnostics connected to
   graph-selected providers.
+- Do not wait for complete Terrenia terrain, caves, or the tools package.
 
 Exit gate:
 
@@ -404,9 +414,45 @@ Exit gate:
 - No package, worldgen, gameplay, or presentation path contains a hidden
   Terrenia fallback.
 
+### V4 — Sparse unbounded chunk streaming
+
+**Goal:** make horizontal exploration operationally unbounded while content is
+still sparse. Bounded residency and the chunk lifecycle are the playable core;
+complete territories, caves, and hydrology are not.
+
+Deliverables:
+
+- Production `DimensionGenerationCoordinator` and explicit chunk lifecycle.
+- Player/camera interest calculation, near-to-far priority, movement look-ahead,
+  bounded load/generation/mesh/collider/save queues, cancellation, and
+  backpressure.
+- Storage-first load against the production storage interfaces. V4 may keep
+  `MemoryWorldStorage`; it must not claim crash recovery or durable eviction.
+- Absent-chunk generation, atomic commit of candidates, derived-job projection,
+  neighbor invalidation, and eviction of clean generated chunks.
+- Dirty edited chunks stay in a bounded dirty set and are not evicted until V3.
+- Configurable vertical range and view distance with hard host clamps.
+- Diagnostics for every resident/active/visible/in-flight class and byte budget,
+  hooked to the inspect/HUD path from V2.
+- Headless high-speed traversal fixture for positive and negative coordinates.
+- Sparse D4 catalog and generator are enough. Do not block on V5 territories or
+  V6 cave topology.
+
+Exit gate:
+
+- Long traversal continuously crosses newly generated chunks without an
+  authored boundary, blocking frame I/O, holes caused by missing lifecycle
+  transitions, or unbounded memory/queue growth.
+- Clean generated chunks may be evicted and regenerated identically. Edited
+  dirty chunks remain resident.
+- Generation and projection remain deterministic under randomized task
+  completion and chunk request order.
+- Returning to an evicted *edited* chunk is not a V4 promise; that is V3.
+
 ### V3 — Authorize and integrate durable world lifecycle
 
-**Goal:** make world mutation safe and recoverable before scaling generation.
+**Goal:** make the already-streaming world recoverable. Streaming and sparse
+generation already exist; this milestone does not invent unbounded traversal.
 
 Security prerequisite:
 
@@ -424,41 +470,19 @@ Deliverables after authorization:
   clone-before-migration, trash, and restore flows.
 - Storage read always precedes generation; a materialized chunk is never
   regenerated because a provider changed.
+- Durable eviction of previously dirty streaming chunks; revisit restores
+  durable state rather than regenerating it.
 - Low-disk and shutdown-timeout paths preserve the latest durable state.
 
 Exit gate:
 
 - Break/place edits and player position survive normal restart and crash
   recovery.
+- Returning to evicted edited chunks restores durable state rather than
+  regenerating it.
 - Stale async work cannot overwrite a newer revision.
 - Recoverable read-only mode never opens a writer.
 - Package/lock/schema failure occurs before the first mutation.
-
-### V4 — Infinite chunk streaming and bounded residency
-
-**Goal:** turn the durable vertical slice into an operationally unbounded world.
-
-Deliverables:
-
-- Production `DimensionGenerationCoordinator` and explicit chunk lifecycle.
-- Player/camera interest calculation, near-to-far priority, movement look-ahead,
-  bounded load/generation/mesh/collider/save queues, cancellation, and
-  backpressure.
-- Storage-first load, absent-chunk generation, atomic commit, derived-job
-  projection, neighbor invalidation, and durable eviction.
-- Configurable vertical range and view distance with hard host clamps.
-- Diagnostics for every resident/active/visible/in-flight class and byte budget.
-- Headless high-speed traversal fixture for positive and negative coordinates.
-
-Exit gate:
-
-- Long traversal continuously crosses newly generated chunks without an
-  authored boundary, blocking frame I/O, holes caused by missing lifecycle
-  transitions, or unbounded memory/queue growth.
-- Returning to evicted edited chunks restores durable state rather than
-  regenerating it.
-- Generation and projection remain deterministic under randomized task
-  completion and chunk request order.
 
 ### V5 — Complete natural terrain, geology, resources, and spawn
 
@@ -609,20 +633,25 @@ Exit gate:
 The critical path is:
 
 ```text
-V0 -> V1 -> V2 -> V3 -> V4 -> V5 -> V6 -> V7 -> V8 -> V9
+V0 -> V1 -> V2 -> V4 -> V3 -> V5 -> V6 -> V7 -> V8 -> V9
 ```
+
+V4 is sparse unbounded streaming. V3 is durable recovery of that already-streaming
+world. V5–V6 add complete terrain and caves on the same coordinator; they must
+not replace V4's lifecycle.
 
 The following work may proceed in parallel only while preserving the milestone
 integration gate:
 
 - `@terrenia/tools` authoring and generic gameplay conformance can proceed
-  during V4-V6, but V7 is not complete until the real runtime journey uses it.
-- Presentation assets can proceed during V4-V7, but authoritative content IDs
-  and schema must be frozen first.
-- Cave algorithm prototypes can run during V4-V5 against the accepted topology
-  contracts, but cannot bypass final occupancy, hydrology, or storage receipts.
+  during V4–V6, but V7 is not complete until the real runtime journey uses it.
+- Presentation assets and inspect/HUD fragments can proceed during V2–V7, but
+  authoritative content IDs and schema must be frozen first.
+- Cave algorithm prototypes can run during V4–V5 against the accepted topology
+  contracts, but cannot bypass final occupancy, hydrology, or storage receipts
+  and cannot delay V4 traversal.
 - Fault fixtures and diagnostics should be added with each subsystem, not saved
-  entirely for V9.
+  entirely for V9. Chunk-lifecycle inspect data is required at V4, not V8.
 - Client visual work never blocks headless conformance, but both must consume the
   same authoritative lock closure.
 
@@ -656,9 +685,9 @@ suggested sequence is:
 1. `feat(compose): finalize local package acquisition and product lock`
 2. `feat(launcher): boot client and headless images from reopened locks`
 3. `feat(engine): integrate the package-driven playable spine`
-4. `feat(world-db): validate sealed world activation receipts` — only after
+4. `feat(runtime): add bounded sparse infinite chunk streaming`
+5. `feat(world-db): validate sealed world activation receipts` — only after
    explicit authorization
-5. `feat(runtime): add bounded infinite chunk streaming`
 6. `feat(worldgen): integrate Terrenia territory and materialization`
 7. `feat(worldgen): realize cave topology and hydrology`
 8. `feat(packages): add the Terrenia basic tools package`
