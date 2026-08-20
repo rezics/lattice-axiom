@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "crates/latticeaxiom-abi",
   "crates/latticeaxiom-compose",
   "crates/latticeaxiom-core",
   "crates/latticeaxiom-engine",
