@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,20 +22,151 @@ env:
 jobs:
   check:
     name: Format, lint, and test
-    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Install Bevy system dependencies
+        timeout-minutes: 10
         run: >-
           sudo apt-get update && sudo apt-get install --yes
           g++ pkg-config libx11-dev libasound2-dev libudev-dev
           libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Check workspace
+        run: cargo check --workspace --all-targets --all-features --locked
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features
+        run: cargo clippy --workspace --all-targets --all-features --locked
       - name: Run tests
-        run: cargo test --workspace --all-targets --all-features
+        run: cargo test --workspace --all-targets --all-features --locked
+
+  reproducibility:
+    name: Locked release build without development features
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Bevy system dependencies
+        timeout-minutes: 10
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          g++ pkg-config libx11-dev libasound2-dev libudev-dev
+          libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Verify locked workspace metadata
+        run: cargo metadata --locked --format-version 1 --no-deps > /dev/null
+      - name: Compile locked release workspace without default features
+        run: cargo build --workspace --release --no-default-features --locked
+
+  supply-chain:
+    name: Locked dependency policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install pinned cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
+      - name: Capture locked all-feature dependency metadata
+        run: >-
+          cargo metadata --locked --format-version 1 --all-features
+          > "${RUNNER_TEMP}/cargo-metadata.json"
+      - name: Enforce temporary advisory exception policy
+        shell: python
+        run: |
+          from datetime import date
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+
+          policy = tomllib.loads(Path("deny.toml").read_text(encoding="utf-8"))
+          metadata_path = Path(os.environ["RUNNER_TEMP"]) / "cargo-metadata.json"
+          metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+          workspace_root = Path.cwd().resolve()
+          for package in metadata["packages"]:
+              if package["source"] is None:
+                  manifest = Path(package["manifest_path"]).resolve()
+                  if not manifest.is_relative_to(workspace_root):
+                      raise SystemExit(
+                          f"path dependency escapes workspace: {manifest}"
+                      )
+          locked_packages = {
+              f"{package['name']}@{package['version']}"
+              for package in metadata["packages"]
+          }
+          required = {
+              "package",
+              "owner",
+              "added",
+              "expires",
+              "mitigation",
+              "issue",
+              "replace-when",
+          }
+          today = date.today()
+          seen = set()
+          for exception in policy.get("advisories", {}).get("ignore", []):
+              advisory_id = exception.get("id", "")
+              if not re.fullmatch(r"RUSTSEC-[0-9]{4}-[0-9]{4}", advisory_id):
+                  raise SystemExit(f"invalid advisory exception ID: {advisory_id!r}")
+              if advisory_id in seen:
+                  raise SystemExit(f"duplicate advisory exception: {advisory_id}")
+              seen.add(advisory_id)
+              fields = {}
+              for field in exception.get("reason", "").split("; "):
+                  key, separator, value = field.partition("=")
+                  if not separator or not key or not value or key in fields:
+                      raise SystemExit(
+                          f"{advisory_id}: malformed exception field {field!r}"
+                      )
+                  fields[key] = value
+              missing = sorted(required - fields.keys())
+              extra = sorted(fields.keys() - required)
+              if missing or extra:
+                  raise SystemExit(
+                      f"{advisory_id}: missing={missing!r}, extra={extra!r}"
+                  )
+              if fields["package"] not in locked_packages:
+                  raise SystemExit(
+                      f"{advisory_id}: package is not in locked metadata: "
+                      f"{fields['package']}"
+                  )
+              added = date.fromisoformat(fields["added"])
+              expires = date.fromisoformat(fields["expires"])
+              if not 0 < (expires - added).days <= 30:
+                  raise SystemExit(f"{advisory_id}: exception exceeds 30 days")
+              if today < added or today >= expires:
+                  raise SystemExit(
+                      f"{advisory_id}: exception is not active on {today.isoformat()}"
+                  )
+              if fields["owner"] != "core-runtime-maintainer":
+                  raise SystemExit(f"{advisory_id}: unexpected exception owner")
+              if not fields["issue"].startswith("https://"):
+                  raise SystemExit(f"{advisory_id}: issue must be an HTTPS URL")
+          print(f"validated {len(seen)} temporary advisory exceptions")
+      - name: Run full locked dependency policy
+        run: cargo deny --locked check
