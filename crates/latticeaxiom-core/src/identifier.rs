@@ -726,12 +726,17 @@ impl FromStr for WorldId {
     type Err = IdentifierError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Uuid::parse_str(value)
-            .map(Self)
-            .map_err(|error| IdentifierError::InvalidWorldId {
+        let parsed = Uuid::parse_str(value).map_err(|error| IdentifierError::InvalidWorldId {
+            value: value.to_owned(),
+            reason: error.to_string(),
+        })?;
+        if parsed.hyphenated().to_string() != value {
+            return Err(IdentifierError::InvalidWorldId {
                 value: value.to_owned(),
-                reason: error.to_string(),
-            })
+                reason: "a world ID must use canonical lowercase hyphenated UUID text".to_owned(),
+            });
+        }
+        Ok(Self(parsed))
     }
 }
 
@@ -1281,6 +1286,17 @@ mod tests {
         let decoded = serde_json::from_str::<WorldId>(&encoded);
         assert_eq!(decoded.ok(), Some(world_id));
         assert!(serde_json::from_str::<WorldId>(r#""not-a-uuid""#).is_err());
+        for noncanonical in [
+            "018F5F3C-7C45-7E89-B321-0123456789AB",
+            "018f5f3c7c457e89b3210123456789ab",
+            "{018f5f3c-7c45-7e89-b321-0123456789ab}",
+            "urn:uuid:018f5f3c-7c45-7e89-b321-0123456789ab",
+        ] {
+            assert!(
+                WorldId::from_str(noncanonical).is_err(),
+                "expected noncanonical world ID `{noncanonical}` to be rejected"
+            );
+        }
     }
 
     #[test]
