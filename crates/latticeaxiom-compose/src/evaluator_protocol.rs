@@ -1253,7 +1253,7 @@ mod protocol_tests {
                 .unwrap_or_else(|error| panic!("fixture closure should resolve: {error}"));
 
         let mut composition = serde_json::from_slice::<CompositionSpec>(include_bytes!(
-            "../../../fixtures/r0/positive/headless-composition.golden.json"
+            "../../../fixtures/composition/positive/headless-composition.golden.json"
         ))
         .unwrap_or_else(|error| panic!("composition fixture should decode: {error}"));
         composition.provenance = fixture_provenance(ENTRY_SOURCE);

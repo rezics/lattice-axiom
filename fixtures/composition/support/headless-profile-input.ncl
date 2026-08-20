@@ -1,7 +1,7 @@
 # Minimal deterministic headless profile before constructor defaults.
 let source_provenance = {
-  source_id = "latticeaxiom:source/r0-fixtures",
-  logical_path = "fixtures/r0/support/core-empty-package-input.ncl",
+  source_id = "latticeaxiom:source/composition-fixtures",
+  logical_path = "fixtures/composition/support/core-empty-package-input.ncl",
   content_hash = std.hash 'Sha256 "core-empty-package",
   span = null,
   origin_chain = [],
@@ -26,7 +26,7 @@ in
   },
   source_universe = [
     {
-      source_id = "latticeaxiom:source/r0-fixtures",
+      source_id = "latticeaxiom:source/composition-fixtures",
       package = "core",
       version = "0.1.0",
       path = "packages/core",

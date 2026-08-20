@@ -1,8 +1,8 @@
 # Minimal package authoring input before the versioned constructor applies
 # defaults and validates cross-field invariants.
 let fixture_provenance = {
-  source_id = "latticeaxiom:source/r0-fixtures",
-  logical_path = "fixtures/r0/support/core-empty-package-input.ncl",
+  source_id = "latticeaxiom:source/composition-fixtures",
+  logical_path = "fixtures/composition/support/core-empty-package-input.ncl",
   content_hash = std.hash 'Sha256 "core-empty-package",
   span = null,
   origin_chain = [],

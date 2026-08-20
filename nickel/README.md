@@ -25,7 +25,7 @@ feedback and deterministic defaults, but successful Nickel evaluation is not
 authorization to resolve, load, or persist a package. The exported JSON must
 still deserialize and validate through Rust.
 
-The R0 golden corpus in `../fixtures/r0` is the executable authoring receipt
+The composition golden corpus in `../fixtures/composition` is the executable authoring receipt
 for library contract 2 and corpus 2. Package model 2 carries the typed
 target-triple acceptance boundary; game-profile model 2 carries the narrowed
 canonical source-path acceptance boundary; registration-manifest schema 1

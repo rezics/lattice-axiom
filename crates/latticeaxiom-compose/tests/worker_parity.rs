@@ -18,7 +18,7 @@ use latticeaxiom_compose::{
 use latticeaxiom_core::{SourceId, StableId, canonical_json_bytes};
 
 const TOOL_PACKAGE: &str =
-    include_str!("../../../fixtures/r0/controlled/import-free-tool-package.ncl");
+    include_str!("../../../fixtures/composition/controlled/import-free-tool-package.ncl");
 
 #[test]
 fn embedded_controller_and_cli_return_identical_typed_output() {

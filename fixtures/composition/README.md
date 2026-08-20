@@ -1,7 +1,7 @@
-# R0 Nickel golden fixtures
+# Composition authoring fixtures
 
-This corpus pins exported JSON and diagnostic intent for Nickel library
-contract 2 and R0 authoring corpus 2. Package and game-profile fixtures use
+This version-independent directory pins exported JSON and diagnostic intent
+for Nickel library contract 2 and R0 authoring corpus 2. Package and game-profile fixtures use
 model 2; the normalized composition fixture uses schema 2; the registration
 manifest remains schema 1. The Rust DTOs remain normative; golden JSON is
 compared as a JSON value, not by object-key order. It is the authoring-contract
@@ -12,11 +12,11 @@ The fixtures target `nickel-lang-core` 0.18.x (Nickel CLI 1.17.x). From the
 repository root, evaluate the positive fixtures with:
 
 ```powershell
-nickel export --format json fixtures/r0/positive/core-empty-package.ncl
-nickel export --format json fixtures/r0/positive/headless-profile.ncl
-nickel export --format json fixtures/r0/positive/tool-profile.ncl
-nickel export --format json fixtures/r0/positive/unicode-provenance-package.ncl
-nickel export --format json fixtures/r0/positive/version-axes.ncl
+nickel export --format json fixtures/composition/positive/core-empty-package.ncl
+nickel export --format json fixtures/composition/positive/headless-profile.ncl
+nickel export --format json fixtures/composition/positive/tool-profile.ncl
+nickel export --format json fixtures/composition/positive/unicode-provenance-package.ncl
+nickel export --format json fixtures/composition/positive/version-axes.ncl
 ```
 
 The results must equal the adjacent `.golden.json` files after JSON parsing.

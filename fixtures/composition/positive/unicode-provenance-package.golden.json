@@ -16,10 +16,10 @@
   "provenance": {
     "content_hash": "4831ca03e2b83abf0378d850adc50d13f55cb6e05e35c6aebfcc03e0401c445d",
     "generated_fragment": null,
-    "logical_path": "fixtures/r0/support/café.ncl",
+    "logical_path": "fixtures/composition/support/café.ncl",
     "origin_chain": [],
     "producer": null,
-    "source_id": "latticeaxiom:source/r0-fixtures",
+    "source_id": "latticeaxiom:source/composition-fixtures",
     "span": null,
     "toolchain": null
   },

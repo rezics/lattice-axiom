@@ -13,7 +13,7 @@ The first R0 foundation is also present:
   registration, semantic, settings, observability, runtime-image, and world
   preflight DTOs;
 - `nickel/latticeaxiom` contains the versioned R0 authoring contracts, while
-  `fixtures/r0` pins positive canonical outputs and negative diagnostic intent;
+  `fixtures/composition` pins positive canonical outputs and negative diagnostic intent;
 - the current authoring boundary is Nickel library contract 2, R0 authoring
   corpus 2, package model 2, game-profile model 2, normalized composition
   schema 2, and registration-manifest schema 1;
@@ -81,6 +81,6 @@ cargo test --workspace --all-targets --all-features
 ```
 
 The model tests are headless and do not create a window or GPU device.
-The R0 corpus can also be checked with Nickel CLI 1.17; see
-[`fixtures/r0/README.md`](fixtures/r0/README.md) for the exact positive and
+The composition corpus can also be checked with Nickel CLI 1.17; see
+[`fixtures/composition/README.md`](fixtures/composition/README.md) for the exact positive and
 negative fixture commands.

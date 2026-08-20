@@ -1,8 +1,8 @@
 # Controlled worker fixtures
 
-This directory begins the protocol-level R0 corpus. The import-free Tool
-package is evaluated through the shared embedded controller and the public
-controller CLI by `r0_worker_parity.rs`. Both paths
+This directory begins the controlled-evaluation protocol corpus. The
+import-free Tool package is evaluated through the shared embedded controller
+and the public controller CLI by `worker_parity.rs`. Both paths
 must return identical canonical typed response bytes for success and for an
 atomic controller-fatal capability mismatch.
 

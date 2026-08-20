@@ -20,8 +20,10 @@ const WORKSPACE_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
 #[test]
 fn embedded_version_axes_match_rust_constants_and_the_golden() {
-    let actual: serde_json::Value = evaluate_fixture("fixtures/r0/positive/version-axes.ncl");
-    let expected: serde_json::Value = read_json("fixtures/r0/positive/version-axes.golden.json");
+    let actual: serde_json::Value =
+        evaluate_fixture("fixtures/composition/positive/version-axes.ncl");
+    let expected: serde_json::Value =
+        read_json("fixtures/composition/positive/version-axes.golden.json");
     assert_canonical_equal(&actual, &expected);
 
     for (field, version) in [
@@ -51,29 +53,32 @@ fn embedded_version_axes_match_rust_constants_and_the_golden() {
 
 #[test]
 fn embedded_core_package_matches_the_normative_golden() {
-    let actual: PackageSpec = evaluate_fixture("fixtures/r0/positive/core-empty-package.ncl");
+    let actual: PackageSpec =
+        evaluate_fixture("fixtures/composition/positive/core-empty-package.ncl");
     actual
         .validate()
         .unwrap_or_else(|error| panic!("evaluated package failed normative validation: {error}"));
-    let expected: PackageSpec = read_json("fixtures/r0/positive/core-empty-package.golden.json");
+    let expected: PackageSpec =
+        read_json("fixtures/composition/positive/core-empty-package.golden.json");
     assert_canonical_equal(&actual, &expected);
 }
 
 #[test]
 fn embedded_package_accepts_nfc_unicode_provenance() {
     let actual: PackageSpec =
-        evaluate_fixture("fixtures/r0/positive/unicode-provenance-package.ncl");
+        evaluate_fixture("fixtures/composition/positive/unicode-provenance-package.ncl");
     actual
         .validate()
         .unwrap_or_else(|error| panic!("Unicode package failed normative validation: {error}"));
     let expected: PackageSpec =
-        read_json("fixtures/r0/positive/unicode-provenance-package.golden.json");
+        read_json("fixtures/composition/positive/unicode-provenance-package.golden.json");
     assert_canonical_equal(&actual, &expected);
 }
 
 #[test]
 fn embedded_headless_profile_matches_the_normative_golden() {
-    let actual: GameProfileSpec = evaluate_fixture("fixtures/r0/positive/headless-profile.ncl");
+    let actual: GameProfileSpec =
+        evaluate_fixture("fixtures/composition/positive/headless-profile.ncl");
     actual
         .validate()
         .unwrap_or_else(|error| panic!("evaluated profile failed normative validation: {error}"));
@@ -87,13 +92,14 @@ fn embedded_headless_profile_matches_the_normative_golden() {
     assert_eq!(actual.policy.maximum_trust, TrustClass::Build);
     assert!(actual.policy.allow_force_override);
     assert!(actual.policy.allow_recovery);
-    let expected: GameProfileSpec = read_json("fixtures/r0/positive/headless-profile.golden.json");
+    let expected: GameProfileSpec =
+        read_json("fixtures/composition/positive/headless-profile.golden.json");
     assert_canonical_equal(&actual, &expected);
 }
 
 #[test]
 fn embedded_headless_profile_normalizes_to_the_composition_golden() {
-    let logical_path = "fixtures/r0/positive/headless-profile.ncl";
+    let logical_path = "fixtures/composition/positive/headless-profile.ncl";
     let profile: GameProfileSpec = evaluate_fixture(logical_path);
     let source = read_source(logical_path);
     let source_id = profile.source_universe.first().map_or_else(
@@ -112,17 +118,19 @@ fn embedded_headless_profile_normalizes_to_the_composition_golden() {
         .into_composition(target("x86_64-unknown-linux-gnu"), provenance)
         .unwrap_or_else(|error| panic!("profile did not normalize: {error}"));
     let expected: CompositionSpec =
-        read_json("fixtures/r0/positive/headless-composition.golden.json");
+        read_json("fixtures/composition/positive/headless-composition.golden.json");
     assert_canonical_equal(&actual, &expected);
 }
 
 #[test]
 fn embedded_tool_profile_accepts_an_explicit_versioned_policy() {
-    let actual: GameProfileSpec = evaluate_fixture("fixtures/r0/positive/tool-profile.ncl");
+    let actual: GameProfileSpec =
+        evaluate_fixture("fixtures/composition/positive/tool-profile.ncl");
     actual
         .validate()
         .unwrap_or_else(|error| panic!("evaluated tool profile failed validation: {error}"));
-    let expected: GameProfileSpec = read_json("fixtures/r0/positive/tool-profile.golden.json");
+    let expected: GameProfileSpec =
+        read_json("fixtures/composition/positive/tool-profile.golden.json");
     assert_canonical_equal(&actual, &expected);
 }
 
@@ -142,7 +150,7 @@ fn embedded_negative_corpus_retains_its_stable_diagnostic_intent() {
 
 #[test]
 fn embedded_typed_boundary_rejects_decomposed_unicode_provenance() {
-    let path = "fixtures/r0/typed-negative/non-nfc-provenance.ncl";
+    let path = "fixtures/composition/typed-negative/non-nfc-provenance.ncl";
     let Err(error) = try_evaluate_fixture::<PackageSpec>(path) else {
         panic!("typed negative fixture `{path}` unexpectedly evaluated");
     };
@@ -226,14 +234,14 @@ fn assert_negative<T>(fixture_name: &str)
 where
     T: DeserializeOwned + Serialize,
 {
-    let logical_path = format!("fixtures/r0/negative/{fixture_name}.ncl");
+    let logical_path = format!("fixtures/composition/negative/{fixture_name}.ncl");
     let Err(error) = try_evaluate_fixture::<T>(&logical_path) else {
         panic!("negative fixture `{fixture_name}` unexpectedly evaluated");
     };
     assert_eq!(error.code(), "compose.evaluation_failed");
 
     let expected_path = Path::new(WORKSPACE_ROOT)
-        .join("fixtures/r0/negative")
+        .join("fixtures/composition/negative")
         .join(format!("{fixture_name}.expected.txt"));
     let expected = fs::read_to_string(&expected_path).unwrap_or_else(|read_error| {
         panic!(
