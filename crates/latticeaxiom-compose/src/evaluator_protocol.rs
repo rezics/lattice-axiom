@@ -479,7 +479,8 @@ impl WorkerResponse {
     ///
     /// Returns [`WorkerProtocolError`] for unsupported versions, malformed
     /// receipts, non-canonical or oversized diagnostics/output, success with
-    /// error diagnostics, or failure without an error diagnostic.
+    /// error diagnostics, or failure without an error diagnostic or the
+    /// canonical one-slot truncation summary.
     pub fn validate(&self) -> Result<(), WorkerProtocolError> {
         self.versions().validate()?;
         match self {
@@ -550,14 +551,25 @@ impl WorkerResponse {
                             details: format!("invalid failure source closure receipt: {error}"),
                         }
                     })?;
+                    if let Some(evaluation) = &failure.evaluation
+                        && (source_closure.imported_files > evaluation.limits.imported_files
+                            || source_closure.source_bytes > evaluation.limits.source_bytes
+                            || source_closure.maximum_depth > evaluation.limits.import_depth)
+                    {
+                        return Err(WorkerProtocolError::InvalidResponse {
+                            details: "failure source closure meters exceed evaluation limits"
+                                .to_owned(),
+                        });
+                    }
                 }
                 if !failure
                     .diagnostics
                     .iter()
                     .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+                    && !is_one_slot_truncation_failure(failure)
                 {
                     return Err(WorkerProtocolError::InvalidResponse {
-                        details: "failed response requires an error diagnostic".to_owned(),
+                        details: "failed response requires an error diagnostic or the canonical one-slot truncation summary".to_owned(),
                     });
                 }
                 Ok(())
@@ -628,6 +640,43 @@ impl WorkerResponse {
             Self::Success { versions, .. } | Self::Failure { versions, .. } => *versions,
         }
     }
+}
+
+fn is_one_slot_truncation_failure(failure: &WorkerFailure) -> bool {
+    let Some(evaluation) = &failure.evaluation else {
+        return false;
+    };
+    if evaluation.limits.retained_diagnostics != 1 {
+        return false;
+    }
+    let [diagnostic] = failure.diagnostics.as_slice() else {
+        return false;
+    };
+    if diagnostic.code.as_str() != "compose.diagnostics_truncated"
+        || diagnostic.severity != DiagnosticSeverity::Warning
+        || diagnostic.summary != "diagnostic output was truncated"
+        || !diagnostic.labels.is_empty()
+    {
+        return false;
+    }
+    let [note] = diagnostic.notes.as_slice() else {
+        return false;
+    };
+    let mut counts = note.split("; ");
+    let total = counts
+        .next()
+        .and_then(|value| value.strip_prefix("total="))
+        .and_then(|value| value.parse::<usize>().ok());
+    let retained = counts.next();
+    let omitted = counts
+        .next()
+        .and_then(|value| value.strip_prefix("omitted="))
+        .and_then(|value| value.parse::<usize>().ok());
+    matches!(
+        (total, retained, omitted, counts.next()),
+        (Some(total), Some("retained=0"), Some(omitted), None)
+            if total > 1 && omitted == total
+    )
 }
 
 #[cfg(feature = "nickel-evaluator")]
@@ -1234,6 +1283,82 @@ mod protocol_tests {
         assert!(matches!(
             decode_worker_response(&injected),
             Err(WorkerProtocolError::Decoding { .. })
+        ));
+    }
+
+    #[test]
+    fn one_slot_truncation_summary_is_a_valid_atomic_failure() {
+        let mut second = failure_diagnostic();
+        second.summary = "second evaluation failure".to_owned();
+        let diagnostics = normalize_diagnostics(vec![failure_diagnostic(), second], 1)
+            .unwrap_or_else(|error| panic!("one-slot diagnostics should normalize: {error}"));
+        let mut evaluation = developer_policy();
+        evaluation.limits.retained_diagnostics = 1;
+        let response = WorkerResponse::Failure {
+            versions: WorkerProtocolVersions::current(),
+            failure: WorkerFailure {
+                diagnostics,
+                source_closure: None,
+                evaluation: Some(evaluation),
+            },
+        };
+
+        let frame = encode_worker_response(&response)
+            .unwrap_or_else(|error| panic!("one-slot failure should encode: {error}"));
+        let decoded = decode_worker_response(&frame)
+            .unwrap_or_else(|error| panic!("one-slot failure should decode: {error}"));
+        assert_eq!(decoded, response);
+
+        let mut malformed = response;
+        let WorkerResponse::Failure { failure, .. } = &mut malformed else {
+            panic!("fixture should remain an atomic failure");
+        };
+        let diagnostic = failure
+            .diagnostics
+            .first_mut()
+            .unwrap_or_else(|| panic!("truncation summary should be retained"));
+        diagnostic.notes = vec!["total=2; retained=0; omitted=1".to_owned()];
+        assert!(matches!(
+            malformed.validate(),
+            Err(WorkerProtocolError::InvalidResponse { .. })
+        ));
+    }
+
+    #[cfg(feature = "nickel-evaluator")]
+    #[test]
+    fn standalone_failure_rejects_closure_meters_beyond_evaluation_limits() {
+        let fixture = RequestFixture::package();
+        let snapshots = fixture
+            .request
+            .snapshots
+            .iter()
+            .cloned()
+            .map(|snapshot| (snapshot.source_id().clone(), snapshot))
+            .collect::<BTreeMap<_, _>>();
+        let closure =
+            crate::resolve_nickel_source_closure(&snapshots, &fixture.request.source_closure)
+                .unwrap_or_else(|error| panic!("fixture closure should resolve: {error}"));
+        assert!(closure.source_bytes > 1);
+
+        let mut evaluation = fixture.request.expected_policy.clone();
+        evaluation.limits.source_bytes = 1;
+        let response = WorkerResponse::Failure {
+            versions: WorkerProtocolVersions::current(),
+            failure: WorkerFailure {
+                diagnostics: vec![failure_diagnostic()],
+                source_closure: Some(closure),
+                evaluation: Some(evaluation),
+            },
+        };
+
+        let error = response
+            .validate()
+            .err()
+            .unwrap_or_else(|| panic!("oversized failure closure unexpectedly validated"));
+        assert!(matches!(
+            error,
+            WorkerProtocolError::InvalidResponse { details }
+                if details == "failure source closure meters exceed evaluation limits"
         ));
     }
 

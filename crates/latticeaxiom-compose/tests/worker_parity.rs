@@ -9,11 +9,12 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use latticeaxiom_compose::{
-    AuthoringTarget, AuthorizedRoot, AuthorizedRootKind, EnforcementCapability,
-    EvaluationPolicyReceipt, NickelEvaluationLimits, R0_SUPERVISOR_DEADLINE_BACKEND, SourceAddress,
-    SourceClosureRequest, SourceRootGrant, SourceScanLimits, WorkerCommand, WorkerExecutionClass,
-    WorkerProtocolVersions, WorkerRequest, WorkerResponse, controller_host_target,
-    encode_worker_request_payload, evaluate_controlled_request, scan_source_snapshot,
+    AuthoringTarget, AuthorizedRoot, AuthorizedRootKind, ControlledEvaluation,
+    EnforcementCapability, EvaluationPolicyReceipt, NickelEvaluationLimits,
+    R0_SUPERVISOR_DEADLINE_BACKEND, SourceAddress, SourceClosureRequest, SourceRootGrant,
+    SourceScanLimits, WorkerCommand, WorkerExecutionClass, WorkerProtocolVersions, WorkerRequest,
+    WorkerResponse, controller_host_target, encode_worker_request_payload,
+    evaluate_controlled_request, scan_source_snapshot,
 };
 use latticeaxiom_core::{SourceId, StableId, canonical_json_bytes};
 
@@ -21,24 +22,20 @@ const TOOL_PACKAGE: &str =
     include_str!("../../../fixtures/composition/controlled/import-free-tool-package.ncl");
 
 #[test]
-fn embedded_controller_and_cli_return_identical_typed_output() {
+fn embedded_controller_and_cli_return_identical_response_bytes() {
     let fixture = ParityFixture::new();
     let request = fixture.request();
     let worker_path = PathBuf::from(env!("CARGO_BIN_EXE_latticeaxiom-compose-worker"));
     let cli_path = PathBuf::from(env!("CARGO_BIN_EXE_latticeaxiom-compose"));
 
     let embedded = evaluate_embedded(&worker_path, &request);
-    let cli = evaluate_cli(&cli_path, &worker_path, fixture.request_path(), &request);
+    let cli_bytes = evaluate_cli(&cli_path, &worker_path, fixture.request_path(), &request);
 
-    let embedded_bytes = canonical_json_bytes(&embedded)
-        .unwrap_or_else(|error| panic!("embedded response encoding failed: {error}"));
-    let cli_bytes = canonical_json_bytes(&cli)
-        .unwrap_or_else(|error| panic!("CLI response encoding failed: {error}"));
-    assert_eq!(cli_bytes, embedded_bytes);
+    assert_eq!(cli_bytes.as_slice(), embedded.canonical_response());
 }
 
 #[test]
-fn embedded_controller_and_cli_return_identical_atomic_failure() {
+fn embedded_controller_and_cli_return_identical_atomic_failure_bytes() {
     let fixture = ParityFixture::new();
     let mut request = fixture.request();
     request.expected_policy.deadline = EnforcementCapability::unsupported();
@@ -48,19 +45,13 @@ fn embedded_controller_and_cli_return_identical_atomic_failure() {
 
     let command = WorkerCommand::new(&worker_path)
         .unwrap_or_else(|error| panic!("worker command was invalid: {error}"));
-    let embedded_failure = evaluate_controlled_request(command, &request, 1024 * 1024)
-        .unwrap_err()
-        .response()
-        .clone();
-    let cli_failure =
-        evaluate_cli_failure(&cli_path, &worker_path, fixture.request_path(), &request);
+    let embedded_failure = evaluate_controlled_request(command, &request, 1024 * 1024).unwrap_err();
+    let cli_bytes = evaluate_cli_failure(&cli_path, &worker_path, fixture.request_path(), &request);
 
-    let embedded_bytes = canonical_json_bytes(&embedded_failure)
+    let embedded_bytes = canonical_json_bytes(embedded_failure.response())
         .unwrap_or_else(|error| panic!("embedded failure encoding failed: {error}"));
-    let cli_bytes = canonical_json_bytes(&cli_failure)
-        .unwrap_or_else(|error| panic!("CLI failure encoding failed: {error}"));
     assert_eq!(cli_bytes, embedded_bytes);
-    let WorkerResponse::Failure { failure, .. } = embedded_failure else {
+    let WorkerResponse::Failure { failure, .. } = embedded_failure.response() else {
         panic!("controller capability mismatch unexpectedly succeeded");
     };
     assert_eq!(failure.diagnostics.len(), 1);
@@ -70,13 +61,11 @@ fn embedded_controller_and_cli_return_identical_atomic_failure() {
     );
 }
 
-fn evaluate_embedded(worker_path: &Path, request: &WorkerRequest) -> WorkerResponse {
+fn evaluate_embedded(worker_path: &Path, request: &WorkerRequest) -> ControlledEvaluation {
     let command = WorkerCommand::new(worker_path)
         .unwrap_or_else(|error| panic!("worker command was invalid: {error}"));
     evaluate_controlled_request(command, request, 1024 * 1024)
         .unwrap_or_else(|error| panic!("embedded controller failed: {error}"))
-        .response()
-        .clone()
 }
 
 fn evaluate_cli(
@@ -84,7 +73,7 @@ fn evaluate_cli(
     worker_path: &Path,
     request_path: &Path,
     request: &WorkerRequest,
-) -> WorkerResponse {
+) -> Vec<u8> {
     let output = Command::new(cli_path)
         .arg("evaluate")
         .arg("--worker")
@@ -98,12 +87,13 @@ fn evaluate_cli(
         "CLI failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let response = serde_json::from_slice::<WorkerResponse>(&output.stdout)
+    let response_bytes = response_bytes_without_cli_newline(&output.stdout);
+    let response = serde_json::from_slice::<WorkerResponse>(response_bytes)
         .unwrap_or_else(|error| panic!("CLI response decode failed: {error}"));
     response
         .validate_against_request(request)
         .unwrap_or_else(|error| panic!("CLI response validation failed: {error}"));
-    response
+    response_bytes.to_vec()
 }
 
 fn evaluate_cli_failure(
@@ -111,7 +101,7 @@ fn evaluate_cli_failure(
     worker_path: &Path,
     request_path: &Path,
     request: &WorkerRequest,
-) -> WorkerResponse {
+) -> Vec<u8> {
     let output = Command::new(cli_path)
         .arg("evaluate")
         .arg("--worker")
@@ -121,11 +111,23 @@ fn evaluate_cli_failure(
         .output()
         .unwrap_or_else(|error| panic!("CLI spawn failed: {error}"));
     assert_eq!(output.status.code(), Some(1));
-    let response = serde_json::from_slice::<WorkerResponse>(&output.stdout)
+    let response_bytes = response_bytes_without_cli_newline(&output.stdout);
+    let response = serde_json::from_slice::<WorkerResponse>(response_bytes)
         .unwrap_or_else(|error| panic!("CLI failure decode failed: {error}"));
     response
         .validate_against_request(request)
         .unwrap_or_else(|error| panic!("CLI failure validation failed: {error}"));
+    response_bytes.to_vec()
+}
+
+fn response_bytes_without_cli_newline(stdout: &[u8]) -> &[u8] {
+    let response = stdout
+        .strip_suffix(b"\n")
+        .unwrap_or_else(|| panic!("CLI response must end with exactly one LF"));
+    assert!(
+        !response.ends_with(b"\n") && !response.ends_with(b"\r"),
+        "CLI response must end with exactly one LF"
+    );
     response
 }
 

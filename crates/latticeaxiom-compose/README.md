@@ -23,10 +23,12 @@ Protocol v1 uses one four-byte big-endian length-prefixed JSON request and one
 response, with a 256 MiB payload cap. `latticeaxiom-compose-worker` is the
 internal process endpoint. The public `latticeaxiom-compose evaluate` command
 requires an explicit absolute worker path and a validated request JSON file;
-the embedded API and CLI use the same complete-request controller. The current
-parity fixture covers byte-identical success and controller-fatal failure. It
-is deliberately import-free and non-production. Process separation limits
-failure impact but is not a hostile-code sandbox.
+the embedded API and CLI use the same complete-request controller. The parity
+fixture directly compares CLI response bytes, after removing exactly one
+terminal LF, with the embedded canonical encoding for one import-free trusted
+package success and one controller-fatal failure. It does not establish broad
+production-worker conformance. Process separation limits failure impact but is
+not a hostile-code sandbox.
 
 The current R0 skeleton uses Nickel library contract 2, authoring corpus 2,
 composition schema 2, package model 2, and game-profile model 2; the

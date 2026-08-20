@@ -350,21 +350,59 @@ impl WorkerSupervisor {
             }
         };
 
-        let status = wait_for_process_and_pipes(
+        let status = match wait_for_process_and_pipes(
             &mut child,
             &writer,
             &stdout_reader,
             &stderr_reader,
             deadline,
             self.limits.deadline,
-        )?;
-        let write_result = join_io_thread(writer, "stdin")?;
-        let stdout_result = join_io_thread(stdout_reader, "stdout")?;
-        let stderr_result = join_io_thread(stderr_reader, "stderr")?;
-        let stderr = stderr_result.map_err(|error| SupervisorError::PipeIo {
-            stream: "stderr",
-            kind: error.kind(),
-        })?;
+        ) {
+            Ok(status) => status,
+            Err(error) => {
+                abort_worker_and_discard_io_threads(
+                    &mut child,
+                    writer,
+                    stdout_reader,
+                    stderr_reader,
+                );
+                return Err(error);
+            }
+        };
+        let write_result = join_io_thread(writer, "stdin");
+        let stdout_result = join_io_thread(stdout_reader, "stdout");
+        let stderr_result = join_io_thread(stderr_reader, "stderr");
+        let write_result = match write_result {
+            Ok(result) => result,
+            Err(error) => {
+                abort_worker(&mut child);
+                return Err(error);
+            }
+        };
+        let stdout_result = match stdout_result {
+            Ok(result) => result,
+            Err(error) => {
+                abort_worker(&mut child);
+                return Err(error);
+            }
+        };
+        let stderr_result = match stderr_result {
+            Ok(result) => result,
+            Err(error) => {
+                abort_worker(&mut child);
+                return Err(error);
+            }
+        };
+        let stderr = match stderr_result {
+            Ok(stderr) => stderr,
+            Err(error) => {
+                abort_worker(&mut child);
+                return Err(SupervisorError::PipeIo {
+                    stream: "stderr",
+                    kind: error.kind(),
+                });
+            }
+        };
 
         if !status.success() {
             return Err(SupervisorError::WorkerExited {
@@ -373,14 +411,23 @@ impl WorkerSupervisor {
                 stderr_truncated: stderr.exceeded,
             });
         }
-        write_result.map_err(|error| SupervisorError::PipeIo {
-            stream: "stdin",
-            kind: error.kind(),
-        })?;
-        let stdout = stdout_result.map_err(|error| SupervisorError::PipeIo {
-            stream: "stdout",
-            kind: error.kind(),
-        })?;
+        if let Err(error) = write_result {
+            abort_worker(&mut child);
+            return Err(SupervisorError::PipeIo {
+                stream: "stdin",
+                kind: error.kind(),
+            });
+        }
+        let stdout = match stdout_result {
+            Ok(stdout) => stdout,
+            Err(error) => {
+                abort_worker(&mut child);
+                return Err(SupervisorError::PipeIo {
+                    stream: "stdout",
+                    kind: error.kind(),
+                });
+            }
+        };
         ensure_before_deadline(deadline, self.limits.deadline)?;
 
         let payload =
@@ -563,6 +610,18 @@ fn abort_worker(child: &mut Child) {
 
 fn discard_join<T>(handle: JoinHandle<T>) {
     let _join_result = handle.join();
+}
+
+fn abort_worker_and_discard_io_threads<W, O, E>(
+    child: &mut Child,
+    writer: JoinHandle<W>,
+    stdout: JoinHandle<O>,
+    stderr: JoinHandle<E>,
+) {
+    abort_worker(child);
+    discard_join(writer);
+    discard_join(stdout);
+    discard_join(stderr);
 }
 
 fn join_io_thread<T>(handle: JoinHandle<T>, stream: &'static str) -> Result<T, SupervisorError> {
@@ -785,6 +844,10 @@ impl SupervisorError {
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use latticeaxiom_core::{StableId, TargetTriple};
     use serde::Deserialize;
@@ -940,6 +1003,35 @@ mod tests {
     }
 
     #[test]
+    fn fault_cleanup_kills_reaps_and_joins_every_io_thread() {
+        let mut child = spawn_helper_process("cleanup-sleep");
+        let joined = Arc::new(AtomicUsize::new(0));
+        let writer = thread::spawn(|| {
+            panic!("injected worker stdin task panic");
+        });
+        let stdout_joined = Arc::clone(&joined);
+        let stdout_reader = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            stdout_joined.fetch_add(1, Ordering::SeqCst);
+        });
+        let stderr_joined = Arc::clone(&joined);
+        let stderr_reader = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            stderr_joined.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let started = Instant::now();
+        abort_worker_and_discard_io_threads(&mut child, writer, stdout_reader, stderr_reader);
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(joined.load(Ordering::SeqCst), 2);
+        assert!(
+            matches!(child.try_wait(), Ok(Some(_))),
+            "fault cleanup did not reap the worker"
+        );
+    }
+
+    #[test]
     fn nonzero_worker_exit_is_unavailable_and_stderr_is_bounded() {
         let supervisor = helper_supervisor("exit", Duration::from_secs(2));
         let result: Result<WorkerExecution<TestResponse>, SupervisorError> =
@@ -966,7 +1058,9 @@ mod tests {
         let Some(mode) = std::env::var_os(HELPER_MODE) else {
             return;
         };
-        if mode == OsStr::new("sleep") {
+        if mode == OsStr::new("cleanup-sleep") {
+            thread::sleep(Duration::from_secs(30));
+        } else if mode == OsStr::new("sleep") {
             thread::sleep(Duration::from_secs(5));
         } else if mode == OsStr::new("exit") {
             let mut stderr = io::stderr().lock();
@@ -974,6 +1068,21 @@ mod tests {
             let _flush_result = stderr.flush();
             std::process::exit(23);
         }
+    }
+
+    fn spawn_helper_process(mode: &str) -> Child {
+        let executable = std::env::current_exe()
+            .unwrap_or_else(|error| panic!("test executable path is unavailable: {error}"));
+        Command::new(executable)
+            .arg("--exact")
+            .arg("supervisor::tests::worker_helper")
+            .arg("--nocapture")
+            .env(HELPER_MODE, mode)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap_or_else(|error| panic!("worker helper process did not start: {error}"))
     }
 
     fn helper_supervisor(mode: &str, deadline: Duration) -> WorkerSupervisor {
