@@ -2,7 +2,7 @@
 title: 套件模組、註冊清單與靜動雙實現
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0010-nickel-driven-package-system.md
@@ -10,6 +10,8 @@ decision:
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0019-separate-package-and-registration-identities.md
   - ../decisions/0020-semantic-registration-and-content-selection.md
+  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../decisions/0024-freeze-portable-native-abi-0x.md
 ---
 
 # 套件模組、註冊清單與靜動雙實現
@@ -187,23 +189,26 @@ example:render-feature/outline
 - stable ID 的 namespace owner／schema owner 由显式授权与 manifest 记录，不从 package name 或 Rust type name 推导；
 - registration row 另存 `declared_by: PackageName`，但 provider package 不成为 stable ID 的语法组成；
 - duplicate ID 一律在 activation 前失败，不能 last-writer-wins；
-- numeric ID 从完整 `LockedGameGraph`／manifest set 以规范规则产生，或由 snapshot local palette 保存；
+- closure numeric ID 只从 final active exact set以规范顺序产生，属于当前`RegistrationImage`／EngineInstance，绝不持久化；
+- snapshot local palette使用自己的compact index，并在palette entry保存stable ID／schema／state mapping；
 - numeric ID 不依 source discovery、Cargo link、plugin add 或 dynamic load 顺序；
 - realization 切换不改变 stable ID、schema owner 与 normative numeric mapping。
 
 ## Exact Registration 與 Semantic Catalog
 
 exact ID 冲突规则不应用于 extensible semantic contribution。多个 package 可以向同一个公开
-Tag 添加各自拥有的 entry，却不能重复定义 Tag contract。package kernel在numeric ID之后／
-code activation之前编译：
+Tag 添加各自拥有的 entry，却不能重复定义 Tag contract。package kernel先以stable ID验证
+definitions／Tag／Map／Role并完成single-wave fallback，得到最终active exact set；之后才分配
+numeric ID并编译bitset／table。全部步骤都发生在code activation之前：
 
 ```text
-exact stable IDs
-  → typed Tag bitsets / SemanticMap tables
-  → StateProperty and Affordance signatures
-  → checked Predicate plans
-  → concrete Role bindings
-  → active ContentBundle set
+exact stable ID / owner / schema validation
+  → unconditional ContentBundle activation
+  → stable-ID Tag / Map / State / Predicate / Role validation
+  → single fallback activation wave
+  → revalidate final active exact set
+  → canonical numeric ID assignment
+  → bitsets / tables / predicate plans / concrete Role bindings
 ```
 
 输入／结构匹配使用 Tag／Predicate，输出／world command使用已经解析的Role target。材料Tag

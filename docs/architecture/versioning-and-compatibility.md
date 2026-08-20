@@ -2,13 +2,18 @@
 title: 套件、ABI、Bevy 與持久化的相容性
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0003-no-global-version-switch.md
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0020-semantic-registration-and-content-selection.md
+  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../decisions/0024-freeze-portable-native-abi-0x.md
+  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../decisions/0030-freeze-governance-distribution-and-security-triggers.md
+  - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
 ---
 
 # 套件、ABI、Bevy 與持久化的相容性

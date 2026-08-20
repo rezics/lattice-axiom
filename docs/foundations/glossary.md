@@ -2,7 +2,7 @@
 title: 詞彙表
 status: active
 type: reference
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # 詞彙表
@@ -79,7 +79,7 @@ updated: 2026-08-19
 | `RenderFeature` | 可组合 shader／compute／post effect，声明 semantic inputs／outputs／resources／fallback。 |
 | `RenderPass` | 插入 versioned semantic slot 的新 render phase／pass。 |
 | `RenderProvider` | 替换一项 exclusive 渲染机制，例如 terrain backend／visibility；不是替换整个 Bevy renderer。 |
-| semantic render slot | 不依赖 Bevy私有 node index 的 versioned 插入语义，例如 `before.tonemap`。 |
+| semantic render slot | 不依赖 Bevy私有 node index 的 versioned插入语义，例如 `latticeaxiom:render-slot/core3d/before-tonemap@1`。 |
 | presentation | 从权威状态衍生的 camera、mesh、material、particle、animation、audio 与 UI；可丢弃重建。 |
 | Y-up | Bevy 原生右手坐标：`+X` 右、`+Y` 上、forward `-Z`，水平面 `x-z`。 |
 

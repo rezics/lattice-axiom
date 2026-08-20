@@ -2,7 +2,9 @@
 title: Terrenia 方块内容规划
 status: active
 type: planning
-updated: 2026-08-19
+updated: 2026-08-20
+decision:
+  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # Terrenia 方块内容规划
@@ -160,7 +162,7 @@ consumer 和 persistence prototype 决定，本文只冻结内容身份与“不
 - 可用的 versioned BlockState schema，例如 `axis`、`facing`、`lit`、`growth`、`half` 或 `form`；
 - worldgen placement predicate、Role receipt 与生成 provenance。
 
-具体字段与 `physical@1` Map 的归属仍由 block／item／biome 最小 schema prototype 决定；
+具体字段与是否需要shared physical Map仍由block／item／biome最小schema prototype和真实consumer决定；在accepted gate满足前不得发布composite `latticeaxiom:block-map/physical@1`；
 本清单不以内容数量提前冻结平台通用 ontology。平台 contract 也不得把这 72 个 Terrenia
 concrete ID 写成 host 默认值。
 
@@ -187,4 +189,4 @@ concrete ID 写成 host 默认值。
 - [语义注册、内容判定与选择](../architecture/semantic-registration.md)
 - [可组合世界生成](../architecture/world-generation.md)
 - [第一个可玩 demo 路线图](roadmap-first-demo.md)
-- [待决问题](open-questions.md)
+- [问题决议索引](open-questions.md)

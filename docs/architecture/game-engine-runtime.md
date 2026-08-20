@@ -2,13 +2,18 @@
 title: 套件驅動的 Bevy 執行期架構
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0020-semantic-registration-and-content-selection.md
+  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../decisions/0024-freeze-portable-native-abi-0x.md
+  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../decisions/0026-freeze-first-demo-performance-budgets.md
+  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
 ---
 
 # 套件驅動的 Bevy 執行期架構
@@ -46,7 +51,7 @@ executable
 
 bootstrap 是短命的 control plane，不是第二套 game loop。进入 `Playing` 后，Nickel evaluator、resolver 与 build planner 不参与每 tick；仅保留 lock／package diagnostics 与 module instance lifecycle 所需的窄状态。
 
-client shell本身也是独立locked package closure与EngineInstance。它只读取`WorldHeader`与package metadata；world选择后先产生不执行module business code的`WorldOpenPlan`，正常停止shell App，再在同一process建立独立game EngineInstance／Bevy App。返回开始页执行相反流程；v1 native library仍保持mapped，不宣称hot unload。bootstrap只协调顺序生命周期，不是第二个game runner。
+client shell本身也是独立locked package closure与EngineInstance。它只读取`WorldHeader`与package metadata；world选择后先产生不执行module business code的`WorldOpenPlan`，再完成settings flush与durability barrier、stop package instances、join有界tasks并关闭writer。只有这些步骤成功后才atomic写入`LaunchIntentV1`并退出；barrier失败不得发布intent。client v1由replacement process建立唯一fresh game `DefaultPlugins` App；返回开始页执行相反流程。这样遵守winit每个application只创建一个`EventLoop`的跨平台约束，也隔离mapped native library、window／GPU与process-global static state。headless／`MinimalPlugins`测试仍可在同一process建立多个EngineInstance；bootstrap只协调进程间顺序生命周期，不是第二个game runner。
 
 ## 唯一啟動真相
 
@@ -186,7 +191,7 @@ Update / PostUpdate
 | stable content／component ID | package contract | 可以 |
 | semantic contract ID／Role binding | registration／world lock | contract与binding可持久化；Tag／Role不能代替concrete voxel ID |
 | stable entity key | world／schema contract | 可以 |
-| closure numeric ID | RegistrationImage／snapshot palette | 仅带 mapping 时 |
+| chunk-local palette index | snapshot-local palette | 可以，但每个palette entry保存stable ID／schema／state；不是closure numeric ID |
 | Bevy `Entity`／`Handle`／`TypeId` | 当前 App | 不可以 |
 | ABI generational handle | EngineInstance／interface | 不可以 |
 | GPU／physics handle | 当前 backend instance | 不可以 |

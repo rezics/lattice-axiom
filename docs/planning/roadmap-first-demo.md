@@ -9,6 +9,18 @@ decision:
   - ../decisions/0017-versioned-native-module-abi.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0019-separate-package-and-registration-identities.md
+  - ../decisions/0020-semantic-registration-and-content-selection.md
+  - ../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md
+  - ../decisions/0022-freeze-controlled-nickel-evaluation-metering-and-worker-protocol.md
+  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../decisions/0024-freeze-portable-native-abi-0x.md
+  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../decisions/0026-freeze-first-demo-performance-budgets.md
+  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../decisions/0029-freeze-render-capability-and-provider-contract.md
+  - ../decisions/0030-freeze-governance-distribution-and-security-triggers.md
+  - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
 ---
 
 # 第一個套件驅動的 Bevy 可玩 demo 路線圖
@@ -31,7 +43,7 @@ D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它�
 - Nickel-authored SemanticTag／Map／Predicate／Role 与 locked fallback ContentBundle；
 - package-injected `SettingSpec`、observability items与统一settings／inspect／dev-tools surfaces；
 - `NativeStatic` 与 `PortableNative` ABI `0.x`；
-- Bevy `0.19.x` baseline，精确 patch／features 由 Cargo lock 固定；
+- Bevy `0.19.x` architecture baseline与精确 `0.19.1` first implementation；manifests／Cargo lock记录version、source、checksum，manifests／profile／build receipt记录features；
 - client `DefaultPlugins`，headless 使用必要标准 profile；
 - Bevy 原生右手 Y-up；
 - voxel／physics／input／assets／diagnostics 先采用 Bevy／生态 upstream；
@@ -74,6 +86,7 @@ D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它�
 - `@latticeaxiom/settings`／observability基础packages与manifest schema skeleton；
 - deterministic SemVer／capability lock；
 - shell／client／headless profile与独立shell lock；
+- launcher／`LaunchIntentV1`／recovery shell process-transition state machine；
 - package-driven Bevy App；
 - package-driven开始页／设置页smoke、placeholder camera／light／cube；
 - Y-up orientation、manual fixed-time、diagnostics／CI。
@@ -82,6 +95,7 @@ D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它�
 
 - 同一 lock 可建立 client／headless的 compatible authoritative closure；
 - client 显示场景并退出；headless无 GPU推进 fixed tick；
+- client process一次只建立一个`EventLoop`／fresh `DefaultPlugins` App；LaunchIntent fault corpus覆盖barrier失败、atomic write、stale／corrupt intent、spawn／boot失败与recovery loop prevention；
 - 没有 hidden hand-written first-party plugin／dimension list；
 - shell／headless都从graph选择exactly-one settings／observability provider；
 - 没有自有 runner／ECS／renderer；
@@ -117,7 +131,7 @@ D1 不是空 `hello_plugin`；system 必须读写 gameplay-shaped data并发 com
 
 - `bevy_voxel_world` 优先 spike；
 - Avian 优先 physics spike；
-- Bevy input／Leafwing 二选一；
+- Leafwing `0.21`作为adoption-gated首版action／input mapping；headless注入相同Lattice `PlayerActionV1`／authoritative command DTO，失败回退Bevy native input；
 - walk／look／jump、raycast、break／place；
 - `@latticeaxiom/inspect`显示target block名称、icon、owner与technical StableId；
 - Performance preset与chunk Grid／Lifecycle／Mesh／Collision visualizers；

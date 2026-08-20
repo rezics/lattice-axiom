@@ -7,6 +7,7 @@ decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
   - ../decisions/0017-versioned-native-module-abi.md
+  - ../decisions/0029-freeze-render-capability-and-provider-contract.md
 ---
 
 # Bevy 渲染能力、Pass 與 Provider 組合
@@ -72,7 +73,7 @@ feature 声明 input／output semantic slots、resource access、format／sample
 
 建立新的明确 pass／phase 或插入已知 slot：
 
-- `after.opaque`、`before.tonemap`、`after.tonemap`；
+- `prepass`、`after-main`、`early-post`、`before-tonemap`、`after-tonemap`；
 - shadow／depth／visibility consumer；
 - compute-to-indirect-draw；
 - portal／reflection／custom transparency phase。

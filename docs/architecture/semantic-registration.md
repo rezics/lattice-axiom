@@ -2,11 +2,13 @@
 title: 語義註冊、內容判定與候選選擇
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0019-separate-package-and-registration-identities.md
   - ../decisions/0020-semantic-registration-and-content-selection.md
+  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # 語義註冊、內容判定與候選選擇
@@ -466,21 +468,17 @@ exact ID / namespace / schema validation
                           ↓
 unconditional ContentBundles
                           ↓
-Tag DAG expansion → typed membership bitsets
-                          ↓
-SemanticMap target expansion / merge
-                          ↓
-StateProperty + Affordance signatures
-                          ↓
-Predicate type-check / deterministic-stage validation
-                          ↓
-Role candidates / explicit bindings
+stable-ID Tag DAG / Map / State / Affordance / Predicate / Role validation
                           ↓
 single fallback activation wave
                           ↓
-revalidate semantic catalog and bindings
+revalidate final active exact set and bindings
                           ↓
-canonical numeric tables + provenance + hash
+canonical numeric ID assignment
+                          ↓
+typed Tag bitsets / SemanticMap tables / Predicate plans / Role lookups
+                          ↓
+semantic resolution receipt + provenance + hashes
                           ↓
 RegistrationImage
 ```

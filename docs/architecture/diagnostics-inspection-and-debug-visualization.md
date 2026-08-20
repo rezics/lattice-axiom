@@ -2,11 +2,13 @@
 title: Package 可組合的診斷、檢查與除錯可視化
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
   - ../decisions/0017-versioned-native-module-abi.md
+  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../decisions/0026-freeze-first-demo-performance-budgets.md
 ---
 
 # Package 可組合的診斷、檢查與除錯可視化

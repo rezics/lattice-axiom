@@ -2,7 +2,7 @@
 title: Lattice Axiom 文件
 status: active
 type: index
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # Lattice Axiom 文件
@@ -13,7 +13,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 
 > 默认使用完整上游能力；只有当一个真实可玩的原型证明现有方案无法满足不可妥协的产品需求时，才允许自研替代。
 
-- Bevy `0.19.x` 是 engine baseline；精确 patch／features 由 Cargo lock 固定。
+- Bevy `0.19.x` 是 architecture baseline，首个实现精确锁定 `0.19.1`；manifests／`Cargo.lock`记录version、source与checksum，manifests／profile／build receipt记录feature selection。
 - runtime 使用一个正常 Bevy App；不重做 ECS、scheduler、renderer、assets、input 或 tasks。
 - Nickel `package.ncl`／`game.ncl` 产生 typed `CompositionSpec`；Rust package kernel负责 SemVer／capability、lock、build、load与activation。
 - 每次游戏由 `LockedGameGraph`／`RegistrationImage` 建立；第一方 package 与 Terrenia 维度不能绕过。
@@ -55,7 +55,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 20. [可组合洞穴生成](architecture/cave-generation.md)
 21. [实体、物理与表现](architecture/entity-physics-presentation.md)
 22. [资产语义](architecture/asset-semantics.md)
-23. [待决问题](planning/open-questions.md)
+23. [问题决议索引](planning/open-questions.md)
 
 ## 文件地图
 
@@ -66,7 +66,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 | Bevy runtime／前端 | package closure如何成为一个Bevy App并提供一致surface | [执行期](architecture/game-engine-runtime.md)、[诊断／检查／可视化](architecture/diagnostics-inspection-and-debug-visualization.md)、[渲染](architecture/rendering.md)、[开始页／world lifecycle](architecture/world-lifecycle-and-start-ui.md)、[实体／物理／表现](architecture/entity-physics-presentation.md)、[资产](architecture/asset-semantics.md) |
 | 世界 | Lattice Axiom的权威资料与生成差异层 | [持久化](architecture/world-persistence.md)、[world lifecycle](architecture/world-lifecycle-and-start-ui.md)、[世界生成](architecture/world-generation.md)、[洞穴](architecture/cave-generation.md)、[物理创作](architecture/physical-authoring.md) |
 | 研究 | 外部证据、候选与失败模式，不自动成为承诺 | [信息／设置／存档UX](research/debug-settings-and-world-ux-lessons.md)、[引擎采用](research/open-source-game-engine-adoption.md)、[原生外挂机制／渲染模组](research/native-plugin-and-render-mod-lessons.md)、[Bevy生态](research/renderer-physics-landscape.md)、[Godot工具对照](research/godot-toolchain-comparison.md)、[Minecraft注册语义](research/minecraft-registration-semantics.md)、[Minecraft世界生成](research/minecraft-world-generation-lessons.md)、[现代地形／洞穴](research/modern-terrain-and-cave-generation.md) |
-| 规划 | 内容范围、依赖顺序、可玩验收、待决问题 | [Terrenia方块](planning/terrenia-block-catalog.md)、[第一个demo](planning/roadmap-first-demo.md)、[runtime路线](planning/roadmap-game-engine.md)、[待决问题](planning/open-questions.md) |
+| 规划 | 内容范围、依赖顺序、可玩验收、问题决议 | [Terrenia方块](planning/terrenia-block-catalog.md)、[第一个demo](planning/roadmap-first-demo.md)、[runtime路线](planning/roadmap-game-engine.md)、[问题决议](planning/open-questions.md) |
 | 元文件 | 文档维护规则 | [组织方式](meta/documentation-organization.md) |
 
 ## Accepted Decisions
@@ -86,6 +86,17 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 | [0018](decisions/0018-package-kernel-from-first-vertical-slice.md) | 首个vertical slice交付package kernel与双实现 |
 | [0019](decisions/0019-separate-package-and-registration-identities.md) | Root／scoped package 与 stable registration identity 分离；Terrenia 为第一维度 |
 | [0020](decisions/0020-semantic-registration-and-content-selection.md) | 精确注册身份、内容语义、判定、候选选择与 fallback 分层 |
+| [0021](decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md) | 冻结首个package／Nickel contract与resolution policy |
+| [0022](decisions/0022-freeze-controlled-nickel-evaluation-metering-and-worker-protocol.md) | 受控Nickel evaluation、metering与worker protocol |
+| [0023](decisions/0023-freeze-sdk-registration-and-semantic-compilation.md) | SDK、registration与semantic compilation contract |
+| [0024](decisions/0024-freeze-portable-native-abi-0x.md) | Portable native ABI 0.x wire与lifecycle contract |
+| [0025](decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md) | Client shell、settings、observability与player contract |
+| [0026](decisions/0026-freeze-first-demo-performance-budgets.md) | First-demo performance profile与budget |
+| [0027](decisions/0027-freeze-authoritative-world-and-persistence-contract.md) | Authoritative world、persistence与recovery contract |
+| [0028](decisions/0028-freeze-worldgen-content-and-asset-contract.md) | Worldgen、content与asset contract |
+| [0029](decisions/0029-freeze-render-capability-and-provider-contract.md) | Render capability、resource graph与provider contract |
+| [0030](decisions/0030-freeze-governance-distribution-and-security-triggers.md) | Governance、distribution与security trigger |
+| [0031](decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md) | Bevy upgrade、dependency与supply-chain policy |
 
 ### Superseded Decisions
 
@@ -102,7 +113,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 - `accepted`：已明确采用的decision／strategy。
 - `active`：当前有效index／roadmap／reference。
 
-目前尚无程序实作。accepted ADR 是开工边界；architecture中的具体API名称仍可由第一个vertical slice修正，但不能绕过accepted package／ABI／Bevy原则。
+实现仓已进入active roadmap；实际交付状态由demo仓的自动证据与两条roadmap追踪。accepted ADR 是兼容性边界；architecture中的具体API名称仍可由第一个vertical slice修正，但不能绕过accepted package／ABI／Bevy原则。
 
 ## 当前刻意没有
 

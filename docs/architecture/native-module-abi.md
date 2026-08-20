@@ -2,10 +2,14 @@
 title: 原生模組 ABI、批次資料與生命週期
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0017-versioned-native-module-abi.md
+  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../decisions/0024-freeze-portable-native-abi-0x.md
+  - ../decisions/0026-freeze-first-demo-performance-budgets.md
+  - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
 ---
 
 # 原生模組 ABI、批次資料與生命週期

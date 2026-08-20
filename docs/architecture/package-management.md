@@ -2,7 +2,7 @@
 title: Nickel 驅動的套件內核與分發邊界
 status: proposed
 type: architecture
-updated: 2026-08-19
+updated: 2026-08-20
 decision:
   - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0010-nickel-driven-package-system.md
@@ -10,6 +10,12 @@ decision:
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0019-separate-package-and-registration-identities.md
   - ../decisions/0020-semantic-registration-and-content-selection.md
+  - ../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md
+  - ../decisions/0022-freeze-controlled-nickel-evaluation-metering-and-worker-protocol.md
+  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../decisions/0024-freeze-portable-native-abi-0x.md
+  - ../decisions/0030-freeze-governance-distribution-and-security-triggers.md
+  - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
 ---
 
 # Nickel 驅動的套件內核與分發邊界

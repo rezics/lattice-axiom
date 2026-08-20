@@ -7,6 +7,8 @@ decision:
   - ../decisions/0009-rocksdb-authoritative-world-snapshots.md
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
 ---
 
 # World 目錄、開始頁與安全生命週期
@@ -50,11 +52,14 @@ host hidden plugin list。这个名称表示同一resolver／`LockedGameGraph` s
 不是第二套package model。它只能读取world header、checkpoint catalog与package metadata，不能
 instantiate chunk或执行world-owned migration。
 
-首个demo在同一process内使用**顺序、独立的EngineInstance／Bevy App**：shell选择world后正常
-停止shell instance，再建立game instance；返回首页则停止game instance并重建shell。已经映射的
-native library保持loaded，不声称支持hot unload。bootstrap只协调这些App的先后生命周期，不
-推进game tick。若window／GPU／static realization隔离证明同process重建不可靠，可改为明确的
-process restart而不改变world格式或UI contract。
+client v1使用**顺序、独立进程中的EngineInstance／Bevy App**：shell选择world后先完成settings
+flush、durability／shutdown barrier，stop instances、join有界tasks并关闭writer；只有这些步骤成功后
+才atomic写入`LaunchIntentV1`并退出。replacement process建立唯一fresh game `DefaultPlugins` App。
+返回首页执行相反流程，barrier失败不得发布intent，失败或无效intent进入recovery shell。该默认遵守
+winit每个application只创建一个`EventLoop`的跨平台约束，并隔离native library、window／GPU、
+foreign threads／TLS与process-global static state。headless／`MinimalPlugins` conformance仍可
+在同一process顺序或并行建立多个EngineInstance。未来若要client同process切换，必须先另立
+单一长寿命event-loop App设计；不能重建两个fresh `DefaultPlugins` Apps。
 
 ## 基礎 Packages
 

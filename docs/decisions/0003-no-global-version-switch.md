@@ -2,7 +2,7 @@
 title: 不以全域版本代替實際相容性
 status: accepted
 type: decision
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # 決策 0003：不以全域版本代替實際相容性
@@ -17,7 +17,7 @@ updated: 2026-08-19
 
 1. Lattice Axiom 可以發布正常的產品 SemVer，但不設一個控制全部執行、存檔、網路與生成相容性的全域大版本開關。
 2. 每个逻辑 package 使用 SemVer 声明相容范围，`latticeaxiom.lock` 选择精确 package version、source、realization 与 artifact hash。package SemVer 是主要外部相容语言，但不代理 ABI、schema 或精确 build。
-3. Bevy 與 Rust crate 的精確版本、feature 和來源由核心 host 的 `Cargo.lock` 記錄。Bevy 升級是程式碼庫遷移，不是由存檔中的 `engineVersion` 在執行期分派兩套邏輯；它只在改变 Lattice 外部契约时触发相应 package／capability 版本变化。
+3. Bevy 與 Rust crate 的精確版本、來源與checksum由核心 host 的manifest／`Cargo.lock`记录；启用的features由workspace manifests、profile与build receipt记录。Bevy 升級是程式碼庫遷移，不是由存檔中的 `engineVersion` 在執行期分派兩套邏輯；它只在改变 Lattice 外部契约时触发相应 package／capability 版本变化。
 4. Portable native ABI、每项 capability interface 与 engine-coupled `EngineBuildId` 独立版本化。`EngineBuildId` 不匹配只判定 exact-build interface 不相容，不能自动宣告整个 package graph 不相容。
 5. 每個長期資料擁有者獨立定義 schema ID、schema version、讀取範圍與遷移函式；不得使用 package／產品／ABI version 代替 schema version。
 6. 世界生成器保存具名 revision、正規化設定雜湊與必要的實作 fingerprint。相同 API 版本不保證程序輸出完全相同。

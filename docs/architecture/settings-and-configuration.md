@@ -7,6 +7,7 @@ decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0019-separate-package-and-registration-identities.md
+  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
 ---
 
 # Package 可注入的設定與配置架構

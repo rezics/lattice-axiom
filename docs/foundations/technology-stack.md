@@ -2,12 +2,12 @@
 title: Package-first／Bevy-first 技術棧與採用邊界
 status: active
 type: reference
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # Package-first／Bevy-first 技術棧與採用邊界
 
-本页是目前实作技术的单一入口。`accepted` 表示架构方向已采用；精确 crate patch、feature 与 source 仍需由开始实作时的 manifests／lock 固定。`spike candidate` 只允许进入有时限、可玩的评估。
+本页是目前实作技术的单一入口。`accepted`表示架构方向已采用；当前精确crate版本、source与checksum由manifests／`Cargo.lock`记录，features由manifests／profile／build receipt记录。`spike candidate`只允许进入有时限、可玩的评估。
 
 ## 採用原則
 
@@ -23,7 +23,7 @@ updated: 2026-08-19
 | 能力 | 选择 | 使用方式 | 状态 |
 | --- | --- | --- | --- |
 | 语言 | Rust stable | core host、package kernel、SDK、static／dynamic modules | accepted |
-| 建置 | Cargo workspace、`Cargo.lock` | core／static source build；toolchain／target／features 精确锁定 | accepted |
+| 建置 | Cargo workspace、`Cargo.lock` | core／static source build；manifests／profile选择features，build receipt记录effective set，lock记录版本／source／checksum | accepted |
 | 组合语言 | [Nickel](https://nickel-lang.org/) | `package.ncl`／`game.ncl`／overlays／contracts；只在控制平面 | accepted |
 | Package version | [SemVer 2.0.0](https://semver.org/) | logical package dependencies；lock 选择精确 version／source／artifact | accepted |
 | Package kernel | project Rust crates | source、resolve、capability、lock、plan、build、load、activation | accepted |
@@ -40,7 +40,7 @@ updated: 2026-08-19
 | 序列化 | serde 生态 | typed model／schema envelope；具体 encoding 由 fixture锁定 | accepted |
 | 观测／debug draw | Bevy diagnostics overlay、gizmos + `tracing` | package／ABI／world／render structured diagnostics与validated visualizer资料 | accepted |
 
-Bevy `0.19.x` 是 2026-08-19 文件基线，不允许自动漂移。实作 commit 必须固定精确 patch；新的 Bevy release 经过 migration／ABI／save／performance gate 后才能成为基线。
+Bevy `0.19.x`是architecture baseline，当前首个实现已精确锁定`0.19.1`，其version／source／checksum与effective features分别由manifests／`Cargo.lock`／build receipt记录，不允许自动漂移。新的Bevy release经过migration／ABI／save／performance gate后才能成为基线。
 
 ## Package／ABI 產物
 

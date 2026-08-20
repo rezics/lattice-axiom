@@ -2,7 +2,7 @@
 title: 採用 Bevy 並以上游能力為預設
 status: accepted
 type: decision
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # 決策 0014：採用 Bevy 並以上游能力為預設
@@ -17,7 +17,7 @@ Lattice Axiom 曾規劃自行建立生命週期、ECS 門面、排程器、輸�
 
 > 默认使用完整上游能力；只有当一个真实可玩的原型证明现有方案无法满足不可妥协的产品需求时，才允许自研替代。
 
-1. Bevy 是 Lattice Axiom 的遊戲引擎與執行期基礎。開始實作時以 Bevy `0.19.x` 為基線，精確 patch、feature 與所有 Rust 相依由 `Cargo.lock` 鎖定。
+1. Bevy 是 Lattice Axiom 的遊戲引擎與執行期基礎。本决策冻结 `0.19.x` 架构基线；具体实现必须选择精确 patch。当前实现的精确版本、source与checksum由workspace manifests／`Cargo.lock`记录，启用的features由manifests、profile与build receipt记录；当前patch与升级政策由[决策 0031](0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md)治理。
 2. 客戶端預設從 Bevy `DefaultPlugins` 開始，只移除經原型證明不適用的 plugin。headless、伺服器與測試使用 Bevy 支援的 plugin 組合，例如 `MinimalPlugins` 加上實際需要的標準 plugin；不另造「空 renderer」或第二套主迴圈。
 3. Lattice Axiom 核心、`NativeStatic` realization 與 host adapter 直接使用 Bevy 的 `Plugin`／`PluginGroup`、`Component`、`Resource`、typed asset、event／message、state、schedule 與 `SystemSet`。不建立逐項映射 Bevy API 的自有 App、World、ECS、scheduler、render、asset、input 或 task facade。动态边界使用 Lattice-owned capability ABI，是可分发 package 契约，不是为了替换 Bevy 的镜像引擎 API。
 4. 通用渲染走 Bevy renderer；普通擴充先使用 Mesh、Material、shader、visibility、camera 與 Bevy render extraction。只有內建 API 和正常的 Bevy render extension point 都無法達成已證明需求時，才考慮更深層替換。
