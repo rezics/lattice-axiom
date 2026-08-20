@@ -1,0 +1,27 @@
+[package]
+name = "latticeaxiom-world-db"
+description = "D3 WorldStorage contract and deterministic DB-first persistence reference for Lattice Axiom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-core = { path = "../latticeaxiom-core" }
+latticeaxiom-storage = { path = "../latticeaxiom-storage" }
+latticeaxiom-world-catalog = { path = "../latticeaxiom-world-catalog" }
+latticeaxiom-world-wire = { path = "../latticeaxiom-world-wire" }
+postcard.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
