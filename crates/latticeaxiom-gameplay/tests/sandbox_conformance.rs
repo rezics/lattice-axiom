@@ -413,21 +413,21 @@ fn envelope(state: &ReferenceGameplayState, command: GameplayCommandV1) -> Comma
 }
 
 #[derive(Debug)]
-struct FixtureAuthority<'catalog> {
-    gameplay: ReferencePlanApplier<'catalog>,
+struct FixtureAuthority {
+    gameplay: ReferencePlanApplier,
     storage: MemoryTransactionKernel,
     storage_revisions: BTreeMap<DimensionChunkKey, ChunkRevision>,
 }
 
-impl<'catalog> Deref for FixtureAuthority<'catalog> {
-    type Target = ReferencePlanApplier<'catalog>;
+impl Deref for FixtureAuthority {
+    type Target = ReferencePlanApplier;
 
     fn deref(&self) -> &Self::Target {
         &self.gameplay
     }
 }
 
-impl DerefMut for FixtureAuthority<'_> {
+impl DerefMut for FixtureAuthority {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.gameplay
     }
@@ -515,7 +515,7 @@ fn capture_domains(plan: &GameplayPlanV1) -> BTreeMap<DimensionChunkKey, Changed
     domains
 }
 
-impl FixtureAuthority<'_> {
+impl FixtureAuthority {
     fn commit_domains(
         &mut self,
         transaction_id: TransactionId,
@@ -579,7 +579,7 @@ impl FixtureAuthority<'_> {
 }
 
 fn execute(
-    authority: &mut FixtureAuthority<'_>,
+    authority: &mut FixtureAuthority,
     catalog: &GameplayCatalog,
     command: GameplayCommandV1,
 ) -> RuntimePlanReceiptV1 {
@@ -590,7 +590,7 @@ fn execute(
     }
 }
 
-fn applier(state: ReferenceGameplayState, catalog: &GameplayCatalog) -> FixtureAuthority<'_> {
+fn applier(state: ReferenceGameplayState, catalog: &GameplayCatalog) -> FixtureAuthority {
     let world = fixture_world();
     let storage = MemoryTransactionKernel::new();
     let mut storage_revisions = BTreeMap::new();
@@ -651,7 +651,7 @@ fn applier(state: ReferenceGameplayState, catalog: &GameplayCatalog) -> FixtureA
             "fixture storage revision mismatch for {chunk:?}: {actual:?} != {expected:?}"
         );
     }
-    let gameplay = ReferencePlanApplier::try_new(world, state, catalog)
+    let gameplay = ReferencePlanApplier::try_new(world, state, catalog.clone())
         .unwrap_or_else(|error| panic!("fixture loaded-state validation failed: {error}"));
     FixtureAuthority {
         gameplay,
@@ -1103,7 +1103,7 @@ fn persistent_tool_state_must_match_definition_and_durability_range() {
     let mut decoded_plain = state_with_inventory(1);
     seed_stack(&mut decoded_plain, PLAYER, 0, plain_tool);
     assert!(matches!(
-        ReferencePlanApplier::try_new(fixture_world(), decoded_plain, &catalog),
+        ReferencePlanApplier::try_new(fixture_world(), decoded_plain, catalog.clone()),
         Err(GameplayReject::ItemStateMismatch { .. })
     ));
     let excessive = match ItemStackV1::tool(parsed("example:item/pickaxe"), 11) {
@@ -1121,7 +1121,7 @@ fn persistent_tool_state_must_match_definition_and_durability_range() {
     let mut decoded_excessive = state_with_inventory(1);
     seed_stack(&mut decoded_excessive, PLAYER, 0, excessive);
     assert!(matches!(
-        ReferencePlanApplier::try_new(fixture_world(), decoded_excessive, &catalog),
+        ReferencePlanApplier::try_new(fixture_world(), decoded_excessive, catalog),
         Err(GameplayReject::DurabilityOutOfRange { .. })
     ));
 }
@@ -1514,7 +1514,7 @@ fn reference_state_hash_excludes_limits_but_covers_storage_observations() {
         .unwrap_or_else(|error| panic!("impossible ledger chunk failed: {error}"));
     let catalog = catalog();
     assert!(matches!(
-        ReferencePlanApplier::try_new(fixture_world(), impossible_ledger, &catalog),
+        ReferencePlanApplier::try_new(fixture_world(), impossible_ledger, catalog),
         Err(GameplayReject::MutationPreconditionFailed {
             resource: "loaded_chunk_revision"
         })

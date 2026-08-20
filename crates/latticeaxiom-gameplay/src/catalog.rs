@@ -393,6 +393,36 @@ impl GameplayCatalog {
         self.processes.get(id)
     }
 
+    /// Returns compiled item definitions in identity order.
+    #[must_use]
+    pub fn items(&self) -> &BTreeMap<ItemId, ItemDefinitionV1> {
+        &self.items
+    }
+
+    /// Returns compiled block definitions in identity order.
+    #[must_use]
+    pub fn blocks(&self) -> &BTreeMap<BlockId, BlockDefinitionV1> {
+        &self.blocks
+    }
+
+    /// Returns compiled tool definitions in identity order.
+    #[must_use]
+    pub fn tools(&self) -> &BTreeMap<ItemId, ToolDefinitionV1> {
+        &self.tools
+    }
+
+    /// Returns compiled recipes in identity order.
+    #[must_use]
+    pub fn recipes(&self) -> &BTreeMap<RecipeId, RecipeDefinitionV1> {
+        &self.recipes
+    }
+
+    /// Returns compiled workstation contracts in identity order.
+    #[must_use]
+    pub fn workstations(&self) -> &BTreeSet<WorkstationId> {
+        &self.workstations
+    }
+
     /// Tests a closed item predicate against a concrete item.
     #[must_use]
     pub fn matches(&self, predicate: &ItemPredicateV1, item: &ItemId) -> bool {

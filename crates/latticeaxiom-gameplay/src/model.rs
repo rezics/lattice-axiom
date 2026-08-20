@@ -87,10 +87,17 @@ impl BlockPosition {
     /// Returns the authoritative 32-cubed chunk coordinate.
     #[must_use]
     pub fn chunk(self) -> ChunkCoordinate {
+        self.chunk_in(32)
+    }
+
+    /// Returns the chunk coordinate for a host-selected cubic edge.
+    #[must_use]
+    pub fn chunk_in(self, edge: u16) -> ChunkCoordinate {
+        let edge = i32::from(edge.max(1));
         ChunkCoordinate::new(
-            self.x.div_euclid(32),
-            self.y.div_euclid(32),
-            self.z.div_euclid(32),
+            self.x.div_euclid(edge),
+            self.y.div_euclid(edge),
+            self.z.div_euclid(edge),
         )
     }
 }
@@ -167,7 +174,13 @@ impl ItemStackV1 {
         &self.state
     }
 
-    pub(crate) fn with_quantity(&self, quantity: u32) -> Result<Option<Self>, GameplayReject> {
+    /// Returns a copy with `quantity`, or `None` when the quantity is zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed rejection when a stateful stack would have quantity
+    /// other than one.
+    pub fn with_quantity(&self, quantity: u32) -> Result<Option<Self>, GameplayReject> {
         if quantity == 0 {
             return Ok(None);
         }
@@ -270,6 +283,12 @@ impl InventoryStateV1 {
                 slot,
                 slots: self.slots.len(),
             })
+    }
+
+    /// Returns every inventory slot in index order.
+    #[must_use]
+    pub const fn slots(&self) -> &[Option<ItemStackV1>] {
+        &self.slots
     }
 
     /// Seeds a slot while constructing a fixture or decoded snapshot.
@@ -569,6 +588,7 @@ pub struct ReferenceGameplayState {
     pub(crate) pending_receipt: Option<RuntimePlanReceiptV1>,
     pub(crate) oldest_replayable_world_revision: WorldRevision,
     pub(crate) limits: GameplayLimits,
+    pub(crate) chunk_edge: u16,
 }
 
 impl ReferenceGameplayState {
@@ -593,7 +613,35 @@ impl ReferenceGameplayState {
             pending_receipt: None,
             oldest_replayable_world_revision: WorldRevision::ZERO,
             limits: limits.validate()?,
+            chunk_edge: 32,
         })
+    }
+
+    /// Sets the cubic chunk edge used to map blocks onto storage chunks.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero edge.
+    pub fn set_chunk_edge(&mut self, edge: u16) -> Result<(), GameplayReject> {
+        if edge == 0 {
+            return Err(GameplayReject::LimitExceeded {
+                resource: "chunk_edge",
+                limit: 1,
+                actual: 0,
+            });
+        }
+        self.chunk_edge = edge;
+        Ok(())
+    }
+
+    /// Returns the cubic chunk edge used by this reference state.
+    #[must_use]
+    pub const fn chunk_edge(&self) -> u16 {
+        self.chunk_edge
+    }
+
+    pub(crate) fn block_chunk(&self, key: &BlockKey) -> DimensionChunkKey {
+        key.chunk_in(self.chunk_edge)
     }
 
     /// Returns the storage-owned world revision observed when this state was loaded.
@@ -677,6 +725,87 @@ impl ReferenceGameplayState {
     #[must_use]
     pub fn dropped_item(&self, id: DropEntityId) -> Option<&DroppedItemV1> {
         self.drops.get(&id)
+    }
+
+    /// Returns every dropped item in identity order.
+    #[must_use]
+    pub const fn dropped_items(&self) -> &BTreeMap<DropEntityId, DroppedItemV1> {
+        &self.drops
+    }
+
+    /// Returns in-progress mining entries in identity order.
+    #[must_use]
+    pub const fn break_progress(&self) -> &BTreeMap<BreakProgressKey, BreakProgressV1> {
+        &self.break_progress
+    }
+
+    /// Returns the runtime receipt waiting for a storage capture, if any.
+    #[must_use]
+    pub const fn pending_receipt(&self) -> Option<&RuntimePlanReceiptV1> {
+        self.pending_receipt.as_ref()
+    }
+
+    /// Seeds or confirms a loaded chunk at its storage-owned revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a conflicting revision for an already-loaded chunk.
+    pub fn ensure_loaded_chunk(
+        &mut self,
+        chunk: DimensionChunkKey,
+        revision: ChunkRevision,
+    ) -> Result<(), GameplayReject> {
+        match self.loaded_chunks.get(&chunk) {
+            Some(existing) if *existing == revision => Ok(()),
+            Some(existing) => Err(GameplayReject::StaleChunkRevision {
+                expected: existing.get(),
+                actual: revision.get(),
+            }),
+            None => self.seed_loaded_chunk(chunk, revision),
+        }
+    }
+
+    /// Inserts or confirms one occupied block cell before planning a command.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the tracked-block boundary plus one, an unloaded chunk, or a
+    /// conflicting occupied identity.
+    pub fn sync_occupied_block(
+        &mut self,
+        key: BlockKey,
+        block: BlockId,
+    ) -> Result<(), GameplayReject> {
+        match self.blocks.get(&key) {
+            Some(existing) if existing == &block => Ok(()),
+            Some(_) => Err(GameplayReject::DuplicateStateKey { kind: "block" }),
+            None => self.seed_block(key, block),
+        }
+    }
+
+    /// Clears a previously tracked occupied cell when the voxel world is empty.
+    pub fn clear_occupied_block(&mut self, key: &BlockKey) {
+        self.blocks.remove(key);
+    }
+
+    /// Seeds one inventory slot on an already-loaded player.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown player or an invalid slot index.
+    pub fn seed_player_slot(
+        &mut self,
+        player: PlayerId,
+        slot: SlotIndex,
+        stack: Option<ItemStackV1>,
+    ) -> Result<(), GameplayReject> {
+        let inventory = self
+            .inventories
+            .get_mut(&player)
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: player.as_bytes(),
+            })?;
+        inventory.seed_slot(slot, stack)
     }
 
     /// Returns one continuation.
@@ -841,7 +970,7 @@ impl ReferenceGameplayState {
             }
         }
         for (key, block) in &self.blocks {
-            self.require_loaded_chunk(&key.chunk())?;
+            self.require_loaded_chunk(&self.block_chunk(key))?;
             if catalog.block(block).is_none() {
                 return Err(GameplayReject::UnknownReference {
                     kind: "block",
@@ -850,7 +979,7 @@ impl ReferenceGameplayState {
             }
         }
         for drop in self.drops.values() {
-            self.require_loaded_chunk(&drop.location.chunk())?;
+            self.require_loaded_chunk(&self.block_chunk(&drop.location))?;
             catalog.validate_stack(&drop.stack)?;
         }
         for (id, container) in &self.containers {
@@ -881,7 +1010,7 @@ impl ReferenceGameplayState {
             }
         }
         for (key, progress) in &self.break_progress {
-            self.require_loaded_chunk(&key.block.chunk())?;
+            self.require_loaded_chunk(&self.block_chunk(&key.block))?;
             if !self.inventories.contains_key(&key.player) {
                 return Err(GameplayReject::UnknownPlayer {
                     player: key.player.as_bytes(),
@@ -1034,7 +1163,7 @@ impl ReferenceGameplayState {
     ///
     /// Rejects the configured tracked-block boundary plus one.
     pub fn seed_block(&mut self, key: BlockKey, block: BlockId) -> Result<(), GameplayReject> {
-        self.require_loaded_chunk(&key.chunk())?;
+        self.require_loaded_chunk(&self.block_chunk(&key))?;
         if self.blocks.contains_key(&key) {
             return Err(GameplayReject::DuplicateStateKey { kind: "block" });
         }

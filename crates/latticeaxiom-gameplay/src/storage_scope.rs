@@ -100,7 +100,13 @@ impl BlockKey {
     /// Returns the dimension-qualified authoritative chunk containing the cell.
     #[must_use]
     pub fn chunk(&self) -> DimensionChunkKey {
-        DimensionChunkKey::new(self.dimension.clone(), self.position.chunk())
+        self.chunk_in(32)
+    }
+
+    /// Returns the chunk key for a host-selected cubic edge.
+    #[must_use]
+    pub fn chunk_in(&self, edge: u16) -> DimensionChunkKey {
+        DimensionChunkKey::new(self.dimension.clone(), self.position.chunk_in(edge))
     }
 }
 

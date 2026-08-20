@@ -97,7 +97,7 @@ impl<'catalog> GameplayKernel<'catalog> {
                     kind: "block",
                     id: block.as_str().to_owned(),
                 })?;
-        let chunk = command.target.chunk();
+        let chunk = state.block_chunk(&command.target);
         let current_chunk_revision = require_chunk_revision(state, &chunk)?;
         if current_chunk_revision != command.expected_chunk_revision {
             return Err(GameplayReject::StaleChunkRevision {
@@ -252,7 +252,7 @@ impl<'catalog> GameplayKernel<'catalog> {
                 actual: checked_capacity_plus_one(state.drops.len(), "drops")?,
             });
         }
-        let chunk = command.location.chunk();
+        let chunk = state.block_chunk(&command.location);
         let _ = require_chunk_revision(state, &chunk)?;
         let inventory = player_inventory(state, command.player)?;
         let mut after = inventory.slots.to_vec();
@@ -309,7 +309,7 @@ impl<'catalog> GameplayKernel<'catalog> {
             Destination::Inventory,
         )?;
         let drop_target = edit_target(
-            drop.location.chunk(),
+            state.block_chunk(&drop.location),
             GameplayStorageDomain::PersistentEntities,
         );
         let mut edits = inventory_diff(command.player, inventory, &after)?;
@@ -337,7 +337,7 @@ impl<'catalog> GameplayKernel<'catalog> {
                 actual: checked_capacity_plus_one(state.blocks.len(), "tracked_blocks")?,
             });
         }
-        let chunk = command.target.chunk();
+        let chunk = state.block_chunk(&command.target);
         let current_chunk_revision = require_chunk_revision(state, &chunk)?;
         if current_chunk_revision != command.expected_chunk_revision {
             return Err(GameplayReject::StaleChunkRevision {
@@ -692,18 +692,19 @@ impl<'catalog> GameplayKernel<'catalog> {
     }
 }
 
-/// Fault-injectable in-memory plan applier for conformance tests.
+/// Fault-injectable in-memory plan applier for conformance tests and hosts.
 ///
-/// The applier is bound to one authoritative world and the exact catalog used
-/// to validate its loaded state. It stages no disk/checkpoint work and publishes
-/// no storage durability or revision receipt. Production hosts must capture the
-/// affected chunks into a complete [`latticeaxiom_storage::WorldTransaction`]
-/// after applying a plan, then reconcile its [`CommitReceipt`] here.
+/// The applier is bound to one authoritative world and owns the exact catalog
+/// used to validate its loaded state. It stages no disk/checkpoint work and
+/// publishes no storage durability or revision receipt. Production hosts must
+/// capture the affected chunks into a complete
+/// [`latticeaxiom_storage::WorldTransaction`] after applying a plan, then
+/// reconcile its [`CommitReceipt`] here.
 #[derive(Clone, Debug)]
-pub struct ReferencePlanApplier<'catalog> {
+pub struct ReferencePlanApplier {
     world: crate::WorldId,
     state: ReferenceGameplayState,
-    kernel: GameplayKernel<'catalog>,
+    catalog: GameplayCatalog,
     pending_storage_commit: Option<PendingStorageCommit>,
 }
 
@@ -714,8 +715,8 @@ struct PendingStorageCommit {
     chunks: BTreeMap<DimensionChunkKey, ChangedDomains>,
 }
 
-impl<'catalog> ReferencePlanApplier<'catalog> {
-    /// Validates loaded state and binds it to one world and immutable catalog.
+impl ReferencePlanApplier {
+    /// Validates loaded state and binds it to one world and owned catalog.
     ///
     /// # Errors
     ///
@@ -724,9 +725,9 @@ impl<'catalog> ReferencePlanApplier<'catalog> {
     pub fn try_new(
         world: crate::WorldId,
         state: ReferenceGameplayState,
-        catalog: &'catalog GameplayCatalog,
+        catalog: GameplayCatalog,
     ) -> Result<Self, GameplayReject> {
-        state.validate_loaded(catalog)?;
+        state.validate_loaded(&catalog)?;
         if let Some(pending) = &state.pending_receipt {
             return Err(GameplayReject::StorageCommitPending {
                 transaction_id: *pending.transaction_id.as_bytes(),
@@ -736,9 +737,23 @@ impl<'catalog> ReferencePlanApplier<'catalog> {
         Ok(Self {
             world,
             state,
-            kernel: GameplayKernel::new(catalog),
+            catalog,
             pending_storage_commit: None,
         })
+    }
+
+    /// Returns the catalog bound to this applier.
+    #[must_use]
+    pub const fn catalog(&self) -> &GameplayCatalog {
+        &self.catalog
+    }
+
+    /// Returns the pending storage-capture set after a runtime-staged plan.
+    #[must_use]
+    pub fn pending_storage_chunks(&self) -> Option<&BTreeMap<DimensionChunkKey, ChangedDomains>> {
+        self.pending_storage_commit
+            .as_ref()
+            .map(|pending| &pending.chunks)
     }
 
     /// Returns the authoritative world bound to this reference state.
@@ -751,6 +766,12 @@ impl<'catalog> ReferencePlanApplier<'catalog> {
     #[must_use]
     pub const fn state(&self) -> &ReferenceGameplayState {
         &self.state
+    }
+
+    /// Returns mutable reference state for host capture and fixture seeding.
+    #[must_use]
+    pub const fn state_mut(&mut self) -> &mut ReferenceGameplayState {
+        &mut self.state
     }
 
     /// Consumes the applier and returns state for an in-memory handoff fixture.
@@ -797,7 +818,7 @@ impl<'catalog> ReferencePlanApplier<'catalog> {
             },
         )?;
         retain_finalized_receipt(&mut next_state, finalized)?;
-        next_state.validate_loaded(self.kernel.catalog)?;
+        next_state.validate_loaded(&self.catalog)?;
 
         self.state = next_state;
         self.pending_storage_commit = None;
@@ -849,7 +870,7 @@ impl<'catalog> ReferencePlanApplier<'catalog> {
                 observed_world_revision: self.state.observed_world_revision.get(),
             });
         }
-        let plan = self.kernel.plan(&self.state, envelope)?;
+        let plan = GameplayKernel::new(&self.catalog).plan(&self.state, envelope)?;
         self.apply_plan(plan, fault)
     }
 
@@ -905,7 +926,7 @@ impl<'catalog> ReferencePlanApplier<'catalog> {
                 actual: self.state.observed_world_revision.get(),
             });
         }
-        self.state.validate_loaded(self.kernel.catalog)?;
+        self.state.validate_loaded(&self.catalog)?;
         if crate::hash::plan_hash(
             plan.expected_world_revision,
             plan.envelope_fingerprint,
@@ -1268,7 +1289,7 @@ fn validate_plan_targets(
                 format!("container-revision:{:?}", container.as_bytes())
             }
             GameplayMutationIntentV1::Block { key, .. } => {
-                let expected = edit_target(key.chunk(), GameplayStorageDomain::Voxels);
+                let expected = edit_target(state.block_chunk(key), GameplayStorageDomain::Voxels);
                 require_exact_target(
                     target,
                     &expected,
@@ -1296,8 +1317,10 @@ fn validate_plan_targets(
                         resource: "drop_move_requires_complete_storage_translation",
                     });
                 }
-                let expected =
-                    edit_target(location.chunk(), GameplayStorageDomain::PersistentEntities);
+                let expected = edit_target(
+                    state.block_chunk(location),
+                    GameplayStorageDomain::PersistentEntities,
+                );
                 require_exact_target(
                     target,
                     &expected,
