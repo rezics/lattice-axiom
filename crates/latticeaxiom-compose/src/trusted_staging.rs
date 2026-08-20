@@ -4,7 +4,7 @@
 //! production Nickel worker has a source-table-native import resolver. It
 //! verifies a complete [`SourceClosureRequest`] against immutable snapshots,
 //! stages only the exact reachable bytes into a fresh temporary tree, and
-//! configures Nickel package aliases exclusively from the verified grants.
+//! configures Nickel package aliases from lock-scoped edges on the request.
 //!
 //! It is not the production `r0@1` containment boundary: Nickel still reads
 //! the private staging tree through its filesystem resolver, and this adapter
@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use latticeaxiom_core::{
-    CanonicalHash, SourceId, SourceProvenance, canonical_json_bytes, canonical_json_hash,
+    CanonicalHash, PackageName, SourceId, SourceProvenance, canonical_json_bytes,
+    canonical_json_hash,
 };
 use nickel_lang_core::eval::cache::CacheImpl;
 use nickel_lang_core::identifier::Ident;
@@ -29,8 +30,9 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    PackageSpec, SourceAddress, SourceClosureError, SourceClosureReceipt, SourceClosureRequest,
-    SourceSnapshot, resolve_nickel_source_closure,
+    AuthorizedRootKind, PackageSpec, R0_LIBRARY_PACKAGE_ALIAS, SourceAddress, SourceClosureError,
+    SourceClosureReceipt, SourceClosureRequest, SourceRootGrant, SourceSnapshot,
+    resolve_nickel_source_closure,
 };
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -212,7 +214,7 @@ pub fn evaluate_trusted_staged_package(
 /// The entry and every import are read from verified [`SourceSnapshot`] bytes.
 /// Original acquisition paths are never passed to Nickel. Only members of the
 /// independently resolved closure are materialized, and package aliases come
-/// only from the request's explicit grants.
+/// from the request's lock-scoped alias edges plus the versioned library.
 ///
 /// The entry must evaluate to a unary function. Package sources use the binder
 /// for raw entry provenance; profiles use it for distinct whole-root and raw
@@ -436,38 +438,109 @@ impl StagedSourceTree {
         &self,
         request: &SourceClosureRequest,
     ) -> Result<PackageMap, TrustedStagedEvaluationError> {
-        let mut aliases = Vec::new();
-        for grant in &request.root_grants {
-            let Some(alias) = &grant.package_alias else {
+        let grants = request
+            .root_grants
+            .iter()
+            .map(|grant| (&grant.source_id, grant))
+            .collect::<BTreeMap<_, _>>();
+        let source_by_package = request
+            .package_instances
+            .iter()
+            .map(|(source_id, package)| (package.clone(), source_id.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut top_level = std::collections::HashMap::new();
+        let mut packages = std::collections::HashMap::new();
+
+        if let Some(library) = request
+            .root_grants
+            .iter()
+            .find(|grant| grant.root_kind == AuthorizedRootKind::Library)
+        {
+            let ident = Ident::new(R0_LIBRARY_PACKAGE_ALIAS);
+            let root = staged_alias_root(self, library, R0_LIBRARY_PACKAGE_ALIAS)?;
+            top_level.insert(ident, root.clone());
+            for parent in self.roots.values() {
+                packages.insert((parent.clone(), ident), root.clone());
+            }
+        }
+
+        if let Some(entry_package) = request.package_instances.get(request.entry.source_id())
+            && let Some(edges) = request.alias_edges.get(entry_package)
+        {
+            for (alias, target_package) in edges {
+                let root = staged_package_alias_root(
+                    self,
+                    &grants,
+                    &source_by_package,
+                    alias.as_str(),
+                    target_package,
+                )?;
+                top_level.insert(Ident::new(alias.as_str()), root);
+            }
+        }
+
+        for (parent_source, parent_root) in &self.roots {
+            let Some(package) = request.package_instances.get(parent_source) else {
                 continue;
             };
-            if grant.entry.logical_path() != "main.ncl" {
-                return Err(TrustedStagedEvaluationError::AliasEntry {
-                    alias: alias.to_string(),
-                    entry: grant.entry.logical_path().to_owned(),
-                });
+            let Some(edges) = request.alias_edges.get(package) else {
+                continue;
+            };
+            for (alias, target_package) in edges {
+                let root = staged_package_alias_root(
+                    self,
+                    &grants,
+                    &source_by_package,
+                    alias.as_str(),
+                    target_package,
+                )?;
+                packages.insert((parent_root.clone(), Ident::new(alias.as_str())), root);
             }
-            let root = self.roots.get(&grant.source_id).ok_or_else(|| {
-                TrustedStagedEvaluationError::SnapshotSet {
-                    details: format!("alias `{alias}` has no staged root"),
-                }
-            })?;
-            aliases.push((Ident::new(alias.as_str()), root.clone()));
         }
-        aliases.sort_by_key(|entry| entry.0);
 
-        let top_level = aliases.iter().cloned().collect();
-        let mut packages = std::collections::HashMap::new();
-        for parent in self.roots.values() {
-            for (alias, target) in &aliases {
-                packages.insert((parent.clone(), *alias), target.clone());
-            }
-        }
         Ok(PackageMap {
             top_level,
             packages,
         })
     }
+}
+
+fn staged_package_alias_root(
+    tree: &StagedSourceTree,
+    grants: &BTreeMap<&SourceId, &SourceRootGrant>,
+    source_by_package: &BTreeMap<PackageName, SourceId>,
+    alias: &str,
+    target_package: &PackageName,
+) -> Result<PathBuf, TrustedStagedEvaluationError> {
+    let target_source = source_by_package.get(target_package).ok_or_else(|| {
+        TrustedStagedEvaluationError::SnapshotSet {
+            details: format!("alias `{alias}` targets unlocked package `{target_package}`"),
+        }
+    })?;
+    let grant = grants.get(target_source).copied().ok_or_else(|| {
+        TrustedStagedEvaluationError::SnapshotSet {
+            details: format!("alias `{alias}` has no grant for `{target_package}`"),
+        }
+    })?;
+    staged_alias_root(tree, grant, alias)
+}
+
+fn staged_alias_root(
+    tree: &StagedSourceTree,
+    grant: &SourceRootGrant,
+    alias: &str,
+) -> Result<PathBuf, TrustedStagedEvaluationError> {
+    if grant.entry.logical_path() != "main.ncl" {
+        return Err(TrustedStagedEvaluationError::AliasEntry {
+            alias: alias.to_owned(),
+            entry: grant.entry.logical_path().to_owned(),
+        });
+    }
+    tree.roots.get(&grant.source_id).cloned().ok_or_else(|| {
+        TrustedStagedEvaluationError::SnapshotSet {
+            details: format!("alias `{alias}` has no staged root"),
+        }
+    })
 }
 
 fn logical_destination(

@@ -55,7 +55,9 @@ impl ControlledEvaluation {
 /// request. It includes request revalidation and encoding, worker spawn and
 /// execution, response decoding, controller-side source-closure recomputation,
 /// typed receipt validation, and final canonical response encoding. Immutable
-/// source acquisition occurs before this boundary and is not counted.
+/// source acquisition and lock-scoped alias-edge binding occur before this
+/// boundary and are not counted. Production `r0@1` stays fail-closed until a
+/// source-table-only loader can consume those bytes and alias edges.
 ///
 /// # Errors
 ///

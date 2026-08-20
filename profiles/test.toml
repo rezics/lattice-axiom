@@ -1,0 +1,78 @@
+schema_version = 1
+projection = "headless-test"
+projection_domains = ["authoritative", "server"]
+evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1"
+realization_policy = ["data"]
+nickel_profile_entry = "profiles/test.ncl"
+
+[roots.terrenia]
+version = "=0.1.0"
+realization = { mode = "exact", kind = "data" }
+
+[roots."@latticeaxiom/settings"]
+version = "=0.1.0"
+realization = { mode = "exact", kind = "data" }
+
+[roots."@latticeaxiom/observability"]
+version = "=0.1.0"
+realization = { mode = "exact", kind = "data" }
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/settings"
+path = "packages/latticeaxiom/settings"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/settings-ui"
+path = "packages/latticeaxiom/settings-ui"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/observability"
+path = "packages/latticeaxiom/observability"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/inspect"
+path = "packages/latticeaxiom/inspect"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/dev-tools"
+path = "packages/latticeaxiom/dev-tools"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/front-end"
+path = "packages/latticeaxiom/front-end"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/world-library"
+path = "packages/latticeaxiom/world-library"
+
+[[sources]]
+kind = "path"
+package = "terrenia"
+path = "packages/terrenia/main"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/blocks"
+path = "packages/terrenia/blocks"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/worldgen"
+path = "packages/terrenia/worldgen"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/gameplay"
+path = "packages/terrenia/gameplay"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/presentation"
+path = "packages/terrenia/presentation"

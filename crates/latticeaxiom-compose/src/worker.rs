@@ -54,6 +54,8 @@ pub enum WorkerHandlerError {
 /// only an import-free entry under an explicit trusted-tool or trusted-fixture
 /// class and a non-R0 policy that truthfully reports the controller's hard
 /// monotonic deadline while leaving memory and recursion unsupported.
+/// Production `r0@1` stays fail-closed until a loader can consume snapshot
+/// bytes together with lock-scoped alias edges.
 ///
 /// The production `r0@1` policy always fails closed with
 /// `compose.worker_capability`: this pure handler does not install the
@@ -474,12 +476,15 @@ fn diagnostic_limit(evaluation: Option<&EvaluationPolicyReceipt>) -> usize {
 
 #[cfg(all(test, feature = "nickel-evaluator"))]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use latticeaxiom_core::{CanonicalHash, SourceId, SourceProvenance, StableId, TargetTriple};
+    use latticeaxiom_core::{
+        CanonicalHash, PackageName, SourceId, SourceProvenance, StableId, TargetTriple,
+    };
 
     use super::*;
     use crate::{
@@ -561,6 +566,61 @@ mod tests {
         );
         assert!(failure.source_closure.is_none());
         assert!(failure.evaluation.is_none());
+    }
+
+    #[test]
+    fn production_r0_stays_fail_closed_when_bytes_and_alias_edges_are_supplied() {
+        let fixture = fixture_request(TOOL_PACKAGE, AuthoringTarget::Package);
+        let mut request = fixture.request;
+        let package = PackageName::from_str("worker-tool")
+            .unwrap_or_else(|error| panic!("fixture package name is invalid: {error}"));
+        request.source_closure.package_instances.insert(
+            request.source_closure.entry.source_id().clone(),
+            package.clone(),
+        );
+        request
+            .source_closure
+            .alias_edges
+            .insert(package, BTreeMap::new());
+        request.expected_policy = production_policy();
+        request.source_closure.limits = request.expected_policy.limits;
+
+        let response = handle_worker_request(request)
+            .unwrap_or_else(|error| panic!("worker response construction failed: {error}"));
+        let WorkerResponse::Failure { failure, .. } = response else {
+            panic!("production R0 evaluated after bytes and alias edges were supplied");
+        };
+        assert_eq!(
+            failure.diagnostics[0].code.as_str(),
+            "compose.worker_capability"
+        );
+        assert!(failure.source_closure.is_none());
+        assert!(failure.evaluation.is_none());
+    }
+
+    #[test]
+    fn package_alias_without_lock_edges_fails_before_evaluation() {
+        let fixture = fixture_request("import blocks", AuthoringTarget::Package);
+        let response = handle_worker_request(fixture.request)
+            .unwrap_or_else(|error| panic!("worker response construction failed: {error}"));
+        let WorkerResponse::Failure { failure, .. } = response else {
+            panic!("missing lock alias reached evaluation");
+        };
+        assert_eq!(
+            failure.diagnostics[0].code.as_str(),
+            "compose.import_denied"
+        );
+        assert!(
+            failure.diagnostics[0]
+                .notes
+                .iter()
+                .any(|note| note.contains("pkg://")),
+            "missing alias must fail closed with a pkg:// span"
+        );
+        assert!(
+            failure.source_closure.is_none(),
+            "missing lock alias must fail during source-closure preflight"
+        );
     }
 
     #[test]
@@ -701,6 +761,8 @@ mod tests {
                     entry,
                     package_alias: None,
                 }],
+                package_instances: std::collections::BTreeMap::new(),
+                alias_edges: std::collections::BTreeMap::new(),
                 limits: policy.limits,
             },
             snapshots: vec![snapshot],

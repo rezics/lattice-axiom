@@ -454,10 +454,12 @@ impl CanonicalSourceTable {
 
     /// Resolves a root-relative path against this complete source table.
     ///
-    /// The supplied path is normalized to NFC after rejecting absolute paths,
-    /// backslashes, Windows drive prefixes, empty segments, and any `..` that
-    /// would escape the root. `.` segments are removed and in-root `..`
-    /// segments are resolved before lookup.
+    /// Quoted Nickel relative imports stay inside this CAS source table; they
+    /// never consult the ambient filesystem. The supplied path is normalized
+    /// to NFC after rejecting absolute paths, backslashes, Windows drive
+    /// prefixes, empty segments, and any `..` that would escape the root.
+    /// `.` segments are removed and in-root `..` segments are resolved before
+    /// lookup.
     ///
     /// # Errors
     ///

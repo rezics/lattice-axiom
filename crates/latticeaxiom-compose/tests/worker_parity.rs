@@ -2,6 +2,7 @@
 
 #![cfg(feature = "nickel-evaluator")]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -217,6 +218,8 @@ impl ParityFixture {
                     entry: self.entry.clone(),
                     package_alias: None,
                 }],
+                package_instances: BTreeMap::new(),
+                alias_edges: BTreeMap::new(),
                 limits,
             },
             snapshots: vec![self.snapshot.clone()],

@@ -3,6 +3,9 @@
 //! These DTOs are evaluated from Nickel and validated before any package code
 //! is loaded. They intentionally contain no Bevy or process-local types.
 
+mod bootstrap;
+#[cfg(feature = "nickel-evaluator")]
+mod cli;
 mod composition;
 #[cfg(feature = "nickel-evaluator")]
 mod controller;
@@ -13,6 +16,7 @@ mod evaluator_protocol;
 mod graph;
 mod imports;
 mod observability;
+mod product_lock;
 mod registration;
 mod semantic;
 mod settings;
@@ -26,6 +30,9 @@ mod worker;
 mod worker_policy;
 mod world;
 
+pub use bootstrap::*;
+#[cfg(feature = "nickel-evaluator")]
+pub use cli::*;
 pub use composition::*;
 #[cfg(feature = "nickel-evaluator")]
 pub use controller::*;
@@ -36,6 +43,7 @@ pub use evaluator_protocol::*;
 pub use graph::*;
 pub use imports::*;
 pub use observability::*;
+pub use product_lock::*;
 pub use registration::*;
 pub use semantic::*;
 pub use settings::*;

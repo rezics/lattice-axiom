@@ -1558,6 +1558,8 @@ mod protocol_tests {
                         entry,
                         package_alias: None,
                     }],
+                    package_instances: BTreeMap::new(),
+                    alias_edges: BTreeMap::new(),
                     limits: policy.limits,
                 },
                 snapshots: vec![snapshot],

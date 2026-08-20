@@ -1,14 +1,16 @@
 //! Deterministic source-closure authorization and accounting.
 //!
 //! This module operates on an immutable source snapshot. It never consults the
-//! ambient filesystem. Static Nickel import extraction is feature-gated, while
-//! the authorization protocol and graph algorithm remain available without the
-//! evaluator feature.
+//! ambient filesystem. Bare Nickel aliases look up the current locked package
+//! instance's [`SourceClosureRequest::alias_edges`]; quoted relative imports
+//! stay inside that instance's CAS source table. Static Nickel import
+//! extraction is feature-gated, while the authorization protocol and graph
+//! algorithm remain available without the evaluator feature.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use latticeaxiom_core::{CanonicalHash, SourceId, canonical_json_bytes};
+use latticeaxiom_core::{CanonicalHash, PackageName, SourceId, canonical_json_bytes};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
@@ -68,10 +70,20 @@ impl SourceAddress {
         logical_path: impl Into<String>,
     ) -> Result<Self, SourceClosureError> {
         let logical_path = logical_path.into();
-        let canonical = canonical_snapshot_path(&logical_path)?;
+        let canonical = canonical_snapshot_path(&logical_path).map_err(|error| match error {
+            SourceClosureError::InvalidLogicalPath { value, reason, .. } => {
+                SourceClosureError::InvalidLogicalPath {
+                    value,
+                    span: package_span(None, &source_id, &logical_path),
+                    reason,
+                }
+            }
+            other => other,
+        })?;
         if canonical != logical_path {
             return Err(SourceClosureError::InvalidLogicalPath {
-                value: logical_path,
+                value: logical_path.clone(),
+                span: package_span(None, &source_id, &logical_path),
                 reason: "snapshot addresses must already be canonical",
             });
         }
@@ -93,11 +105,17 @@ impl SourceAddress {
     pub fn logical_path(&self) -> &str {
         &self.logical_path
     }
+
+    /// Returns a `pkg://` span for diagnostics that must not leak host paths.
+    #[must_use]
+    pub fn package_span(&self, package: Option<&PackageName>) -> String {
+        package_span(package, self.source_id(), self.logical_path())
+    }
 }
 
 impl fmt::Display for SourceAddress {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}#{}", self.source_id, self.logical_path)
+        formatter.write_str(&self.package_span(None))
     }
 }
 
@@ -202,7 +220,11 @@ pub struct SourceRootGrant {
     pub source_hash: CanonicalHash,
     /// Explicit logical entry used when this root is imported as a package.
     pub entry: SourceAddress,
-    /// Optional globally unique Nickel package name for this root.
+    /// Optional identity of a versioned-library root.
+    ///
+    /// This is not a grant-global package-import table. Bare Nickel aliases
+    /// resolve through [`SourceClosureRequest::alias_edges`] for the current
+    /// locked package instance.
     #[serde(default)]
     pub package_alias: Option<PackageAlias>,
 }
@@ -219,6 +241,19 @@ pub struct SourceClosureRequest {
     pub entry: SourceAddress,
     /// Complete root grants. Duplicate source IDs are rejected.
     pub root_grants: Vec<SourceRootGrant>,
+    /// Locked package instance for each granted package source root.
+    ///
+    /// Keys are granted source IDs from a reopened [`crate::LockV1`]. Roots
+    /// without a lock instance, such as the versioned library or a fixture,
+    /// are omitted. Duplicate package names are rejected.
+    #[serde(default)]
+    pub package_instances: BTreeMap<SourceId, PackageName>,
+    /// Package-local Nickel import alias edges from a reopened [`crate::LockV1`].
+    ///
+    /// Bare `import alias` looks up the current package instance's direct
+    /// dependency edge. This is not an ambient grant-global alias table.
+    #[serde(default)]
+    pub alias_edges: BTreeMap<PackageName, BTreeMap<PackageAlias, PackageName>>,
     /// Effective composition limits recorded in the lock.
     pub limits: NickelEvaluationLimits,
 }
@@ -233,7 +268,8 @@ impl SourceClosureRequest {
     ///
     /// Returns [`SourceClosureError`] for zero limits, malformed grants,
     /// duplicate roots or package aliases, a reserved library alias attached
-    /// to a non-library root, or an ungranted entry root.
+    /// to a non-library root, lock-scoped alias-table defects, or an
+    /// ungranted entry root.
     pub fn validate(&self) -> Result<(), SourceClosureError> {
         if self.library_contract_major != NICKEL_LIBRARY_CONTRACT_MAJOR {
             return Err(SourceClosureError::UnsupportedLibraryContractMajor {
@@ -252,7 +288,7 @@ impl SourceClosureRequest {
             .map_err(|error| SourceClosureError::InvalidEvaluationLimits {
                 details: error.to_string(),
             })?;
-        let grants = validate_grants(&self.root_grants)?;
+        let grants = validate_grants(self)?;
         ensure_root_granted(&grants.by_source, self.entry.source_id())
     }
 }
@@ -269,6 +305,10 @@ impl<'de> Deserialize<'de> for SourceClosureRequest {
             corpus_major: u32,
             entry: SourceAddress,
             root_grants: Vec<SourceRootGrant>,
+            #[serde(default)]
+            package_instances: BTreeMap<SourceId, PackageName>,
+            #[serde(default)]
+            alias_edges: BTreeMap<PackageName, BTreeMap<PackageAlias, PackageName>>,
             limits: NickelEvaluationLimits,
         }
 
@@ -278,6 +318,8 @@ impl<'de> Deserialize<'de> for SourceClosureRequest {
             corpus_major: fields.corpus_major,
             entry: fields.entry,
             root_grants: fields.root_grants,
+            package_instances: fields.package_instances,
+            alias_edges: fields.alias_edges,
             limits: fields.limits,
         };
         request.validate().map_err(de::Error::custom)?;
@@ -325,7 +367,7 @@ pub enum StaticSourceImport {
         /// Input format selected by Nickel syntax.
         format: SourceFormat,
     },
-    /// A package-local alias resolved only through an explicit root grant.
+    /// A package-local alias resolved from the current lock instance.
     Package {
         /// Symbolic package dependency name.
         alias: PackageAlias,
@@ -652,10 +694,12 @@ impl fmt::Display for SourceCycle {
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum SourceClosureError {
     /// A snapshot address or relative import path violated lexical policy.
-    #[error("invalid logical source path `{value}`: {reason}")]
+    #[error("invalid logical source path `{value}` at `{span}`: {reason}")]
     InvalidLogicalPath {
         /// Rejected logical path.
         value: String,
+        /// `pkg://` span of the importing or addressed source.
+        span: String,
         /// Violated lexical rule.
         reason: &'static str,
     },
@@ -707,10 +751,8 @@ pub enum SourceClosureError {
         /// Denied source-root identity.
         source_id: SourceId,
     },
-    /// Two granted roots declared the same globally unique package alias.
-    #[error(
-        "package alias `{alias}` is declared by both `{first_source_id}` and `{second_source_id}`"
-    )]
+    /// Two lock-scoped bindings claimed the same package alias.
+    #[error("package alias `{alias}` is declared by both `{first_span}` and `{second_span}`")]
     DuplicatePackageAlias {
         /// Duplicated package alias.
         alias: PackageAlias,
@@ -718,6 +760,24 @@ pub enum SourceClosureError {
         first_source_id: Box<SourceId>,
         /// Second source root in canonical source-ID order.
         second_source_id: Box<SourceId>,
+        /// `pkg://` span of the first binding.
+        first_span: String,
+        /// `pkg://` span of the second binding.
+        second_span: String,
+    },
+    /// Two granted roots claimed the same locked package instance.
+    #[error("package `{package}` is bound to both `{first_span}` and `{second_span}`")]
+    DuplicatePackageInstance {
+        /// Duplicated locked package name.
+        package: PackageName,
+        /// First source root in canonical source-ID order.
+        first_source_id: Box<SourceId>,
+        /// Second source root in canonical source-ID order.
+        second_source_id: Box<SourceId>,
+        /// `pkg://` span of the first instance.
+        first_span: String,
+        /// `pkg://` span of the second instance.
+        second_span: String,
     },
     /// The current Lattice library alias named a non-library root.
     #[error(
@@ -757,13 +817,23 @@ pub enum SourceClosureError {
         /// Shared canonical target.
         target: Box<SourceAddress>,
     },
-    /// An authored package import had no explicit alias binding.
-    #[error("package alias `{alias}` is not granted from source root `{source_id}`")]
+    /// An authored package import had no lock-scoped alias binding.
+    #[error("package alias `{alias}` is not granted from `{span}`")]
     PackageAliasNotGranted {
         /// Importing source-root identity.
         source_id: SourceId,
         /// Missing alias.
         alias: PackageAlias,
+        /// `pkg://` span of the importing source.
+        span: String,
+    },
+    /// A lock alias table named a package with no granted instance.
+    #[error("package `{package}` at `{span}` is not a locked package instance")]
+    PackageInstanceNotLocked {
+        /// Missing or extra lock package name.
+        package: PackageName,
+        /// `pkg://` span of the rejected table row.
+        span: String,
     },
     /// An authorized address was absent from the immutable snapshot.
     #[error("source `{address}` is absent from the immutable snapshot")]
@@ -933,10 +1003,12 @@ impl SourceClosureError {
             | Self::GrantEntryRootMismatch { .. }
             | Self::RootNotGranted { .. }
             | Self::DuplicatePackageAlias { .. }
+            | Self::DuplicatePackageInstance { .. }
             | Self::ReservedLibraryAliasWrongKind { .. }
             | Self::LibraryAliasMajorMismatch { .. }
             | Self::PackageAliasCollision { .. }
             | Self::PackageAliasNotGranted { .. }
+            | Self::PackageInstanceNotLocked { .. }
             | Self::SourceNotFound { .. }
             | Self::SnapshotRootMissing { .. }
             | Self::SnapshotSourceIdMismatch { .. }
@@ -963,10 +1035,16 @@ struct ResolvedImport {
 }
 
 #[derive(Debug)]
+#[cfg_attr(
+    not(any(test, feature = "nickel-evaluator")),
+    allow(dead_code, reason = "lock-scoped lookup runs with the Nickel scanner")
+)]
 struct ValidatedGrants<'a> {
     by_source: BTreeMap<SourceId, &'a SourceRootGrant>,
-    #[cfg(any(test, feature = "nickel-evaluator"))]
-    by_alias: BTreeMap<PackageAlias, &'a SourceRootGrant>,
+    instances_by_source: BTreeMap<SourceId, PackageName>,
+    source_by_package: BTreeMap<PackageName, SourceId>,
+    alias_edges: BTreeMap<PackageName, BTreeMap<PackageAlias, PackageName>>,
+    library: Option<&'a SourceRootGrant>,
 }
 
 #[cfg(any(test, feature = "nickel-evaluator"))]
@@ -1019,7 +1097,7 @@ where
     P: StaticImportScanner,
 {
     request.validate()?;
-    let grants = validate_grants(&request.root_grants)?;
+    let grants = validate_grants(request)?;
     validate_snapshot_authority(snapshot, &grants)?;
 
     let mut graph = ClosureGraph {
@@ -1182,11 +1260,11 @@ where
 }
 
 fn validate_grants(
-    root_grants: &[SourceRootGrant],
+    request: &SourceClosureRequest,
 ) -> Result<ValidatedGrants<'_>, SourceClosureError> {
     let mut by_source = BTreeMap::new();
-    let mut by_alias = BTreeMap::new();
-    let mut ordered_grants = root_grants.iter().collect::<Vec<_>>();
+    let mut library: Option<&SourceRootGrant> = None;
+    let mut ordered_grants = request.root_grants.iter().collect::<Vec<_>>();
     ordered_grants.sort_by(|left, right| left.source_id.cmp(&right.source_id));
     for grant in ordered_grants {
         validate_grant(grant)?;
@@ -1195,22 +1273,151 @@ fn validate_grants(
                 source_id: grant.source_id.clone(),
             });
         }
-        if let Some(alias) = &grant.package_alias
-            && let Some(first) = by_alias.insert(alias.clone(), grant)
-        {
-            return Err(SourceClosureError::DuplicatePackageAlias {
-                alias: alias.clone(),
-                first_source_id: Box::new(first.source_id.clone()),
-                second_source_id: Box::new(grant.source_id.clone()),
-            });
+        if grant.root_kind == AuthorizedRootKind::Library {
+            if let Some(first) = library {
+                let alias = library_package_alias()?;
+                return Err(SourceClosureError::DuplicatePackageAlias {
+                    alias,
+                    first_source_id: Box::new(first.source_id.clone()),
+                    second_source_id: Box::new(grant.source_id.clone()),
+                    first_span: first.entry.package_span(None),
+                    second_span: grant.entry.package_span(None),
+                });
+            }
+            library = Some(grant);
         }
     }
 
+    let mut instances_by_source = BTreeMap::new();
+    let mut source_by_package = BTreeMap::new();
+    validate_package_instances(
+        &by_source,
+        &request.package_instances,
+        &mut instances_by_source,
+        &mut source_by_package,
+    )?;
+    let alias_edges = validate_alias_edges(
+        &by_source,
+        &source_by_package,
+        library,
+        &request.alias_edges,
+    )?;
+
     Ok(ValidatedGrants {
         by_source,
-        #[cfg(any(test, feature = "nickel-evaluator"))]
-        by_alias,
+        instances_by_source,
+        source_by_package,
+        alias_edges,
+        library,
     })
+}
+
+fn library_package_alias() -> Result<PackageAlias, SourceClosureError> {
+    PackageAlias::new(R0_LIBRARY_PACKAGE_ALIAS).map_err(|_| {
+        SourceClosureError::InvalidPackageAlias {
+            value: R0_LIBRARY_PACKAGE_ALIAS.to_owned(),
+        }
+    })
+}
+
+fn validate_package_instances(
+    by_source: &BTreeMap<SourceId, &SourceRootGrant>,
+    package_instances: &BTreeMap<SourceId, PackageName>,
+    instances_by_source: &mut BTreeMap<SourceId, PackageName>,
+    source_by_package: &mut BTreeMap<PackageName, SourceId>,
+) -> Result<(), SourceClosureError> {
+    for (source_id, package) in package_instances {
+        let grant = by_source.get(source_id).copied().ok_or_else(|| {
+            SourceClosureError::RootNotGranted {
+                source_id: source_id.clone(),
+            }
+        })?;
+        if grant.root_kind == AuthorizedRootKind::Library {
+            return Err(SourceClosureError::PackageInstanceNotLocked {
+                package: package.clone(),
+                span: grant.entry.package_span(Some(package)),
+            });
+        }
+        if let Some(first_source_id) = source_by_package.insert(package.clone(), source_id.clone())
+        {
+            let first_grant = by_source.get(&first_source_id).copied().ok_or_else(|| {
+                SourceClosureError::RootNotGranted {
+                    source_id: first_source_id.clone(),
+                }
+            })?;
+            return Err(SourceClosureError::DuplicatePackageInstance {
+                package: package.clone(),
+                first_source_id: Box::new(first_source_id),
+                second_source_id: Box::new(source_id.clone()),
+                first_span: first_grant.entry.package_span(Some(package)),
+                second_span: grant.entry.package_span(Some(package)),
+            });
+        }
+        instances_by_source.insert(source_id.clone(), package.clone());
+    }
+    Ok(())
+}
+
+fn validate_alias_edges(
+    by_source: &BTreeMap<SourceId, &SourceRootGrant>,
+    source_by_package: &BTreeMap<PackageName, SourceId>,
+    library: Option<&SourceRootGrant>,
+    alias_edges: &BTreeMap<PackageName, BTreeMap<PackageAlias, PackageName>>,
+) -> Result<BTreeMap<PackageName, BTreeMap<PackageAlias, PackageName>>, SourceClosureError> {
+    let library_alias = library_package_alias()?;
+    let mut validated = BTreeMap::new();
+    for (importer, aliases) in alias_edges {
+        let Some(importer_source) = source_by_package.get(importer) else {
+            return Err(SourceClosureError::PackageInstanceNotLocked {
+                package: importer.clone(),
+                span: format!("pkg://{importer}/"),
+            });
+        };
+        let importer_grant = by_source.get(importer_source).copied().ok_or_else(|| {
+            SourceClosureError::RootNotGranted {
+                source_id: importer_source.clone(),
+            }
+        })?;
+        let mut importer_edges = BTreeMap::new();
+        for (alias, target) in aliases {
+            if alias == &library_alias {
+                let library_grant =
+                    library.ok_or_else(|| SourceClosureError::PackageAliasNotGranted {
+                        source_id: importer_source.clone(),
+                        alias: alias.clone(),
+                        span: importer_grant.entry.package_span(Some(importer)),
+                    })?;
+                return Err(SourceClosureError::DuplicatePackageAlias {
+                    alias: alias.clone(),
+                    first_source_id: Box::new(library_grant.source_id.clone()),
+                    second_source_id: Box::new(importer_source.clone()),
+                    first_span: library_grant.entry.package_span(None),
+                    second_span: importer_grant.entry.package_span(Some(importer)),
+                });
+            }
+            let Some(target_source) = source_by_package.get(target) else {
+                return Err(SourceClosureError::PackageInstanceNotLocked {
+                    package: target.clone(),
+                    span: format!("pkg://{target}/"),
+                });
+            };
+            ensure_root_granted(by_source, target_source)?;
+            if importer_edges
+                .insert(alias.clone(), target.clone())
+                .is_some()
+            {
+                return Err(SourceClosureError::DuplicatePackageAlias {
+                    alias: alias.clone(),
+                    first_source_id: Box::new(importer_source.clone()),
+                    second_source_id: Box::new(importer_source.clone()),
+                    first_span: importer_grant.entry.package_span(Some(importer)),
+                    second_span: importer_grant.entry.package_span(Some(importer)),
+                });
+            }
+        }
+        validated.insert(importer.clone(), importer_edges);
+    }
+    Ok(validated)
 }
 
 fn validate_grant(grant: &SourceRootGrant) -> Result<(), SourceClosureError> {
@@ -1432,17 +1639,12 @@ fn resolve_imports(
             StaticSourceImport::Relative { path, format } => ResolvedImport {
                 target: SourceAddress {
                     source_id: parent.source_id().clone(),
-                    logical_path: resolve_relative_path(parent.logical_path(), path)?,
+                    logical_path: resolve_relative_path(grants, parent, path)?,
                 },
                 format: *format,
             },
             StaticSourceImport::Package { alias } => {
-                let target_grant = grants.by_alias.get(alias).copied().ok_or_else(|| {
-                    SourceClosureError::PackageAliasNotGranted {
-                        source_id: parent.source_id().clone(),
-                        alias: alias.clone(),
-                    }
-                })?;
+                let target_grant = resolve_package_alias(grants, parent, alias)?;
                 ResolvedImport {
                     target: target_grant.entry.clone(),
                     format: SourceFormat::Nickel,
@@ -1455,64 +1657,136 @@ fn resolve_imports(
     Ok(resolved.into_values().map(|(target, _)| target).collect())
 }
 
+#[cfg(any(test, feature = "nickel-evaluator"))]
+fn resolve_package_alias<'a>(
+    grants: &ValidatedGrants<'a>,
+    parent: &SourceAddress,
+    alias: &PackageAlias,
+) -> Result<&'a SourceRootGrant, SourceClosureError> {
+    let current_package = grants.instances_by_source.get(parent.source_id());
+    let span = parent.package_span(current_package);
+    if alias.as_str() == R0_LIBRARY_PACKAGE_ALIAS {
+        return grants
+            .library
+            .ok_or_else(|| SourceClosureError::PackageAliasNotGranted {
+                source_id: parent.source_id().clone(),
+                alias: alias.clone(),
+                span,
+            });
+    }
+    let Some(package) = current_package else {
+        return Err(SourceClosureError::PackageAliasNotGranted {
+            source_id: parent.source_id().clone(),
+            alias: alias.clone(),
+            span,
+        });
+    };
+    let Some(target_name) = grants
+        .alias_edges
+        .get(package)
+        .and_then(|edges| edges.get(alias))
+    else {
+        return Err(SourceClosureError::PackageAliasNotGranted {
+            source_id: parent.source_id().clone(),
+            alias: alias.clone(),
+            span,
+        });
+    };
+    let Some(target_source) = grants.source_by_package.get(target_name) else {
+        return Err(SourceClosureError::PackageInstanceNotLocked {
+            package: target_name.clone(),
+            span: format!("pkg://{target_name}/"),
+        });
+    };
+    grants
+        .by_source
+        .get(target_source)
+        .copied()
+        .ok_or_else(|| SourceClosureError::RootNotGranted {
+            source_id: target_source.clone(),
+        })
+}
+
+fn package_span(package: Option<&PackageName>, source_id: &SourceId, logical_path: &str) -> String {
+    match package {
+        Some(package) => format!("pkg://{package}/{logical_path}"),
+        None => format!("pkg://{source_id}/{logical_path}"),
+    }
+}
+
 fn canonical_snapshot_path(path: &str) -> Result<String, SourceClosureError> {
-    validate_relative_path_prefix(path)?;
+    validate_relative_path_prefix(path, path)?;
     let mut segments = Vec::new();
     for segment in path.split('/') {
         if segment.is_empty() {
-            return Err(SourceClosureError::InvalidLogicalPath {
-                value: path.to_owned(),
-                reason: "path segments cannot be empty",
-            });
+            return Err(invalid_logical_path(
+                path,
+                path,
+                "path segments cannot be empty",
+            ));
         }
         match segment {
             "." => {}
             ".." => {
                 if segments.pop().is_none() {
-                    return Err(SourceClosureError::InvalidLogicalPath {
-                        value: path.to_owned(),
-                        reason: "the path escapes its source root",
-                    });
+                    return Err(invalid_logical_path(
+                        path,
+                        path,
+                        "the path escapes its source root",
+                    ));
                 }
             }
             value => segments.push(value.to_owned()),
         }
     }
     if segments.is_empty() {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: path.to_owned(),
-            reason: "the path must name a source file",
-        });
+        return Err(invalid_logical_path(
+            path,
+            path,
+            "the path must name a source file",
+        ));
     }
     Ok(segments.join("/"))
 }
 
 #[cfg(any(test, feature = "nickel-evaluator"))]
-fn resolve_relative_path(parent: &str, import: &str) -> Result<String, SourceClosureError> {
-    validate_relative_path_prefix(import)?;
-    let mut segments = parent.split('/').map(str::to_owned).collect::<Vec<_>>();
+fn resolve_relative_path(
+    grants: &ValidatedGrants<'_>,
+    parent: &SourceAddress,
+    import: &str,
+) -> Result<String, SourceClosureError> {
+    let span = parent.package_span(grants.instances_by_source.get(parent.source_id()));
+    validate_relative_path_prefix(import, &span)?;
+    let mut segments = parent
+        .logical_path()
+        .split('/')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     if segments.pop().is_none() {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: parent.to_owned(),
-            reason: "the importing source path has no file segment",
-        });
+        return Err(invalid_logical_path(
+            parent.logical_path(),
+            &span,
+            "the importing source path has no file segment",
+        ));
     }
 
     for segment in import.split('/') {
         if segment.is_empty() {
-            return Err(SourceClosureError::InvalidLogicalPath {
-                value: import.to_owned(),
-                reason: "path segments cannot be empty",
-            });
+            return Err(invalid_logical_path(
+                import,
+                &span,
+                "path segments cannot be empty",
+            ));
         }
         match segment {
             "." => {}
             ".." => {
                 if segments.pop().is_none() {
-                    return Err(SourceClosureError::InvalidLogicalPath {
-                        value: import.to_owned(),
-                        reason: "the import escapes its source root",
-                    });
+                    return Err(invalid_logical_path(
+                        import,
+                        &span,
+                        "the import escapes its source root",
+                    ));
                 }
             }
             value => segments.push(value.to_owned()),
@@ -1520,52 +1794,59 @@ fn resolve_relative_path(parent: &str, import: &str) -> Result<String, SourceClo
     }
 
     if segments.is_empty() {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: import.to_owned(),
-            reason: "the import must resolve to a source file",
-        });
+        return Err(invalid_logical_path(
+            import,
+            &span,
+            "the import must resolve to a source file",
+        ));
     }
     Ok(segments.join("/"))
 }
 
-fn validate_relative_path_prefix(path: &str) -> Result<(), SourceClosureError> {
+fn validate_relative_path_prefix(path: &str, span: &str) -> Result<(), SourceClosureError> {
     if path.is_empty() {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: path.to_owned(),
-            reason: "the path cannot be empty",
-        });
+        return Err(invalid_logical_path(path, span, "the path cannot be empty"));
     }
     if path.starts_with('/') {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: path.to_owned(),
-            reason: "absolute paths are denied",
-        });
+        return Err(invalid_logical_path(
+            path,
+            span,
+            "absolute paths are denied",
+        ));
     }
     if path.as_bytes().get(1) == Some(&b':') {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: path.to_owned(),
-            reason: "drive-prefixed paths are denied",
-        });
+        return Err(invalid_logical_path(
+            path,
+            span,
+            "drive-prefixed paths are denied",
+        ));
     }
     if path.contains('\\') {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: path.to_owned(),
-            reason: "backslash separators are denied",
-        });
+        return Err(invalid_logical_path(
+            path,
+            span,
+            "backslash separators are denied",
+        ));
     }
     if path.contains('\0') {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: path.to_owned(),
-            reason: "NUL is denied",
-        });
+        return Err(invalid_logical_path(path, span, "NUL is denied"));
     }
     if !path.nfc().eq(path.chars()) {
-        return Err(SourceClosureError::InvalidLogicalPath {
-            value: path.to_owned(),
-            reason: "logical paths must already be NFC",
-        });
+        return Err(invalid_logical_path(
+            path,
+            span,
+            "logical paths must already be NFC",
+        ));
     }
     Ok(())
+}
+
+fn invalid_logical_path(value: &str, span: &str, reason: &'static str) -> SourceClosureError {
+    SourceClosureError::InvalidLogicalPath {
+        value: value.to_owned(),
+        span: span.to_owned(),
+        reason,
+    }
 }
 
 #[allow(
@@ -2043,13 +2324,30 @@ mod tests {
         grants: Vec<SourceRootGrant>,
         limits: NickelEvaluationLimits,
     ) -> SourceClosureRequest {
+        request_with_lock(entry, grants, BTreeMap::new(), BTreeMap::new(), limits)
+    }
+
+    fn request_with_lock(
+        entry: SourceAddress,
+        grants: Vec<SourceRootGrant>,
+        package_instances: BTreeMap<SourceId, PackageName>,
+        alias_edges: BTreeMap<PackageName, BTreeMap<PackageAlias, PackageName>>,
+        limits: NickelEvaluationLimits,
+    ) -> SourceClosureRequest {
         SourceClosureRequest {
             library_contract_major: NICKEL_LIBRARY_CONTRACT_MAJOR,
             corpus_major: R0_AUTHORING_CORPUS_MAJOR,
             entry,
             root_grants: grants,
+            package_instances,
+            alias_edges,
             limits,
         }
+    }
+
+    fn package_name(value: &str) -> PackageName {
+        PackageName::from_str(value)
+            .unwrap_or_else(|error| panic!("fixture package name is invalid: {error}"))
     }
 
     fn one_root_grant(source_id: &SourceId) -> SourceRootGrant {
@@ -2346,6 +2644,8 @@ mod tests {
     fn relative_paths_stay_within_root_and_package_aliases_are_explicit() {
         let root = source_id("latticeaxiom:source/root");
         let dependency = source_id("latticeaxiom:source/dependency");
+        let importer = package_name("terrenia");
+        let dependency_name = package_name("@terrenia/blocks");
         let entry = address(&root, "nested/main.ncl");
         let sibling = address(&root, "sibling.ncl");
         let dependency_entry = address(&dependency, "package/entry.ncl");
@@ -2378,14 +2678,25 @@ mod tests {
                 root_kind: AuthorizedRootKind::Test,
                 source_hash: fixture_source_hash(&dependency),
                 entry: dependency_entry.clone(),
-                package_alias: Some(alias),
+                package_alias: None,
             },
         ];
+        let package_instances = BTreeMap::from([
+            (root.clone(), importer.clone()),
+            (dependency.clone(), dependency_name.clone()),
+        ]);
+        let alias_edges = BTreeMap::from([(importer, BTreeMap::from([(alias, dependency_name)]))]);
 
         let receipt = resolve(
             &snapshot,
             &mut scanner,
-            &request(entry, grants, NickelEvaluationLimits::default()),
+            &request_with_lock(
+                entry,
+                grants,
+                package_instances,
+                alias_edges,
+                NickelEvaluationLimits::default(),
+            ),
         )
         .unwrap_or_else(|error| panic!("authorized aliases were rejected: {error}"));
         assert_eq!(receipt.imported_files, 3);
@@ -2415,11 +2726,21 @@ mod tests {
             path_error,
             SourceClosureError::InvalidLogicalPath { .. }
         ));
+        let path_text = path_error.to_string();
+        assert!(
+            path_text.contains("pkg://latticeaxiom:source/root/main.ncl"),
+            "root escape must carry a pkg:// span, got {path_text}"
+        );
 
         let alias = PackageAlias::new("missing")
             .unwrap_or_else(|error| panic!("fixture alias is invalid: {error}"));
         let mut missing_alias = FixtureScanner::default();
-        missing_alias.add(entry, vec![StaticSourceImport::Package { alias }]);
+        missing_alias.add(
+            entry,
+            vec![StaticSourceImport::Package {
+                alias: alias.clone(),
+            }],
+        );
         let alias_error = resolve(&snapshot, &mut missing_alias, &closure_request)
             .err()
             .unwrap_or_else(|| panic!("missing alias unexpectedly passed"));
@@ -2427,6 +2748,11 @@ mod tests {
             alias_error,
             SourceClosureError::PackageAliasNotGranted { .. }
         ));
+        let alias_text = alias_error.to_string();
+        assert!(
+            alias_text.contains("pkg://latticeaxiom:source/root/main.ncl"),
+            "missing alias must carry a pkg:// span, got {alias_text}"
+        );
     }
 
     #[test]
@@ -2489,12 +2815,12 @@ mod tests {
             SourceClosureError::GrantEntryRootMismatch { .. }
         ));
 
-        let alias = PackageAlias::new("shared")
-            .unwrap_or_else(|error| panic!("fixture alias is invalid: {error}"));
+        let package = package_name("terrenia");
+        snapshot.add(address(&dependency, "custom-entry.ncl"), b"y");
         let collision = resolve(
             &snapshot,
             &mut scanner,
-            &request(
+            &request_with_lock(
                 entry.clone(),
                 vec![
                     SourceRootGrant {
@@ -2502,29 +2828,39 @@ mod tests {
                         root_kind: AuthorizedRootKind::Test,
                         source_hash: fixture_source_hash(&root),
                         entry,
-                        package_alias: Some(alias.clone()),
+                        package_alias: None,
                     },
                     SourceRootGrant {
                         source_id: dependency.clone(),
                         root_kind: AuthorizedRootKind::Test,
                         source_hash: fixture_source_hash(&dependency),
                         entry: address(&dependency, "custom-entry.ncl"),
-                        package_alias: Some(alias.clone()),
+                        package_alias: None,
                     },
                 ],
+                BTreeMap::from([
+                    (root.clone(), package.clone()),
+                    (dependency.clone(), package.clone()),
+                ]),
+                BTreeMap::new(),
                 NickelEvaluationLimits::default(),
             ),
         )
         .err()
-        .unwrap_or_else(|| panic!("package alias collision unexpectedly passed"));
+        .unwrap_or_else(|| panic!("duplicate package instance unexpectedly passed"));
         assert_eq!(
             collision,
-            SourceClosureError::DuplicatePackageAlias {
-                alias,
-                first_source_id: Box::new(dependency),
-                second_source_id: Box::new(root),
+            SourceClosureError::DuplicatePackageInstance {
+                package,
+                first_source_id: Box::new(dependency.clone()),
+                second_source_id: Box::new(root.clone()),
+                first_span: address(&dependency, "custom-entry.ncl")
+                    .package_span(Some(&package_name("terrenia"))),
+                second_span: address(&root, "main.ncl")
+                    .package_span(Some(&package_name("terrenia"))),
             }
         );
+        assert!(collision.to_string().contains("pkg://terrenia/"));
     }
 
     #[test]
@@ -2578,12 +2914,22 @@ mod tests {
             root_kind: AuthorizedRootKind::Test,
             source_hash: fixture_source_hash(&root),
             entry: address(&root, "nested/entry.ncl"),
-            package_alias: Some(alias),
+            package_alias: None,
         };
+        let importer = package_name("self-root");
         let origin_error = resolve(
             &snapshot,
             &mut origin_scanner,
-            &request(nested_entry, vec![grant], NickelEvaluationLimits::default()),
+            &request_with_lock(
+                nested_entry,
+                vec![grant],
+                BTreeMap::from([(root, importer.clone())]),
+                BTreeMap::from([(
+                    importer,
+                    BTreeMap::from([(alias, package_name("self-root"))]),
+                )]),
+                NickelEvaluationLimits::default(),
+            ),
         )
         .err()
         .unwrap_or_else(|| panic!("relative/package origin collision unexpectedly deduplicated"));
@@ -2597,31 +2943,40 @@ mod tests {
     fn request_validation_is_order_independent_and_binds_snapshot_authority() {
         let first = source_id("latticeaxiom:source/a");
         let second = source_id("latticeaxiom:source/b");
-        let alias = PackageAlias::new("shared")
-            .unwrap_or_else(|error| panic!("fixture alias is invalid: {error}"));
+        let package = package_name("shared-root");
         let grant = |source_id: &SourceId| SourceRootGrant {
             source_id: source_id.clone(),
             root_kind: AuthorizedRootKind::Test,
             source_hash: fixture_source_hash(source_id),
             entry: address(source_id, "main.ncl"),
-            package_alias: Some(alias.clone()),
+            package_alias: None,
         };
-        let forward = request(
+        let instances = |left: &SourceId, right: &SourceId| {
+            BTreeMap::from([
+                (left.clone(), package.clone()),
+                (right.clone(), package.clone()),
+            ])
+        };
+        let forward = request_with_lock(
             address(&first, "main.ncl"),
             vec![grant(&first), grant(&second)],
+            instances(&first, &second),
+            BTreeMap::new(),
             NickelEvaluationLimits::default(),
         )
         .validate()
         .err()
-        .unwrap_or_else(|| panic!("duplicate alias unexpectedly passed"));
-        let reverse = request(
+        .unwrap_or_else(|| panic!("duplicate package instance unexpectedly passed"));
+        let reverse = request_with_lock(
             address(&first, "main.ncl"),
             vec![grant(&second), grant(&first)],
+            instances(&second, &first),
+            BTreeMap::new(),
             NickelEvaluationLimits::default(),
         )
         .validate()
         .err()
-        .unwrap_or_else(|| panic!("reordered duplicate alias unexpectedly passed"));
+        .unwrap_or_else(|| panic!("reordered duplicate package instance unexpectedly passed"));
         assert_eq!(forward, reverse);
 
         let root = source_id("latticeaxiom:source/root");
@@ -2891,6 +3246,281 @@ mod tests {
             omitted.verify_against_request_and_snapshot(&closure_request, &snapshot),
             Err(SourceClosureError::ClosureReceiptMismatch)
         );
+    }
+
+    #[test]
+    fn lock_scoped_alias_lookup_uses_current_package_before_evaluation() {
+        let importer_source = source_id("latticeaxiom:source/importer");
+        let blocks_source = source_id("latticeaxiom:source/blocks");
+        let other_source = source_id("latticeaxiom:source/other");
+        let importer = package_name("terrenia");
+        let blocks = package_name("@terrenia/blocks");
+        let other = package_name("@terrenia/other");
+        let alias = PackageAlias::new("blocks")
+            .unwrap_or_else(|error| panic!("fixture alias is invalid: {error}"));
+        let entry = address(&importer_source, "package.ncl");
+        let blocks_entry = address(&blocks_source, "package.ncl");
+        let other_entry = address(&other_source, "package.ncl");
+        let mut snapshot = FixtureSnapshot::default();
+        snapshot.add(entry.clone(), b"import blocks");
+        snapshot.add(blocks_entry.clone(), b"blocks");
+        snapshot.add(other_entry.clone(), b"other");
+        let mut scanner = FixtureScanner::default();
+        scanner.add(
+            entry.clone(),
+            vec![StaticSourceImport::Package {
+                alias: alias.clone(),
+            }],
+        );
+        let grants = vec![
+            one_root_grant(&importer_source),
+            SourceRootGrant {
+                source_id: blocks_source.clone(),
+                root_kind: AuthorizedRootKind::Test,
+                source_hash: fixture_source_hash(&blocks_source),
+                entry: blocks_entry.clone(),
+                package_alias: None,
+            },
+            SourceRootGrant {
+                source_id: other_source.clone(),
+                root_kind: AuthorizedRootKind::Test,
+                source_hash: fixture_source_hash(&other_source),
+                entry: other_entry,
+                package_alias: None,
+            },
+        ];
+        let package_instances = BTreeMap::from([
+            (importer_source.clone(), importer.clone()),
+            (blocks_source.clone(), blocks.clone()),
+            (other_source, other.clone()),
+        ]);
+        let alias_edges = BTreeMap::from([
+            (
+                importer.clone(),
+                BTreeMap::from([(alias.clone(), blocks.clone())]),
+            ),
+            (other, BTreeMap::from([(alias.clone(), blocks)])),
+        ]);
+
+        let receipt = resolve(
+            &snapshot,
+            &mut scanner,
+            &request_with_lock(
+                entry,
+                grants,
+                package_instances,
+                alias_edges,
+                NickelEvaluationLimits::default(),
+            ),
+        )
+        .unwrap_or_else(|error| {
+            panic!("lock-scoped alias lookup failed before evaluation: {error}")
+        });
+        assert_eq!(receipt.imported_files, 2);
+        assert!(
+            receipt
+                .sources
+                .iter()
+                .any(|source| source.address == blocks_entry),
+            "bare alias must resolve through the current package's lock edge"
+        );
+        assert!(receipt.edges.iter().any(|edge| {
+            edge.parent.source_id() == &importer_source && edge.target == blocks_entry
+        }));
+    }
+
+    #[test]
+    fn bare_alias_is_denied_when_only_another_package_declares_it() {
+        let importer_source = source_id("latticeaxiom:source/importer");
+        let neighbor_source = source_id("latticeaxiom:source/neighbor");
+        let blocks_source = source_id("latticeaxiom:source/blocks");
+        let importer = package_name("terrenia");
+        let neighbor = package_name("@terrenia/gameplay");
+        let blocks = package_name("@terrenia/blocks");
+        let alias = PackageAlias::new("blocks")
+            .unwrap_or_else(|error| panic!("fixture alias is invalid: {error}"));
+        let entry = address(&importer_source, "package.ncl");
+        let mut snapshot = FixtureSnapshot::default();
+        snapshot.add(entry.clone(), b"import blocks");
+        snapshot.add(address(&neighbor_source, "main.ncl"), b"neighbor");
+        snapshot.add(address(&blocks_source, "main.ncl"), b"blocks");
+        let mut scanner = FixtureScanner::default();
+        scanner.add(
+            entry.clone(),
+            vec![StaticSourceImport::Package {
+                alias: alias.clone(),
+            }],
+        );
+        let error = resolve(
+            &snapshot,
+            &mut scanner,
+            &request_with_lock(
+                entry,
+                vec![
+                    one_root_grant(&importer_source),
+                    one_root_grant(&neighbor_source),
+                    one_root_grant(&blocks_source),
+                ],
+                BTreeMap::from([
+                    (importer_source.clone(), importer),
+                    (neighbor_source, neighbor.clone()),
+                    (blocks_source, blocks.clone()),
+                ]),
+                BTreeMap::from([(neighbor, BTreeMap::from([(alias, blocks)]))]),
+                NickelEvaluationLimits::default(),
+            ),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("foreign package alias unexpectedly resolved"));
+        assert!(matches!(
+            error,
+            SourceClosureError::PackageAliasNotGranted { .. }
+        ));
+        assert!(error.to_string().contains("pkg://terrenia/package.ncl"));
+        assert_eq!(error.code(), "compose.import_denied");
+    }
+
+    #[test]
+    fn quoted_relative_import_stays_inside_the_current_source_table() {
+        let root = source_id("latticeaxiom:source/root");
+        let other = source_id("latticeaxiom:source/other");
+        let entry = address(&root, "nested/main.ncl");
+        let sibling = address(&root, "nested/child.ncl");
+        let mut snapshot = FixtureSnapshot::default();
+        snapshot.add(entry.clone(), b"import \"child.ncl\"");
+        snapshot.add(sibling.clone(), b"child");
+        snapshot.add(address(&other, "child.ncl"), b"foreign");
+        let mut scanner = FixtureScanner::default();
+        scanner.add(entry.clone(), vec![relative("child.ncl")]);
+        let receipt = resolve(
+            &snapshot,
+            &mut scanner,
+            &request_with_lock(
+                entry,
+                vec![one_root_grant(&root), one_root_grant(&other)],
+                BTreeMap::from([
+                    (root.clone(), package_name("terrenia")),
+                    (other, package_name("@terrenia/blocks")),
+                ]),
+                BTreeMap::new(),
+                NickelEvaluationLimits::default(),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("in-root relative import was rejected: {error}"));
+        assert_eq!(receipt.imported_files, 2);
+        assert!(
+            receipt
+                .sources
+                .iter()
+                .all(|source| source.address.source_id() == &root)
+        );
+        assert!(
+            receipt
+                .sources
+                .iter()
+                .any(|source| source.address == sibling)
+        );
+    }
+
+    #[test]
+    fn missing_duplicate_alias_and_root_escape_fail_closed_with_pkg_spans() {
+        let root = source_id("latticeaxiom:source/root");
+        let library = source_id("latticeaxiom:source/library");
+        let importer = package_name("terrenia");
+        let entry = address(&root, "nested/main.ncl");
+        let mut snapshot = FixtureSnapshot::default();
+        snapshot.add(entry.clone(), b"x");
+        snapshot.add(address(&library, "main.ncl"), b"lib");
+
+        let mut escaping = FixtureScanner::default();
+        escaping.add(entry.clone(), vec![relative("../../outside.ncl")]);
+        let escape = resolve(
+            &snapshot,
+            &mut escaping,
+            &request_with_lock(
+                entry.clone(),
+                vec![one_root_grant(&root)],
+                BTreeMap::from([(root.clone(), importer.clone())]),
+                BTreeMap::new(),
+                NickelEvaluationLimits::default(),
+            ),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("root escape unexpectedly passed"));
+        assert!(matches!(
+            escape,
+            SourceClosureError::InvalidLogicalPath {
+                reason: "the import escapes its source root",
+                ..
+            }
+        ));
+        assert!(
+            escape
+                .to_string()
+                .contains("pkg://terrenia/nested/main.ncl")
+        );
+        assert_eq!(escape.code(), "compose.import_denied");
+
+        let alias = PackageAlias::new("blocks")
+            .unwrap_or_else(|error| panic!("fixture alias is invalid: {error}"));
+        let mut missing = FixtureScanner::default();
+        missing.add(
+            entry.clone(),
+            vec![StaticSourceImport::Package {
+                alias: alias.clone(),
+            }],
+        );
+        let missing_error = resolve(
+            &snapshot,
+            &mut missing,
+            &request_with_lock(
+                entry.clone(),
+                vec![one_root_grant(&root)],
+                BTreeMap::from([(root.clone(), importer.clone())]),
+                BTreeMap::new(),
+                NickelEvaluationLimits::default(),
+            ),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("missing lock alias unexpectedly passed"));
+        assert!(matches!(
+            missing_error,
+            SourceClosureError::PackageAliasNotGranted { .. }
+        ));
+        assert!(
+            missing_error
+                .to_string()
+                .contains("pkg://terrenia/nested/main.ncl")
+        );
+
+        let library_alias = PackageAlias::new(R0_LIBRARY_PACKAGE_ALIAS)
+            .unwrap_or_else(|error| panic!("library alias is invalid: {error}"));
+        let mut library_grant = one_root_grant(&library);
+        library_grant.root_kind = AuthorizedRootKind::Library;
+        library_grant.package_alias = Some(library_alias.clone());
+        let duplicate = request_with_lock(
+            entry,
+            vec![one_root_grant(&root), library_grant],
+            BTreeMap::from([(root, importer.clone())]),
+            BTreeMap::from([(
+                importer,
+                BTreeMap::from([(library_alias, package_name("terrenia"))]),
+            )]),
+            NickelEvaluationLimits::default(),
+        )
+        .validate()
+        .err()
+        .unwrap_or_else(|| panic!("duplicate library alias on a package edge unexpectedly passed"));
+        assert!(matches!(
+            duplicate,
+            SourceClosureError::DuplicatePackageAlias { .. }
+        ));
+        let duplicate_text = duplicate.to_string();
+        assert!(
+            duplicate_text.contains("pkg://"),
+            "duplicate alias must carry pkg:// spans, got {duplicate_text}"
+        );
+        assert_eq!(duplicate.code(), "compose.import_denied");
     }
 
     fn rehash_receipt(receipt: &mut SourceClosureReceipt) {

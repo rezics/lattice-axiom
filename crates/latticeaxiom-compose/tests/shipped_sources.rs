@@ -747,6 +747,8 @@ fn source_request(
         corpus_major: R0_AUTHORING_CORPUS_MAJOR,
         entry,
         root_grants,
+        package_instances: BTreeMap::new(),
+        alias_edges: BTreeMap::new(),
         limits: NickelEvaluationLimits::default(),
     }
 }
@@ -764,6 +766,8 @@ fn single_root_request(snapshot: &SourceSnapshot, entry_path: &str) -> SourceClo
             entry,
             package_alias: None,
         }],
+        package_instances: BTreeMap::new(),
+        alias_edges: BTreeMap::new(),
         limits: NickelEvaluationLimits::default(),
     }
 }

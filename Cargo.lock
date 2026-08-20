@@ -3983,6 +3983,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "toml 1.1.4+spec-1.1.0",
  "unicode-casefold",
  "unicode-normalization",
 ]
@@ -4038,8 +4039,11 @@ dependencies = [
  "latticeaxiom-compose",
  "latticeaxiom-core",
  "latticeaxiom-gameplay",
+ "latticeaxiom-launcher",
  "latticeaxiom-player",
  "latticeaxiom-registration",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 
@@ -4059,7 +4063,9 @@ dependencies = [
 name = "latticeaxiom-launcher"
 version = "0.1.0"
 dependencies = [
+ "latticeaxiom-compose",
  "latticeaxiom-core",
+ "latticeaxiom-packages",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
