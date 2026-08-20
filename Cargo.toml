@@ -5,6 +5,7 @@ members = [
   "crates/latticeaxiom-compose",
   "crates/latticeaxiom-content",
   "crates/latticeaxiom-core",
+  "crates/latticeaxiom-dual-fixture",
   "crates/latticeaxiom-engine",
   "crates/latticeaxiom-gameplay",
   "crates/latticeaxiom-launcher",
@@ -40,7 +41,7 @@ repository = "https://github.com/rezics/lattice-axiom-demo"
 # ADR 0014 fixes the implementation baseline at Bevy 0.19.x. Cargo.lock is
 # the authoritative dependency record, so upgrades are deliberate migrations.
 avian3d = { version = "=0.7.0", default-features = false }
-bevy = "=0.19.1"
+bevy = { version = "=0.19.1", default-features = false }
 bevy_voxel_world = "=0.17.0"
 criterion = "0.8"
 hex = "0.4.3"
