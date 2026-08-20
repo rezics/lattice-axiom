@@ -3,9 +3,16 @@ title: 凍結受控 Nickel 求值計量與 Worker 協議
 status: accepted
 type: decision
 updated: 2026-08-20
+amended_by:
+  - 0032-freeze-local-package-acquisition-imports-and-product-lock.md
 ---
 
 # 決策 0022：凍結受控 Nickel 求值計量與 Worker 協議
+
+> 本决策的 source-table-only、hard containment 与 worker protocol 继续生效；
+> [决策 0032](0032-freeze-local-package-acquisition-imports-and-product-lock.md)把 package dependency
+> alias扩展为由 candidate／final product lock提供的 package-local direct edge，并禁止 evaluator
+> 自行发现或取得 package。
 
 ## 背景
 

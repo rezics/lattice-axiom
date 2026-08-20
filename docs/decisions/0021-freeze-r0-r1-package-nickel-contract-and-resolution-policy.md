@@ -3,9 +3,16 @@ title: 凍結 R0／R1 Package、Nickel 契約與解析政策
 status: accepted
 type: decision
 updated: 2026-08-20
+amended_by:
+  - 0032-freeze-local-package-acquisition-imports-and-product-lock.md
 ---
 
 # 決策 0021：凍結 R0／R1 Package、Nickel 契約與解析政策
+
+> 本决策的 typed model、hash、SemVer、source normalization 与 deterministic resolution 规则继续
+> 生效；[决策 0032](0032-freeze-local-package-acquisition-imports-and-product-lock.md)规定
+> `GameProfileSpec` 的 graph-affecting输入只能投影静态 bootstrap authority，不能在完整 Nickel
+> 求值时首次发现外部 source／dependency。
 
 ## 背景
 

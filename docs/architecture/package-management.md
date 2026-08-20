@@ -16,6 +16,7 @@ decision:
   - ../decisions/0024-freeze-portable-native-abi-0x.md
   - ../decisions/0030-freeze-governance-distribution-and-security-triggers.md
   - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
+  - ../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
 ---
 
 # Nickel 驅動的套件內核與分發邊界
@@ -24,33 +25,44 @@ decision:
 
 Lattice Axiom 的 package kernel 从第一個垂直切片起就是唯一组合控制平面。Nickel 描述 package、profile、overlay、semantic registration 与 realization intent；Rust 负责 SemVer／capability 解析、全图 semantic validation、lock、build、加载与 Bevy activation。
 
+外部 package 的发现与取得不由完整 Nickel profile启动。静态 `CompositionBootstrapV1`／
+`PackageSourceManifestV1` 先给 Rust kernel足够的root、source与graph metadata；kernel把本地
+source快照进CAS并建立candidate graph／package-local alias map后，完整Nickel composition才在
+locked source table上执行。Nickel可以组合已授权package，不能动态扩大source universe。
+
 它不是第二个 ECS、scheduler、renderer 或 asset server。所有已解析模组最终由 host adapter 安装进一个正常的 Bevy App；Bevy 提供通用引擎能力，package kernel 决定**哪些逻辑套件、哪些版本、以哪种 realization、携带哪些权限与 schema**构成这次游戏。
 
 ## 核心管線
 
 ```text
-package.ncl / game.ncl / overlays / latticeaxiom.lib
-                         │
+latticeaxiom.toml + latticeaxiom-package.toml + local source providers
+                         │ validate / acquire / snapshot
                          ▼
-             Nickel merge + contracts
-                         │ direct typed conversion
+             immutable CAS + candidate package graph
+                         │ deterministic resolution
+                         ▼
+          ResolutionReceiptV1 + package-local alias map
+                         │ source-table-only grants
+                         ▼
+package.ncl / game.ncl / overlays / latticeaxiom.lib / package imports
+                         │ Nickel merge + contracts
                          ▼
                   CompositionSpec
-                         │ source + SemVer + capability resolution
+                         │ graph-input conformance + realization planning
                          ▼
-                 LockedGameGraph
-                         │ realization and target planning
-                         ▼
-                     BuildPlan
+        LockedGameGraph + BuildIntentV1 + BuildPlan
              ┌───────────┴───────────┐
              ▼                       ▼
    static source/glue          data/dynamic artifacts
              └───────────┬───────────┘
                          ▼
-          RegistrationImage + RuntimeImage
-                         │ Bevy host adapter
+       RegistrationImage + verified artifact receipts
+                         │ final lock atomic write + reopen
                          ▼
-                      Bevy App
+          RuntimeImage activation / native load
+                         │
+                         ▼
+               launcher → Bevy App
 ```
 
 没有任何第一方 `add_plugins(...)` 清单可以绕过这条管线成为第二份真相。测试可以用 in-memory source 与预构建 fixture 缩短 I/O，但仍产生相同语义型别与验证结果。
@@ -92,15 +104,22 @@ package kernel 只另外记录 `declared_by`，不得从 package name、source p
 | `parameters` | 由 Nickel contract 验证的纯资料输入 |
 | `trust` | realization 所需信任等级与主机 capability policy |
 
+上述graph-affecting投影先存在于非可执行`latticeaxiom-package.toml`，使kernel无需执行未锁定
+Nickel就能取得source并解析依赖。`package.ncl`可以相对import该manifest，通过
+`latticeaxiom.lib`补充registration与semantic intent；重叠typed fields必须完全相等。
+Root requirements、source providers、projection、graph features／parameters与realization policy
+同理由`latticeaxiom.toml`先行授权。
+
 概念上的 Nickel profile：
 
 ```nickel
-let la = import "latticeaxiom/lib.ncl" in
+let bootstrap = import "./latticeaxiom.toml" in
+let la = import latticeaxiom_lib_v2 in
+let terrenia = import terrenia in
 
 la.GameProfile & {
-  packages = [
-    { name = "terrenia", version = "~0.1", realization = 'auto },
-  ],
+  roots = bootstrap.roots,
+  package_fragments = [terrenia],
   semantic.bindings = {
     "latticeaxiom:block-role/storage-block/copper@1"
       = "terrenia:block/copper-block",
@@ -109,7 +128,9 @@ la.GameProfile & {
 }
 ```
 
-这只是语义示例，不冻结最终 Nickel API。最终 contract 必须由 `latticeaxiom.lib` 与 Rust conformance fixtures 共同定义。
+`terrenia`是bootstrap manifest中root package声明的局部alias，不是ambient search path。这只是语义
+示例，不冻结最终 Nickel API。最终 contract 必须由 `latticeaxiom.lib`、静态manifest DTO与Rust
+conformance fixtures共同定义。
 
 ## Nickel 與 Rust 的邊界
 
@@ -207,28 +228,47 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 
 ## Source、lock 與 artifact
 
-首阶段来源只需支持 workspace／local directory 与测试 fixture；每个 source 都规范化并 content-addressed。lock 至少保存：
+首阶段支持workspace、root-relative path、local catalog与explicit fixture source。每个source按0021
+规范化后快照进immutable CAS；path只作acquisition locator，lock与运行期都以algorithm-tagged
+source-tree digest识别。Local catalog提供deterministic check／pack／publish-to-directory／acquire，
+并拒绝同一package exact version对应不同source digest；它是future remote contract的本地fixture，
+不是public registry或publisher-authenticity服务。
 
-- package name／version／source／source hash；
-- dependency 与 capability resolution；
-- selected realization／target／profile；
-- manifest schema／hash；
+同一lock schema把portable resolution与target realization分层，至少保存：
+
+- bootstrap manifest、package manifest、source tree与package archive receipts；
+- exact package name／version／source digest与package-local dependency alias edges；
+- feature／domain、capability provider与resolution explanation；
+- semantic／provenance／evaluation policy receipts；
+- selected realization／target／projection、manifest schema／hash；
 - ABI／interface range、`EngineBuildId`（如适用）；
-- artifact hash、producer／toolchain fingerprint；
+- registration／runtime artifact hash、producer／toolchain fingerprint；
 - `latticeaxiom.lib` 与核心模型版本。
 
-`.rlib` 不作为稳定分发 artifact。static cache 只能以完整 toolchain、target、features、source 与 `EngineBuildId` 作 exact cache key；cache miss 就重建。dynamic artifact 必须与发布描述符／manifest hash 一致。
+`ResolutionReceiptV1`与`BuildIntentV1`只是final lock的输入证据，不是可启动lock。`.rlib`不作为
+稳定分发artifact。static cache只能以完整toolchain、target、features、source与`EngineBuildId`作
+exact cache key；dynamic artifact必须与发布描述符／manifest hash一致。
+
+`resolve`／`upgrade`可以改变package selection，`realize`只为既有portable graph发布显式target
+realization；三者都以transaction原子发布final lock。`--locked`要求lock bytes不变，只能补齐并
+逐byte验证lock已描述的object／artifact；`--offline`禁止network provider，`--frozen`进一步禁止
+fetch、path snapshot、build、source fallback、lock／store mutation并要求exact artifact。Lock以
+同目录temporary file、flush／sync、atomic replace与reopen validation发布；launcher永远只消费
+重新打开并验证过的final lock。
 
 ## 啟動交易
 
-1. 读取 profile／lock；需要时在受控 source universe 重新 resolve。
-2. 验证 source／artifact hash、target、trust 与签章 policy（首阶段可只信任 local）。
-3. 读取所有 registration manifests，不执行模组 code。
-4. 合并 ID、schema、capability、schedule、settings、observability、render与semantic contracts；编译Tag／Map／Predicate／Role，解析单轮fallback；任何冲突均停止。
-5. 构建／加载 realization；dynamic entry 只能协商 descriptor／interface。
-6. 验证 callback map 与 manifest hash，建立 `RuntimeImage`。
-7. 创建 EngineInstance 与 Bevy App，host adapter 安装 standard plugins、static systems 与 dynamic bridge systems。
-8. 执行 module `create／start`，完成 assets／world validation 后才进入 `Playing`。
+1. 读取bootstrap manifest与既有final lock；只有显式resolve／upgrade action可产生candidate graph。
+2. 从workspace／path／local catalog取得manifest与source，验证后快照进CAS；frozen path不执行此步。
+3. 解析exact graph并建立package-local alias／source-grant table，再以受控worker完整求值Nickel。
+4. 验证`CompositionSpec`没有扩大bootstrap graph inputs，产生semantic／provenance／evaluation receipts。
+5. 读取所有registration manifests，不执行模组code；合并ID、schema、capability、schedule、settings、
+   observability、render与semantic contracts。
+6. 构建／验证realization artifact与callback／manifest expectations，建立`RegistrationImage`，但不load native code。
+7. 原子写入final lock，重新打开并逐项验证manifest、source、toolchain、`EngineBuildId`与artifact。
+8. 按reopened lock load realization并建立带process-local callbacks的`RuntimeImage`。
+9. 创建EngineInstance与Bevy App；host adapter安装standard plugins、static systems与dynamic bridge systems。
+10. 执行module `create／start`，完成assets／world validation后才进入`Playing`。
 
 任何失败都必须保持「尚未进入可修改世界」；不能加载一半后以 last-writer-wins 继续。
 
@@ -238,16 +278,18 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 
 - `NativeStatic`：构建时信任 source 与 build script。
 - `PortableNative`／`EngineCoupledNative`：加载即授予进程级能力；需要来源 allowlist 与清楚 UI／日志。
-- Nickel：在受控 import root 与资源限制内求值，不继承 native code 信任。
+- Nickel：只在candidate／final lock授予的source table、direct dependency aliases与资源限制内求值，不继承native code信任。
+- CAS或lock中的package只证明exact bytes，不授予namespace、native trust、world writer或其他activation authority。
 - 未来 `WasmComponent`／process isolation：另行定义 capability security、资源计量与持久化 owner。
 
 ## 首階段與延後範圍
 
 ### 首階段必須完成
 
-- Nickel contracts 与 typed `CompositionSpec`；
-- Nickel semantic constructors／contracts／overlay 与 Rust typed model conformance；
-- package SemVer、local source、deterministic resolution 与 lock；
+- `CompositionBootstrapV1`／`PackageSourceManifestV1`与typed `CompositionSpec` conformance；
+- Nickel semantic constructors／contracts／overlay与package-local `import alias`；
+- workspace／path snapshot、immutable CAS、local catalog与deterministic pack／acquire；
+- package SemVer、deterministic resolution、atomic product lock与locked／offline／frozen modes；
 - capability／realization selection；
 - SDK-generated `RegistrationManifest`；
 - static／portable dynamic equivalence fixture；
@@ -271,7 +313,11 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 
 ## 驗收
 
-- 同一 Nickel profile 在 CLI／headless／client 得到同一 lock 与 registration hash。
+- 同一bootstrap／Nickel profile在CLI／headless／client得到同一portable graph与registration hash。
+- Local A package可经manifest alias import B；undeclared transitive、ambient与root-escape import稳定失败并保留`pkg://` source span。
+- 修改path source不改变旧lock读取的CAS bytes；missing object、manifest／toolchain／`EngineBuildId`或artifact mismatch使`--frozen`精确失败。
+- Local check／pack／publish-to-directory／acquire／resolve／run-frozen fixture全程不需network。
+- Lock fault corpus证明atomic write后只能观察旧完整或新完整file，launcher不消费candidate／partial lock。
 - 官方与 test package 都只能经 graph 启动；不存在隐藏 plugin list。
 - static／dynamic realization 可互换且不改变 stable ID、schedule、save schema 与权威 state hash。
 - 随机化 source discovery／artifact load 顺序不改变结果。

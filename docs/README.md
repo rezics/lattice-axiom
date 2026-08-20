@@ -15,7 +15,9 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 
 - Bevy `0.19.x` 是 architecture baseline，首个实现精确锁定 `0.19.1`；manifests／`Cargo.lock`记录version、source与checksum，manifests／profile／build receipt记录feature selection。
 - runtime 使用一个正常 Bevy App；不重做 ECS、scheduler、renderer、assets、input 或 tasks。
-- Nickel `package.ncl`／`game.ncl` 产生 typed `CompositionSpec`；Rust package kernel负责 SemVer／capability、lock、build、load与activation。
+- 非可执行`latticeaxiom.toml`／`latticeaxiom-package.toml`先授权root、source与graph inputs；Rust package kernel把local path／catalog source快照进CAS并解析exact graph。
+- Nickel `package.ncl`／`game.ncl`随后从locked package-local alias／source table产生typed `CompositionSpec`，不得在求值期发现或取得package。
+- `latticeaxiom.lock`封印source／manifest／toolchain／`EngineBuildId`／registration／artifact receipts，原子写入并reopen验证后才可由launcher消费。
 - 每次游戏由 `LockedGameGraph`／`RegistrationImage` 建立；第一方 package 与 Terrenia 维度不能绕过。
 - Logical package 使用 root `name` 或 scoped `@scope/name`；stable registration 使用独立的 `<namespace>:<kind>/<path>`，两者不得互相推导。
 - 精确 StableId、SemanticTag／Map、StateProperty、Affordance、Predicate、Role 与 fallback bundle 分层；Nickel 组合语义，Rust 验证并编译进 `RegistrationImage`。
@@ -29,7 +31,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 - 世界坐标采用Bevy原生右手Y-up。
 - RocksDB保存完整已物化world snapshots；process-local Bevy／ABI handles不进入存档。
 - package-driven client shell在world写入前完成catalog、frozen-lock preflight、checkpoint／migration与恢复选择。
-- 首阶段包含package kernel与ABI `0.x`；延后的是public registry、marketplace、general resolver规模、hot unload与WASM ecosystem。
+- 首阶段包含本地package check／pack／publish／acquire、immutable CAS、package-aware Nickel import、产品lock与ABI `0.x`；延后的是public registry、marketplace、general resolver规模、hot unload与WASM ecosystem。
 
 ## 建议阅读顺序
 
@@ -97,6 +99,7 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 | [0029](decisions/0029-freeze-render-capability-and-provider-contract.md) | Render capability、resource graph与provider contract |
 | [0030](decisions/0030-freeze-governance-distribution-and-security-triggers.md) | Governance、distribution与security trigger |
 | [0031](decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md) | Bevy upgrade、dependency与supply-chain policy |
+| [0032](decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md) | Local package acquisition、Nickel package import与产品lock |
 
 ### Superseded Decisions
 

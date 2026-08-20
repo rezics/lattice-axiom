@@ -17,10 +17,16 @@ updated: 2026-08-20
 | namespace grant | 授权某个 `PackageName` 注册指定 namespace／kind／path pattern 的 closure-wide 规则；名称相似不自动取得授权。 |
 | Terrenia | Lattice Axiom 由 root `terrenia` 与 `@terrenia/*` package closure 定义的第一个维度；不是产品别名或 host 内建主世界。 |
 | package kernel | 以 Rust 实作的控制平面；负责 source、SemVer／capability resolution、lock、realization planning、build、load、activation 与诊断。它不拥有游戏 ECS／renderer。 |
+| `CompositionBootstrapV1` | 非可执行root manifest DTO；在完整Nickel求值前授权root requirements、source providers、projection、graph features／parameters、realization与evaluation policy。默认representation为`latticeaxiom.toml`。 |
+| `PackageSourceManifestV1` | 非可执行package graph／distribution manifest DTO；声明identity／version、direct dependency aliases、graph-affecting projection、Nickel public entrypoint与source inclusion。默认representation为`latticeaxiom-package.toml`。 |
+| package source snapshot | 对workspace／path／catalog source按canonical path／raw bytes建立的immutable CAS tree；path只是取得提示，digest才是runnable source identity。 |
+| local catalog | 文件系统中的deterministic package index与objects；支持check／pack／publish／acquire fixture，但不声称具备public registry或publisher authenticity。 |
 | `latticeaxiom.lib` | 提供 `Package`、`GameProfile`、`Capability`、`Realization` 等 contract／组合函数的 versioned Nickel library。 |
-| `CompositionSpec` | Nickel 完整求值后直接转换的强型别组合意图；仍可含 version range 与 realization preference。 |
-| `LockedGameGraph` | 已解析、确定的 package version／source／dependency／capability closure。每次游戏启动的逻辑真相。 |
-| `BuildPlan` | 从 lock 选择 target、profile、realization、toolchain 与 artifact工作的强型别计划。 |
+| `ResolutionReceiptV1` | 从bootstrap input、candidate universe与policy解析出exact package graph及discard explanation的证据；它是final lock输入，不是可启动lock。 |
+| `CompositionSpec` | Locked alias／source table上的Nickel完整求值后直接转换的强型别组合意图；graph-affecting字段必须等于bootstrap授权输入或更窄。 |
+| `LockedGameGraph` | 已解析、确定的 package version／source digest／dependency alias／capability closure。每次游戏启动的portable逻辑真相。 |
+| `latticeaxiom.lock` | 封印bootstrap、portable resolution、composition／registration与target realization receipts的final产品lock；必须原子写入、reopen验证后才能启动。 |
+| `BuildPlan` | 从 locked graph选择 target、profile、realization、toolchain 与 artifact工作的强型别计划；现有`BuildIntentV1`是其输入receipt之一。 |
 | `RegistrationManifest` | SDK 为单一 package realization 产生的纯资料注册声明；包含 stable IDs、schemas、systems、settings、observability、capabilities 与 render contracts。 |
 | `RegistrationImage` | package kernel 合并整个 closure manifests 后产生的 IDs、schema、schedule、settings／observability catalog与capability plan。code activation 前完成。 |
 | `RuntimeImage` | 与 registration image 匹配的 static functions、dynamic callback tables、artifacts 与 instance factories。 |

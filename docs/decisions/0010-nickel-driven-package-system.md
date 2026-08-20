@@ -2,10 +2,16 @@
 title: 以 Nickel 驅動套件系統並以 Rust 執行
 status: accepted
 type: decision
-updated: 2026-08-19
+updated: 2026-08-20
+amended_by:
+  - 0032-freeze-local-package-acquisition-imports-and-product-lock.md
 ---
 
 # 決策 0010：以 Nickel 驅動套件系統並以 Rust 執行
+
+> 本决策的 Nickel／Rust 责任边界继续生效；[决策 0032](0032-freeze-local-package-acquisition-imports-and-product-lock.md)
+> 修正 bootstrapping 顺序：静态 bootstrap／package source manifest 与本地 package acquisition
+> 先建立 candidate graph／alias map，完整 Nickel composition 随后在 locked source table 上执行。
 
 ## 背景
 
