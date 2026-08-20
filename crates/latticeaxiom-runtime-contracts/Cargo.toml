@@ -1,0 +1,20 @@
+[package]
+name = "latticeaxiom-runtime-contracts"
+description = "Pure-data settings and observability host policies for Lattice Axiom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-compose = { path = "../latticeaxiom-compose" }
+latticeaxiom-core = { path = "../latticeaxiom-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[lints]
+workspace = true

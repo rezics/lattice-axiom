@@ -9,6 +9,8 @@ members = [
   "crates/latticeaxiom-gameplay",
   "crates/latticeaxiom-player",
   "crates/latticeaxiom-registration",
+  "crates/latticeaxiom-render-contracts",
+  "crates/latticeaxiom-runtime-contracts",
   "crates/latticeaxiom-sdk",
   "crates/latticeaxiom-sdk-macros",
   "crates/latticeaxiom-storage",
