@@ -1014,10 +1014,19 @@ fn parse_comparator_version(
 }
 
 fn parse_req_version(range: &str, version: &str) -> Result<PackageVersion, IdentifierError> {
-    PackageVersion::from_str(version).map_err(|error| IdentifierError::InvalidPackageVersionReq {
-        value: range.to_owned(),
-        reason: error.to_string(),
-    })
+    let parsed = PackageVersion::from_str(version).map_err(|error| {
+        IdentifierError::InvalidPackageVersionReq {
+            value: range.to_owned(),
+            reason: error.to_string(),
+        }
+    })?;
+    if !parsed.0.build.is_empty() {
+        return Err(IdentifierError::InvalidPackageVersionReq {
+            value: range.to_owned(),
+            reason: "version requirements must not include SemVer build metadata".to_owned(),
+        });
+    }
+    Ok(parsed)
 }
 
 fn normalize_comparators(mut comparators: Vec<VersionComparator>) -> Vec<VersionComparator> {
@@ -1209,6 +1218,11 @@ mod tests {
             ">=1.0.0, <2.0.0",
             "^1.2",
             "~1",
+            "=1.2.3+build.7",
+            "^1.2.3+build.7",
+            "~1.2.3+build.7",
+            ">=1.2.3+build.7 <2.0.0",
+            ">=1.2.3 <2.0.0+build.7",
         ] {
             assert!(
                 PackageVersionReq::from_str(value).is_err(),
