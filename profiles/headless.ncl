@@ -87,6 +87,10 @@ game.make {
       "terrenia:source/gameplay"
       "@terrenia/gameplay"
       "packages/terrenia/gameplay",
+    source_candidate
+      "terrenia:source/tools"
+      "@terrenia/tools"
+      "packages/terrenia/tools",
   ],
   realization_policy = ["data"],
   evaluation_policy = game.r0_evaluation_policy,

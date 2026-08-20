@@ -44,6 +44,11 @@ package.make {
       optional = false,
       domains = ["authoritative"],
     },
+    "@terrenia/tools" = {
+      version = "~0.1.0",
+      optional = false,
+      domains = ["authoritative"],
+    },
     "@terrenia/presentation" = {
       version = "~0.1.0",
       optional = false,
@@ -108,6 +113,15 @@ package.make {
     "@terrenia/gameplay" = [
       "terrenia:system/**",
       "terrenia:schema/**",
+    ],
+    "@terrenia/tools" = [
+      "terrenia:item/stick",
+      "terrenia:item/stone-axe",
+      "terrenia:item/stone-pickaxe",
+      "terrenia:item/stone-shovel",
+      "terrenia:item/wooden-axe",
+      "terrenia:item/wooden-pickaxe",
+      "terrenia:item/wooden-shovel",
     ],
     "@terrenia/presentation" = [
       "terrenia:asset/**",

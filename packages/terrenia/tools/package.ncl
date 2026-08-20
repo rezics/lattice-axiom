@@ -1,4 +1,5 @@
-# D0 empty Terrenia gameplay skeleton; authoritative systems arrive later.
+# Data-only wooden and stone tools. Mining runtime is V7, not this package.
+# The hand is an intrinsic no-item fallback and is not registered as an item.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in
@@ -9,20 +10,15 @@ let blocks_capability = "latticeaxiom:capability/content-blocks@1" in
 let fragment = registration.constructors.fragment {} in
 
 package.make {
-  name = "@terrenia/gameplay",
+  name = "@terrenia/tools",
   version = "0.1.0",
   metadata = {
-    display_name = "Terrenia Gameplay",
+    display_name = "Terrenia Tools",
     documentation = null,
     license = "MIT OR Apache-2.0",
   },
   dependencies = {
     "@terrenia/blocks" = {
-      version = "~0.1.0",
-      optional = false,
-      domains = ["authoritative"],
-    },
-    "@terrenia/tools" = {
       version = "~0.1.0",
       optional = false,
       domains = ["authoritative"],
@@ -50,7 +46,15 @@ package.make {
     },
   },
   domains = ["authoritative"],
-  namespace_requests = ["terrenia:system/**", "terrenia:schema/**"],
+  namespace_requests = [
+    "terrenia:item/stick",
+    "terrenia:item/stone-axe",
+    "terrenia:item/stone-pickaxe",
+    "terrenia:item/stone-shovel",
+    "terrenia:item/wooden-axe",
+    "terrenia:item/wooden-pickaxe",
+    "terrenia:item/wooden-shovel",
+  ],
   trust = "data-only",
   registration = fragment,
   provenance = package_provenance,

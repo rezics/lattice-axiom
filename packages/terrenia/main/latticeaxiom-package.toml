@@ -22,6 +22,12 @@ version = "~0.1.0"
 optional = false
 domains = ["authoritative"]
 
+[dependencies.tools]
+package = "@terrenia/tools"
+version = "~0.1.0"
+optional = false
+domains = ["authoritative"]
+
 [dependencies.presentation]
 package = "@terrenia/presentation"
 version = "~0.1.0"

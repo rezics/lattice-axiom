@@ -1,0 +1,247 @@
+{
+  "authoring_schema": "terrenia:schema/authored-tools@1",
+  "owner_package": "@terrenia/tools",
+  "hand": {
+    "kind": "intrinsic-no-item-fallback",
+    "tool_class": "latticeaxiom:tool-class/hand@1",
+    "tier": 0,
+    "mining_multiplier": 1
+  },
+  "items": [
+    {
+      "id": "terrenia:item/stick",
+      "maximum_stack": 64
+    },
+    {
+      "id": "terrenia:item/stone-axe",
+      "maximum_stack": 1,
+      "durability": 131
+    },
+    {
+      "id": "terrenia:item/stone-pickaxe",
+      "maximum_stack": 1,
+      "durability": 131
+    },
+    {
+      "id": "terrenia:item/stone-shovel",
+      "maximum_stack": 1,
+      "durability": 131
+    },
+    {
+      "id": "terrenia:item/wooden-axe",
+      "maximum_stack": 1,
+      "durability": 59
+    },
+    {
+      "id": "terrenia:item/wooden-pickaxe",
+      "maximum_stack": 1,
+      "durability": 59
+    },
+    {
+      "id": "terrenia:item/wooden-shovel",
+      "maximum_stack": 1,
+      "durability": 59
+    }
+  ],
+  "tools": [
+    {
+      "item": "terrenia:item/stone-axe",
+      "class": "latticeaxiom:tool-class/axe@1",
+      "tier": 2,
+      "durability": 131,
+      "mining_multiplier": 4
+    },
+    {
+      "item": "terrenia:item/stone-pickaxe",
+      "class": "latticeaxiom:tool-class/pickaxe@1",
+      "tier": 2,
+      "durability": 131,
+      "mining_multiplier": 4
+    },
+    {
+      "item": "terrenia:item/stone-shovel",
+      "class": "latticeaxiom:tool-class/shovel@1",
+      "tier": 2,
+      "durability": 131,
+      "mining_multiplier": 4
+    },
+    {
+      "item": "terrenia:item/wooden-axe",
+      "class": "latticeaxiom:tool-class/axe@1",
+      "tier": 1,
+      "durability": 59,
+      "mining_multiplier": 2
+    },
+    {
+      "item": "terrenia:item/wooden-pickaxe",
+      "class": "latticeaxiom:tool-class/pickaxe@1",
+      "tier": 1,
+      "durability": 59,
+      "mining_multiplier": 2
+    },
+    {
+      "item": "terrenia:item/wooden-shovel",
+      "class": "latticeaxiom:tool-class/shovel@1",
+      "tier": 1,
+      "durability": 59,
+      "mining_multiplier": 2
+    }
+  ],
+  "recipes": [
+    {
+      "id": "terrenia:recipe/stick@1",
+      "kind": "shaped",
+      "width": 1,
+      "height": 2,
+      "pattern": [
+        ["terrenia:item/oak-planks"],
+        ["terrenia:item/oak-planks"]
+      ],
+      "output": {
+        "item": "terrenia:item/stick",
+        "quantity": 4
+      },
+      "output_role": "terrenia:item-role/recipe-output-stick@1"
+    },
+    {
+      "id": "terrenia:recipe/stone-axe@1",
+      "kind": "shaped",
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        ["terrenia:item/cobblestone", "terrenia:item/cobblestone", null],
+        ["terrenia:item/cobblestone", "terrenia:item/stick", null],
+        [null, "terrenia:item/stick", null]
+      ],
+      "output": {
+        "item": "terrenia:item/stone-axe",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-stone-axe@1"
+    },
+    {
+      "id": "terrenia:recipe/stone-pickaxe@1",
+      "kind": "shaped",
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        [
+          "terrenia:item/cobblestone",
+          "terrenia:item/cobblestone",
+          "terrenia:item/cobblestone"
+        ],
+        [null, "terrenia:item/stick", null],
+        [null, "terrenia:item/stick", null]
+      ],
+      "output": {
+        "item": "terrenia:item/stone-pickaxe",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-stone-pickaxe@1"
+    },
+    {
+      "id": "terrenia:recipe/stone-shovel@1",
+      "kind": "shaped",
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        [null, "terrenia:item/cobblestone", null],
+        [null, "terrenia:item/stick", null],
+        [null, "terrenia:item/stick", null]
+      ],
+      "output": {
+        "item": "terrenia:item/stone-shovel",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-stone-shovel@1"
+    },
+    {
+      "id": "terrenia:recipe/wooden-axe@1",
+      "kind": "shaped",
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        ["terrenia:item/oak-planks", "terrenia:item/oak-planks", null],
+        ["terrenia:item/oak-planks", "terrenia:item/stick", null],
+        [null, "terrenia:item/stick", null]
+      ],
+      "output": {
+        "item": "terrenia:item/wooden-axe",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-wooden-axe@1"
+    },
+    {
+      "id": "terrenia:recipe/wooden-pickaxe@1",
+      "kind": "shaped",
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        [
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks"
+        ],
+        [null, "terrenia:item/stick", null],
+        [null, "terrenia:item/stick", null]
+      ],
+      "output": {
+        "item": "terrenia:item/wooden-pickaxe",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-wooden-pickaxe@1"
+    },
+    {
+      "id": "terrenia:recipe/wooden-shovel@1",
+      "kind": "shaped",
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        [null, "terrenia:item/oak-planks", null],
+        [null, "terrenia:item/stick", null],
+        [null, "terrenia:item/stick", null]
+      ],
+      "output": {
+        "item": "terrenia:item/wooden-shovel",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-wooden-shovel@1"
+    }
+  ],
+  "recipe_output_roles": [
+    {
+      "id": "terrenia:item-role/recipe-output-stick@1",
+      "concrete_item": "terrenia:item/stick"
+    },
+    {
+      "id": "terrenia:item-role/recipe-output-stone-axe@1",
+      "concrete_item": "terrenia:item/stone-axe"
+    },
+    {
+      "id": "terrenia:item-role/recipe-output-stone-pickaxe@1",
+      "concrete_item": "terrenia:item/stone-pickaxe"
+    },
+    {
+      "id": "terrenia:item-role/recipe-output-stone-shovel@1",
+      "concrete_item": "terrenia:item/stone-shovel"
+    },
+    {
+      "id": "terrenia:item-role/recipe-output-wooden-axe@1",
+      "concrete_item": "terrenia:item/wooden-axe"
+    },
+    {
+      "id": "terrenia:item-role/recipe-output-wooden-pickaxe@1",
+      "concrete_item": "terrenia:item/wooden-pickaxe"
+    },
+    {
+      "id": "terrenia:item-role/recipe-output-wooden-shovel@1",
+      "concrete_item": "terrenia:item/wooden-shovel"
+    }
+  ]
+}

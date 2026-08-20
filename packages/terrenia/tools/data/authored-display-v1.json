@@ -1,0 +1,42 @@
+{
+  "authoring_schema": "terrenia:schema/authored-content-display@1",
+  "owner_package": "@terrenia/tools",
+  "default_locale": "en",
+  "entries": [
+    {
+      "content": "terrenia:item/stick",
+      "display_key": "terrenia.item.stick",
+      "fallback": "Stick"
+    },
+    {
+      "content": "terrenia:item/stone-axe",
+      "display_key": "terrenia.item.stone.axe",
+      "fallback": "Stone Axe"
+    },
+    {
+      "content": "terrenia:item/stone-pickaxe",
+      "display_key": "terrenia.item.stone.pickaxe",
+      "fallback": "Stone Pickaxe"
+    },
+    {
+      "content": "terrenia:item/stone-shovel",
+      "display_key": "terrenia.item.stone.shovel",
+      "fallback": "Stone Shovel"
+    },
+    {
+      "content": "terrenia:item/wooden-axe",
+      "display_key": "terrenia.item.wooden.axe",
+      "fallback": "Wooden Axe"
+    },
+    {
+      "content": "terrenia:item/wooden-pickaxe",
+      "display_key": "terrenia.item.wooden.pickaxe",
+      "fallback": "Wooden Pickaxe"
+    },
+    {
+      "content": "terrenia:item/wooden-shovel",
+      "display_key": "terrenia.item.wooden.shovel",
+      "fallback": "Wooden Shovel"
+    }
+  ]
+}

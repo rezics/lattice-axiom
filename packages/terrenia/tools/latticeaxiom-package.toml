@@ -1,17 +1,11 @@
 schema_version = 1
-name = "@terrenia/gameplay"
+name = "@terrenia/tools"
 version = "0.1.0"
 domains = ["authoritative"]
 trust = "data-only"
 
 [dependencies.blocks]
 package = "@terrenia/blocks"
-version = "~0.1.0"
-optional = false
-domains = ["authoritative"]
-
-[dependencies.tools]
-package = "@terrenia/tools"
 version = "~0.1.0"
 optional = false
 domains = ["authoritative"]

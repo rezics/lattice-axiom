@@ -19,7 +19,7 @@ fn shipped_bootstrap_and_package_manifests_parse() {
 
     assert_eq!(
         package_manifests.len(),
-        12,
+        13,
         "every shipped package.ncl must have a sibling {PACKAGE_SOURCE_MANIFEST_FILE_NAME}"
     );
     assert!(
@@ -46,6 +46,29 @@ fn shipped_bootstrap_and_package_manifests_parse() {
             )
         });
     }
+}
+
+#[test]
+fn terrenia_tools_package_source_manifest_parses() {
+    let path = Path::new(WORKSPACE_ROOT)
+        .join("packages/terrenia/tools")
+        .join(PACKAGE_SOURCE_MANIFEST_FILE_NAME);
+    let text = read_manifest(&path);
+    let manifest = PackageSourceManifestV1::from_toml_str(&text).unwrap_or_else(|error| {
+        panic!(
+            "{} must parse as PackageSourceManifestV1: {error}",
+            path.display()
+        )
+    });
+    assert_eq!(manifest.name.as_str(), "@terrenia/tools");
+    assert_eq!(manifest.version.to_string(), "0.1.0");
+    assert!(
+        manifest
+            .dependencies
+            .values()
+            .any(|dependency| dependency.package.as_str() == "@terrenia/blocks"),
+        "@terrenia/tools must depend on Terrenia materials/items"
+    );
 }
 
 fn shipped_package_manifests(workspace: &Path) -> Vec<PathBuf> {

@@ -66,5 +66,10 @@ path = "packages/terrenia/gameplay"
 
 [[sources]]
 kind = "path"
+package = "@terrenia/tools"
+path = "packages/terrenia/tools"
+
+[[sources]]
+kind = "path"
 package = "@terrenia/presentation"
 path = "packages/terrenia/presentation"

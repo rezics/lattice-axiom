@@ -39,7 +39,7 @@ struct PackageSource {
     package_name: &'static str,
 }
 
-const PACKAGE_SOURCES: [PackageSource; 12] = [
+const PACKAGE_SOURCES: [PackageSource; 13] = [
     PackageSource {
         logical_dir: "packages/latticeaxiom/settings",
         source_id: "latticeaxiom:source/settings",
@@ -94,6 +94,11 @@ const PACKAGE_SOURCES: [PackageSource; 12] = [
         logical_dir: "packages/terrenia/gameplay",
         source_id: "terrenia:source/gameplay",
         package_name: "@terrenia/gameplay",
+    },
+    PackageSource {
+        logical_dir: "packages/terrenia/tools",
+        source_id: "terrenia:source/tools",
+        package_name: "@terrenia/tools",
     },
     PackageSource {
         logical_dir: "packages/terrenia/presentation",
@@ -468,6 +473,7 @@ fn validate_shipped_package_delegations(packages: &BTreeMap<PackageName, Package
                 package_name("@terrenia/blocks"),
                 package_name("@terrenia/gameplay"),
                 package_name("@terrenia/presentation"),
+                package_name("@terrenia/tools"),
                 package_name("@terrenia/worldgen"),
             ]),
         ),

@@ -133,6 +133,10 @@ game.make {
       "@terrenia/gameplay"
       "packages/terrenia/gameplay",
     source_candidate
+      "terrenia:source/tools"
+      "@terrenia/tools"
+      "packages/terrenia/tools",
+    source_candidate
       "terrenia:source/presentation"
       "@terrenia/presentation"
       "packages/terrenia/presentation",
