@@ -303,22 +303,30 @@ impl<'de> Deserialize<'de> for CapabilityId {
     }
 }
 
-/// A stable identifier constrained to the `schema` registration kind.
-#[repr(transparent)]
+/// A versioned stable identifier constrained to the `schema` registration kind.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct SchemaId(StableId);
+pub struct SchemaId {
+    stable_id: StableId,
+    major: NonZeroU64,
+}
 
 impl SchemaId {
     /// Returns the underlying stable identifier.
     #[must_use]
     pub fn as_stable_id(&self) -> &StableId {
-        &self.0
+        &self.stable_id
+    }
+
+    /// Returns the schema contract major version.
+    #[must_use]
+    pub const fn major(&self) -> NonZeroU64 {
+        self.major
     }
 
     /// Returns the full canonical schema identifier.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        self.stable_id.as_str()
     }
 }
 
@@ -346,7 +354,16 @@ impl TryFrom<StableId> for SchemaId {
                 reason: "registration kind must be `schema`",
             });
         }
-        Ok(Self(value))
+        let Some(major) = value.major() else {
+            return Err(IdentifierError::InvalidSchemaId {
+                value: value.to_string(),
+                reason: "a schema ID requires a positive major suffix",
+            });
+        };
+        Ok(Self {
+            stable_id: value,
+            major,
+        })
     }
 }
 
@@ -1145,11 +1162,14 @@ mod tests {
     }
 
     #[test]
-    fn specialized_ids_enforce_kind_and_capability_major() {
+    fn specialized_ids_enforce_kind_and_contract_major() {
         assert!(CapabilityId::from_str("latticeaxiom:capability/settings@1").is_ok());
         assert!(CapabilityId::from_str("latticeaxiom:capability/settings").is_err());
         assert!(CapabilityId::from_str("latticeaxiom:schema/settings@1").is_err());
-        assert!(SchemaId::from_str("latticeaxiom:schema/world-header@1").is_ok());
+        let schema = SchemaId::from_str("latticeaxiom:schema/world-header@1")
+            .unwrap_or_else(|error| panic!("valid schema ID was rejected: {error}"));
+        assert_eq!(schema.major().get(), 1);
+        assert!(SchemaId::from_str("latticeaxiom:schema/world-header").is_err());
         assert!(SchemaId::from_str("latticeaxiom:capability/settings@1").is_err());
     }
 
@@ -1161,6 +1181,7 @@ mod tests {
         assert!(serde_json::from_str::<StableId>(r#""example:block/stone@0""#).is_err());
         assert!(serde_json::from_str::<CapabilityId>(r#""example:capability/blocks""#).is_err());
         assert!(serde_json::from_str::<SchemaId>(r#""example:block/stone""#).is_err());
+        assert!(serde_json::from_str::<SchemaId>(r#""example:schema/stone""#).is_err());
     }
 
     #[test]
