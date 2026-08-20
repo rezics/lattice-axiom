@@ -12,9 +12,9 @@
 //!
 //! The production playable spine lives in [`host`]. It starts from
 //! [`LockVerifiedComposeImages`], stores voxels through
-//! [`latticeaxiom_storage::MemoryTransactionKernel`], and presents chunk meshes
-//! rather than one entity per block. The `playable` module remains a
-//! non-production fixture.
+//! [`latticeaxiom_storage::MemoryTransactionKernel`], streams a bounded chunk
+//! working set around the local player, and presents chunk meshes rather than
+//! one entity per block. The `playable` module remains a non-production fixture.
 
 mod host;
 mod instance;
@@ -25,8 +25,9 @@ mod prepared;
 mod presentation_fixture;
 
 pub use host::{
-    ChunkMeshCursor, ChunkPresentation, ProductionHostError, ProductionHostPlugin,
+    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ProductionHostError, ProductionHostPlugin,
     ProductionInspectSurface, ProductionPlayerPose, ProductionSpine, ProductionWorldStorage,
+    WorkingSetDiagnosticsV1,
 };
 pub use instance::{
     EngineInstance, EngineInstanceError, EngineProfile, FixedTickCount, MAX_TICKS_PER_ADVANCE,

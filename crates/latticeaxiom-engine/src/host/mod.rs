@@ -1,14 +1,16 @@
 //! Production playable host spine for the V2 package-driven slice.
 //!
 //! This module is the production Bevy world session. It starts from a
-//! reopened [`LockVerifiedComposeImages`], publishes a finite D4 region through
+//! reopened [`LockVerifiedComposeImages`], stores voxels through
 //! [`MemoryTransactionKernel`], and presents one Avian collider plus CPU mesh
-//! per chunk. It does not stream infinitely, does not open a durable writer,
-//! and must not be confused with the `playable` development fixture.
+//! per chunk. Chunk interest streams around the local player. It does not open
+//! a durable writer and must not be confused with the `playable` development
+//! fixture.
 
 #[cfg(feature = "client")]
 mod hud;
 mod spine;
+mod stream;
 mod worldgen;
 
 use std::fmt;
@@ -20,7 +22,7 @@ use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
     prelude::{
-        Commands, Component, Entity, FixedPostUpdate, MessageWriter, Query, Res, Resource,
+        Commands, Component, Entity, FixedPostUpdate, MessageWriter, Query, Res, ResMut, Resource,
         Transform, With, Without,
     },
     transform::TransformPlugin,
@@ -41,7 +43,8 @@ use latticeaxiom_voxel_runtime::RuntimeError;
 use latticeaxiom_worldgen::WorldgenError;
 use thiserror::Error;
 
-pub use spine::{ProductionSpine, ProductionWorldStorage};
+pub use spine::{ProductionSpine, ProductionWorldStorage, WorkingSetDiagnosticsV1};
+pub use stream::ChunkLifecycle;
 
 #[cfg(feature = "client")]
 use crate::EngineProfile;
@@ -166,8 +169,10 @@ impl Plugin for ProductionHostPlugin {
             FixedPostUpdate,
             (
                 evaluate_target_inspect.after(PlayerSystemSet::EvaluateEdit),
-                sync_chunk_colliders.after(PlayerSystemSet::EvaluateEdit),
                 sync_player_pose.after(PlayerSystemSet::EvaluateEdit),
+                sync_chunk_stream.after(sync_player_pose),
+                sync_chunk_colliders.after(sync_chunk_stream),
+                sync_working_set_diagnostics.after(sync_chunk_stream),
                 refresh_crosshair_target
                     .after(sync_player_pose)
                     .after(evaluate_target_inspect),
@@ -177,7 +182,10 @@ impl Plugin for ProductionHostPlugin {
         app.add_systems(Startup, spawn_production_hud_if_client)
             .add_systems(
                 FixedPostUpdate,
-                hud::sync_production_inspect_hud.after(refresh_crosshair_target),
+                (
+                    hud::sync_production_inspect_hud.after(refresh_crosshair_target),
+                    hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
+                ),
             );
     }
 
@@ -190,9 +198,8 @@ impl EngineInstance {
     /// Builds a GPU-free production spine from a reopened final product lock.
     ///
     /// The host inserts [`MemoryTransactionKernel`] as the production storage
-    /// implementation, materializes a finite D4 region, and installs
-    /// [`PlayerPlugin`]. It does not open a world writer or stream unbounded
-    /// chunks.
+    /// implementation, streams a bounded working set around the player, and
+    /// installs [`PlayerPlugin`]. It does not open a world writer.
     ///
     /// # Errors
     ///
@@ -269,10 +276,12 @@ fn install_production_host(
     if include_transform {
         app.add_plugins(TransformPlugin);
     }
+    let working_set = spine.working_set_diagnostics();
     app.insert_resource(product_lock_hash)
         .insert_resource(inspect_surface)
         .insert_resource(spine.storage())
         .insert_resource(BlockEditAuthorityResource::new(spine.clone()))
+        .insert_resource(working_set)
         .insert_resource(spine)
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
@@ -288,8 +297,8 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
         spine::local_player_id(),
         Transform::from_translation(spawn),
     ));
-    if let Ok(updates) = spine.take_dirty() {
-        for (coordinate, collider, origin) in updates {
+    if let Ok(delta) = spine.take_presentation() {
+        for (coordinate, collider, origin) in delta.upserts {
             world.spawn((
                 ChunkPresentation { coordinate },
                 avian3d::prelude::RigidBody::Static,
@@ -298,6 +307,19 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
             ));
         }
     }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn sync_chunk_stream(tick: Res<'_, PlayerFixedTick>, spine: Res<'_, ProductionSpine>) {
+    let _ = spine.sync_interest(tick.get());
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn sync_working_set_diagnostics(
+    spine: Res<'_, ProductionSpine>,
+    mut snapshot: ResMut<'_, WorkingSetDiagnosticsV1>,
+) {
+    *snapshot = spine.working_set_diagnostics();
 }
 
 #[cfg(feature = "client")]
@@ -324,10 +346,18 @@ fn sync_chunk_colliders(
         ),
     >,
 ) {
-    let Ok(updates) = spine.take_dirty() else {
+    let Ok(delta) = spine.take_presentation() else {
         return;
     };
-    for (coordinate, collider, origin) in updates {
+    for coordinate in delta.removals {
+        if let Some((entity, _, _, _)) = chunks
+            .iter()
+            .find(|(_, presentation, _, _)| presentation.coordinate == coordinate)
+        {
+            commands.entity(entity).despawn();
+        }
+    }
+    for (coordinate, collider, origin) in delta.upserts {
         if let Some((_, _, mut existing, mut transform)) = chunks
             .iter_mut()
             .find(|(_, presentation, _, _)| presentation.coordinate == coordinate)
@@ -518,12 +548,18 @@ pub enum ProductionHostError {
     /// Padded mesh indexing left the interior.
     #[error("padded voxel index is outside the captured halo")]
     PaddedIndex,
-    /// No safe surface column exists in the negative-X generated region.
+    /// No safe surface column exists in the generated spawn neighborhood.
     #[error("no safe spawn column exists in the generated region")]
     NoSafeSpawn,
-    /// Generation reused storage evidence on a vacant V2 request.
+    /// Generation reused storage evidence on a vacant request.
     #[error("D4 generation reused existing snapshot evidence for a vacant chunk")]
     UnexpectedExistingSnapshot,
+    /// Playable host clamps were zero or could not bound the working set.
+    #[error("playable host hard limits are invalid")]
+    InvalidHostLimits,
+    /// The local player pose is outside the canonical chunk domain.
+    #[error("player pose is outside the canonical chunk domain")]
+    InvalidPlayerPose,
 }
 
 impl fmt::Debug for ProductionSpine {

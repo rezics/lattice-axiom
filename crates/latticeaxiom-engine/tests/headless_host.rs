@@ -31,11 +31,12 @@ use latticeaxiom_core::{
     TargetTriple, canonical_json_bytes,
 };
 use latticeaxiom_engine::{
-    ActionAxis2V1, AuthoritativeTransactionKernel, ChunkCoordinate, ChunkMeshCursor,
-    ChunkPresentation, EngineInstance, EngineInstanceError, LockVerifiedComposeImages,
-    MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
-    PreparationError, ProductionInspectSurface, ProductionSpine, ProductionWorldStorage,
-    StructurallyValidatedComposeImages, VerifiedProductLockHash,
+    ActionAxis2V1, AuthoritativeTransactionKernel, ChunkCoordinate, ChunkLifecycle,
+    ChunkMeshCursor, ChunkPresentation, EngineInstance, EngineInstanceError,
+    LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1,
+    PlayerActionV1, PreparationError, ProductionInspectSurface, ProductionSpine,
+    ProductionWorldStorage, StructurallyValidatedComposeImages, VerifiedProductLockHash,
+    WorkingSetDiagnosticsV1,
 };
 use latticeaxiom_launcher::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
 use latticeaxiom_registration::{
@@ -432,15 +433,15 @@ fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
             .is_some_and(|revision| revision.get() >= revision_after_break.get()),
         "chunk revision must remain advanced after later edits"
     );
-    assert_eq!(
-        instance
-            .app()
-            .world()
-            .iter_entities()
-            .filter(bevy::ecs::world::EntityRef::contains::<ChunkPresentation>)
-            .count(),
-        chunk_entities,
-        "edits must replace chunk colliders, not spawn per-block entities"
+    let chunk_entities_after = instance
+        .app()
+        .world()
+        .iter_entities()
+        .filter(bevy::ecs::world::EntityRef::contains::<ChunkPresentation>)
+        .count();
+    assert!(
+        chunk_entities_after > 0 && chunk_entities_after < voxel_count,
+        "edits must replace chunk colliders, not spawn per-block entities (before={chunk_entities}, after={chunk_entities_after}, voxels/chunk={voxel_count})"
     );
 }
 
@@ -524,6 +525,249 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     assert_eq!(success.old_content.as_ref(), Some(&inspected.block_id));
 }
 
+#[test]
+fn production_host_exposes_working_set_diagnostics() {
+    let boot = lock_boot_fixture();
+    let images = boot.prepared();
+    let mut instance = EngineInstance::new_headless_host_from_lock(images, SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let limits = spine
+        .hard_limits()
+        .expect("production host clamps are installed");
+
+    let snapshot = instance
+        .app()
+        .world()
+        .get_resource::<WorkingSetDiagnosticsV1>()
+        .copied()
+        .expect("working-set diagnostics are installed");
+    assert_eq!(snapshot, spine.working_set_diagnostics());
+    assert_working_set_diagnostics(snapshot, limits);
+
+    instance
+        .advance_fixed_ticks(2)
+        .expect("idle ticks refresh working-set diagnostics");
+    let refreshed = instance
+        .app()
+        .world()
+        .get_resource::<WorkingSetDiagnosticsV1>()
+        .copied()
+        .expect("working-set diagnostics remain installed");
+    assert_eq!(refreshed, spine.working_set_diagnostics());
+    assert_working_set_diagnostics(refreshed, limits);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
+    let boot = lock_boot_fixture();
+    let images = boot.prepared();
+    let mut instance = EngineInstance::new_headless_host_from_lock(images, SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    let v2_neighborhood = [
+        ChunkCoordinate::new(-1, 0, -1),
+        ChunkCoordinate::new(-1, 0, 0),
+        ChunkCoordinate::new(0, 0, -1),
+        ChunkCoordinate::new(0, 0, 0),
+    ];
+    let spawn = spine.spawn_center();
+    let spawn_chunk = chunk_from_translation(spawn, spine.chunk_edge());
+    let edited = ChunkCoordinate::new(-1, 3, -1);
+    assert_eq!(
+        spine.chunk_lifecycle(edited),
+        ChunkLifecycle::Active,
+        "the spawn probe chunk starts active"
+    );
+    assert!(
+        spine.edited_chunks().contains(&edited),
+        "edited chunks must be pinned before the walk"
+    );
+
+    let mut generation = 1_u64;
+    let mut seen_presentations = BTreeSet::new();
+    let mut seen_player_chunks = BTreeSet::new();
+    let mut min_y = spawn.y;
+    record_stream_sample(
+        &instance,
+        &spine,
+        &mut seen_presentations,
+        &mut seen_player_chunks,
+        &mut min_y,
+    );
+
+    generation = enqueue_look_then_walk(
+        &mut instance,
+        generation,
+        std::f32::consts::FRAC_PI_2,
+        0.0,
+        1.0,
+        720,
+    );
+    sample_walk(
+        &mut instance,
+        &spine,
+        720,
+        &mut seen_presentations,
+        &mut seen_player_chunks,
+        &mut min_y,
+    );
+    let plus_x = seen_player_chunks
+        .iter()
+        .map(|chunk| chunk.x)
+        .max()
+        .expect("player visited +X chunks");
+    let pose_after_plus = spine.player_pose();
+    assert!(
+        plus_x > 0,
+        "walk +X must leave the V2 neighborhood (spawn {spawn_chunk:?}, max x {plus_x}, pose {:?}, yaw {}, min_y {min_y}, presented {:?}, resident {:?}, error {:?})",
+        pose_after_plus.translation,
+        pose_after_plus.yaw_radians,
+        seen_presentations
+            .iter()
+            .map(|chunk| chunk.x)
+            .collect::<BTreeSet<_>>(),
+        spine
+            .resident_chunks()
+            .iter()
+            .map(|chunk| chunk.x)
+            .collect::<BTreeSet<_>>(),
+        spine.last_stream_error()
+    );
+    enqueue_look_then_walk(
+        &mut instance,
+        generation,
+        -std::f32::consts::PI,
+        0.0,
+        1.0,
+        1_040,
+    );
+    sample_walk(
+        &mut instance,
+        &spine,
+        1_040,
+        &mut seen_presentations,
+        &mut seen_player_chunks,
+        &mut min_y,
+    );
+    let minus_x = seen_player_chunks
+        .iter()
+        .map(|chunk| chunk.x)
+        .min()
+        .expect("player visited -X chunks");
+
+    let current = presented_chunks(&instance);
+    let current_xs = current.iter().map(|chunk| chunk.x).collect::<BTreeSet<_>>();
+    let seen_xs = seen_presentations
+        .iter()
+        .map(|chunk| chunk.x)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        plus_x > 0,
+        "walk +X must leave the V2 neighborhood (spawn {spawn_chunk:?}, max x {plus_x})"
+    );
+    assert!(
+        minus_x < -1,
+        "walk -X must leave the V2 neighborhood (spawn {spawn_chunk:?}, min x {minus_x})"
+    );
+    assert!(
+        seen_presentations.len() > v2_neighborhood.len(),
+        "streaming must activate more than the V2 four-chunk neighborhood, got {}",
+        seen_presentations.len()
+    );
+    assert!(
+        seen_xs.iter().any(|x| *x >= 2) && seen_xs.iter().any(|x| *x <= -3),
+        "presented chunks must exist beyond the authored V2 x range, got {seen_xs:?}"
+    );
+    assert!(
+        min_y > 8.0,
+        "the player must stay on generated ground without an authored world edge, min y {min_y}"
+    );
+    assert!(
+        current.len() < seen_presentations.len(),
+        "clean generated chunks must be evicted after the player walks away (current {}, seen {})",
+        current.len(),
+        seen_presentations.len()
+    );
+    assert!(
+        !current_xs.contains(&plus_x) || current.len() < seen_presentations.len(),
+        "the working set must not retain every visited chunk"
+    );
+    assert!(
+        spine.edited_chunks().contains(&edited)
+            && spine.resident_chunks().contains(&edited)
+            && spine.chunk_lifecycle(edited) != ChunkLifecycle::Absent,
+        "dirty edited chunks must not be evicted"
+    );
+    assert!(
+        v2_neighborhood.iter().any(|chunk| !current.contains(chunk)
+            || spine.chunk_lifecycle(*chunk) == ChunkLifecycle::Absent),
+        "clean origin-neighborhood chunks may leave the working set"
+    );
+}
+
+fn assert_working_set_diagnostics(
+    snapshot: WorkingSetDiagnosticsV1,
+    limits: latticeaxiom_compose::PlayableWorldHardLimitsV1,
+) {
+    assert!(
+        snapshot.resident() > 0,
+        "spawn neighborhood must keep committed projections resident"
+    );
+    assert!(
+        snapshot.resident() <= limits.max_resident_chunks,
+        "resident {} exceeds clamp {}",
+        snapshot.resident(),
+        limits.max_resident_chunks
+    );
+    assert!(
+        snapshot.active() <= snapshot.resident(),
+        "active {} exceeds resident {}",
+        snapshot.active(),
+        snapshot.resident()
+    );
+    assert!(
+        snapshot.visible() <= snapshot.resident(),
+        "visible {} exceeds resident {}",
+        snapshot.visible(),
+        snapshot.resident()
+    );
+    assert!(
+        snapshot.in_flight() <= limits.max_in_flight_chunks,
+        "in-flight {} exceeds clamp {}",
+        snapshot.in_flight(),
+        limits.max_in_flight_chunks
+    );
+    assert!(
+        snapshot.dirty() >= 1,
+        "the spawn probe edit must stay dirty and pinned"
+    );
+    assert_eq!(
+        snapshot.saving(),
+        0,
+        "production host must not open a world writer"
+    );
+    assert_eq!(snapshot.byte_budget(), 32 * 1024 * 1024);
+    assert!(
+        snapshot.reserved_bytes() <= snapshot.byte_budget(),
+        "reserved {} exceeds budget {}",
+        snapshot.reserved_bytes(),
+        snapshot.byte_budget()
+    );
+}
+
 fn idle_frame(generation: u64) -> PlayerActionFrameV1 {
     PlayerActionFrameV1 {
         generation,
@@ -557,6 +801,97 @@ fn inspect_frame(generation: u64) -> PlayerActionFrameV1 {
         started,
         ..PlayerActionFrameV1::default()
     }
+}
+
+fn enqueue_look_then_walk(
+    instance: &mut EngineInstance,
+    start_generation: u64,
+    yaw: f32,
+    pitch: f32,
+    forward: f32,
+    walk_ticks: u64,
+) -> u64 {
+    let mut frames = vec![
+        look_frame(start_generation, yaw, pitch),
+        idle_frame(start_generation + 1),
+    ];
+    frames.extend((0..walk_ticks).map(|offset| {
+        let mut started = PlayerActionButtonsV1::empty();
+        if offset.is_multiple_of(18) {
+            started.insert(PlayerActionV1::Jump);
+        }
+        PlayerActionFrameV1 {
+            generation: start_generation + 2 + offset,
+            movement: ActionAxis2V1 { x: 0.0, y: forward },
+            started,
+            ..PlayerActionFrameV1::default()
+        }
+    }));
+    instance
+        .enqueue_headless_actions(frames)
+        .expect("walk frames enqueue");
+    start_generation + 2 + walk_ticks
+}
+
+fn sample_walk(
+    instance: &mut EngineInstance,
+    spine: &ProductionSpine,
+    ticks: u32,
+    seen_presentations: &mut BTreeSet<ChunkCoordinate>,
+    seen_player_chunks: &mut BTreeSet<ChunkCoordinate>,
+    min_y: &mut f32,
+) {
+    let mut remaining = ticks;
+    while remaining > 0 {
+        let step = remaining.min(64);
+        instance
+            .advance_fixed_ticks(step)
+            .expect("walk ticks advance");
+        remaining -= step;
+        record_stream_sample(
+            instance,
+            spine,
+            seen_presentations,
+            seen_player_chunks,
+            min_y,
+        );
+    }
+}
+
+fn record_stream_sample(
+    instance: &EngineInstance,
+    spine: &ProductionSpine,
+    seen_presentations: &mut BTreeSet<ChunkCoordinate>,
+    seen_player_chunks: &mut BTreeSet<ChunkCoordinate>,
+    min_y: &mut f32,
+) {
+    seen_presentations.extend(presented_chunks(instance));
+    let pose = spine.player_pose();
+    *min_y = min_y.min(pose.translation.y);
+    seen_player_chunks.insert(chunk_from_translation(pose.translation, spine.chunk_edge()));
+}
+
+fn presented_chunks(instance: &EngineInstance) -> BTreeSet<ChunkCoordinate> {
+    instance
+        .app()
+        .world()
+        .iter_entities()
+        .filter_map(|entity| {
+            entity
+                .get::<ChunkPresentation>()
+                .map(|chunk| chunk.coordinate)
+        })
+        .collect()
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn chunk_from_translation(translation: bevy::prelude::Vec3, edge: u16) -> ChunkCoordinate {
+    let edge = f32::from(edge);
+    ChunkCoordinate::new(
+        (translation.x / edge).floor() as i32,
+        (translation.y / edge).floor() as i32,
+        (translation.z / edge).floor() as i32,
+    )
 }
 
 fn place_frame(generation: u64, spine: &ProductionSpine) -> PlayerActionFrameV1 {
