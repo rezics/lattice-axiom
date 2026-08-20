@@ -8,7 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+latticeaxiom-compose = { path = "../latticeaxiom-compose" }
 latticeaxiom-core = { path = "../latticeaxiom-core" }
+latticeaxiom-packages = { path = "../latticeaxiom-packages" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -15,7 +15,11 @@ use bevy::{
 };
 use thiserror::Error;
 
-use crate::StructurallyValidatedComposeImages;
+use latticeaxiom_core::CanonicalHash;
+#[cfg(feature = "client")]
+use latticeaxiom_launcher::{FreshClientAppLeaseProof, FreshClientAppLeaseToken};
+
+use crate::prepared::{LockVerifiedComposeImages, StructurallyValidatedComposeImages};
 
 /// Maximum fixed iterations accepted by one manual advancement call.
 ///
@@ -34,6 +38,28 @@ pub enum EngineProfile {
     Client,
     /// GPU-free host built from Bevy [`MinimalPlugins`].
     Headless,
+}
+
+/// Exact product-lock hash of the reopened `latticeaxiom.lock` used to boot.
+///
+/// Client and headless hosts that start from [`LockVerifiedComposeImages`]
+/// carry the same hash. The resource is absent from scaffold instances that
+/// bypass the production lock gate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Resource)]
+pub struct VerifiedProductLockHash(CanonicalHash);
+
+impl VerifiedProductLockHash {
+    /// Creates a hash resource from a reopened final product lock.
+    #[must_use]
+    pub const fn new(digest: CanonicalHash) -> Self {
+        Self(digest)
+    }
+
+    /// Returns the exact product-lock hash.
+    #[must_use]
+    pub const fn get(self) -> CanonicalHash {
+        self.0
+    }
 }
 
 /// Number of Bevy fixed-schedule iterations completed by an instance.
@@ -67,6 +93,9 @@ impl EngineInstance {
     /// permanently. This fails closed because the underlying winit event loop
     /// is not generally safe to recreate after a client is dropped.
     ///
+    /// Ordinary launch must use [`Self::new_client_from_lock`] so a reopened
+    /// final product lock is verified before runtime-image construction.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineInstanceError::ClientInstanceAlreadyExists`] after any
@@ -76,6 +105,28 @@ impl EngineInstance {
         images: StructurallyValidatedComposeImages,
     ) -> Result<Self, EngineInstanceError> {
         Self::new_client_with_setup(images, |_| {})
+    }
+
+    /// Builds the process's sole interactive client from a reopened final lock.
+    ///
+    /// The lock-verified images are shared with headless hosts and are not
+    /// re-resolved. Native modules are not loaded. The launcher lease is
+    /// consumed after Bevy [`DefaultPlugins`] are assembled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineInstanceError::ClientInstanceAlreadyExists`] after any
+    /// earlier client-construction attempt reserved the process event loop.
+    #[cfg(feature = "client")]
+    pub fn new_client_from_lock(
+        images: LockVerifiedComposeImages,
+        lease: FreshClientAppLeaseToken,
+    ) -> Result<(Self, FreshClientAppLeaseProof), EngineInstanceError> {
+        let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
+        let instance = Self::new_client_with_setup(images.into_images(), move |app| {
+            app.insert_resource(product_lock_hash);
+        })?;
+        Ok((instance, lease.into_app_created_proof()))
     }
 
     /// Builds the process's sole interactive client with a host setup hook.
@@ -119,6 +170,9 @@ impl EngineInstance {
 
     /// Builds a GPU-free instance with a manually controlled fixed timestep.
     ///
+    /// Ordinary launch must use [`Self::new_headless_from_lock`] so a reopened
+    /// final product lock is verified before runtime-image construction.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineInstanceError::ZeroFixedTimestep`] when
@@ -128,6 +182,27 @@ impl EngineInstance {
         fixed_timestep: Duration,
     ) -> Result<Self, EngineInstanceError> {
         Self::new_headless_with_setup(images, fixed_timestep, |_| {})
+    }
+
+    /// Builds a GPU-free instance from a reopened final product lock.
+    ///
+    /// The same lock-verified images may start a
+    /// [`bevy::prelude::DefaultPlugins`] client.
+    /// This constructor uses Bevy [`MinimalPlugins`] and does not load native
+    /// modules or open a world writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineInstanceError::ZeroFixedTimestep`] when
+    /// `fixed_timestep` is zero.
+    pub fn new_headless_from_lock(
+        images: LockVerifiedComposeImages,
+        fixed_timestep: Duration,
+    ) -> Result<Self, EngineInstanceError> {
+        let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
+        Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
+            app.insert_resource(product_lock_hash);
+        })
     }
 
     /// Builds a GPU-free instance with a construction-time host setup hook.

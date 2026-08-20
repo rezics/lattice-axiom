@@ -7,11 +7,14 @@ use std::{
 
 use bevy::prelude::Resource;
 use latticeaxiom_compose::{
-    GraphHashError, LOCK_SCHEMA_VERSION, LockedGameGraph, RealizationKind, RuntimeImage,
+    GraphHashError, LOCK_SCHEMA_VERSION, LockedGameGraph, RealizationKind, RuntimeBinding,
+    RuntimeImage, TargetRealizationLockV1,
 };
 use latticeaxiom_core::{
-    CanonicalHash, CapabilityId, PackageName, PackageVersion, SchemaId, StableId,
+    CanonicalHash, CanonicalJsonError, CapabilityId, PackageName, PackageVersion, SchemaId,
+    StableId, TargetTriple, canonical_json_hash,
 };
+use latticeaxiom_launcher::ReopenedFinalLockV1;
 use latticeaxiom_registration::{CallbackMapReceipt, CompiledRegistration, ReceiptValidationError};
 use thiserror::Error;
 
@@ -93,6 +96,168 @@ impl StructurallyValidatedComposeImages {
     #[must_use]
     pub fn into_parts(self) -> (LockedGameGraph, CompiledRegistration, RuntimeImage) {
         (self.graph, self.registration, self.runtime)
+    }
+}
+
+/// Exact lock, compiled registration, and runtime image bound to a reopened
+/// final `latticeaxiom.lock`.
+///
+/// Construction reopens no files and does not call the package resolver. It
+/// constructs [`RuntimeImage`] from the verified target realization and
+/// callback receipt, then applies the same structural gate as
+/// [`StructurallyValidatedComposeImages`]. Native modules are never mapped.
+/// Client and headless hosts must share one value.
+#[derive(Clone, Debug, Resource)]
+pub struct LockVerifiedComposeImages {
+    images: StructurallyValidatedComposeImages,
+    product_lock_hash: CanonicalHash,
+    target: TargetTriple,
+}
+
+impl LockVerifiedComposeImages {
+    /// Binds compiled evidence to a reopened final product lock.
+    ///
+    /// [`RuntimeImage`] is constructed after lock verification from the sealed
+    /// realization and callback receipt. This path does not re-resolve
+    /// packages, load native modules, or open a world writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PreparationError`] when the graph, registration image,
+    /// realization target, runtime fingerprint, or native-mapping policy does
+    /// not match the reopened lock, or when structural image validation fails.
+    pub fn from_reopened_lock(
+        lock: &ReopenedFinalLockV1,
+        target: &TargetTriple,
+        graph: LockedGameGraph,
+        registration: CompiledRegistration,
+    ) -> Result<Self, PreparationError> {
+        let product = lock.product_lock();
+        let Some(realization) = product.realizations.get(target) else {
+            return Err(PreparationError::MissingTargetRealization {
+                target: target.clone(),
+            });
+        };
+        bind_graph_to_lock(
+            &graph,
+            product.registration.graph_hash,
+            product.registration.graph_lock_hash,
+        )?;
+        if product.portable_resolution.graph_hash != graph.graph_hash {
+            return Err(PreparationError::RegistrationGraphMismatch {
+                locked: product.portable_resolution.graph_hash,
+                registration: graph.graph_hash,
+            });
+        }
+        if registration.image.image_hash != product.registration.image_hash {
+            return Err(PreparationError::RegistrationImageDoesNotMatchProductLock {
+                locked: product.registration.image_hash,
+                registration: registration.image.image_hash,
+            });
+        }
+        refuse_native_module_mapping(realization)?;
+        let runtime = runtime_image_from_realization(realization, &registration);
+        let actual = canonical_json_hash(&runtime)?;
+        if actual != realization.runtime_image_fingerprint {
+            return Err(PreparationError::RuntimeImageFingerprintMismatch {
+                locked: realization.runtime_image_fingerprint,
+                actual,
+            });
+        }
+        let images = StructurallyValidatedComposeImages::new(graph, registration, runtime)?;
+        Ok(Self {
+            images,
+            product_lock_hash: lock.product_lock_hash(),
+            target: target.clone(),
+        })
+    }
+
+    /// Returns the structurally validated compose images.
+    #[must_use]
+    pub const fn images(&self) -> &StructurallyValidatedComposeImages {
+        &self.images
+    }
+
+    /// Returns the exact product-lock hash of the shared reopened lock.
+    #[must_use]
+    pub const fn product_lock_hash(&self) -> CanonicalHash {
+        self.product_lock_hash
+    }
+
+    /// Returns the target realization selected from the reopened lock.
+    #[must_use]
+    pub const fn target(&self) -> &TargetTriple {
+        &self.target
+    }
+
+    /// Consumes the lock-verified images.
+    #[must_use]
+    pub fn into_images(self) -> StructurallyValidatedComposeImages {
+        self.images
+    }
+}
+
+fn bind_graph_to_lock(
+    graph: &LockedGameGraph,
+    locked_graph_hash: CanonicalHash,
+    locked_graph_lock_hash: CanonicalHash,
+) -> Result<(), PreparationError> {
+    if graph.graph_hash != locked_graph_hash {
+        return Err(PreparationError::RegistrationGraphMismatch {
+            locked: locked_graph_hash,
+            registration: graph.graph_hash,
+        });
+    }
+    if graph.lock_hash != locked_graph_lock_hash {
+        return Err(PreparationError::RegistrationLockMismatch {
+            locked: locked_graph_lock_hash,
+            registration: graph.lock_hash,
+        });
+    }
+    Ok(())
+}
+
+fn refuse_native_module_mapping(
+    realization: &TargetRealizationLockV1,
+) -> Result<(), PreparationError> {
+    for (package, realized) in &realization.packages {
+        if matches!(
+            realized.kind,
+            RealizationKind::PortableNative | RealizationKind::EngineCoupledNative
+        ) {
+            return Err(PreparationError::NativeModuleMappingForbidden {
+                package: package.clone(),
+                kind: realized.kind,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn runtime_image_from_realization(
+    realization: &TargetRealizationLockV1,
+    registration: &CompiledRegistration,
+) -> RuntimeImage {
+    let mut packages = BTreeMap::new();
+    for (name, package) in &realization.packages {
+        let mut callbacks = BTreeSet::new();
+        for (callback, binding) in &registration.callback_receipt.callbacks {
+            if binding.owner == *name {
+                callbacks.insert(callback.clone());
+            }
+        }
+        packages.insert(
+            name.clone(),
+            RuntimeBinding {
+                realization: package.kind,
+                artifact_hash: package.artifact_digest,
+                callbacks,
+            },
+        );
+    }
+    RuntimeImage {
+        registration_hash: realization.registration_image_hash,
+        packages,
     }
 }
 
@@ -581,6 +746,9 @@ impl fmt::Display for CatalogKind {
 /// Failure to verify and bind host preparation inputs.
 #[derive(Debug, Error)]
 pub enum PreparationError {
+    /// Canonical encoding of a runtime image failed.
+    #[error(transparent)]
+    Canonical(#[from] CanonicalJsonError),
     /// The lock schema is not understood by this host.
     #[error("unsupported lock schema {actual}; this host accepts schema {expected}")]
     UnsupportedLockSchema {
@@ -588,6 +756,38 @@ pub enum PreparationError {
         expected: u32,
         /// Schema carried by the lock.
         actual: u32,
+    },
+    /// The reopened product lock has no realization for the requested target.
+    #[error("reopened product lock has no realization for target {target}")]
+    MissingTargetRealization {
+        /// Requested build target.
+        target: TargetTriple,
+    },
+    /// The compiled registration image hash does not match the reopened lock.
+    #[error("registration image hash {registration} does not match reopened product lock {locked}")]
+    RegistrationImageDoesNotMatchProductLock {
+        /// Registration image hash sealed by the product lock.
+        locked: CanonicalHash,
+        /// Registration image hash supplied with compiled evidence.
+        registration: CanonicalHash,
+    },
+    /// Constructed runtime-image fingerprint does not match the reopened lock.
+    #[error("runtime image fingerprint {actual} does not match reopened product lock {locked}")]
+    RuntimeImageFingerprintMismatch {
+        /// Runtime-image fingerprint sealed by the product lock.
+        locked: CanonicalHash,
+        /// Fingerprint of the runtime image constructed after reopen.
+        actual: CanonicalHash,
+    },
+    /// A native module would have to be mapped into the process.
+    #[error(
+        "native module for '{package}' ({kind:?}) is verified by digest only and is not loaded"
+    )]
+    NativeModuleMappingForbidden {
+        /// Package whose native artifact must not be mapped.
+        package: PackageName,
+        /// Native realization kind recorded by the lock.
+        kind: RealizationKind,
     },
     /// A claimed graph or lock hash is invalid.
     #[error("locked game graph hash validation failed: {0}")]

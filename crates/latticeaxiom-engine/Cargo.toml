@@ -32,9 +32,14 @@ bevy.workspace = true
 latticeaxiom-compose = { path = "../latticeaxiom-compose" }
 latticeaxiom-core = { path = "../latticeaxiom-core" }
 latticeaxiom-gameplay = { path = "../latticeaxiom-gameplay" }
+latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
 latticeaxiom-player = { path = "../latticeaxiom-player" }
 latticeaxiom-registration = { path = "../latticeaxiom-registration" }
 thiserror.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

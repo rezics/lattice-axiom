@@ -4,7 +4,13 @@
 //! bounded [`LaunchIntentV1`], models shell/world/recovery transitions, and
 //! issues a single-use process lease that a future Bevy host must consume
 //! before creating its one fresh client `DefaultPlugins` application.
+//!
+//! Ordinary launch reopens and fully verifies `latticeaxiom.lock` before a
+//! host may construct [`latticeaxiom_compose::RuntimeImage`] or load native
+//! modules. Client and headless hosts share that reopened lock and must not
+//! re-resolve. This crate still does not create a Bevy `App`.
 
+mod boot;
 mod error;
 mod filesystem;
 mod machine;
@@ -12,6 +18,7 @@ mod model;
 mod process;
 mod store;
 
+pub use boot::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
 pub use error::{IntentStoreError, LaunchIntentError, LaunchModelError, StoreOperation};
 pub use filesystem::FileLaunchIntentStore;
 pub use machine::{

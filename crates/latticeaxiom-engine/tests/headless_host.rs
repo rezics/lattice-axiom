@@ -3,6 +3,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs, io,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -13,25 +16,31 @@ use bevy::{
     render::{RenderPlugin, renderer::RenderDevice},
 };
 use latticeaxiom_compose::{
-    COMPOSITION_SCHEMA_VERSION, CompositionPolicy, CompositionSpec, ExactRegistration,
-    LOCK_SCHEMA_VERSION, LockedGameGraph, LockedPackage, ManifestProducer, NickelEvaluationLimits,
-    NumericRegistrationId, PackageDomain, PackageRequest, ProfileKind, RealizationId,
-    RealizationKind, RealizationPreference, RegistrationFragment, RegistrationKind,
-    RegistrationManifest, RuntimeBinding, RuntimeImage, SourceCandidate, TrustClass,
+    COMPOSITION_SCHEMA_VERSION, CompositionBootstrapV1, CompositionPolicy, CompositionSpec,
+    ExactRegistration, LOCK_SCHEMA_VERSION, LockActionMode, LockedGameGraph, LockedPackage,
+    ManifestProducer, NickelEvaluationLimits, NumericRegistrationId, PRODUCT_LOCK_FILE_NAME,
+    PRODUCT_LOCK_PRODUCER_MACHINE, PackageDomain, PackageRequest, ProductLockDraftV1,
+    ProductLockError, ProductLockObjects, ProductLockProducerV1, ProductLockReceiptKind,
+    ProfileKind, RealizationId, RealizationKind, RealizationPreference, RegistrationFragment,
+    RegistrationKind, RegistrationManifest, RuntimeBinding, RuntimeImage, SourceCandidate,
+    TargetPackageRealizationV1, TargetRealizationLockV1, TrustClass, persist_product_lock,
 };
 use latticeaxiom_core::{
     CanonicalHash, NamespaceGrant, NamespaceGrantPattern, NamespaceGrantor, PackageName,
     PackageVersion, PackageVersionReq, RegistrationNamespace, SourceId, SourceProvenance, StableId,
-    TargetTriple,
+    TargetTriple, canonical_json_bytes,
 };
 use latticeaxiom_engine::{
-    EngineInstance, EngineInstanceError, MAX_TICKS_PER_ADVANCE, PreparationError,
-    StructurallyValidatedComposeImages,
+    EngineInstance, EngineInstanceError, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE,
+    PreparationError, StructurallyValidatedComposeImages, VerifiedProductLockHash,
 };
+use latticeaxiom_launcher::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
 use latticeaxiom_registration::{
     CallbackDeclaration, CompiledRegistration, PackageRegistrationInput, ReceiptValidationError,
     RegistrationCompileInput, RegistrationCompiler, SystemDeclaration,
 };
+use serde::Serialize;
+use serde_json::Value;
 
 const FIXED_TIMESTEP: Duration = Duration::from_millis(20);
 const FIXED_STAGE: &str = "latticeaxiom:system-stage/gameplay/fixed@1";
@@ -225,6 +234,79 @@ fn zero_timestep_is_rejected() {
     ));
 }
 
+#[test]
+fn reopened_lock_starts_gpu_free_headless_without_re_resolving() {
+    let boot = lock_boot_fixture();
+    let prepared = boot.prepared();
+    let client_share = prepared.clone();
+    assert_eq!(
+        client_share.product_lock_hash(),
+        boot.reopened.product_lock_hash()
+    );
+    assert_eq!(client_share.target(), prepared.target());
+
+    let mut instance = EngineInstance::new_headless_from_lock(prepared, FIXED_TIMESTEP)
+        .expect("headless instance starts from the reopened lock");
+    assert_eq!(
+        instance.profile(),
+        latticeaxiom_engine::EngineProfile::Headless
+    );
+    assert_eq!(
+        instance
+            .app()
+            .world()
+            .get_resource::<VerifiedProductLockHash>()
+            .copied()
+            .map(VerifiedProductLockHash::get),
+        Some(boot.reopened.product_lock_hash())
+    );
+    instance
+        .advance_fixed_ticks(3)
+        .expect("lock-boot headless ticks advance");
+    assert_eq!(instance.completed_fixed_ticks(), 3);
+}
+
+#[test]
+fn missing_lock_refuses_before_headless_app() {
+    let boot = lock_boot_fixture();
+    let missing = boot.directory.path().join("absent.lock");
+    match ReopenedFinalLockV1::reopen_frozen(&missing, &boot.objects, &boot.host) {
+        Err(ProductLockBootError::ProductLock(ProductLockError::MissingLock { path })) => {
+            assert_eq!(path, missing);
+        }
+        other => panic!("missing lock must fail before App construction, got {other:?}"),
+    }
+}
+
+#[test]
+fn tampered_source_refuses_before_headless_app() {
+    let mut boot = lock_boot_fixture();
+    boot.objects.sources.clear();
+    match ReopenedFinalLockV1::reopen_frozen(boot.lock_path(), &boot.objects, &boot.host) {
+        Err(ProductLockBootError::ProductLock(ProductLockError::MissingReceipt {
+            receipt: ProductLockReceiptKind::Source,
+            ..
+        })) => {}
+        other => panic!("missing source must fail before App construction, got {other:?}"),
+    }
+}
+
+#[test]
+fn tampered_registration_refuses_before_headless_app() {
+    let boot = lock_boot_fixture();
+    let mut compiled = boot.compiled;
+    compiled.callback_receipt.callback_map_hash = CanonicalHash::digest(b"tampered-callback-map");
+    assert!(matches!(
+        LockVerifiedComposeImages::from_reopened_lock(
+            &boot.reopened,
+            &boot.target,
+            boot.graph,
+            compiled,
+        ),
+        Err(PreparationError::CompiledRegistration(_))
+    ));
+}
+
 fn fixed_elapsed(instance: &EngineInstance) -> Duration {
     instance
         .app()
@@ -237,6 +319,7 @@ struct Fixture {
     graph: LockedGameGraph,
     compiled: CompiledRegistration,
     runtime: RuntimeImage,
+    manifest: RegistrationManifest,
     package: PackageName,
     system: StableId,
     callback: StableId,
@@ -431,6 +514,7 @@ fn fixture() -> Fixture {
         graph,
         compiled,
         runtime,
+        manifest,
         package,
         system,
         callback,
@@ -495,4 +579,218 @@ fn source_id(value: &str) -> SourceId {
 
 fn target(value: &str) -> TargetTriple {
     value.parse().expect("fixture target triple is valid")
+}
+
+struct LockBootFixture {
+    directory: TestDirectory,
+    reopened: ReopenedFinalLockV1,
+    objects: ProductLockObjects,
+    host: HostBuildReceipts,
+    graph: LockedGameGraph,
+    compiled: CompiledRegistration,
+    target: TargetTriple,
+}
+
+impl LockBootFixture {
+    fn lock_path(&self) -> PathBuf {
+        self.directory.lock_path()
+    }
+
+    fn prepared(&self) -> LockVerifiedComposeImages {
+        LockVerifiedComposeImages::from_reopened_lock(
+            &self.reopened,
+            &self.target,
+            self.graph.clone(),
+            self.compiled.clone(),
+        )
+        .expect("reopened lock binds compiled evidence")
+    }
+}
+
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn create() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "latticeaxiom-engine-lock-boot-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("test directory was created");
+        Self(fs::canonicalize(&path).expect("test directory canonicalized"))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.0.join(PRODUCT_LOCK_FILE_NAME)
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let temporary_root =
+            fs::canonicalize(std::env::temp_dir()).expect("temporary root canonicalized");
+        assert!(
+            self.0.starts_with(&temporary_root),
+            "refusing to delete a test directory outside the process temporary root"
+        );
+        if let Err(error) = fs::remove_dir_all(&self.0)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            panic!("test directory cleanup failed: {error}");
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn lock_boot_fixture() -> LockBootFixture {
+    let fixture = fixture();
+    let directory = TestDirectory::create();
+    let source = b"terrenia-source".to_vec();
+    let artifact = b"terrenia-artifact".to_vec();
+    let manifest_bytes = manifest_object_bytes(&fixture.manifest);
+    assert_eq!(
+        CanonicalHash::digest(&manifest_bytes),
+        fixture.manifest.semantic_hash,
+        "CAS manifest bytes must be the semantic identity payload"
+    );
+    let mut objects = ProductLockObjects::default();
+    objects
+        .sources
+        .insert(CanonicalHash::digest(&source), source.clone());
+    objects
+        .manifests
+        .insert(fixture.manifest.semantic_hash, manifest_bytes);
+    objects
+        .artifacts
+        .insert(CanonicalHash::digest(&artifact), artifact.clone());
+
+    let bootstrap = CompositionBootstrapV1::from_toml_str(
+        r#"
+schema_version = 1
+projection = "headless-test"
+projection_domains = ["authoritative"]
+evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1"
+realization_policy = ["data"]
+nickel_profile_entry = "profiles/headless.ncl"
+
+[roots.terrenia]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[[sources]]
+kind = "fixture"
+package = "terrenia"
+version = "0.1.0"
+source_id = "latticeaxiom:source/terrenia"
+path = "packages/terrenia"
+"#,
+    )
+    .expect("lock-boot bootstrap parses");
+    let toolchain = CanonicalHash::digest(b"engine-lock-boot-toolchain");
+    let runtime_image_fingerprint = latticeaxiom_core::canonical_json_hash(&fixture.runtime)
+        .expect("fixture runtime image canonicalizes");
+    let target = target("x86_64-unknown-linux-gnu");
+    let name = fixture.package.clone();
+    let lock = latticeaxiom_compose::LockV1::seal(ProductLockDraftV1 {
+        producer: ProductLockProducerV1 {
+            machine: PRODUCT_LOCK_PRODUCER_MACHINE.to_owned(),
+            toolchain,
+        },
+        bootstrap,
+        alias_edges: BTreeMap::new(),
+        resolution_receipt_hash: CanonicalHash::digest(b"resolution-receipt"),
+        evaluation_policy_receipt_hash: CanonicalHash::digest(b"evaluation-policy"),
+        package_features: BTreeMap::new(),
+        source_objects: BTreeMap::from([(name.clone(), CanonicalHash::digest(&source))]),
+        realizations: BTreeMap::from([(
+            target.clone(),
+            TargetRealizationLockV1 {
+                projection: ProfileKind::HeadlessTest,
+                target: target.clone(),
+                toolchain,
+                build_intent_hash: CanonicalHash::digest(b"build-intent"),
+                packages: BTreeMap::from([(
+                    name,
+                    TargetPackageRealizationV1 {
+                        realization_id: fixture
+                            .graph
+                            .packages
+                            .values()
+                            .next()
+                            .expect("fixture graph has a package")
+                            .realization_id
+                            .clone(),
+                        kind: RealizationKind::Data,
+                        artifact_digest: CanonicalHash::digest(&artifact),
+                        engine_build_id: None,
+                        registration_hash: fixture.manifest.semantic_hash,
+                    },
+                )]),
+                engine_build_id: None,
+                registration_image_hash: fixture.compiled.image.image_hash,
+                runtime_image_fingerprint,
+            },
+        )]),
+        registration_semantic_hash: fixture.compiled.image_receipt.registration_semantic_hash,
+        registration_image: fixture.compiled.image.clone(),
+        runtime_image: fixture.runtime.clone(),
+        graph: fixture.graph.clone(),
+    })
+    .expect("product lock seals from compiled evidence");
+    persist_product_lock(directory.lock_path(), &lock, LockActionMode::Persist)
+        .expect("product lock persists and reopens");
+    let host = HostBuildReceipts {
+        toolchain,
+        engine_build_id: None,
+    };
+    let reopened = ReopenedFinalLockV1::reopen_frozen(directory.lock_path(), &objects, &host)
+        .expect("persisted lock reopens frozen");
+    LockBootFixture {
+        directory,
+        reopened,
+        objects,
+        host,
+        graph: fixture.graph,
+        compiled: fixture.compiled,
+        target,
+    }
+}
+
+#[derive(Serialize)]
+struct ManifestSemanticIdentity<'a> {
+    schema_version: u32,
+    package: &'a PackageName,
+    version: &'a PackageVersion,
+    normalized_fragment: Value,
+}
+
+fn manifest_object_bytes(manifest: &RegistrationManifest) -> Vec<u8> {
+    let mut fragment = serde_json::to_value(&manifest.fragment).expect("fragment encodes");
+    if let Value::Object(fields) = &mut fragment
+        && let Some(Value::Array(registrations)) = fields.get_mut("registrations")
+    {
+        for registration in registrations.iter_mut() {
+            if let Value::Object(fields) = registration {
+                fields.remove("provenance");
+            }
+        }
+        registrations.sort_by(|left, right| {
+            canonical_json_bytes(left)
+                .expect("registration left canonicalizes")
+                .cmp(&canonical_json_bytes(right).expect("registration right canonicalizes"))
+        });
+    }
+
+    canonical_json_bytes(&ManifestSemanticIdentity {
+        schema_version: manifest.schema_version,
+        package: &manifest.package,
+        version: &manifest.version,
+        normalized_fragment: fragment,
+    })
+    .expect("manifest semantic identity canonicalizes")
 }
