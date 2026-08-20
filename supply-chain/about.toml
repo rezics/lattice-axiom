@@ -1,0 +1,121 @@
+accepted = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+private = { ignore = false }
+workarounds = ["ring", "rustls", "rustix"]
+
+# Workspace crates are intentionally accepted one by one. A new crate remains
+# fail-closed until it declares AGPL-3.0-only and is added here deliberately.
+[latticeaxiom-abi]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-compose]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-content]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-core]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-dual-fixture]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-engine]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-gameplay]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-launcher]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-packages]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-player]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-registration]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-render-contracts]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-runtime-contracts]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-sdk]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-sdk-macros]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-start-ui]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-storage]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-territory]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-voxel-mesh]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-voxel-playground]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-voxel-runtime]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-world-catalog]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-world-db]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-world-wire]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-worldgen]
+accepted = ["AGPL-3.0-only"]
+# Exact versions remain enforced by deny.toml and by the locked-metadata
+# validator. These entries only teach cargo-about which reviewed branch to use.
+[bitmaps]
+accepted = ["MPL-2.0"]
+
+[dyn-eq]
+accepted = ["MPL-2.0"]
+
+[imbl-sized-chunks]
+accepted = ["MPL-2.0"]
+
+[malachite]
+accepted = ["LGPL-3.0-only"]
+
+[malachite-base]
+accepted = ["LGPL-3.0-only"]
+
+[malachite-float]
+accepted = ["LGPL-3.0-only"]
+
+[malachite-nz]
+accepted = ["LGPL-3.0-only"]
+
+[malachite-q]
+accepted = ["LGPL-3.0-only"]
