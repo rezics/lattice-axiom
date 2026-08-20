@@ -276,6 +276,12 @@ pub struct GenerationReceiptV1 {
 }
 
 impl GenerationReceiptV1 {
+    /// Returns the generated dimension.
+    #[must_use]
+    pub const fn dimension(&self) -> &DimensionId {
+        &self.dimension
+    }
+
     /// Returns the generated chunk coordinate.
     #[must_use]
     pub const fn chunk(&self) -> ChunkCoordinate {
@@ -685,6 +691,30 @@ impl GenerationPlanV1 {
         face: crate::ChunkFaceV1,
     ) -> WorldgenResult<crate::SharedFaceKeyV1> {
         self.cave.shared_face_key(coordinate, face)
+    }
+
+    /// Builds a request for a chunk that has never been materialized.
+    ///
+    /// The request carries an unassigned local epoch, a complete unassigned
+    /// four-neighbor view, and the default `Absent` storage CAS condition. It
+    /// does not read or open storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an arithmetic error when a cardinal planning-cell neighbor is
+    /// not representable.
+    pub fn vacant_generation_request(
+        &self,
+        coordinate: ChunkCoordinate,
+    ) -> WorldgenResult<ChunkGenerationRequestV1> {
+        let cell = self.planning_cell(coordinate);
+        Ok(ChunkGenerationRequestV1::new(
+            coordinate,
+            None,
+            CellEpochStateV1::Unassigned,
+            AdjacentEpochSnapshotV1::all_unassigned(cell)?,
+            Vec::new(),
+        ))
     }
 
     /// Reuses consistent storage evidence or creates a new snapshot-first candidate.

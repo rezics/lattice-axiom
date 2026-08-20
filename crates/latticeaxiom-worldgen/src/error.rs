@@ -283,4 +283,35 @@ pub enum WorldgenError {
         /// Validation reason.
         reason: String,
     },
+    /// A bounded region request contained no chunks.
+    #[error("bounded generated region is empty")]
+    EmptyGeneratedRegion,
+    /// A bounded region request repeated one chunk coordinate.
+    #[error("bounded generated region repeats chunk {coordinate:?}")]
+    DuplicateGeneratedRegionChunk {
+        /// Repeated chunk coordinate.
+        coordinate: ChunkCoordinate,
+    },
+    /// A bounded region request exceeded the hard chunk count.
+    #[error("bounded generated region has {actual} chunks; limit is {limit}")]
+    GeneratedRegionLimitExceeded {
+        /// Requested unique chunk count.
+        actual: usize,
+        /// Hard maximum unique chunks.
+        limit: usize,
+    },
+    /// Region materialization received reused snapshot evidence instead of a new candidate.
+    #[error("generation reused existing snapshot evidence for chunk {coordinate:?}")]
+    ExistingSnapshotUnsupported {
+        /// Chunk that returned caller-trusted storage evidence.
+        coordinate: ChunkCoordinate,
+    },
+    /// A storage schema or provenance identity used by snapshot candidates was invalid.
+    #[error("invalid storage identity `{value}`: {reason}")]
+    InvalidStorageIdentity {
+        /// Rejected identity text.
+        value: String,
+        /// Validation reason.
+        reason: String,
+    },
 }

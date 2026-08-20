@@ -24,6 +24,7 @@ mod error;
 mod generation;
 mod hashes;
 mod provider;
+mod region;
 mod roles;
 mod seed;
 mod territory;
@@ -49,6 +50,9 @@ pub use hashes::{
     SharedFaceHashV1, SnapshotChecksumV1, WorldgenConfigHashV1,
 };
 pub use provider::{ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1};
+pub use region::{
+    BoundedGeneratedRegionV1, MAX_BOUNDED_REGION_CHUNKS, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1,
+};
 pub use roles::{
     D4_MAX_CATALOG_BLOCK_COUNT, D4_MAX_ROLE_BINDING_COUNT, D4BlockCatalogClosureV1,
     D4MaterialRoleV1, D4RoleVocabularyV1, FrozenRoleBindingsV1,

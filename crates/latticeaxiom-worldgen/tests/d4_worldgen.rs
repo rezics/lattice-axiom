@@ -11,15 +11,21 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
 
-use latticeaxiom_core::{CanonicalHash, StableId};
+use latticeaxiom_core::{CanonicalHash, StableId, WorldId};
+use latticeaxiom_storage::{
+    AuthoritativeTransactionKernel, ChunkKey, CommitReceipt, MemoryTransactionKernel,
+    TransactionId, WorldRevision,
+};
 use latticeaxiom_worldgen::{
-    AdjacentCellEpochV1, AdjacentEpochSnapshotV1, BoundaryAdapterDeclarationV1, CellEpochStateV1,
-    ChunkCoordinate, ChunkFaceV1, ChunkGenerationOutcomeV1, ChunkGenerationRequestV1,
-    ChunkRevision, ChunkRevisionExpectation, D4BlockCatalogClosureV1, D4MaterialRoleV1,
-    D4RoleVocabularyV1, DimensionId, ExistingSnapshotEvidenceV1, FrozenRoleBindingsV1,
-    GenerationEpochIdV1, GenerationPlanInputV1, GenerationPlanV1, PlacementPredicateKindV1,
-    PlanActivationIdV1, PlanningCellCoordinateV1, ProviderGenerationIdentityV1, ProviderOfferV1,
-    ProviderSlotV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
+    AdjacentCellEpochV1, AdjacentEpochSnapshotV1, BoundaryAdapterDeclarationV1,
+    BoundedGeneratedRegionV1, CellEpochStateV1, ChunkCoordinate, ChunkFaceV1,
+    ChunkGenerationOutcomeV1, ChunkGenerationRequestV1, ChunkRevision, ChunkRevisionExpectation,
+    D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, DimensionId,
+    ExistingSnapshotEvidenceV1, FrozenRoleBindingsV1, GenerationEpochIdV1, GenerationPlanInputV1,
+    GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1,
+    PlacementPredicateKindV1, PlanActivationIdV1, PlanningCellCoordinateV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
+    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
 };
 use proptest::prelude::*;
 
@@ -983,6 +989,124 @@ fn both_style_surface_snapshots_have_independent_goldens() {
         ]
     );
 }
+
+#[test]
+fn origin_neighborhood_includes_negative_xz_and_commits_snapshot_candidates() {
+    let plan = fixture_plan(false, &[b"lock-a"]);
+    let region = BoundedGeneratedRegionV1::materialize(&plan)
+        .expect("origin neighborhood generates through D4");
+    assert_eq!(region.len(), ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1.len());
+    assert!(
+        ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1
+            .iter()
+            .any(|coordinate| coordinate.x < 0 && coordinate.z < 0)
+    );
+    for coordinate in ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1 {
+        assert!(region.candidate(coordinate).is_some());
+    }
+
+    let world = fixture_world_id();
+    let transaction = region
+        .to_storage_transaction(world, TransactionId::from_u128(1), WorldRevision::ZERO)
+        .expect("region converts to kernel mutations without opening a writer");
+    assert_eq!(
+        transaction.mutations().len(),
+        ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1.len()
+    );
+
+    let storage = MemoryTransactionKernel::new();
+    let receipt = storage
+        .commit(transaction)
+        .expect("in-memory kernel accepts D4 snapshot candidates");
+    assert_eq!(
+        receipt.chunks().len(),
+        ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1.len()
+    );
+
+    let snapshot = storage
+        .reference_snapshot(world)
+        .expect("committed region remains readable");
+    for coordinate in ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1 {
+        let candidate = region
+            .candidate(coordinate)
+            .expect("generated neighborhood contains the coordinate");
+        let stored = snapshot
+            .chunk(&ChunkKey::new(world, plan.dimension().clone(), coordinate))
+            .expect("kernel snapshot contains the generated chunk");
+        assert_eq!(stored.data().voxels().bytes(), candidate.snapshot_bytes());
+        assert_eq!(
+            stored.data().provenance().len(),
+            2,
+            "receipt and checksum sidecars are persisted with the candidate"
+        );
+    }
+}
+
+#[test]
+fn same_seed_and_config_match_across_independent_region_runs() {
+    let first_plan = fixture_plan_with_seed(42);
+    let second_plan = fixture_plan_with_seed(42);
+    let divergent_plan = fixture_plan_with_seed(43);
+    assert_eq!(
+        first_plan.generation_input_hash(),
+        second_plan.generation_input_hash()
+    );
+    assert_ne!(
+        first_plan.generation_input_hash(),
+        divergent_plan.generation_input_hash()
+    );
+
+    let first = BoundedGeneratedRegionV1::materialize(&first_plan)
+        .expect("first independent run materializes");
+    let second = BoundedGeneratedRegionV1::materialize_coordinates(
+        &second_plan,
+        ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1.into_iter().rev(),
+    )
+    .expect("second independent run materializes in reverse request order");
+    let divergent = BoundedGeneratedRegionV1::materialize(&divergent_plan)
+        .expect("divergent seed still materializes");
+    assert_eq!(first, second);
+    assert_ne!(first, divergent);
+
+    let world = fixture_world_id();
+    let first_hash = commit_region(&first, world, 11).materialized_chunk_state_hash();
+    let second_hash = commit_region(&second, world, 11).materialized_chunk_state_hash();
+    let divergent_hash = commit_region(&divergent, world, 11).materialized_chunk_state_hash();
+    assert_eq!(first_hash, second_hash);
+    assert_ne!(first_hash, divergent_hash);
+}
+
+#[test]
+fn bounded_region_requests_fail_closed() {
+    let plan = fixture_plan(false, &[b"lock-a"]);
+    assert!(matches!(
+        BoundedGeneratedRegionV1::materialize_coordinates(&plan, []),
+        Err(WorldgenError::EmptyGeneratedRegion)
+    ));
+    assert!(matches!(
+        BoundedGeneratedRegionV1::materialize_coordinates(
+            &plan,
+            [
+                ChunkCoordinate::new(0, 0, 0),
+                ChunkCoordinate::new(0, 0, 0),
+            ]
+        ),
+        Err(WorldgenError::DuplicateGeneratedRegionChunk {
+            coordinate
+        }) if coordinate == ChunkCoordinate::new(0, 0, 0)
+    ));
+
+    let too_many = (0..=i32::try_from(MAX_BOUNDED_REGION_CHUNKS).expect("limit fits i32"))
+        .map(|x| ChunkCoordinate::new(x, 0, 0));
+    assert!(matches!(
+        BoundedGeneratedRegionV1::materialize_coordinates(&plan, too_many),
+        Err(WorldgenError::GeneratedRegionLimitExceeded {
+            actual,
+            limit: MAX_BOUNDED_REGION_CHUNKS
+        }) if actual == MAX_BOUNDED_REGION_CHUNKS + 1
+    ));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -1051,6 +1175,49 @@ fn all_cave_plan() -> GenerationPlanV1 {
         WorldgenLimitsV1::default(),
     ))
     .expect("all-cave fixture plan compiles")
+}
+
+fn fixture_plan_with_seed(seed: i64) -> GenerationPlanV1 {
+    GenerationPlanV1::compile(GenerationPlanInputV1::new(
+        dimension_id(),
+        WorldSeedV1::from_integer(seed),
+        default_config(),
+        7,
+        PlanActivationIdV1::from_hash(CanonicalHash::digest(b"fixture-activation")),
+        provider_offers(false),
+        role_vocabulary(),
+        role_bindings(),
+        block_catalog(),
+        CanonicalHash::digest(b"authoritative-semantic-image"),
+        vec![CanonicalHash::digest(b"lock-a")],
+        WorldgenLimitsV1::default(),
+    ))
+    .expect("seeded fixture plan compiles")
+}
+
+fn fixture_world_id() -> WorldId {
+    "018f1e2d-3c4b-4a59-8c6d-7e8f9012abcd"
+        .parse()
+        .expect("fixture world UUID is a canonical version-4 identifier")
+}
+
+fn commit_region(
+    region: &BoundedGeneratedRegionV1,
+    world: WorldId,
+    transaction: u128,
+) -> CommitReceipt {
+    let storage = MemoryTransactionKernel::new();
+    storage
+        .commit(
+            region
+                .to_storage_transaction(
+                    world,
+                    TransactionId::from_u128(transaction),
+                    WorldRevision::ZERO,
+                )
+                .expect("region converts to an in-memory transaction"),
+        )
+        .expect("in-memory kernel commits generated snapshot candidates")
 }
 
 fn fixture_plan_with_activation(activation: &[u8]) -> GenerationPlanV1 {
