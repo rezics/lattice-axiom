@@ -5,8 +5,8 @@ use std::fmt;
 use std::str::FromStr;
 
 use latticeaxiom_core::{
-    CanonicalHash, CanonicalJsonError, PackageName, PackageVersion, PackageVersionReq, SourceId,
-    SourceProvenance, StableId, TargetTriple, canonical_json_hash,
+    CanonicalHash, CanonicalJsonError, CanonicalLogicalPath, PackageName, PackageVersion,
+    PackageVersionReq, SourceId, SourceProvenance, StableId, TargetTriple, canonical_json_hash,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -561,12 +561,12 @@ pub enum ArtifactIntent {
     /// Select a local prebuilt artifact by a package-relative path.
     LocalPrebuilt {
         /// Slash-normalized package-relative artifact path.
-        path: String,
+        path: CanonicalLogicalPath,
     },
     /// Load a pure-data root.
     DataRoot {
         /// Slash-normalized package-relative data root.
-        path: String,
+        path: CanonicalLogicalPath,
     },
 }
 
@@ -1510,6 +1510,23 @@ mod tests {
             }))
             .is_err()
         );
+        for path in [
+            "../artifact",
+            "/absolute/artifact",
+            "C:/artifact",
+            r"artifacts\plugin",
+            "artifacts/./plugin",
+            "artifacts/e\u{301}",
+        ] {
+            assert!(
+                serde_json::from_value::<ArtifactIntent>(serde_json::json!({
+                    "kind": "local-prebuilt",
+                    "path": path
+                }))
+                .is_err(),
+                "expected noncanonical artifact path `{path}` to be rejected"
+            );
+        }
     }
 
     #[test]
@@ -1757,7 +1774,8 @@ mod tests {
             targets: BTreeSet::new(),
             required_features: BTreeSet::new(),
             artifact: ArtifactIntent::DataRoot {
-                path: "assets".to_owned(),
+                path: CanonicalLogicalPath::new("assets")
+                    .unwrap_or_else(|error| panic!("fixture artifact path is invalid: {error}")),
             },
             trust: TrustClass::DataOnly,
             engine_build: None,
