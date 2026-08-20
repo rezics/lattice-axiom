@@ -1,0 +1,6 @@
+terrenia:block/air
+terrenia:block/copper-block
+terrenia:block/dirt
+terrenia:block/grass
+terrenia:block/obsidian
+terrenia:block/stone

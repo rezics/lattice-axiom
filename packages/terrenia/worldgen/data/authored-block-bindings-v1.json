@@ -1,0 +1,542 @@
+{
+  "authoring_schema": "terrenia:schema/authored-worldgen-block-bindings@1",
+  "bindings_revision": 1,
+  "owner_package": "@terrenia/worldgen",
+  "roles": [
+    {
+      "id": "terrenia:block-role/catalog-air@1",
+      "candidate": "terrenia:block/air",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-grass@1",
+      "candidate": "terrenia:block/grass",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-dirt@1",
+      "candidate": "terrenia:block/dirt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-stone@1",
+      "candidate": "terrenia:block/stone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-copper-block@1",
+      "candidate": "terrenia:block/copper-block",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-obsidian@1",
+      "candidate": "terrenia:block/obsidian",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-clay@1",
+      "candidate": "terrenia:block/clay",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-sand@1",
+      "candidate": "terrenia:block/sand",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-red-sand@1",
+      "candidate": "terrenia:block/red-sand",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-gravel@1",
+      "candidate": "terrenia:block/gravel",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-limestone@1",
+      "candidate": "terrenia:block/limestone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-basalt@1",
+      "candidate": "terrenia:block/basalt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-sandstone@1",
+      "candidate": "terrenia:block/sandstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-red-sandstone@1",
+      "candidate": "terrenia:block/red-sandstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-copper-ore@1",
+      "candidate": "terrenia:block/copper-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-oak-log@1",
+      "candidate": "terrenia:block/oak-log",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-oak-leaves@1",
+      "candidate": "terrenia:block/oak-leaves",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-tall-grass@1",
+      "candidate": "terrenia:block/tall-grass",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-coarse-dirt@1",
+      "candidate": "terrenia:block/coarse-dirt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-rooted-dirt@1",
+      "candidate": "terrenia:block/rooted-dirt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-mud@1",
+      "candidate": "terrenia:block/mud",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-silt@1",
+      "candidate": "terrenia:block/silt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-peat@1",
+      "candidate": "terrenia:block/peat",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-snow@1",
+      "candidate": "terrenia:block/snow",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-ice@1",
+      "candidate": "terrenia:block/ice",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-moss@1",
+      "candidate": "terrenia:block/moss",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-deepstone@1",
+      "candidate": "terrenia:block/deepstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-granite@1",
+      "candidate": "terrenia:block/granite",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-slate@1",
+      "candidate": "terrenia:block/slate",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-tuff@1",
+      "candidate": "terrenia:block/tuff",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-calcite@1",
+      "candidate": "terrenia:block/calcite",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-dripstone@1",
+      "candidate": "terrenia:block/dripstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-coal-ore@1",
+      "candidate": "terrenia:block/coal-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-iron-ore@1",
+      "candidate": "terrenia:block/iron-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-tin-ore@1",
+      "candidate": "terrenia:block/tin-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-gold-ore@1",
+      "candidate": "terrenia:block/gold-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-sulfur-ore@1",
+      "candidate": "terrenia:block/sulfur-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-crystal-cluster@1",
+      "candidate": "terrenia:block/crystal-cluster",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-pine-log@1",
+      "candidate": "terrenia:block/pine-log",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-pine-leaves@1",
+      "candidate": "terrenia:block/pine-leaves",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-cobblestone@1",
+      "candidate": "terrenia:block/cobblestone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-marble@1",
+      "candidate": "terrenia:block/marble",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-coal-block@1",
+      "candidate": "terrenia:block/coal-block",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-iron-block@1",
+      "candidate": "terrenia:block/iron-block",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-tin-block@1",
+      "candidate": "terrenia:block/tin-block",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-gold-block@1",
+      "candidate": "terrenia:block/gold-block",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-stripped-oak-log@1",
+      "candidate": "terrenia:block/stripped-oak-log",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-stripped-pine-log@1",
+      "candidate": "terrenia:block/stripped-pine-log",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-fern@1",
+      "candidate": "terrenia:block/fern",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-reed@1",
+      "candidate": "terrenia:block/reed",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-cactus@1",
+      "candidate": "terrenia:block/cactus",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-vine@1",
+      "candidate": "terrenia:block/vine",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-red-mushroom@1",
+      "candidate": "terrenia:block/red-mushroom",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-brown-mushroom@1",
+      "candidate": "terrenia:block/brown-mushroom",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-glow-moss@1",
+      "candidate": "terrenia:block/glow-moss",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-wildflowers@1",
+      "candidate": "terrenia:block/wildflowers",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-oak-planks@1",
+      "candidate": "terrenia:block/oak-planks",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-pine-planks@1",
+      "candidate": "terrenia:block/pine-planks",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-stone-bricks@1",
+      "candidate": "terrenia:block/stone-bricks",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-mossy-stone-bricks@1",
+      "candidate": "terrenia:block/mossy-stone-bricks",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-bricks@1",
+      "candidate": "terrenia:block/bricks",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-polished-stone@1",
+      "candidate": "terrenia:block/polished-stone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-polished-granite@1",
+      "candidate": "terrenia:block/polished-granite",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-polished-slate@1",
+      "candidate": "terrenia:block/polished-slate",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-basalt-tiles@1",
+      "candidate": "terrenia:block/basalt-tiles",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-glass@1",
+      "candidate": "terrenia:block/glass",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-copper-grating@1",
+      "candidate": "terrenia:block/copper-grating",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-roof-tiles@1",
+      "candidate": "terrenia:block/roof-tiles",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-torch@1",
+      "candidate": "terrenia:block/torch",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-workbench@1",
+      "candidate": "terrenia:block/workbench",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-furnace@1",
+      "candidate": "terrenia:block/furnace",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/catalog-chest@1",
+      "candidate": "terrenia:block/chest",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/empty@1",
+      "candidate": "terrenia:block/air",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/temperate-surface@1",
+      "candidate": "terrenia:block/grass",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/temperate-subsurface@1",
+      "candidate": "terrenia:block/dirt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/temperate-base-rock@1",
+      "candidate": "terrenia:block/stone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/temperate-secondary-rock@1",
+      "candidate": "terrenia:block/limestone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/temperate-clay@1",
+      "candidate": "terrenia:block/clay",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/temperate-gravel@1",
+      "candidate": "terrenia:block/gravel",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/woodland-log@1",
+      "candidate": "terrenia:block/oak-log",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/woodland-leaves@1",
+      "candidate": "terrenia:block/oak-leaves",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/woodland-ground-cover@1",
+      "candidate": "terrenia:block/tall-grass",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/arid-sand@1",
+      "candidate": "terrenia:block/sand",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/arid-red-sand@1",
+      "candidate": "terrenia:block/red-sand",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/arid-sandstone@1",
+      "candidate": "terrenia:block/sandstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/arid-red-sandstone@1",
+      "candidate": "terrenia:block/red-sandstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/arid-base-rock@1",
+      "candidate": "terrenia:block/basalt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/copper-resource@1",
+      "candidate": "terrenia:block/copper-ore",
+      "cardinality": "exactly-one"
+    }
+  ],
+  "predicates": [
+    {
+      "id": "terrenia:predicate/place-empty@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-vegetation@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-attached@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-canopy@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-solid@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-surface@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-arid-vegetation@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/fluid-replaceable@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "target-replaceable",
+        "fluid-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-water@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-lava@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows"
+      ]
+    }
+  ],
+  "provenance": [
+    {
+      "id": "terrenia:worldgen-provenance/authored-catalog@1",
+      "source_package": "@terrenia/blocks",
+      "records": [
+        "definition-id",
+        "state",
+        "role-receipt",
+        "predicate-receipt",
+        "generation-epoch"
+      ]
+    }
+  ]
+}

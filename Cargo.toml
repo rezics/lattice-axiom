@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/latticeaxiom-abi",
   "crates/latticeaxiom-compose",
+  "crates/latticeaxiom-content",
   "crates/latticeaxiom-core",
   "crates/latticeaxiom-engine",
   "crates/latticeaxiom-registration",

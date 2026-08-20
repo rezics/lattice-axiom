@@ -1,0 +1,452 @@
+{
+  "authoring_schema": "terrenia:schema/authored-presentation-assets@1",
+  "assets_revision": 1,
+  "owner_package": "@terrenia/presentation",
+  "authoritative": false,
+  "assets": [
+    {
+      "id": "terrenia:asset/block-air",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/air"
+    },
+    {
+      "id": "terrenia:asset/block-grass",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/grass"
+    },
+    {
+      "id": "terrenia:asset/block-dirt",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/dirt"
+    },
+    {
+      "id": "terrenia:asset/block-stone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/stone"
+    },
+    {
+      "id": "terrenia:asset/block-copper-block",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/copper-block"
+    },
+    {
+      "id": "terrenia:asset/block-obsidian",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/obsidian"
+    },
+    {
+      "id": "terrenia:asset/block-clay",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/clay"
+    },
+    {
+      "id": "terrenia:asset/block-sand",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/sand"
+    },
+    {
+      "id": "terrenia:asset/block-red-sand",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/red-sand"
+    },
+    {
+      "id": "terrenia:asset/block-gravel",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/gravel"
+    },
+    {
+      "id": "terrenia:asset/block-limestone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/limestone"
+    },
+    {
+      "id": "terrenia:asset/block-basalt",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/basalt"
+    },
+    {
+      "id": "terrenia:asset/block-sandstone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/sandstone"
+    },
+    {
+      "id": "terrenia:asset/block-red-sandstone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/red-sandstone"
+    },
+    {
+      "id": "terrenia:asset/block-copper-ore",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/copper-ore"
+    },
+    {
+      "id": "terrenia:asset/block-oak-log",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/oak-log"
+    },
+    {
+      "id": "terrenia:asset/block-oak-leaves",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/oak-leaves"
+    },
+    {
+      "id": "terrenia:asset/block-tall-grass",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/tall-grass"
+    },
+    {
+      "id": "terrenia:asset/block-coarse-dirt",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/coarse-dirt"
+    },
+    {
+      "id": "terrenia:asset/block-rooted-dirt",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/rooted-dirt"
+    },
+    {
+      "id": "terrenia:asset/block-mud",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/mud"
+    },
+    {
+      "id": "terrenia:asset/block-silt",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/silt"
+    },
+    {
+      "id": "terrenia:asset/block-peat",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/peat"
+    },
+    {
+      "id": "terrenia:asset/block-snow",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/snow"
+    },
+    {
+      "id": "terrenia:asset/block-ice",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/ice"
+    },
+    {
+      "id": "terrenia:asset/block-moss",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/moss"
+    },
+    {
+      "id": "terrenia:asset/block-deepstone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/deepstone"
+    },
+    {
+      "id": "terrenia:asset/block-granite",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/granite"
+    },
+    {
+      "id": "terrenia:asset/block-slate",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/slate"
+    },
+    {
+      "id": "terrenia:asset/block-tuff",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/tuff"
+    },
+    {
+      "id": "terrenia:asset/block-calcite",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/calcite"
+    },
+    {
+      "id": "terrenia:asset/block-dripstone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/dripstone"
+    },
+    {
+      "id": "terrenia:asset/block-coal-ore",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/coal-ore"
+    },
+    {
+      "id": "terrenia:asset/block-iron-ore",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/iron-ore"
+    },
+    {
+      "id": "terrenia:asset/block-tin-ore",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/tin-ore"
+    },
+    {
+      "id": "terrenia:asset/block-gold-ore",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/gold-ore"
+    },
+    {
+      "id": "terrenia:asset/block-sulfur-ore",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/sulfur-ore"
+    },
+    {
+      "id": "terrenia:asset/block-crystal-cluster",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/crystal-cluster"
+    },
+    {
+      "id": "terrenia:asset/block-pine-log",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/pine-log"
+    },
+    {
+      "id": "terrenia:asset/block-pine-leaves",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/pine-leaves"
+    },
+    {
+      "id": "terrenia:asset/block-cobblestone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/cobblestone"
+    },
+    {
+      "id": "terrenia:asset/block-marble",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/marble"
+    },
+    {
+      "id": "terrenia:asset/block-coal-block",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/coal-block"
+    },
+    {
+      "id": "terrenia:asset/block-iron-block",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/iron-block"
+    },
+    {
+      "id": "terrenia:asset/block-tin-block",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/tin-block"
+    },
+    {
+      "id": "terrenia:asset/block-gold-block",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/gold-block"
+    },
+    {
+      "id": "terrenia:asset/block-stripped-oak-log",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/stripped-oak-log"
+    },
+    {
+      "id": "terrenia:asset/block-stripped-pine-log",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/stripped-pine-log"
+    },
+    {
+      "id": "terrenia:asset/block-fern",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/fern"
+    },
+    {
+      "id": "terrenia:asset/block-reed",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/reed"
+    },
+    {
+      "id": "terrenia:asset/block-cactus",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/cactus"
+    },
+    {
+      "id": "terrenia:asset/block-vine",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/vine"
+    },
+    {
+      "id": "terrenia:asset/block-red-mushroom",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/red-mushroom"
+    },
+    {
+      "id": "terrenia:asset/block-brown-mushroom",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/brown-mushroom"
+    },
+    {
+      "id": "terrenia:asset/block-glow-moss",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/glow-moss"
+    },
+    {
+      "id": "terrenia:asset/block-wildflowers",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/wildflowers"
+    },
+    {
+      "id": "terrenia:asset/block-oak-planks",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/oak-planks"
+    },
+    {
+      "id": "terrenia:asset/block-pine-planks",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/pine-planks"
+    },
+    {
+      "id": "terrenia:asset/block-stone-bricks",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/stone-bricks"
+    },
+    {
+      "id": "terrenia:asset/block-mossy-stone-bricks",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/mossy-stone-bricks"
+    },
+    {
+      "id": "terrenia:asset/block-bricks",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/bricks"
+    },
+    {
+      "id": "terrenia:asset/block-polished-stone",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/polished-stone"
+    },
+    {
+      "id": "terrenia:asset/block-polished-granite",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/polished-granite"
+    },
+    {
+      "id": "terrenia:asset/block-polished-slate",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/polished-slate"
+    },
+    {
+      "id": "terrenia:asset/block-basalt-tiles",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/basalt-tiles"
+    },
+    {
+      "id": "terrenia:asset/block-glass",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/glass"
+    },
+    {
+      "id": "terrenia:asset/block-copper-grating",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/copper-grating"
+    },
+    {
+      "id": "terrenia:asset/block-roof-tiles",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/roof-tiles"
+    },
+    {
+      "id": "terrenia:asset/block-torch",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/torch"
+    },
+    {
+      "id": "terrenia:asset/block-workbench",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/workbench"
+    },
+    {
+      "id": "terrenia:asset/block-furnace",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/furnace"
+    },
+    {
+      "id": "terrenia:asset/block-chest",
+      "asset_kind": "block-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/blocks/chest"
+    },
+    {
+      "id": "terrenia:asset/fluid-water",
+      "asset_kind": "fluid-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/fluids/water"
+    },
+    {
+      "id": "terrenia:asset/fluid-lava",
+      "asset_kind": "fluid-material-set",
+      "status": "explicit-placeholder",
+      "source": "placeholders/fluids/lava"
+    }
+  ]
+}

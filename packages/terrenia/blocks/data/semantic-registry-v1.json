@@ -1,0 +1,22 @@
+{
+  "authoring_schema": "terrenia:schema/authored-semantic-registry@1",
+  "owner_package": "@terrenia/blocks",
+  "physical_profile_ids": [
+    "terrenia:physical-profile/empty@1",
+    "terrenia:physical-profile/fixture@1",
+    "terrenia:physical-profile/glass@1",
+    "terrenia:physical-profile/ice@1",
+    "terrenia:physical-profile/leaves@1",
+    "terrenia:physical-profile/metal@1",
+    "terrenia:physical-profile/soil@1",
+    "terrenia:physical-profile/stone@1",
+    "terrenia:physical-profile/vegetation@1",
+    "terrenia:physical-profile/wood@1"
+  ],
+  "fluid_policy_ids": [
+    "terrenia:fluid-collision-policy/lava@1",
+    "terrenia:fluid-collision-policy/water@1",
+    "terrenia:fluid-selection-policy/lava@1",
+    "terrenia:fluid-selection-policy/water@1"
+  ]
+}
