@@ -22,6 +22,7 @@ decision:
   - ../decisions/0029-freeze-render-capability-and-provider-contract.md
   - ../decisions/0030-freeze-governance-distribution-and-security-triggers.md
   - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
+  - ../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
 ---
 
 # 套件驅動的 Bevy 執行期整合路線
@@ -31,8 +32,10 @@ decision:
 这条路线把 package control plane、dual realization 与 Bevy runtime 合成一个可验证依赖链。它既不是「先造完整 package manager」，也不是「先让官方 Bevy Plugin 跑起来再补 ABI」。每个基础阶段都尽快进入[第一个可玩 demo](roadmap-first-demo.md)。
 
 ```text
-Nickel / typed models
-  → deterministic lock
+static bootstrap/package manifests
+  → local acquire / immutable CAS / deterministic package graph
+  → locked package aliases / controlled Nickel / typed models
+  → final product lock
   → generated registration
   → static + dynamic equivalence
   → package-driven Bevy App
@@ -46,8 +49,8 @@ Nickel / typed models
 ### 交付
 
 - workspace／Rust toolchain／CI；
-- `CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RegistrationManifest`、`RegistrationImage`、`RuntimeImage` 的 crate／schema skeleton；
-- root／scoped `PackageName`、SemVer、独立 `StableId`／namespace grant、realization 与 schema owner grammar；
+- `CompositionBootstrapV1`、`PackageSourceManifestV1`、`CompositionSpec`、`LockedGameGraph`、`BuildPlan`、`RegistrationManifest`、`RegistrationImage`、`RuntimeImage` 的 crate／schema skeleton；
+- root／scoped `PackageName`、SemVer、package dependency alias、独立 `StableId`／namespace grant、realization 与 schema owner grammar；
 - `SemanticTag`／`SemanticMap`／`StatePropertyKey`／`Affordance`／`ContentPredicate`／`ContentRole`／`ContentBundle` typed model skeleton；
 - `SettingSpec`／scope／authority／apply impact、InfoItem／Metric／InspectFragment／DebugVisualizer typed model skeleton；
 - `WorldId`／`WorldHeader`／`WorldOpenPlan`与shell／world双lock关系；
@@ -57,8 +60,9 @@ Nickel / typed models
 
 ### 出场条件
 
-- Nickel source 在 CLI／embedded evaluator 得到语义相同 `CompositionSpec`；
-- CLI／embedded通过同一受控worker路径，对positive corpus产生逐byte相同的canonical `CompositionSpec`，对negative corpus产生相同stable code与source provenance；
+- 静态bootstrap／package manifest先产生相同graph inputs，完整Nickel不能扩大source／dependency authority；
+- Nickel package alias与relative import在CLI／embedded同一source-table-only resolver得到语义相同`CompositionSpec`；
+- CLI／embedded通过同一受控worker路径，对positive corpus产生逐byte相同的canonical `CompositionSpec`，对negative corpus产生相同stable code与`pkg://` source provenance；
 - R0 Nickel deadline、memory、recursion与import／output／diagnostic limits通过boundary／`+1` fault fixtures；缺少hard enforcement capability时fail closed；
 - typed models 有 round-trip／golden fixtures；
 - source path／record key reorder 不改变 canonical hash；
@@ -71,22 +75,28 @@ Nickel / typed models
 
 ### 交付
 
-- workspace／local directory／in-memory fixture sources；
+- workspace／root-relative path／local catalog／in-memory fixture providers；
+- canonical source snapshot、immutable CAS与deterministic package check／pack／publish-to-directory／acquire；
 - SemVer exact／caret／tilde／bounded range 与 pre-release tests；
-- dependency、optional／feature、cycle 与唯一版本政策；
+- direct dependency aliases、optional／feature、cycle 与唯一版本政策；
 - versioned capability、exclusive／multi provider；
 - realization／target selection；
-- deterministic resolver／resolution explanation；
-- `latticeaxiom.lock` read／write／frozen mode；
+- deterministic resolver／resolution explanation／`ResolutionReceiptV1`；
+- portable resolution与target realization分层的`latticeaxiom.lock`；
+- atomic lock read／write／reopen，以及`--locked`／`--offline`／`--frozen`；
 - `latticeaxiom-shell.lock`与per-world frozen game lock fixture。
 
 ### 出场条件
 
-- randomized source discovery不改变 lock；
-- missing range、cycle、exclusive conflict、unavailable realization 有 package-chain诊断；
-- frozen lock 不因新增 source version改变；
-- resolver 可在没有 Bevy／GPU 的 test process运行；
-- 尚未实现 public registry／network fetch／general SAT scale。
+- randomized source discovery／catalog enumeration不改变lock；
+- local check／pack／publish-to-directory／acquire／resolve／run-frozen fixture全程无network；
+- 同一local-catalog package exact version不能对应不同source digest；path authoring变化产生新snapshot／candidate lock；
+- missing range、cycle、alias、exclusive conflict、unavailable realization有package-chain与source-span诊断；
+- frozen lock不因新增source version或path mutation改变；missing CAS object不回读path；
+- manifest、source、toolchain、`EngineBuildId`与artifact tamper各自精确失败；
+- atomic-write fault corpus只观察旧完整或新完整lock；
+- resolver可在没有Bevy／GPU的test process运行；
+- 尚未实现public registry／network fetch／general SAT scale。
 
 ## R2：SDK、Registration 與 Static Path
 

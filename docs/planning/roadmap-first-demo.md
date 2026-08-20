@@ -21,6 +21,7 @@ decision:
   - ../decisions/0029-freeze-render-capability-and-provider-contract.md
   - ../decisions/0030-freeze-governance-distribution-and-security-triggers.md
   - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
+  - ../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
 ---
 
 # 第一個套件驅動的 Bevy 可玩 demo 路線圖
@@ -37,8 +38,9 @@ D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它�
 
 ## 固定基線
 
-- Nickel `package.ncl`／`game.ncl` → typed `CompositionSpec`；
-- package SemVer、capability／realization resolution 与精确 lock；
+- 非可执行`latticeaxiom.toml`／`latticeaxiom-package.toml`先授权roots、sources与graph inputs；
+- local path／catalog package快照进CAS，locked alias map再供Nickel `package.ncl`／`game.ncl` import；
+- package SemVer、capability／realization resolution与包含source／manifest／toolchain／artifact receipts的精确产品lock；
 - `RegistrationManifest`／`RegistrationImage`；
 - Nickel-authored SemanticTag／Map／Predicate／Role 与 locked fallback ContentBundle；
 - package-injected `SettingSpec`、observability items与统一settings／inspect／dev-tools surfaces；
@@ -67,12 +69,15 @@ D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它�
 
 ### Package 循环
 
-1. Nickel profile 选择 `@example/dual-gameplay`。
-2. 以 `NativeStatic` 启动并记录 lock／registration／state hash。
-3. 只切换 realization 为 `PortableNative`。
-4. loader 验证 artifact／ABI／manifest。
-5. 执行同一 action fixture。
-6. 比较 IDs、schedule、effective settings、state、save 与 diagnostics。
+1. Bootstrap manifest选择`@example/dual-gameplay` root、local source provider与projection。
+2. Kernel取得／快照source、解析exact graph并建立package-local alias map。
+3. Nickel profile从locked source table import该package并产生typed `CompositionSpec`。
+4. 以`NativeStatic`启动并记录final lock／registration／state hash。
+5. 只切换realization为`PortableNative`并显式产生candidate lock。
+6. Kernel验证artifact／ABI／manifest但不load native code，原子写入并reopen final lock。
+7. Loader只从reopened final lock建立`RuntimeImage`。
+8. 执行同一action fixture。
+9. 比较IDs、schedule、effective settings、state、save与diagnostics。
 
 任一循环失败，demo 均未完成。
 
@@ -80,12 +85,15 @@ D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它�
 
 ### 交付
 
-- local Nickel profile／contracts；
+- `CompositionBootstrapV1`／`PackageSourceManifestV1`及受限TOML representations；
+- local Nickel profile／contracts、package-local `import alias`与source-table-only grants；
 - `latticeaxiom.lib` semantic constructors／contracts／concat与binding overlay；
 - core／empty game packages；
 - `@latticeaxiom/settings`／observability基础packages与manifest schema skeleton；
-- deterministic SemVer／capability lock；
-- shell／client／headless profile与独立shell lock；
+- workspace／path snapshot、immutable CAS、local catalog check／pack／publish／acquire；
+- deterministic SemVer／capability resolution与`ResolutionReceiptV1`；
+- portable resolution／target realization分层的产品lock、atomic read／write及locked／offline／frozen modes；
+- shell／client／headless profile与同schema的独立shell lock；
 - launcher／`LaunchIntentV1`／recovery shell process-transition state machine；
 - package-driven Bevy App；
 - package-driven开始页／设置页smoke、placeholder camera／light／cube；
@@ -93,7 +101,11 @@ D0–D6定义这条vertical slice；同一active roadmap继续以D7–D10把它�
 
 ### 完成
 
-- 同一 lock 可建立 client／headless的 compatible authoritative closure；
+- 同一final lock可建立client／headless的compatible authoritative closure，且两者不各自重新resolve；
+- local A package经manifest alias import B；undeclared transitive、ambient、escape与missing alias错误保留exact `pkg://` source span；
+- path source修改后旧lock仍读取原CAS bytes；`--frozen`对missing／tampered source、manifest、toolchain、`EngineBuildId`与artifact精确失败且不fallback；
+- local check／pack／publish-to-directory／acquire／resolve／run-frozen fixture全程无network；
+- lock fault corpus覆盖temporary write、flush、atomic replace、reopen与corruption，只接受旧完整或新完整lock；
 - client 显示场景并退出；headless无 GPU推进 fixed tick；
 - client process一次只建立一个`EventLoop`／fresh `DefaultPlugins` App；LaunchIntent fault corpus覆盖barrier失败、atomic write、stale／corrupt intent、spawn／boot失败与recovery loop prevention；
 - 没有 hidden hand-written first-party plugin／dimension list；
