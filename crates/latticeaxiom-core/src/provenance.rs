@@ -1,9 +1,9 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
 
 use crate::canonical::{CanonicalHash, CanonicalJsonError, canonical_json_hash};
 use crate::identifier::SourceId;
+use crate::logical_path::{CanonicalLogicalPath, CanonicalLogicalPathError};
 
 /// A half-open byte range in one authored source file.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -153,7 +153,7 @@ impl<'de> Deserialize<'de> for SourceOrigin {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct SourceProvenance {
     source_id: SourceId,
-    logical_path: String,
+    logical_path: CanonicalLogicalPath,
     content_hash: CanonicalHash,
     span: Option<SourceSpan>,
     origin_chain: Vec<SourceOrigin>,
@@ -167,9 +167,9 @@ impl SourceProvenance {
     ///
     /// # Errors
     ///
-    /// Returns [`SourceProvenanceError::InvalidLogicalPath`] when the path is
-    /// empty, absolute, backslash-separated, or contains non-canonical dot or
-    /// empty segments.
+    /// Returns [`SourceProvenanceError::InvalidLogicalPath`] when the path does
+    /// not satisfy [`CanonicalLogicalPath`], including its NFC, separator,
+    /// control-character, segment, and byte-length rules.
     pub fn new(
         source_id: SourceId,
         logical_path: impl Into<String>,
@@ -178,7 +178,12 @@ impl SourceProvenance {
         origin_chain: Vec<SourceOrigin>,
     ) -> Result<Self, SourceProvenanceError> {
         let logical_path = logical_path.into();
-        validate_logical_path(&logical_path)?;
+        let logical_path = CanonicalLogicalPath::new(logical_path.clone()).map_err(|error| {
+            SourceProvenanceError::InvalidLogicalPath {
+                value: logical_path,
+                reason: logical_path_error_reason(&error),
+            }
+        })?;
         Ok(Self {
             source_id,
             logical_path,
@@ -218,10 +223,16 @@ impl SourceProvenance {
         &self.source_id
     }
 
+    /// Returns the typed canonical logical path.
+    #[must_use]
+    pub const fn canonical_logical_path(&self) -> &CanonicalLogicalPath {
+        &self.logical_path
+    }
+
     /// Returns the canonical root-relative logical path.
     #[must_use]
     pub fn logical_path(&self) -> &str {
-        &self.logical_path
+        self.logical_path.as_str()
     }
 
     /// Returns the raw file-content SHA-256 digest.
@@ -348,37 +359,25 @@ fn validate_optional_identity(
     Ok(())
 }
 
-fn validate_logical_path(path: &str) -> Result<(), SourceProvenanceError> {
-    let invalid = |reason| SourceProvenanceError::InvalidLogicalPath {
-        value: path.to_owned(),
-        reason,
-    };
-    if path.is_empty() {
-        return Err(invalid("the path cannot be empty"));
+const fn logical_path_error_reason(error: &CanonicalLogicalPathError) -> &'static str {
+    match error {
+        CanonicalLogicalPathError::Empty => "the path cannot be empty",
+        CanonicalLogicalPathError::PathTooLong { .. } => "the path exceeds its byte-length limit",
+        CanonicalLogicalPathError::Absolute => "the path must be root-relative",
+        CanonicalLogicalPathError::WindowsDrivePrefix => {
+            "the path cannot contain a Windows drive prefix"
+        }
+        CanonicalLogicalPathError::BackslashSeparator => "the path must use `/` separators",
+        CanonicalLogicalPathError::ControlCharacter { .. } => {
+            "the path cannot contain control characters"
+        }
+        CanonicalLogicalPathError::NonNfc => "the path must use Unicode NFC normalization",
+        CanonicalLogicalPathError::EmptySegment => "the path contains an empty segment",
+        CanonicalLogicalPathError::DotSegment { .. } => "the path contains a dot segment",
+        CanonicalLogicalPathError::SegmentTooLong { .. } => {
+            "a path segment exceeds its byte-length limit"
+        }
     }
-    if path.starts_with('/') {
-        return Err(invalid("the path must be root-relative"));
-    }
-    let bytes = path.as_bytes();
-    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-        return Err(invalid("the path cannot contain a Windows drive prefix"));
-    }
-    if path.contains('\\') {
-        return Err(invalid("the path must use `/` separators"));
-    }
-    if path.contains('\0') {
-        return Err(invalid("the path cannot contain a NUL byte"));
-    }
-    if !path.nfc().eq(path.chars()) {
-        return Err(invalid("the path must use Unicode NFC normalization"));
-    }
-    if path
-        .split('/')
-        .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
-    {
-        return Err(invalid("the path contains an empty or dot segment"));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
