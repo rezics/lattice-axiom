@@ -1,0 +1,500 @@
+//! Shell routing, semantic-tree projection, and replacement-process handoff.
+
+use std::collections::BTreeSet;
+
+use latticeaxiom_core::{CanonicalHash, CanonicalJsonError, WorldId, canonical_json_hash};
+use latticeaxiom_launcher::{
+    LaunchAttempt, LaunchGeneration, LaunchIntentDraftV1, LaunchIntentV1, LaunchModelError,
+    LaunchTargetV1, SettingTransactionRevision,
+};
+use latticeaxiom_world_catalog::{WorldOpenAction, WorldOpenStatus};
+use thiserror::Error;
+
+use crate::{
+    ClientShellGraph, HomePrimaryAction, LoadingState, SemanticActionId, SemanticCommand,
+    SemanticCommandError, SemanticNode, SemanticNodeId, SemanticRole, SemanticState,
+    SettingsSurfaceModel, WorldListModel, WorldShellRecord, validate_semantic_command,
+};
+
+/// Package-driven client-shell route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShellScreen {
+    /// High-frequency home actions.
+    Home,
+    /// Bounded world catalog and recovery actions.
+    Worlds,
+    /// Quick and advanced creation entry.
+    NewWorld,
+    /// Mechanically generated settings surface.
+    Settings,
+    /// World activation progress.
+    Loading,
+}
+
+/// Headless state used by both CI and the future Bevy client adapter.
+#[derive(Clone, Debug)]
+pub struct StartShellModel {
+    graph: ClientShellGraph,
+    /// Current route.
+    pub screen: ShellScreen,
+    /// Visible world library.
+    pub worlds: WorldListModel,
+    /// Current loading state when routed to Loading.
+    pub loading: Option<LoadingState>,
+    /// Generic settings rows.
+    pub settings: Option<SettingsSurfaceModel>,
+}
+
+impl StartShellModel {
+    /// Creates a shell only from a validated package closure.
+    #[must_use]
+    pub const fn new(graph: ClientShellGraph, worlds: WorldListModel) -> Self {
+        Self {
+            graph,
+            screen: ShellScreen::Home,
+            worlds,
+            loading: None,
+            settings: None,
+        }
+    }
+
+    /// Returns the resolved package graph that owns this shell.
+    #[must_use]
+    pub const fn graph(&self) -> &ClientShellGraph {
+        &self.graph
+    }
+
+    /// Builds role/name/value/description/state/action semantics in visual and
+    /// focus order, with no Bevy entity identities.
+    #[must_use]
+    pub fn semantic_tree(&self) -> SemanticNode {
+        let children = match self.screen {
+            ShellScreen::Home => self.home_nodes(),
+            ShellScreen::Worlds => self.world_nodes(),
+            ShellScreen::NewWorld => Self::new_world_nodes(),
+            ShellScreen::Settings => self.settings_nodes(),
+            ShellScreen::Loading => self.loading_nodes(),
+        };
+        SemanticNode {
+            id: node_id("shell"),
+            role: SemanticRole::Application,
+            name: "Lattice Axiom".to_owned(),
+            value: None,
+            description: Some("Package-driven client shell".to_owned()),
+            state: SemanticState::default(),
+            actions: BTreeSet::new(),
+            children,
+        }
+    }
+
+    /// Validates and applies a semantic command from keyboard, controller, or
+    /// a headless injector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellCommandError`] if the current tree rejects the command or
+    /// the command does not map to the current route.
+    pub fn inject(&mut self, command: &SemanticCommand) -> Result<ShellEffect, ShellCommandError> {
+        let tree = self.semantic_tree();
+        validate_semantic_command(&tree, command)?;
+        let target = command.target.as_str();
+        let action = command.action;
+        let effect = if matches!(
+            action,
+            SemanticActionId::FocusNext | SemanticActionId::FocusPrevious
+        ) {
+            ShellEffect::FocusTraversal(action)
+        } else if target == "home/worlds" || action == SemanticActionId::OpenWorlds {
+            self.screen = ShellScreen::Worlds;
+            ShellEffect::Navigate(ShellScreen::Worlds)
+        } else if target == "home/new-world" || action == SemanticActionId::QuickCreate {
+            self.screen = ShellScreen::NewWorld;
+            ShellEffect::Navigate(ShellScreen::NewWorld)
+        } else if target == "home/settings" || action == SemanticActionId::OpenSettings {
+            self.screen = ShellScreen::Settings;
+            ShellEffect::Navigate(ShellScreen::Settings)
+        } else if action == SemanticActionId::Back {
+            self.screen = ShellScreen::Home;
+            ShellEffect::Navigate(ShellScreen::Home)
+        } else if target == "home/continue" || action == SemanticActionId::ContinueWorld {
+            match self.worlds.home_primary_action() {
+                HomePrimaryAction::Continue { world_id, .. } => {
+                    ShellEffect::RequestExactWorldLaunch(world_id)
+                }
+                _ => return Err(ShellCommandError::NoExactContinue),
+            }
+        } else if target == "home/review" || action == SemanticActionId::ReviewWorld {
+            let HomePrimaryAction::Review { world_id, .. } = self.worlds.home_primary_action()
+            else {
+                return Err(ShellCommandError::NoReviewTarget);
+            };
+            self.screen = ShellScreen::Worlds;
+            ShellEffect::ReviewWorld(world_id)
+        } else if target.starts_with("world:") && action == SemanticActionId::Activate {
+            let record = self
+                .worlds
+                .records()
+                .iter()
+                .find(|record| record.semantic_id() == command.target)
+                .ok_or(ShellCommandError::UnknownWorld)?;
+            ShellEffect::ReviewWorld(record.world_id())
+        } else if target == "loading/cancel" {
+            let loading = self
+                .loading
+                .as_ref()
+                .ok_or(ShellCommandError::NoLoadingState)?;
+            ShellEffect::CancelLoading(loading.cancel_disposition())
+        } else if target == "new-world/quick-create" {
+            ShellEffect::RequestQuickCreate
+        } else if target == "settings/apply" {
+            ShellEffect::RequestSettingsApply
+        } else {
+            return Err(ShellCommandError::UnmappedCommand);
+        };
+        Ok(effect)
+    }
+
+    fn home_nodes(&self) -> Vec<SemanticNode> {
+        let mut nodes = Vec::new();
+        match self.worlds.home_primary_action() {
+            HomePrimaryAction::Continue { label, .. } => nodes.push(button(
+                "home/continue",
+                format!("Continue — {label}"),
+                "Only available because the recent world is ReadyExact",
+                [SemanticActionId::Activate, SemanticActionId::ContinueWorld],
+            )),
+            HomePrimaryAction::Review { label, health, .. } => nodes.push(button(
+                "home/review",
+                format!("Review {label}"),
+                format!("Recent world requires review: {health:?}"),
+                [SemanticActionId::Activate, SemanticActionId::ReviewWorld],
+            )),
+            HomePrimaryAction::Worlds => {}
+        }
+        nodes.extend([
+            button(
+                "home/worlds",
+                "Worlds",
+                "Browse, recover, or manage worlds",
+                [SemanticActionId::Activate, SemanticActionId::OpenWorlds],
+            ),
+            button(
+                "home/new-world",
+                "New World",
+                "Create from current profile safe defaults",
+                [SemanticActionId::Activate, SemanticActionId::QuickCreate],
+            ),
+            button(
+                "home/settings",
+                "Settings and Accessibility",
+                "Accessibility remains reachable before and during errors",
+                [SemanticActionId::Activate, SemanticActionId::OpenSettings],
+            ),
+        ]);
+        nodes
+    }
+
+    fn world_nodes(&self) -> Vec<SemanticNode> {
+        let mut nodes = vec![button(
+            "worlds/back",
+            "Back",
+            "Return to home",
+            [SemanticActionId::Back],
+        )];
+        nodes.extend(self.worlds.records().iter().map(|record| SemanticNode {
+            id: record.semantic_id(),
+            role: if matches!(record.health(), crate::WorldHealth::CatalogFailure(_)) {
+                SemanticRole::Alert
+            } else {
+                SemanticRole::ListItem
+            },
+            name: record.display_label(),
+            value: Some(format!("{:?}", record.health())),
+            description: Some(format!("Available actions: {:?}", record.actions())),
+            state: SemanticState {
+                focusable: true,
+                focused: self.worlds.focused() == Some(&record.semantic_id()),
+                ..SemanticState::default()
+            },
+            actions: BTreeSet::from([SemanticActionId::Activate]),
+            children: Vec::new(),
+        }));
+        nodes
+    }
+
+    fn new_world_nodes() -> Vec<SemanticNode> {
+        vec![
+            button(
+                "new-world/back",
+                "Back",
+                "Return to home",
+                [SemanticActionId::Back],
+            ),
+            SemanticNode {
+                id: node_id("new-world/name"),
+                role: SemanticRole::TextInput,
+                name: "World name".to_owned(),
+                value: None,
+                description: Some("Accepts composition and IME committed-text events".to_owned()),
+                state: SemanticState {
+                    focusable: true,
+                    ..SemanticState::default()
+                },
+                actions: BTreeSet::new(),
+                children: Vec::new(),
+            },
+            button(
+                "new-world/quick-create",
+                "Quick Create",
+                "Resolve and publish a transaction from current safe defaults",
+                [SemanticActionId::Activate, SemanticActionId::QuickCreate],
+            ),
+        ]
+    }
+
+    fn settings_nodes(&self) -> Vec<SemanticNode> {
+        let mut nodes = vec![button(
+            "settings/back",
+            "Back",
+            "Return to home",
+            [SemanticActionId::Back],
+        )];
+        if let Some(settings) = &self.settings {
+            nodes.extend(settings.rows().iter().map(|row| SemanticNode {
+                id: node_id(&format!("setting/{}", sanitize_id(&row.id.to_string()))),
+                role: SemanticRole::Group,
+                name: row.id.to_string(),
+                value: Some(row.value.clone()),
+                description: Some(format!(
+                    "Owner {}; scope {:?}; impact {:?}",
+                    row.owner, row.source_scope, row.impact
+                )),
+                state: SemanticState::default(),
+                actions: BTreeSet::new(),
+                children: Vec::new(),
+            }));
+        }
+        nodes.push(button(
+            "settings/apply",
+            "Apply settings",
+            "Validate complete draft and show impact before atomic persistence",
+            [SemanticActionId::Activate, SemanticActionId::ApplySettings],
+        ));
+        nodes
+    }
+
+    fn loading_nodes(&self) -> Vec<SemanticNode> {
+        let (name, value, busy) = self.loading.as_ref().map_or_else(
+            || ("Loading".to_owned(), None, false),
+            |loading| {
+                (
+                    loading.stage.fallback_label().to_owned(),
+                    Some(format!("{:?}", loading.progress)),
+                    loading.stage != crate::LoadingStage::Playing,
+                )
+            },
+        );
+        vec![
+            SemanticNode {
+                id: node_id("loading/status"),
+                role: SemanticRole::Status,
+                name,
+                value,
+                description: self
+                    .loading
+                    .as_ref()
+                    .and_then(|loading| loading.current_item.clone()),
+                state: SemanticState {
+                    busy,
+                    ..SemanticState::default()
+                },
+                actions: BTreeSet::new(),
+                children: Vec::new(),
+            },
+            button(
+                "loading/cancel",
+                "Cancel loading",
+                "Cancellation uses the writer-safe boundary for the current stage",
+                [SemanticActionId::Activate, SemanticActionId::CancelLoading],
+            ),
+        ]
+    }
+}
+
+fn button<const N: usize>(
+    id: &str,
+    name: impl Into<String>,
+    description: impl Into<String>,
+    actions: [SemanticActionId; N],
+) -> SemanticNode {
+    SemanticNode {
+        id: node_id(id),
+        role: SemanticRole::Button,
+        name: name.into(),
+        value: None,
+        description: Some(description.into()),
+        state: SemanticState {
+            focusable: true,
+            ..SemanticState::default()
+        },
+        actions: BTreeSet::from(actions),
+        children: Vec::new(),
+    }
+}
+
+fn node_id(value: &str) -> SemanticNodeId {
+    match SemanticNodeId::new(value) {
+        Ok(id) => id,
+        Err(error) => unreachable!("validated static shell semantic ID: {error}"),
+    }
+}
+
+fn sanitize_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '/' | '-' | '_' | ':')
+            {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// Observable result of one accepted shell command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShellEffect {
+    /// Route changed.
+    Navigate(ShellScreen),
+    /// Input adapter should move focus using current semantic order.
+    FocusTraversal(SemanticActionId),
+    /// Exact-ready world is selected for launch handoff.
+    RequestExactWorldLaunch(WorldId),
+    /// World is selected for compatibility/recovery review.
+    ReviewWorld(WorldId),
+    /// Quick-create form should emit its typed intent.
+    RequestQuickCreate,
+    /// Settings surface should start its transaction state machine.
+    RequestSettingsApply,
+    /// Loading cancellation policy derived from the writer boundary.
+    CancelLoading(crate::LoadingCancelDisposition),
+}
+
+/// Invalid shell command injection.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum ShellCommandError {
+    /// Accessibility tree rejected the command.
+    #[error(transparent)]
+    Semantic(#[from] SemanticCommandError),
+    /// Current recent world does not allow Continue.
+    #[error("no exact-ready recent world is available for Continue")]
+    NoExactContinue,
+    /// No recent world needs review.
+    #[error("no recent world is available for review")]
+    NoReviewTarget,
+    /// World row disappeared during async refresh.
+    #[error("world command target disappeared")]
+    UnknownWorld,
+    /// Loading route has no loading state.
+    #[error("loading command has no loading state")]
+    NoLoadingState,
+    /// Advertised command has no route mapping.
+    #[error("semantic command is not mapped on the current route")]
+    UnmappedCommand,
+}
+
+/// Inputs needed to seal a replacement-process world launch intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LaunchHandoffContext {
+    /// Monotonic launcher generation.
+    pub generation: LaunchGeneration,
+    /// Intent issue time.
+    pub issued_at_ms: u64,
+    /// Intent expiry within launcher policy.
+    pub expires_at_ms: u64,
+    /// Exact client-shell lock.
+    pub shell_lock_hash: CanonicalHash,
+    /// Exact frozen world lock.
+    pub world_lock_hash: CanonicalHash,
+    /// Last settings transaction confirmed by the shutdown barrier.
+    pub confirmed_setting_transaction_revision: SettingTransactionRevision,
+}
+
+/// Handoff that must be atomically published before the current process exits.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchHandoff {
+    /// Authenticated cross-process envelope.
+    pub intent: LaunchIntentV1,
+    /// Explicit client lifecycle requirement.
+    pub disposition: ClientProcessDisposition,
+}
+
+impl LaunchHandoff {
+    /// Builds a world launch only from a `ReadyExact` plan offering the frozen lock.
+    ///
+    /// No Bevy `App` is created here. The launcher atomically persists this
+    /// intent after shutdown barriers and starts a replacement process whose
+    /// one fresh application enters the world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchHandoffError`] if the world is not exact-ready, plan
+    /// hashing fails, or launcher intent validation fails.
+    pub fn for_ready_exact(
+        record: &WorldShellRecord,
+        context: LaunchHandoffContext,
+    ) -> Result<Self, LaunchHandoffError> {
+        let plan = record
+            .open_plan
+            .as_ref()
+            .ok_or(LaunchHandoffError::NotReadyExact)?;
+        if plan.status != WorldOpenStatus::ReadyExact
+            || !plan.actions.contains(&WorldOpenAction::UseFrozenLock)
+        {
+            return Err(LaunchHandoffError::NotReadyExact);
+        }
+        let world_open_plan_hash = canonical_json_hash(plan)?;
+        let intent = LaunchIntentV1::seal(LaunchIntentDraftV1 {
+            generation: context.generation,
+            attempt: LaunchAttempt::FIRST,
+            issued_at_ms: context.issued_at_ms,
+            expires_at_ms: context.expires_at_ms,
+            target: LaunchTargetV1::World {
+                world_id: record.world_id(),
+            },
+            shell_lock_hash: context.shell_lock_hash,
+            world_lock_hash: Some(context.world_lock_hash),
+            world_open_plan_hash: Some(world_open_plan_hash),
+            confirmed_setting_transaction_revision: context.confirmed_setting_transaction_revision,
+        })?;
+        Ok(Self {
+            intent,
+            disposition: ClientProcessDisposition::ExitAfterAtomicIntentPublish,
+        })
+    }
+}
+
+/// Client lifecycle after a launch handoff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientProcessDisposition {
+    /// Exit current process; external launcher starts the replacement process.
+    ExitAfterAtomicIntentPublish,
+}
+
+/// Failure to build replacement-process handoff.
+#[derive(Debug, Error)]
+pub enum LaunchHandoffError {
+    /// Continue/launch is not allowed for this record.
+    #[error("world launch requires a ReadyExact plan offering UseFrozenLock")]
+    NotReadyExact,
+    /// Canonical plan hashing failed.
+    #[error(transparent)]
+    Canonical(#[from] CanonicalJsonError),
+    /// Launcher rejected the intent shape or lifetime.
+    #[error(transparent)]
+    Launcher(#[from] LaunchModelError),
+}
