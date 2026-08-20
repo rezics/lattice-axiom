@@ -4043,6 +4043,7 @@ dependencies = [
  "latticeaxiom-packages",
  "latticeaxiom-player",
  "latticeaxiom-registration",
+ "latticeaxiom-start-ui",
  "latticeaxiom-storage",
  "latticeaxiom-voxel-mesh",
  "latticeaxiom-voxel-runtime",

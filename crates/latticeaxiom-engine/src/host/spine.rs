@@ -10,7 +10,11 @@ use avian3d::prelude::Collider;
 use bevy::prelude::{Quat, Resource, Vec3};
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
 use latticeaxiom_core::{SchemaId, WorldId};
-use latticeaxiom_gameplay::{BlockId, BlockPosition, PlayerId};
+use latticeaxiom_gameplay::{
+    BlockId, BlockPosition, CatalogLimits, CommandOutcomeV1, ContainerId, DimensionChunkKey,
+    DropEntityId, GameplayCatalog, GameplayCatalogSourceV1, GameplayReject, ItemStackV1, PlayerId,
+    RecipeId, SlotIndex, WorkstationId,
+};
 use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
     BlockEditAuthority, BlockEditRejectV1, BlockEditSuccessV1, BlockFaceV1,
@@ -19,8 +23,9 @@ use latticeaxiom_player::{
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
-    ChunkMutation, ChunkRevision, ChunkRevisionExpectation, DimensionId, MemoryTransactionKernel,
-    PayloadSchemaVersion, StoredChunk, TransactionId, VersionedPayload, WorldTransaction,
+    ChunkMutation, ChunkRevision, ChunkRevisionExpectation, ContinuationId, DimensionId,
+    MemoryTransactionKernel, PayloadSchemaVersion, PersistentEntityId, StoredChunk, TransactionId,
+    VersionedPayload, WorldTransaction,
 };
 use latticeaxiom_voxel_mesh::{
     Face, FaceDescriptor, FaceOcclusion, MeshGroup, MeshReceipt, MeshSource, PaddedChunk, Voxel,
@@ -40,6 +45,7 @@ use latticeaxiom_worldgen::{
 
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
+    gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
     worldgen::{compile_plan, host_hard_limits, spine_config},
 };
@@ -203,6 +209,7 @@ pub(super) struct ProductionSpineInner {
     last_inspect: Option<Result<HeadlessTargetInspectV1, TargetInspectRejectV1>>,
     player_pose: ProductionPlayerPose,
     last_stream_error: Option<String>,
+    gameplay: Option<ProductionGameplay>,
 }
 
 /// Collider upserts and evictions consumed by the production presentation system.
@@ -242,15 +249,56 @@ impl ProductionSpine {
     ///
     /// Returns [`ProductionHostError`] when lock-bound generation, storage
     /// publication, voxel projection, or derived meshing fails.
-    #[allow(clippy::too_many_lines)]
     pub fn materialize(images: &LockVerifiedComposeImages) -> Result<Self, ProductionHostError> {
+        Self::materialize_world(images, WORLD_ID.parse()?)
+    }
+
+    /// Materializes the production spine with a caller-supplied gameplay catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when materialization or catalog binding fails.
+    pub fn materialize_with_catalog(
+        images: &LockVerifiedComposeImages,
+        catalog: GameplayCatalog,
+    ) -> Result<Self, ProductionHostError> {
+        Self::materialize_world_with_catalog(images, WORLD_ID.parse()?, catalog)
+    }
+
+    /// Materializes one process-local world identity into the memory kernel.
+    ///
+    /// The host does not pre-generate a large finite map. Further chunks stream
+    /// from player interest. This path does not open a durable writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when lock-bound generation, storage
+    /// publication, voxel projection, or derived meshing fails.
+    pub fn materialize_world(
+        images: &LockVerifiedComposeImages,
+        world: WorldId,
+    ) -> Result<Self, ProductionHostError> {
+        Self::materialize_world_with_catalog(images, world, empty_gameplay_catalog()?)
+    }
+
+    /// Materializes one process-local world with a caller-supplied catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when lock-bound generation, storage
+    /// publication, voxel projection, derived meshing, or gameplay binding fails.
+    #[allow(clippy::too_many_lines)]
+    pub fn materialize_world_with_catalog(
+        images: &LockVerifiedComposeImages,
+        world: WorldId,
+        catalog: GameplayCatalog,
+    ) -> Result<Self, ProductionHostError> {
         let config = spine_config();
         let chunk_edge = config.chunk_edge_voxels;
         let plan = compile_plan(
             images.product_lock_hash(),
             images.images().registration().image.image_hash,
         )?;
-        let world: WorldId = WORLD_ID.parse()?;
         let dimension = super::worldgen::dimension_id()?;
         let kernel = Arc::new(MemoryTransactionKernel::new());
         let palette = catalog_palette()?;
@@ -292,6 +340,7 @@ impl ProductionSpine {
             last_inspect: None,
             player_pose: ProductionPlayerPose::default(),
             last_stream_error: None,
+            gameplay: None,
         };
         fill_working_set(
             &mut inner,
@@ -308,6 +357,7 @@ impl ProductionSpine {
         let spawn_chunk = translation_chunk(inner.spawn_center, inner.chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
         fill_working_set(&mut inner, &kernel, spawn_chunk, [0, 0], FixedTick::new(0))?;
+        bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk)?;
 
         Ok(Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -531,6 +581,252 @@ impl ProductionSpine {
             .and_then(|inner| inner.last_reject.clone())
     }
 
+    /// Returns the compiled gameplay catalog bound to this session.
+    #[must_use]
+    pub fn gameplay_catalog(&self) -> Option<GameplayCatalog> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .gameplay
+                .as_ref()
+                .map(|session| session.catalog().clone())
+        })
+    }
+
+    /// Returns the local inventory and selected hotbar slot.
+    #[must_use]
+    pub fn inventory_view(&self) -> Option<ProductionInventoryView> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .gameplay
+                .as_ref()
+                .and_then(ProductionGameplay::inventory_view)
+        })
+    }
+
+    /// Selects a hotbar slot in `0..HOTBAR_SLOTS`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject::SlotOutOfRange`] for an invalid index.
+    pub fn select_hotbar_slot(&self, slot: u16) -> Result<(), GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .select_hotbar_slot(slot)
+    }
+
+    /// Returns dropped items still waiting for pickup.
+    #[must_use]
+    pub fn dropped_items(&self) -> BTreeMap<DropEntityId, latticeaxiom_gameplay::DroppedItemV1> {
+        self.lock_inner().map_or_else(
+            |_| BTreeMap::new(),
+            |inner| {
+                inner
+                    .gameplay
+                    .as_ref()
+                    .map(|session| session.dropped_items().clone())
+                    .unwrap_or_default()
+            },
+        )
+    }
+
+    /// Returns the last gameplay command outcome.
+    #[must_use]
+    pub fn last_gameplay_outcome(&self) -> Option<CommandOutcomeV1> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .gameplay
+                .as_ref()
+                .and_then(ProductionGameplay::last_outcome)
+                .cloned()
+        })
+    }
+
+    /// Returns the last gameplay kernel rejection.
+    #[must_use]
+    pub fn last_gameplay_reject(&self) -> Option<GameplayReject> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .gameplay
+                .as_ref()
+                .and_then(ProductionGameplay::last_reject)
+                .cloned()
+        })
+    }
+
+    /// Mines one cell through the gameplay kernel without DDA.
+    ///
+    /// # Errors
+    ///
+    /// Returns a block-edit rejection when targeting, planning, or commit fails.
+    pub fn mine_cell(
+        &self,
+        position: BlockPosition,
+    ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let result = inner.mine_cell(self.storage.kernel(), position, 0);
+        record_edit_result(&mut inner, &result);
+        result
+    }
+
+    /// Places from the selected hotbar slot beside `anchor` using `face`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a block-edit rejection when placement validation or commit fails.
+    pub fn place_from_hotbar(
+        &self,
+        anchor: BlockPosition,
+        face: BlockFaceV1,
+    ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let adjacent = face
+            .adjacent(anchor)
+            .ok_or(BlockEditRejectV1::PermissionDenied)?;
+        let result = inner.place_cell(self.storage.kernel(), adjacent, None, [0.0, 0.0, 0.0], 0);
+        record_edit_result(&mut inner, &result);
+        result
+    }
+
+    /// Picks up one dropped stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the drop is missing or inventory is full.
+    pub fn pickup_drop(&self, drop: DropEntityId) -> Result<CommandOutcomeV1, GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.pickup_drop(self.storage.kernel(), drop)
+    }
+
+    /// Crafts `recipe`, optionally at a bound workstation container.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when inputs, workstation, or output fail closed.
+    pub fn craft_recipe(
+        &self,
+        recipe: &RecipeId,
+        workstation: Option<ContainerId>,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.craft_recipe(self.storage.kernel(), recipe, workstation)
+    }
+
+    /// Binds a workstation container on the player inventory chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the workstation is unknown or the
+    /// container cannot be seeded.
+    pub fn bind_workstation(
+        &self,
+        workstation: WorkstationId,
+        container: ContainerId,
+    ) -> Result<(), GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        let spawn = translation_chunk(inner.spawn_center, inner.chunk_edge).ok_or(
+            GameplayReject::ChunkNotLoaded {
+                dimension: inner.dimension.as_str().to_owned(),
+                x: 0,
+                y: 0,
+                z: 0,
+            },
+        )?;
+        let chunk = DimensionChunkKey::new(inner.dimension.clone(), spawn);
+        inner
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .bind_workstation(workstation, &chunk, container)
+    }
+
+    /// Seeds one local inventory slot for fixture setup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the slot or stack is invalid.
+    pub fn seed_inventory_slot(
+        &self,
+        slot: SlotIndex,
+        stack: Option<ItemStackV1>,
+    ) -> Result<(), GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .seed_slot(slot, stack)
+    }
+
+    /// Returns the first resident cell matching `block`, if any.
+    #[must_use]
+    pub fn first_resident_block(&self, block: &BlockId) -> Option<BlockPosition> {
+        let inner = self.lock_inner().ok()?;
+        let wanted = palette_index(&inner.palette, block)?;
+        let edge = i32::from(inner.chunk_edge);
+        for coordinate in inner.resident_coordinates() {
+            for ly in 0..edge {
+                for lz in 0..edge {
+                    for lx in 0..edge {
+                        let position = BlockPosition {
+                            x: coordinate.x.checked_mul(edge)?.checked_add(lx)?,
+                            y: coordinate.y.checked_mul(edge)?.checked_add(ly)?,
+                            z: coordinate.z.checked_mul(edge)?.checked_add(lz)?,
+                        };
+                        let voxel = VoxelCoordinate::new(
+                            i64::from(position.x),
+                            i64::from(position.y),
+                            i64::from(position.z),
+                        );
+                        if inner
+                            .runtime
+                            .cell(voxel)
+                            .ok()
+                            .is_some_and(|cell| cell.palette_index == wanted)
+                        {
+                            return Some(position);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Returns the latest crosshair DDA target.
     #[must_use]
     pub fn current_target(&self) -> Option<HeadlessTargetInspectV1> {
@@ -654,6 +950,21 @@ struct SelectableHit {
 }
 
 impl ProductionSpineInner {
+    fn resident_coordinates(&self) -> Vec<ChunkCoordinate> {
+        self.lifecycle
+            .iter()
+            .filter_map(|(coordinate, state)| {
+                matches!(
+                    state,
+                    ChunkLifecycle::Resident
+                        | ChunkLifecycle::MeshCollider
+                        | ChunkLifecycle::Active
+                )
+                .then_some(*coordinate)
+            })
+            .collect()
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::needless_pass_by_value)] // Trait-shaped request is owned by the authority call.
     fn apply(
@@ -669,46 +980,265 @@ impl ProductionSpineInner {
             hit.revision,
             hit.distance,
         )?;
-
-        let (target, old_voxel, new_voxel) = match request.intent.action {
-            BlockEditActionV1::Break => {
-                if hit.voxel == self.empty {
-                    return Err(BlockEditRejectV1::NotBreakable);
-                }
-                (hit.position, hit.voxel, self.empty)
-            }
+        match request.intent.action {
+            BlockEditActionV1::Break => self.mine_cell(kernel, hit.position, request.fixed_tick),
             BlockEditActionV1::Place => {
-                let placement = request
-                    .intent
-                    .placement_content
-                    .clone()
-                    .ok_or(BlockEditRejectV1::NoPlacementContent)?;
-                let palette_index = palette_index(&self.palette, &placement)
-                    .ok_or(BlockEditRejectV1::ContentUnavailable)?;
                 let adjacent = hit
                     .face
                     .adjacent(hit.position)
                     .ok_or(BlockEditRejectV1::PermissionDenied)?;
-                if cell_intersects_player(adjacent, request.eye_pose.origin_m) {
-                    return Err(BlockEditRejectV1::WouldIntersectActor);
-                }
-                let adjacent_voxel = VoxelCoordinate::new(
-                    i64::from(adjacent.x),
-                    i64::from(adjacent.y),
-                    i64::from(adjacent.z),
-                );
-                let old = *self
-                    .runtime
-                    .cell(adjacent_voxel)
-                    .map_err(|_| BlockEditRejectV1::PermissionDenied)?;
-                if old != self.empty {
-                    return Err(BlockEditRejectV1::NotReplaceable);
-                }
-                (adjacent, old, HostVoxel { palette_index })
+                self.place_cell(
+                    kernel,
+                    adjacent,
+                    request.intent.placement_content.as_ref(),
+                    request.eye_pose.origin_m,
+                    request.fixed_tick,
+                )
             }
-        };
+        }
+    }
 
-        self.commit_cell(kernel, request.fixed_tick, target, old_voxel, new_voxel)
+    fn mine_cell(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        position: BlockPosition,
+        fixed_tick: u64,
+    ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
+        let voxel = *self
+            .runtime
+            .cell(VoxelCoordinate::new(
+                i64::from(position.x),
+                i64::from(position.y),
+                i64::from(position.z),
+            ))
+            .map_err(|_| BlockEditRejectV1::PermissionDenied)?;
+        if voxel == self.empty {
+            return Err(BlockEditRejectV1::NotBreakable);
+        }
+        let Some(block) = self.block_id(voxel) else {
+            return Err(BlockEditRejectV1::ContentUnavailable);
+        };
+        if self
+            .gameplay
+            .as_ref()
+            .is_none_or(|session| session.catalog().block(&block).is_none())
+        {
+            return self.commit_cell(kernel, fixed_tick, position, voxel, self.empty);
+        }
+        self.sync_gameplay_world(kernel)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let required_tool = self.gameplay.as_ref().and_then(|session| {
+            session.catalog().block(&block).and_then(|definition| {
+                definition
+                    .mining
+                    .tool
+                    .as_ref()
+                    .map(|tool| tool.class.clone())
+            })
+        });
+        let revision = self
+            .runtime
+            .chunk_revisions(chunk_of(position, self.chunk_edge))
+            .map(|(_, revision, _)| revision)
+            .ok_or(BlockEditRejectV1::PermissionDenied)?;
+        let command = self
+            .gameplay
+            .as_mut()
+            .ok_or(BlockEditRejectV1::ContentUnavailable)?
+            .prepare_mine(position, block.clone(), revision)
+            .map_err(|error| block_edit_reject(&error, required_tool.as_ref()))?;
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(BlockEditRejectV1::ContentUnavailable)?
+            .execute(transaction, command)
+            .map_err(|error| block_edit_reject(&error, required_tool.as_ref()))?;
+        let voxel_write = matches!(receipt.outcome, CommandOutcomeV1::BlockBroken { .. })
+            .then_some((position, self.empty));
+        commit_gameplay_storage(self, kernel, transaction, voxel_write, fixed_tick)?;
+        match receipt.outcome {
+            CommandOutcomeV1::MiningProgress {
+                accumulated,
+                required,
+            } => Err(BlockEditRejectV1::RequiresProgress {
+                remaining_work: remaining_work(accumulated, required),
+            }),
+            CommandOutcomeV1::BlockBroken { drop, .. } => {
+                let _ = self.pickup_drop(kernel, drop);
+                let published = kernel
+                    .reference_snapshot(self.world)
+                    .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+                let coordinate = chunk_of(position, self.chunk_edge);
+                let stored = published
+                    .chunk(&ChunkKey::new(
+                        self.world,
+                        self.dimension.clone(),
+                        coordinate,
+                    ))
+                    .ok_or(BlockEditRejectV1::StorageUnavailable)?;
+                Ok(BlockEditSuccessV1 {
+                    position,
+                    old_content: Some(block),
+                    new_content: None,
+                    committed_chunk_revision: stored.revision(),
+                })
+            }
+            _ => Err(BlockEditRejectV1::StorageUnavailable),
+        }
+    }
+
+    fn place_cell(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        target: BlockPosition,
+        requested_block: Option<&BlockId>,
+        eye_origin: [f32; 3],
+        fixed_tick: u64,
+    ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
+        if cell_intersects_player(target, eye_origin) {
+            return Err(BlockEditRejectV1::WouldIntersectActor);
+        }
+        let old = *self
+            .runtime
+            .cell(VoxelCoordinate::new(
+                i64::from(target.x),
+                i64::from(target.y),
+                i64::from(target.z),
+            ))
+            .map_err(|_| BlockEditRejectV1::PermissionDenied)?;
+        if old != self.empty {
+            return Err(BlockEditRejectV1::NotReplaceable);
+        }
+        let has_catalog = self.gameplay.as_ref().is_some_and(|session| {
+            session.inventory_view().is_some_and(|view| {
+                view.selected()
+                    .is_some_and(|stack| session.catalog().item(stack.item()).is_some())
+                    || requested_block.is_some_and(|block| {
+                        session
+                            .catalog()
+                            .items()
+                            .values()
+                            .any(|item| item.placement_block.as_ref() == Some(block))
+                    })
+            })
+        });
+        if !has_catalog {
+            let placement = requested_block
+                .cloned()
+                .or_else(|| Some(self.placement_content.clone()))
+                .ok_or(BlockEditRejectV1::NoPlacementContent)?;
+            let palette_index = palette_index(&self.palette, &placement)
+                .ok_or(BlockEditRejectV1::ContentUnavailable)?;
+            return self.commit_cell(kernel, fixed_tick, target, old, HostVoxel { palette_index });
+        }
+        self.sync_gameplay_world(kernel)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let revision = self
+            .runtime
+            .chunk_revisions(chunk_of(target, self.chunk_edge))
+            .map(|(_, revision, _)| revision)
+            .ok_or(BlockEditRejectV1::PermissionDenied)?;
+        let (command, block) = self
+            .gameplay
+            .as_mut()
+            .ok_or(BlockEditRejectV1::ContentUnavailable)?
+            .prepare_place(target, revision, requested_block)
+            .map_err(|error| block_edit_reject(&error, None))?;
+        let palette_index =
+            palette_index(&self.palette, &block).ok_or(BlockEditRejectV1::ContentUnavailable)?;
+        let transaction = next_transaction_id(self);
+        let _receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(BlockEditRejectV1::ContentUnavailable)?
+            .execute(transaction, command)
+            .map_err(|error| block_edit_reject(&error, None))?;
+        commit_gameplay_storage(
+            self,
+            kernel,
+            transaction,
+            Some((target, HostVoxel { palette_index })),
+            fixed_tick,
+        )?;
+        let published = kernel
+            .reference_snapshot(self.world)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let coordinate = chunk_of(target, self.chunk_edge);
+        let stored = published
+            .chunk(&ChunkKey::new(
+                self.world,
+                self.dimension.clone(),
+                coordinate,
+            ))
+            .ok_or(BlockEditRejectV1::StorageUnavailable)?;
+        Ok(BlockEditSuccessV1 {
+            position: target,
+            old_content: None,
+            new_content: Some(block),
+            committed_chunk_revision: stored.revision(),
+        })
+    }
+
+    fn pickup_drop(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        drop: DropEntityId,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        self.sync_gameplay_world(kernel)?;
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .pickup(transaction, drop)?;
+        commit_gameplay_storage(self, kernel, transaction, None, 0)
+            .map_err(|_| GameplayReject::StorageCommitMismatch { resource: "pickup" })?;
+        Ok(receipt.outcome)
+    }
+
+    fn craft_recipe(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        recipe: &RecipeId,
+        workstation: Option<ContainerId>,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        self.sync_gameplay_world(kernel)?;
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .craft(transaction, recipe, workstation)?;
+        commit_gameplay_storage(self, kernel, transaction, None, 0)
+            .map_err(|_| GameplayReject::StorageCommitMismatch { resource: "craft" })?;
+        Ok(receipt.outcome)
+    }
+
+    fn sync_gameplay_world(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+    ) -> Result<(), GameplayReject> {
+        let snapshot = kernel.reference_snapshot(self.world).map_err(|_| {
+            GameplayReject::StorageCommitMismatch {
+                resource: "snapshot",
+            }
+        })?;
+        let mut loaded = BTreeMap::new();
+        for (key, stored) in snapshot.chunks() {
+            loaded.insert(
+                DimensionChunkKey::new(key.dimension.clone(), key.coordinate),
+                stored.revision(),
+            );
+        }
+        if let Some(gameplay) = self.gameplay.as_mut() {
+            gameplay.sync_loaded_world(snapshot.revision(), loaded)?;
+        }
+        Ok(())
     }
 
     fn commit_cell(
@@ -1331,16 +1861,72 @@ fn chunk_data(
     schema_version: PayloadSchemaVersion,
     cells: &[HostVoxel],
 ) -> ChunkData {
-    let mut bytes = Vec::with_capacity(cells.len().saturating_mul(2));
-    for cell in cells {
-        bytes.extend_from_slice(&cell.palette_index.to_le_bytes());
-    }
     ChunkData::new(
-        VersionedPayload::new(schema.clone(), schema_version, bytes),
+        voxel_payload(schema, schema_version, cells),
         BTreeMap::new(),
         BTreeMap::new(),
         BTreeMap::new(),
     )
+}
+
+fn runtime_chunk_cells(
+    inner: &ProductionSpineInner,
+    coordinate: ChunkCoordinate,
+) -> Vec<HostVoxel> {
+    let edge = inner.chunk_edge;
+    let mut cells = Vec::with_capacity(usize::from(edge).pow(3));
+    for y in 0..edge {
+        for z in 0..edge {
+            for x in 0..edge {
+                let voxel = VoxelCoordinate::new(
+                    i64::from(coordinate.x) * i64::from(edge) + i64::from(x),
+                    i64::from(coordinate.y) * i64::from(edge) + i64::from(y),
+                    i64::from(coordinate.z) * i64::from(edge) + i64::from(z),
+                );
+                cells.push(inner.runtime.cell(voxel).map_or(inner.empty, |cell| *cell));
+            }
+        }
+    }
+    cells
+}
+
+fn voxel_payload(
+    schema: &SchemaId,
+    schema_version: PayloadSchemaVersion,
+    cells: &[HostVoxel],
+) -> VersionedPayload {
+    let mut bytes = Vec::with_capacity(cells.len().saturating_mul(2));
+    for cell in cells {
+        bytes.extend_from_slice(&cell.palette_index.to_le_bytes());
+    }
+    VersionedPayload::new(schema.clone(), schema_version, bytes)
+}
+
+fn runtime_capture_payload(
+    schema: &SchemaId,
+    schema_version: PayloadSchemaVersion,
+    transaction_id: TransactionId,
+    discriminator: u8,
+) -> VersionedPayload {
+    let mut bytes = transaction_id.as_bytes().to_vec();
+    bytes.push(discriminator);
+    VersionedPayload::new(schema.clone(), schema_version, bytes)
+}
+
+fn capture_entity(coordinate: ChunkCoordinate) -> PersistentEntityId {
+    let mut bytes = [0xCA; 16];
+    bytes[0..4].copy_from_slice(&coordinate.x.to_le_bytes());
+    bytes[4..8].copy_from_slice(&coordinate.y.to_le_bytes());
+    bytes[8..12].copy_from_slice(&coordinate.z.to_le_bytes());
+    PersistentEntityId::from_bytes(bytes)
+}
+
+fn capture_continuation(coordinate: ChunkCoordinate) -> ContinuationId {
+    let mut bytes = [0xC0; 16];
+    bytes[0..4].copy_from_slice(&coordinate.x.to_le_bytes());
+    bytes[4..8].copy_from_slice(&coordinate.y.to_le_bytes());
+    bytes[8..12].copy_from_slice(&coordinate.z.to_le_bytes());
+    ContinuationId::from_bytes(bytes)
 }
 
 fn decode_cells(bytes: &[u8], edge: u16) -> Result<Vec<HostVoxel>, ProductionHostError> {
@@ -1619,4 +2205,209 @@ fn chunk_origin(coordinate: ChunkCoordinate, edge: f32) -> Vec3 {
 #[must_use]
 pub(super) const fn local_player_id() -> PlayerId {
     PlayerId::new(1)
+}
+
+fn empty_gameplay_catalog() -> Result<GameplayCatalog, ProductionHostError> {
+    Ok(GameplayCatalog::compile(
+        GameplayCatalogSourceV1::default(),
+        CatalogLimits::default(),
+    )?)
+}
+
+fn bind_gameplay_session(
+    inner: &mut ProductionSpineInner,
+    kernel: &MemoryTransactionKernel,
+    catalog: GameplayCatalog,
+    spawn_chunk: ChunkCoordinate,
+) -> Result<(), ProductionHostError> {
+    let snapshot = kernel.reference_snapshot(inner.world)?;
+    let mut loaded = BTreeMap::new();
+    for (key, stored) in snapshot.chunks() {
+        loaded.insert(
+            DimensionChunkKey::new(key.dimension.clone(), key.coordinate),
+            stored.revision(),
+        );
+    }
+    inner.edited.insert(spawn_chunk);
+    inner.gameplay = Some(ProductionGameplay::new(
+        inner.world,
+        catalog,
+        local_player_id(),
+        inner.dimension.clone(),
+        DimensionChunkKey::new(inner.dimension.clone(), spawn_chunk),
+        loaded,
+        snapshot.revision(),
+        inner.chunk_edge,
+    )?);
+    Ok(())
+}
+
+fn next_transaction_id(inner: &mut ProductionSpineInner) -> TransactionId {
+    let transaction = TransactionId::from_u128(inner.next_transaction);
+    inner.next_transaction = inner.next_transaction.saturating_add(1);
+    transaction
+}
+
+fn record_edit_result(
+    inner: &mut ProductionSpineInner,
+    result: &Result<BlockEditSuccessV1, BlockEditRejectV1>,
+) {
+    match result {
+        Ok(success) => {
+            inner.last_success = Some(success.clone());
+            inner.last_reject = None;
+        }
+        Err(reject) => inner.last_reject = Some(reject.clone()),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn commit_gameplay_storage(
+    inner: &mut ProductionSpineInner,
+    kernel: &MemoryTransactionKernel,
+    transaction_id: TransactionId,
+    voxel_write: Option<(BlockPosition, HostVoxel)>,
+    fixed_tick: u64,
+) -> Result<(), BlockEditRejectV1> {
+    let pending = match inner
+        .gameplay
+        .as_ref()
+        .and_then(ProductionGameplay::pending_storage_chunks)
+    {
+        Some(chunks) if !chunks.is_empty() => chunks.clone(),
+        _ => return Ok(()),
+    };
+    let snapshot = kernel
+        .reference_snapshot(inner.world)
+        .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+    let mut mutations = Vec::new();
+    for (chunk, domains) in &pending {
+        let key = ChunkKey::new(inner.world, chunk.dimension.clone(), chunk.coordinate);
+        let stored = snapshot
+            .chunk(&key)
+            .ok_or(BlockEditRejectV1::StorageUnavailable)?;
+        let mut cells = if inner.runtime.is_resident(chunk.coordinate) {
+            runtime_chunk_cells(inner, chunk.coordinate)
+        } else {
+            decode_cells(stored.data().voxels().bytes(), inner.chunk_edge)
+                .map_err(|_| BlockEditRejectV1::StorageUnavailable)?
+        };
+        if let Some((position, voxel)) = voxel_write
+            && chunk_of(position, inner.chunk_edge) == chunk.coordinate
+        {
+            let local = local_index(position, inner.chunk_edge);
+            let index =
+                canonical_index(usize::from(inner.chunk_edge), local[0], local[1], local[2]);
+            if let Some(cell) = cells.get_mut(index) {
+                *cell = voxel;
+            }
+        }
+        let mut entities = stored.data().persistent_entities().clone();
+        if domains.contains(ChangedDomains::PERSISTENT_ENTITIES) {
+            entities.insert(
+                capture_entity(chunk.coordinate),
+                runtime_capture_payload(
+                    &inner.voxel_schema,
+                    inner.voxel_schema_version,
+                    transaction_id,
+                    1,
+                ),
+            );
+        }
+        let mut continuations = stored.data().continuations().clone();
+        if domains.contains(ChangedDomains::CONTINUATIONS) {
+            continuations.insert(
+                capture_continuation(chunk.coordinate),
+                runtime_capture_payload(
+                    &inner.voxel_schema,
+                    inner.voxel_schema_version,
+                    transaction_id,
+                    2,
+                ),
+            );
+        }
+        let replacement = ChunkData::new(
+            voxel_payload(&inner.voxel_schema, inner.voxel_schema_version, &cells),
+            entities,
+            continuations,
+            stored.data().provenance().clone(),
+        );
+        let mut declared = ChangedDomains::NONE;
+        if replacement.voxels() != stored.data().voxels() {
+            declared = declared.union(ChangedDomains::VOXELS);
+        }
+        if replacement.persistent_entities() != stored.data().persistent_entities() {
+            declared = declared.union(ChangedDomains::PERSISTENT_ENTITIES);
+        }
+        if replacement.continuations() != stored.data().continuations() {
+            declared = declared.union(ChangedDomains::CONTINUATIONS);
+        }
+        if replacement.provenance() != stored.data().provenance() {
+            declared = declared.union(ChangedDomains::PROVENANCE);
+        }
+        if declared.is_empty() {
+            return Err(BlockEditRejectV1::StorageUnavailable);
+        }
+        mutations.push(ChunkMutation::new(
+            key,
+            ChunkRevisionExpectation::Exact(stored.revision()),
+            declared,
+            replacement,
+        ));
+    }
+    let receipt = kernel
+        .commit(WorldTransaction::new(
+            transaction_id,
+            inner.world,
+            snapshot.revision(),
+            mutations,
+        ))
+        .map_err(|error| {
+            inner.last_stream_error = Some(error.to_string());
+            BlockEditRejectV1::StorageUnavailable
+        })?;
+    inner
+        .gameplay
+        .as_mut()
+        .ok_or(BlockEditRejectV1::ContentUnavailable)?
+        .observe_storage_commit(&receipt)
+        .map_err(|error| {
+            inner.last_stream_error = Some(error.to_string());
+            BlockEditRejectV1::StorageUnavailable
+        })?;
+    let published = kernel
+        .reference_snapshot(inner.world)
+        .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+    for chunk in pending.keys() {
+        inner.edited.insert(chunk.coordinate);
+        let key = ChunkKey::new(inner.world, chunk.dimension.clone(), chunk.coordinate);
+        let stored = published
+            .chunk(&key)
+            .ok_or(BlockEditRejectV1::StorageUnavailable)?;
+        project_stored(
+            &mut inner.runtime,
+            stored,
+            inner.chunk_edge,
+            FixedTick::new(fixed_tick),
+        )
+        .map_err(|error| {
+            inner.last_stream_error = Some(error.to_string());
+            BlockEditRejectV1::StorageUnavailable
+        })?;
+        inner
+            .lifecycle
+            .entry(chunk.coordinate)
+            .and_modify(|state| {
+                if *state == ChunkLifecycle::Active {
+                    *state = ChunkLifecycle::MeshCollider;
+                }
+            })
+            .or_insert(ChunkLifecycle::Resident);
+    }
+    drain_derived(inner, FixedTick::new(fixed_tick)).map_err(|error| {
+        inner.last_stream_error = Some(error.to_string());
+        BlockEditRejectV1::StorageUnavailable
+    })?;
+    refresh_lifecycle(inner);
+    Ok(())
 }

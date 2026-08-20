@@ -34,13 +34,18 @@ pub use client::{
     run_client_host_from_workspace,
 };
 pub use host::{
-    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ProductionHostError, ProductionHostPlugin,
-    ProductionInspectSurface, ProductionPlayerPose, ProductionSpine, ProductionWorldStorage,
-    WorkingSetDiagnosticsV1,
+    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, HOTBAR_SLOTS, INVENTORY_SLOTS,
+    ProductionHostError, ProductionHostPlugin, ProductionInspectSurface, ProductionInventoryView,
+    ProductionMemoryStart, ProductionMemoryStartError, ProductionPlayerPose, ProductionSpine,
+    ProductionWorldList, ProductionWorldStorage, WorkingSetDiagnosticsV1,
 };
 pub use instance::{
     EngineInstance, EngineInstanceError, EngineProfile, FixedTickCount, MAX_TICKS_PER_ADVANCE,
     VerifiedProductLockHash,
+};
+pub use latticeaxiom_gameplay::{
+    CommandOutcomeV1, ContainerId, DropEntityId, GameplayCatalog, GameplayReject, ItemId,
+    ItemStackV1, ItemStateV1, RecipeId, SlotIndex, WorkstationId,
 };
 pub use latticeaxiom_player::{
     ActionAxis2V1, ActionFrameInbox, ActionFrameInboxError, BlockEditReceiptV1, BlockEditSuccessV1,

@@ -9,9 +9,11 @@
 
 #[cfg(feature = "client")]
 mod client;
+mod gameplay;
 #[cfg(feature = "client")]
 mod hud;
 mod spine;
+mod start;
 mod stream;
 mod worldgen;
 
@@ -34,7 +36,7 @@ use bevy::{
 };
 use latticeaxiom_compose::LockedGameGraph;
 use latticeaxiom_core::IdentifierError;
-use latticeaxiom_gameplay::GameplayIdError;
+use latticeaxiom_gameplay::{GameplayIdError, GameplayReject};
 use latticeaxiom_player::{
     ActionFrameInbox, ActionFrameInboxError, AuthoritativeTargetInspectRequestV1,
     BlockEditAuthorityResource, CurrentPlayerActionFrame, D2Player, D2PlayerBundle,
@@ -50,7 +52,9 @@ use latticeaxiom_voxel_runtime::RuntimeError;
 use latticeaxiom_worldgen::WorldgenError;
 use thiserror::Error;
 
+pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
 pub use spine::{ProductionSpine, ProductionWorldStorage, WorkingSetDiagnosticsV1};
+pub use start::{ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList};
 pub use stream::ChunkLifecycle;
 
 #[cfg(feature = "client")]
@@ -202,6 +206,7 @@ impl Plugin for ProductionHostPlugin {
             (
                 hud::sync_production_inspect_hud.after(refresh_crosshair_target),
                 hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
+                hud::sync_production_hotbar_hud.after(refresh_crosshair_target),
             ),
         );
     }
@@ -229,6 +234,29 @@ impl EngineInstance {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
         let spine = ProductionSpine::materialize(&images)?;
+        Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
+            install_production_host(app, product_lock_hash, spine, inspect_surface, true);
+        })
+        .map_err(ProductionHostError::from)
+    }
+
+    /// Builds a GPU-free production spine with a caller-supplied gameplay catalog.
+    ///
+    /// The catalog is compiled from package data by the caller. This path does
+    /// not embed Terrenia identifiers and does not open a world writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when materialization or Bevy construction
+    /// fails.
+    pub fn new_headless_host_from_lock_with_catalog(
+        images: LockVerifiedComposeImages,
+        fixed_timestep: std::time::Duration,
+        catalog: latticeaxiom_gameplay::GameplayCatalog,
+    ) -> Result<Self, ProductionHostError> {
+        let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
+        let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
+        let spine = ProductionSpine::materialize_with_catalog(&images, catalog)?;
         Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
             install_production_host(app, product_lock_hash, spine, inspect_surface, true);
         })
@@ -594,6 +622,9 @@ pub enum ProductionHostError {
     /// The local player pose is outside the canonical chunk domain.
     #[error("player pose is outside the canonical chunk domain")]
     InvalidPlayerPose,
+    /// The gameplay kernel rejected a catalog, inventory, or command.
+    #[error(transparent)]
+    Gameplay(#[from] GameplayReject),
 }
 
 impl fmt::Debug for ProductionSpine {

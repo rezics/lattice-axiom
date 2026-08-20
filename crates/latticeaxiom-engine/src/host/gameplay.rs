@@ -1,0 +1,677 @@
+//! Inventory, hotbar, mining progress, drops, pickup, and recipes on the spine.
+//!
+//! Package-authored catalogs are supplied by the caller. This module does not
+//! embed Terrenia item, recipe, or block identifiers.
+
+use std::collections::BTreeMap;
+
+use latticeaxiom_gameplay::{
+    BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1,
+    ContainerId, ContainerOwnerComponentV1, ContainerStateV1, DimensionChunkKey, DimensionId,
+    DropEntityId, FaultInjection, GameplayCatalog, GameplayCommandV1, GameplayEditTarget,
+    GameplayLimits, GameplayReject, GameplayStorageDomain, IngredientV1, InventoryStateV1, ItemId,
+    ItemStackV1, ItemStateV1, MineCommandV1, PickupCommandV1, PlaceCommandV1, PlayerId,
+    RecipeCraftCommandV1, RecipeId, RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier,
+    RuntimePlanReceiptV1, SlotIndex, ToolClassId, TransactionId, WorkstationId, WorldId,
+    WorldRevision,
+};
+use latticeaxiom_player::BlockEditRejectV1;
+use latticeaxiom_storage::{ChangedDomains, CommitReceipt};
+
+/// Player inventory size used by the production host.
+pub const INVENTORY_SLOTS: usize = 36;
+/// Hotbar prefix of [`INVENTORY_SLOTS`].
+pub const HOTBAR_SLOTS: u16 = 9;
+const CRAFTING_GRID_ORIGIN: u16 = 27;
+
+/// In-memory gameplay session bound to [`MemoryTransactionKernel`] commits.
+#[derive(Clone, Debug)]
+pub(super) struct ProductionGameplay {
+    applier: ReferencePlanApplier,
+    player: PlayerId,
+    dimension: DimensionId,
+    hotbar_slot: u16,
+    next_drop: u64,
+    last_outcome: Option<CommandOutcomeV1>,
+    last_reject: Option<GameplayReject>,
+}
+
+/// Snapshot of the local inventory and selected hotbar slot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionInventoryView {
+    hotbar_slot: u16,
+    slots: Box<[Option<ItemStackV1>]>,
+}
+
+impl ProductionInventoryView {
+    /// Returns the selected hotbar index in `0..HOTBAR_SLOTS`.
+    #[must_use]
+    pub const fn hotbar_slot(&self) -> u16 {
+        self.hotbar_slot
+    }
+
+    /// Returns every inventory slot in index order.
+    #[must_use]
+    pub const fn slots(&self) -> &[Option<ItemStackV1>] {
+        &self.slots
+    }
+
+    /// Returns the selected hotbar stack.
+    #[must_use]
+    pub fn selected(&self) -> Option<&ItemStackV1> {
+        self.slots.get(usize::from(self.hotbar_slot))?.as_ref()
+    }
+
+    /// Counts copies of `item` across every slot.
+    #[must_use]
+    pub fn count_item(&self, item: &ItemId) -> u32 {
+        self.slots.iter().flatten().fold(0, |total, stack| {
+            if stack.item() == item {
+                total.saturating_add(stack.quantity())
+            } else {
+                total
+            }
+        })
+    }
+
+    /// Returns remaining durability of the first matching tool stack.
+    #[must_use]
+    pub fn tool_durability(&self, item: &ItemId) -> Option<u32> {
+        self.slots.iter().flatten().find_map(|stack| {
+            if stack.item() != item {
+                return None;
+            }
+            match stack.state() {
+                ItemStateV1::ToolDurability { remaining } => Some(remaining.get()),
+                ItemStateV1::Plain => None,
+            }
+        })
+    }
+}
+
+impl ProductionGameplay {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        world: WorldId,
+        catalog: GameplayCatalog,
+        player: PlayerId,
+        dimension: DimensionId,
+        spawn_chunk: DimensionChunkKey,
+        loaded: BTreeMap<DimensionChunkKey, ChunkRevision>,
+        world_revision: WorldRevision,
+        chunk_edge: u16,
+    ) -> Result<Self, GameplayReject> {
+        let mut state = ReferenceGameplayState::new(GameplayLimits::default())?;
+        state.set_chunk_edge(chunk_edge)?;
+        for (chunk, revision) in loaded {
+            state.ensure_loaded_chunk(chunk, revision)?;
+        }
+        state.observe_world_revision(world_revision)?;
+        let inventory = InventoryStateV1::empty(
+            GameplayEditTarget::new(spawn_chunk, GameplayStorageDomain::PersistentEntities),
+            INVENTORY_SLOTS,
+        )?;
+        state.seed_player(player, inventory)?;
+        Ok(Self {
+            applier: ReferencePlanApplier::try_new(world, state, catalog)?,
+            player,
+            dimension,
+            hotbar_slot: 0,
+            next_drop: 10_000,
+            last_outcome: None,
+            last_reject: None,
+        })
+    }
+
+    pub(super) fn catalog(&self) -> &GameplayCatalog {
+        self.applier.catalog()
+    }
+
+    pub(super) fn select_hotbar_slot(&mut self, slot: u16) -> Result<(), GameplayReject> {
+        if slot >= HOTBAR_SLOTS {
+            return Err(GameplayReject::SlotOutOfRange {
+                slot: SlotIndex::new(slot),
+                slots: usize::from(HOTBAR_SLOTS),
+            });
+        }
+        self.hotbar_slot = slot;
+        Ok(())
+    }
+
+    pub(super) fn inventory_view(&self) -> Option<ProductionInventoryView> {
+        let inventory = self.applier.state().inventory(self.player)?;
+        Some(ProductionInventoryView {
+            hotbar_slot: self.hotbar_slot,
+            slots: inventory.slots().to_vec().into_boxed_slice(),
+        })
+    }
+
+    pub(super) fn dropped_items(
+        &self,
+    ) -> &BTreeMap<DropEntityId, latticeaxiom_gameplay::DroppedItemV1> {
+        self.applier.state().dropped_items()
+    }
+
+    pub(super) fn last_outcome(&self) -> Option<&CommandOutcomeV1> {
+        self.last_outcome.as_ref()
+    }
+
+    pub(super) fn last_reject(&self) -> Option<&GameplayReject> {
+        self.last_reject.as_ref()
+    }
+
+    pub(super) fn pending_storage_chunks(
+        &self,
+    ) -> Option<&BTreeMap<DimensionChunkKey, ChangedDomains>> {
+        self.applier.pending_storage_chunks()
+    }
+
+    pub(super) fn observe_storage_commit(
+        &mut self,
+        receipt: &CommitReceipt,
+    ) -> Result<(), GameplayReject> {
+        self.applier.observe_storage_commit(receipt)
+    }
+
+    pub(super) fn sync_loaded_world(
+        &mut self,
+        world_revision: WorldRevision,
+        chunks: impl IntoIterator<Item = (DimensionChunkKey, ChunkRevision)>,
+    ) -> Result<(), GameplayReject> {
+        if let Some(pending) = self.applier.state().pending_receipt() {
+            return Err(GameplayReject::StorageCommitPending {
+                transaction_id: *pending.transaction_id.as_bytes(),
+                observed_world_revision: pending.observed_world_revision.get(),
+            });
+        }
+        let state = self.applier.state_mut();
+        for (chunk, revision) in chunks {
+            state.ensure_loaded_chunk(chunk, revision)?;
+        }
+        state.observe_world_revision(world_revision)
+    }
+
+    pub(super) fn prepare_mine(
+        &mut self,
+        target: BlockPosition,
+        block: BlockId,
+        expected_chunk_revision: ChunkRevision,
+    ) -> Result<GameplayCommandV1, GameplayReject> {
+        let key = BlockKey::new(self.dimension.clone(), target);
+        self.applier
+            .state_mut()
+            .sync_occupied_block(key.clone(), block)?;
+        let reserved_drop = DropEntityId::new(self.next_drop);
+        self.next_drop = self.next_drop.saturating_add(1);
+        Ok(GameplayCommandV1::Mine(MineCommandV1 {
+            player: self.player,
+            target: key,
+            expected_chunk_revision,
+            tool_slot: self.selected_tool_slot(),
+            reserved_drop,
+        }))
+    }
+
+    pub(super) fn prepare_place(
+        &mut self,
+        target: BlockPosition,
+        expected_chunk_revision: ChunkRevision,
+        requested_block: Option<&BlockId>,
+    ) -> Result<(GameplayCommandV1, BlockId), GameplayReject> {
+        let key = BlockKey::new(self.dimension.clone(), target);
+        self.applier.state_mut().clear_occupied_block(&key);
+        let slot = self.placement_slot(requested_block)?;
+        let inventory =
+            self.applier
+                .state()
+                .inventory(self.player)
+                .ok_or(GameplayReject::UnknownPlayer {
+                    player: self.player.as_bytes(),
+                })?;
+        let stack = inventory.slot(slot)?.ok_or(GameplayReject::EmptySlot)?;
+        let item =
+            self.catalog()
+                .item(stack.item())
+                .ok_or_else(|| GameplayReject::UnknownReference {
+                    kind: "item",
+                    id: stack.item().as_str().to_owned(),
+                })?;
+        let block =
+            item.placement_block
+                .clone()
+                .ok_or_else(|| GameplayReject::NotPlacementItem {
+                    item: stack.item().clone(),
+                })?;
+        Ok((
+            GameplayCommandV1::Place(PlaceCommandV1 {
+                player: self.player,
+                slot,
+                target: key,
+                expected_chunk_revision,
+            }),
+            block,
+        ))
+    }
+
+    pub(super) fn execute(
+        &mut self,
+        transaction_id: TransactionId,
+        command: GameplayCommandV1,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        let envelope = CommandEnvelopeV1 {
+            transaction_id,
+            expected_world_revision: self.applier.state().observed_world_revision(),
+            command,
+        };
+        match self.applier.execute(&envelope, FaultInjection::None) {
+            Ok(receipt) => {
+                self.last_outcome = Some(receipt.outcome.clone());
+                self.last_reject = None;
+                Ok(receipt)
+            }
+            Err(error) => {
+                self.last_reject = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn pickup(
+        &mut self,
+        transaction_id: TransactionId,
+        drop: DropEntityId,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        self.execute(
+            transaction_id,
+            GameplayCommandV1::Pickup(PickupCommandV1 {
+                player: self.player,
+                drop,
+            }),
+        )
+    }
+
+    pub(super) fn craft(
+        &mut self,
+        transaction_id: TransactionId,
+        recipe: &RecipeId,
+        workstation: Option<ContainerId>,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        let input_slots = self.layout_recipe(recipe)?;
+        self.execute(
+            transaction_id,
+            GameplayCommandV1::Craft(RecipeCraftCommandV1 {
+                player: self.player,
+                recipe: recipe.clone(),
+                input_slots,
+                workstation,
+            }),
+        )
+    }
+
+    pub(super) fn bind_workstation(
+        &mut self,
+        workstation: WorkstationId,
+        owner_chunk: &DimensionChunkKey,
+        entity: ContainerId,
+    ) -> Result<(), GameplayReject> {
+        if !self.catalog().workstations().contains(&workstation) {
+            return Err(GameplayReject::UnknownReference {
+                kind: "workstation",
+                id: workstation.as_str().to_owned(),
+            });
+        }
+        if self.applier.state().container(entity).is_some() {
+            return Ok(());
+        }
+        let container = ContainerStateV1::empty(
+            ContainerOwnerComponentV1 {
+                dimension: owner_chunk.dimension.clone(),
+                chunk: owner_chunk.coordinate,
+                entity: entity.into_persistent_entity_id(),
+            },
+            Some(workstation),
+            9,
+        )?;
+        self.applier.state_mut().seed_container(entity, container)
+    }
+
+    pub(super) fn seed_slot(
+        &mut self,
+        slot: SlotIndex,
+        stack: Option<ItemStackV1>,
+    ) -> Result<(), GameplayReject> {
+        if let Some(stack) = &stack {
+            self.catalog().validate_stack(stack)?;
+        }
+        self.applier
+            .state_mut()
+            .seed_player_slot(self.player, slot, stack)
+    }
+
+    fn selected_tool_slot(&self) -> Option<SlotIndex> {
+        let inventory = self.applier.state().inventory(self.player)?;
+        let slot = SlotIndex::new(self.hotbar_slot);
+        let stack = inventory.slot(slot).ok().flatten()?;
+        self.catalog().tool(stack.item())?;
+        Some(slot)
+    }
+
+    fn placement_slot(
+        &self,
+        requested_block: Option<&BlockId>,
+    ) -> Result<SlotIndex, GameplayReject> {
+        let inventory =
+            self.applier
+                .state()
+                .inventory(self.player)
+                .ok_or(GameplayReject::UnknownPlayer {
+                    player: self.player.as_bytes(),
+                })?;
+        if let Some(requested) = requested_block {
+            for (index, stack) in inventory.slots().iter().enumerate() {
+                let Some(stack) = stack else {
+                    continue;
+                };
+                if self
+                    .catalog()
+                    .item(stack.item())
+                    .and_then(|item| item.placement_block.as_ref())
+                    == Some(requested)
+                {
+                    let slot = u16::try_from(index).map_err(|_| GameplayReject::LimitExceeded {
+                        resource: "inventory_slots",
+                        limit: usize::from(u16::MAX),
+                        actual: index,
+                    })?;
+                    return Ok(SlotIndex::new(slot));
+                }
+            }
+        }
+        let selected = SlotIndex::new(self.hotbar_slot);
+        if inventory.slot(selected)?.is_some() {
+            return Ok(selected);
+        }
+        Err(GameplayReject::EmptySlot)
+    }
+
+    fn layout_recipe(&mut self, recipe: &RecipeId) -> Result<Box<[SlotIndex]>, GameplayReject> {
+        let pattern = self
+            .catalog()
+            .recipe(recipe)
+            .ok_or_else(|| GameplayReject::UnknownReference {
+                kind: "recipe",
+                id: recipe.as_str().to_owned(),
+            })?
+            .pattern
+            .clone();
+        match pattern {
+            RecipePatternV1::Shapeless { ingredients } => {
+                self.shapeless_slots(recipe, ingredients.as_ref())
+            }
+            RecipePatternV1::Shaped { cells, .. } => {
+                self.layout_shaped_grid(recipe, cells.as_ref())
+            }
+        }
+    }
+
+    fn shapeless_slots(
+        &self,
+        recipe: &RecipeId,
+        ingredients: &[IngredientV1],
+    ) -> Result<Box<[SlotIndex]>, GameplayReject> {
+        let inventory =
+            self.applier
+                .state()
+                .inventory(self.player)
+                .ok_or(GameplayReject::UnknownPlayer {
+                    player: self.player.as_bytes(),
+                })?;
+        let mut slots = Vec::new();
+        for ingredient in ingredients {
+            let mut remaining = ingredient.quantity.get();
+            for (index, stack) in inventory.slots().iter().enumerate() {
+                if remaining == 0 {
+                    break;
+                }
+                let Some(stack) = stack else {
+                    continue;
+                };
+                if !self.catalog().matches(&ingredient.accepts, stack.item()) {
+                    continue;
+                }
+                let slot = u16::try_from(index).map_err(|_| GameplayReject::LimitExceeded {
+                    resource: "inventory_slots",
+                    limit: usize::from(u16::MAX),
+                    actual: index,
+                })?;
+                slots.push(SlotIndex::new(slot));
+                remaining = remaining.saturating_sub(stack.quantity());
+            }
+            if remaining > 0 {
+                return Err(GameplayReject::RecipeMismatch {
+                    recipe: recipe.clone(),
+                });
+            }
+        }
+        if slots.is_empty() {
+            return Err(GameplayReject::RecipeMismatch {
+                recipe: recipe.clone(),
+            });
+        }
+        Ok(slots.into_boxed_slice())
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "shaped grid layout must stay one conservation-preserving flow"
+    )]
+    fn layout_shaped_grid(
+        &mut self,
+        recipe: &RecipeId,
+        cells: &[Option<IngredientV1>],
+    ) -> Result<Box<[SlotIndex]>, GameplayReject> {
+        if cells.len() > 9 {
+            return Err(GameplayReject::LimitExceeded {
+                resource: "shaped_cells",
+                limit: 9,
+                actual: cells.len(),
+            });
+        }
+        let catalog = self.catalog().clone();
+        let player = self.player;
+        let inventory = self
+            .applier
+            .state()
+            .inventory(player)
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: player.as_bytes(),
+            })?
+            .clone();
+        let mut working = inventory.slots().to_vec();
+        let grid_start = usize::from(CRAFTING_GRID_ORIGIN);
+        for offset in 0..cells.len() {
+            let grid_index = grid_start
+                .checked_add(offset)
+                .ok_or(GameplayReject::QuantityOverflow)?;
+            let offset_u16 = u16::try_from(offset).map_err(|_| GameplayReject::QuantityOverflow)?;
+            let Some(grid_slot) = working.get_mut(grid_index) else {
+                return Err(GameplayReject::SlotOutOfRange {
+                    slot: SlotIndex::new(CRAFTING_GRID_ORIGIN.saturating_add(offset_u16)),
+                    slots: working.len(),
+                });
+            };
+            if let Some(stack) = grid_slot.take() {
+                insert_into_working(&catalog, &mut working, &stack, grid_index)?;
+            }
+        }
+        for (offset, cell) in cells.iter().enumerate() {
+            let Some(ingredient) = cell else {
+                continue;
+            };
+            let grid_index = grid_start
+                .checked_add(offset)
+                .ok_or(GameplayReject::QuantityOverflow)?;
+            let mut remaining = ingredient.quantity.get();
+            for source in 0..working.len() {
+                if remaining == 0 || source == grid_index {
+                    continue;
+                }
+                let Some(stack) = working[source].clone() else {
+                    continue;
+                };
+                if !catalog.matches(&ingredient.accepts, stack.item()) {
+                    continue;
+                }
+                let take = remaining.min(stack.quantity());
+                working[source] = stack.with_quantity(stack.quantity() - take)?;
+                let existing = working[grid_index].clone();
+                let placed = match existing {
+                    None => stack
+                        .with_quantity(take)?
+                        .ok_or(GameplayReject::ZeroQuantity)?,
+                    Some(current) if current.item() == stack.item() => current
+                        .with_quantity(
+                            current
+                                .quantity()
+                                .checked_add(take)
+                                .ok_or(GameplayReject::QuantityOverflow)?,
+                        )?
+                        .ok_or(GameplayReject::ZeroQuantity)?,
+                    Some(_) => {
+                        return Err(GameplayReject::SlotMismatch);
+                    }
+                };
+                working[grid_index] = Some(placed);
+                remaining -= take;
+            }
+            if remaining > 0 {
+                return Err(GameplayReject::RecipeMismatch {
+                    recipe: recipe.clone(),
+                });
+            }
+        }
+        for (index, stack) in working.iter().enumerate() {
+            let slot = u16::try_from(index).map_err(|_| GameplayReject::LimitExceeded {
+                resource: "inventory_slots",
+                limit: usize::from(u16::MAX),
+                actual: index,
+            })?;
+            self.applier.state_mut().seed_player_slot(
+                player,
+                SlotIndex::new(slot),
+                stack.clone(),
+            )?;
+        }
+        (0..cells.len())
+            .map(|offset| {
+                u16::try_from(offset).map(|offset_u16| {
+                    SlotIndex::new(CRAFTING_GRID_ORIGIN.saturating_add(offset_u16))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Vec::into_boxed_slice)
+            .map_err(|_| GameplayReject::QuantityOverflow)
+    }
+}
+
+fn insert_into_working(
+    catalog: &GameplayCatalog,
+    slots: &mut [Option<ItemStackV1>],
+    stack: &ItemStackV1,
+    skip: usize,
+) -> Result<(), GameplayReject> {
+    catalog.validate_stack(stack)?;
+    let definition =
+        catalog
+            .item(stack.item())
+            .ok_or_else(|| GameplayReject::UnknownReference {
+                kind: "item",
+                id: stack.item().as_str().to_owned(),
+            })?;
+    let limit = definition.stack_limit.get();
+    let mut remaining = stack.quantity();
+    for (index, slot) in slots.iter_mut().enumerate() {
+        if remaining == 0 || index == skip {
+            continue;
+        }
+        if let Some(existing) = slot
+            && existing.item() == stack.item()
+            && existing.state() == stack.state()
+        {
+            let capacity = limit
+                .checked_sub(existing.quantity())
+                .ok_or(GameplayReject::QuantityOverflow)?;
+            let add = remaining.min(capacity);
+            if add == 0 {
+                continue;
+            }
+            *existing = existing
+                .with_quantity(
+                    existing
+                        .quantity()
+                        .checked_add(add)
+                        .ok_or(GameplayReject::QuantityOverflow)?,
+                )?
+                .ok_or(GameplayReject::ZeroQuantity)?;
+            remaining -= add;
+        }
+    }
+    for (index, slot) in slots.iter_mut().enumerate() {
+        if remaining == 0 || index == skip {
+            continue;
+        }
+        if slot.is_none() {
+            *slot = stack.with_quantity(remaining)?;
+            return Ok(());
+        }
+    }
+    Err(GameplayReject::InventoryFull)
+}
+
+/// Maps a gameplay rejection onto the block-edit DTO used by the player plugin.
+#[must_use]
+pub(super) fn block_edit_reject(
+    reject: &GameplayReject,
+    required_tool: Option<&ToolClassId>,
+) -> BlockEditRejectV1 {
+    match reject {
+        GameplayReject::ToolRequired
+        | GameplayReject::ToolClassMismatch { .. }
+        | GameplayReject::ToolTierTooLow { .. }
+        | GameplayReject::NotATool { .. } => BlockEditRejectV1::RequiresTool {
+            required: match reject {
+                GameplayReject::ToolClassMismatch { required, .. } => required.as_ref().clone(),
+                _ => required_tool.cloned().unwrap_or_else(fallback_tool_class),
+            },
+        },
+        GameplayReject::StaleChunkRevision { expected, actual } => {
+            BlockEditRejectV1::StaleRevision {
+                expected: *expected,
+                actual: *actual,
+            }
+        }
+        GameplayReject::BlockOccupied => BlockEditRejectV1::NotReplaceable,
+        GameplayReject::BlockMissing => BlockEditRejectV1::NotBreakable,
+        GameplayReject::EmptySlot | GameplayReject::NotPlacementItem { .. } => {
+            BlockEditRejectV1::NoPlacementContent
+        }
+        GameplayReject::ChunkNotLoaded { .. } => BlockEditRejectV1::PermissionDenied,
+        GameplayReject::UnknownReference { .. } => BlockEditRejectV1::ContentUnavailable,
+        _ => BlockEditRejectV1::StorageUnavailable,
+    }
+}
+
+fn fallback_tool_class() -> ToolClassId {
+    match ToolClassId::parse("latticeaxiom:tool-class/hand@1") {
+        Ok(class) => class,
+        Err(error) => {
+            panic!("platform hand tool class is a canonical semantic contract: {error}")
+        }
+    }
+}
+
+/// Remaining work advertised when a mine command only advanced progress.
+#[must_use]
+pub(super) const fn remaining_work(accumulated: u32, required: u32) -> u32 {
+    required.saturating_sub(accumulated)
+}

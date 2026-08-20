@@ -578,6 +578,9 @@ pub enum WorldShellError {
     /// Restored structural location already exists.
     #[error("restored live-world location already exists")]
     LiveLocationConflict,
+    /// An in-memory session with this identity already exists.
+    #[error("in-memory world identity already exists")]
+    DuplicateWorldId,
     /// Underlying managed-trash policy rejected the plan.
     #[error(transparent)]
     TrashPlan(latticeaxiom_world_catalog::TrashPlanError),

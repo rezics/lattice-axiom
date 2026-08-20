@@ -629,3 +629,67 @@ fn async_refresh_restores_focus_by_world_key_not_row_index() {
     list.refresh(vec![beta, alpha]);
     assert_eq!(list.focused(), Some(&beta_key));
 }
+
+#[test]
+fn memory_create_list_continue_semantic_flow_preserves_world_id() {
+    let mut flow = MemoryStartFlow::new(shell_graph());
+    flow.set_draft(
+        QuickCreateIntent::new(
+            "Memory Session",
+            memory_session_template(),
+            package("@example/game"),
+            CanonicalHash::digest(b"profile"),
+        )
+        .unwrap_or_else(|error| panic!("quick create: {error}")),
+    );
+    flow.set_now_ms(10);
+
+    let effect = flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("home/new-world")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::Activate,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("open new world: {error}"));
+    assert_eq!(
+        effect,
+        MemoryStartEffect::Shell(ShellEffect::Navigate(ShellScreen::NewWorld))
+    );
+
+    let created = match flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("new-world/quick-create")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::Activate,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("quick create: {error}"))
+    {
+        MemoryStartEffect::Created(world_id) => world_id,
+        other @ MemoryStartEffect::Shell(_) => panic!("expected created world, got {other:?}"),
+    };
+    assert_eq!(flow.continue_world_id(), Some(created));
+    assert_eq!(flow.worlds().len(), 1);
+    assert_eq!(flow.shell().screen, ShellScreen::Home);
+    assert!(matches!(
+        flow.shell().worlds.home_primary_action(),
+        HomePrimaryAction::Continue { world_id, .. } if world_id == created
+    ));
+
+    flow.mark_played(created, 20)
+        .unwrap_or_else(|error| panic!("mark played: {error}"));
+    let effect = flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("home/continue")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::ContinueWorld,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("continue: {error}"));
+    assert_eq!(
+        effect,
+        MemoryStartEffect::Shell(ShellEffect::RequestExactWorldLaunch(created))
+    );
+    assert_eq!(flow.continue_world_id(), Some(created));
+}
