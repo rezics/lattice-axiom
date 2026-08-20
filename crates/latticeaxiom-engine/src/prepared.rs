@@ -106,7 +106,8 @@ impl StructurallyValidatedComposeImages {
 /// constructs [`RuntimeImage`] from the verified target realization and
 /// callback receipt, then applies the same structural gate as
 /// [`StructurallyValidatedComposeImages`]. Native modules are never mapped.
-/// Client and headless hosts must share one value.
+/// Client and headless hosts must share one value. The production playable
+/// spine consumes this type without re-resolving or opening a world writer.
 #[derive(Clone, Debug, Resource)]
 pub struct LockVerifiedComposeImages {
     images: StructurallyValidatedComposeImages,

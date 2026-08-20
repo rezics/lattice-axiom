@@ -57,6 +57,7 @@ fn capture_primary_cursor(mut cursors: Query<'_, '_, &mut CursorOptions, With<Pr
     cursor.visible = false;
 }
 
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 fn sample_keyboard_and_mouse(
     keyboard: Res<'_, ButtonInput<KeyCode>>,
     mouse: Res<'_, ButtonInput<MouseButton>>,

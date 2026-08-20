@@ -11,6 +11,7 @@
 
 mod action;
 mod edit;
+mod inspect;
 #[cfg(feature = "client-input")]
 mod leafwing_adapter;
 mod movement;
@@ -25,6 +26,10 @@ pub use edit::{
     BlockEditAuthorityResource, BlockEditIntentV1, BlockEditReceiptV1, BlockEditRejectV1,
     BlockEditSuccessV1, BlockFaceV1, ClientTargetObservationV1, MAX_BLOCK_EDIT_REACH_M,
     PlayerEditLimiter, SUCCESSFUL_EDIT_COOLDOWN_TICKS, SuccessfulEditCooldownV1, TargetEyePoseV1,
+};
+pub use inspect::{
+    AuthoritativeTargetInspectRequestV1, HeadlessTargetInspectV1, TargetInspectReceiptV1,
+    TargetInspectRejectV1,
 };
 #[cfg(feature = "client-input")]
 pub use leafwing_adapter::{

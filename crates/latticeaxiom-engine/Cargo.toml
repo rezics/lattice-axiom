@@ -35,6 +35,10 @@ latticeaxiom-gameplay = { path = "../latticeaxiom-gameplay" }
 latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
 latticeaxiom-player = { path = "../latticeaxiom-player" }
 latticeaxiom-registration = { path = "../latticeaxiom-registration" }
+latticeaxiom-storage = { path = "../latticeaxiom-storage" }
+latticeaxiom-voxel-mesh = { path = "../latticeaxiom-voxel-mesh" }
+latticeaxiom-voxel-runtime = { path = "../latticeaxiom-voxel-runtime" }
+latticeaxiom-worldgen = { path = "../latticeaxiom-worldgen" }
 thiserror.workspace = true
 
 [dev-dependencies]

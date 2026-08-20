@@ -82,7 +82,7 @@ impl FixedTickCount {
 /// deterministic headless clocks after activation.
 pub struct EngineInstance {
     profile: EngineProfile,
-    app: App,
+    pub(crate) app: App,
     fixed_timestep: Option<Duration>,
 }
 

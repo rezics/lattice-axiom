@@ -31,8 +31,11 @@ use latticeaxiom_core::{
     TargetTriple, canonical_json_bytes,
 };
 use latticeaxiom_engine::{
-    EngineInstance, EngineInstanceError, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE,
-    PreparationError, StructurallyValidatedComposeImages, VerifiedProductLockHash,
+    ActionAxis2V1, AuthoritativeTransactionKernel, ChunkCoordinate, ChunkMeshCursor,
+    ChunkPresentation, EngineInstance, EngineInstanceError, LockVerifiedComposeImages,
+    MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
+    PreparationError, ProductionInspectSurface, ProductionSpine, ProductionWorldStorage,
+    StructurallyValidatedComposeImages, VerifiedProductLockHash,
 };
 use latticeaxiom_launcher::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
 use latticeaxiom_registration::{
@@ -264,6 +267,307 @@ fn reopened_lock_starts_gpu_free_headless_without_re_resolving() {
         .advance_fixed_ticks(3)
         .expect("lock-boot headless ticks advance");
     assert_eq!(instance.completed_fixed_ticks(), 3);
+}
+
+const SPINE_TIMESTEP: Duration = Duration::from_nanos(1_000_000_000 / 60);
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
+    let boot = lock_boot_fixture();
+    let images = boot.prepared();
+    let mut instance = EngineInstance::new_headless_host_from_lock(images, SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let storage = instance
+        .app()
+        .world()
+        .get_resource::<ProductionWorldStorage>()
+        .expect("memory kernel is installed behind the production storage interface")
+        .clone();
+    let world_id = spine.world_id().expect("spine owns a world identity");
+    let snapshot = storage
+        .kernel()
+        .reference_snapshot(world_id)
+        .expect("memory kernel exposes a reference snapshot");
+    assert!(snapshot.chunks().len() > 0, "D4 region was materialized");
+    assert!(
+        spine.has_all_six_faces(),
+        "chunk meshes must emit all six faces, got {:?} from {} derived chunks",
+        spine.visible_faces(),
+        spine.derived_chunk_count()
+    );
+
+    let chunk_entities = instance.production_chunk_entity_count();
+    assert!(chunk_entities > 0, "chunk colliders must be spawned");
+    let voxel_count = snapshot
+        .chunks()
+        .next()
+        .expect("generated region contains a chunk")
+        .1
+        .data()
+        .voxels()
+        .bytes()
+        .len()
+        / 2;
+    assert!(
+        chunk_entities < voxel_count,
+        "presentation must not spawn one entity per block (chunks={chunk_entities}, voxels/chunk={voxel_count})"
+    );
+    assert_eq!(
+        instance
+            .app()
+            .world()
+            .iter_entities()
+            .filter(|entity| entity
+                .get::<bevy::prelude::Name>()
+                .is_some_and(|name| name.as_str() == "Playable Block"))
+            .count(),
+        0
+    );
+
+    let spawn = spine.spawn_center();
+    let cursors_before: BTreeMap<ChunkCoordinate, ChunkMeshCursor> = snapshot
+        .chunks()
+        .filter_map(|(key, _)| {
+            spine
+                .mesh_cursor(key.coordinate)
+                .map(|cursor| (key.coordinate, cursor))
+        })
+        .collect();
+    instance
+        .enqueue_headless_actions([
+            look_frame(1, -std::f32::consts::FRAC_PI_2, 0.7),
+            idle_frame(2),
+            break_frame(3),
+        ])
+        .expect("look and break frames enqueue");
+    instance
+        .advance_fixed_ticks(4)
+        .expect("look and break ticks advance");
+
+    let success = spine.last_success().unwrap_or_else(|| {
+        panic!(
+            "authoritative break must succeed, reject={:?}, pose={:?}",
+            spine.last_reject(),
+            spine.player_pose()
+        )
+    });
+    assert!(
+        success.position.x < 0 || success.position.z < 0,
+        "break must land on a negative X or Z voxel, got {:?}",
+        success.position
+    );
+    let edited_chunk = spine
+        .chunk_of(success.position)
+        .expect("broken voxel maps to a host chunk");
+    let cursor = cursors_before
+        .get(&edited_chunk)
+        .copied()
+        .expect("edited chunk had a mesh before the break");
+    let revision_after_break = success.committed_chunk_revision;
+    assert!(
+        revision_after_break.get() > 0,
+        "storage-backed chunk revision must advance past zero"
+    );
+
+    instance
+        .enqueue_headless_actions(
+            (4..=20)
+                .map(idle_frame)
+                .chain(std::iter::once(place_frame(21, &spine)))
+                .chain((22..=50).map(|generation| PlayerActionFrameV1 {
+                    generation,
+                    movement: ActionAxis2V1 { x: 0.0, y: 1.0 },
+                    ..PlayerActionFrameV1::default()
+                }))
+                .chain(std::iter::once({
+                    let mut started = PlayerActionButtonsV1::empty();
+                    started.insert(PlayerActionV1::Jump);
+                    PlayerActionFrameV1 {
+                        generation: 51,
+                        started,
+                        ..PlayerActionFrameV1::default()
+                    }
+                }))
+                .chain((52..=90).map(idle_frame)),
+        )
+        .expect("place, move, and jump frames enqueue");
+    instance
+        .advance_fixed_ticks(90)
+        .expect("place, move, and jump ticks advance");
+
+    let pose = spine.player_pose();
+    assert!(
+        pose.translation.distance(spawn) > 0.4,
+        "move/jump frames must change player position (spawn {:?}, now {:?})",
+        spawn,
+        pose.translation
+    );
+    assert!(
+        pose.yaw_radians.abs() > 0.5,
+        "look frames must change yaw, got {}",
+        pose.yaw_radians
+    );
+    assert!(
+        spine
+            .last_success()
+            .is_some_and(|latest| latest != success
+                || latest.committed_chunk_revision != revision_after_break),
+        "place must commit after the shared cooldown"
+    );
+    assert!(
+        spine.mesh_invalidated(&cursor),
+        "break must invalidate the previous chunk mesh receipt"
+    );
+    assert!(
+        spine
+            .chunk_revision(edited_chunk)
+            .is_some_and(|revision| revision.get() >= revision_after_break.get()),
+        "chunk revision must remain advanced after later edits"
+    );
+    assert_eq!(
+        instance
+            .app()
+            .world()
+            .iter_entities()
+            .filter(bevy::ecs::world::EntityRef::contains::<ChunkPresentation>)
+            .count(),
+        chunk_entities,
+        "edits must replace chunk colliders, not spawn per-block entities"
+    );
+}
+
+#[test]
+fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
+    let boot = lock_boot_fixture();
+    let images = boot.prepared();
+    let mut instance = EngineInstance::new_headless_host_from_lock(images, SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let inspect_surface = instance
+        .app()
+        .world()
+        .get_resource::<ProductionInspectSurface>()
+        .copied()
+        .expect("inspect surface selection is installed");
+    assert!(
+        inspect_surface.uses_headless_dto(),
+        "the V2 lock-boot fixture does not select inspect/observability packages"
+    );
+
+    instance
+        .enqueue_headless_actions([
+            look_frame(1, -std::f32::consts::FRAC_PI_2, 0.7),
+            idle_frame(2),
+        ])
+        .expect("look frames enqueue");
+    instance.advance_fixed_ticks(3).expect("look ticks advance");
+
+    let current = spine.current_target().unwrap_or_else(|| {
+        panic!(
+            "crosshair DDA must hit after look, pose={:?}",
+            spine.player_pose()
+        )
+    });
+    assert!(
+        current.observation.position.x < 0 || current.observation.position.z < 0,
+        "inspect DDA must land on a negative X or Z voxel, got {:?}",
+        current.observation.position
+    );
+    assert!(
+        current.block_id.as_str().starts_with("terrenia:block/"),
+        "targeted block id must be a registered Terrenia block, got {}",
+        current.block_id
+    );
+
+    instance
+        .enqueue_headless_actions([inspect_frame(3)])
+        .expect("inspect frame enqueues");
+    instance
+        .advance_fixed_ticks(2)
+        .expect("inspect ticks advance");
+
+    let inspected = spine
+        .last_inspect()
+        .expect("inspect action must emit a result")
+        .unwrap_or_else(|reject| panic!("authoritative inspect must succeed, reject={reject:?}"));
+    assert_eq!(inspected.block_id, current.block_id);
+    assert_eq!(inspected.observation.position, current.observation.position);
+
+    instance
+        .enqueue_headless_actions([break_frame(4)])
+        .expect("break frame enqueues");
+    instance
+        .advance_fixed_ticks(2)
+        .expect("break ticks advance");
+
+    let success = spine.last_success().unwrap_or_else(|| {
+        panic!(
+            "authoritative break must succeed after inspect, reject={:?}",
+            spine.last_reject()
+        )
+    });
+    assert_eq!(success.position, inspected.observation.position);
+    assert_eq!(success.old_content.as_ref(), Some(&inspected.block_id));
+}
+
+fn idle_frame(generation: u64) -> PlayerActionFrameV1 {
+    PlayerActionFrameV1 {
+        generation,
+        ..PlayerActionFrameV1::default()
+    }
+}
+
+fn look_frame(generation: u64, yaw: f32, pitch: f32) -> PlayerActionFrameV1 {
+    PlayerActionFrameV1 {
+        generation,
+        look_radians: ActionAxis2V1 { x: yaw, y: pitch },
+        ..PlayerActionFrameV1::default()
+    }
+}
+
+fn break_frame(generation: u64) -> PlayerActionFrameV1 {
+    let mut started = PlayerActionButtonsV1::empty();
+    started.insert(PlayerActionV1::BreakBlock);
+    PlayerActionFrameV1 {
+        generation,
+        started,
+        ..PlayerActionFrameV1::default()
+    }
+}
+
+fn inspect_frame(generation: u64) -> PlayerActionFrameV1 {
+    let mut started = PlayerActionButtonsV1::empty();
+    started.insert(PlayerActionV1::Inspect);
+    PlayerActionFrameV1 {
+        generation,
+        started,
+        ..PlayerActionFrameV1::default()
+    }
+}
+
+fn place_frame(generation: u64, spine: &ProductionSpine) -> PlayerActionFrameV1 {
+    let mut started = PlayerActionButtonsV1::empty();
+    started.insert(PlayerActionV1::PlaceBlock);
+    PlayerActionFrameV1 {
+        generation,
+        started,
+        placement_content: spine.placement_content(),
+        ..PlayerActionFrameV1::default()
+    }
 }
 
 #[test]
