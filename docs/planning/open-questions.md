@@ -17,7 +17,7 @@ updated: 2026-08-20
 
 - [x] `SDK-01`：公开 authoring surface 采用 proc macro；macro 共用 sealed typed IR，Rust builder 不成为第二个组合入口。
 - [x] `SDK-02`：作者只写一个 row kernel；生成器分别产生直接 typed Bevy query adapter 与每 system／batch 的动态 adapter。
-- [x] `SDK-03`：dual whitelist只含ABI-POD read／write／optional、`With`／`Without`、stable entity key、fixed context、command sink、manifest-declared message sink／reader与已实现read-only POD input slice；其他`SystemParam`编译期static-only。
+- [x] `SDK-03`：dual whitelist只含ABI-POD component的required／optional read与write row、ABI-POD `With`／`Without`、当前row的Lattice opaque／generational key、by-value fixed tick／delta context、SDK command sink、已实现且manifest-declared的authoritative message sink／reader，以及已实现interface提供的read-only POD input slice；显式dual遇到其他参数时compile error，`auto`只可生成带stable reason的`NativeStaticOnly`。
 - [x] `SDK-04`：跨 package typed 或公开持久 component 使用 `GeneratedSharedSchema`；host／private 使用 `HostTyped`；仅 POD untyped consumer 可用 `RuntimeDynamic`，typed dependency 显式进入 `BuildPlan`。
 - [x] `SDK-05`：unsafe descriptor 构造隔离在窄 bridge crate；`ValidatedRuntimePodDescriptor` 验证 layout／drop-free invariant，stable ID 到 `ComponentId` 仅属当前 `World`。
 - [x] `SDK-06`：`registration_semantic_hash`、`provenance_hash`、callback-map hash 与 artifact hash 分离；producer／toolchain 只进 provenance receipt。
@@ -38,7 +38,7 @@ updated: 2026-08-20
 
 - [x] `ABI-01`：bootstrap 使用 16-byte `LaxAbiHeader`、`LAXB` magic、fixed-width C layout；首版只支持 little-endian 64-bit target，并在读取尾字段前验证 size／flags／target／hash。
 - [x] `ABI-02`：`InterfaceId` 由 canonical interface name 的 domain-separated SHA-256 截取 128 bit；manifest 保留全名并对 collision fail closed。
-- [x] `ABI-03`：首批tables只有diagnostics、`ecs.batch`、command buffer与messages；tasks／assets／render只有在真实consumer、provider、budget与conformance fixture齐备后才冻结。
+- [x] `ABI-03`：R3首批由同一个`@example/dual-gameplay`真实使用`core.diagnostics@0.1`、`ecs.batch@0.1`、`ecs.command-buffer@0.1`与`messages@0.1`；tasks、assets、settings／information-surface、render与engine-coupled internal table都只有在真实consumer、provider、budget与conformance fixture四者同时齐备后才独立冻结，不扩大bootstrap或合并成Host API。
 - [x] `ABI-04`：ABI-POD 只允许 fixed scalars、fixed arrays 与显式 nested POD，alignment 不超过 16；layout hash 包含 fields／offsets／size／align／endianness。
 - [x] `ABI-05`：recoverable write 必须 staged；authoritative direct write 失败为 instance-fatal，不实现通用 rollback，也不允许半写 state 继续 tick／save。
 - [x] `ABI-06`：handle 固定为 `{u64 table_id,u32 slot,u32 generation}`；零值无效，generation 溢出永久 retire slot，handle 不持久化。
@@ -55,11 +55,11 @@ updated: 2026-08-20
 - [x] `PLAY-01`：60 Hz fixed movement；1.8 m × 0.35 m capsule、4.5 m/s walk、45° slope、0.60 m step、约 1.25 m jump apex、100 ms buffer／coyote；fly／noclip 仅 detached debug spectator。
 - [x] `PLAY-02`：break／place reach 5 m，authoritative deterministic voxel DDA，共用 12 fixed ticks cooldown；命令携带 chunk revision 并返回稳定 typed errors。
 - [x] `PLAY-03`：首个可理解目标是 `Restore the Terrenia Waymark`：检查错误方块、取得 creative palette、break／place copper block、durable reopen。
-- [x] `PLAY-04`：首个client reference是Windows 11 x64、6C／12T AVX2、16 GiB、6 GiB VRAM、1080p medium／D3D12；Linux x64负责headless CI。
+- [x] `PLAY-04`：首个client performance reference是Windows 11 x86_64、6 physical cores／12 hardware threads与x86-64 AVX2、16 GiB、6 GiB dedicated VRAM、本机SSD、1920×1080 60 Hz medium／D3D12；Linux x86_64是required headless CI target，Windows x86_64另跑compile、unit、headless command-input与save／reopen corpus；keyboard／mouse与standard gamepad都映射到相同logical actions。
 - [x] `PLAY-05`：Bevy 精确锁定 `0.19.1`；client 从 `DefaultPlugins` 开始，headless 使用最小标准 plugins，feature selection 由 manifests／build receipt 记录。
 - [x] `PLAY-06`：`bevy_voxel_world` 只可作为 working-set／presentation adapter；authoritative chunk、stable ID 与 snapshot 由 Lattice 持有。
 - [x] `PLAY-07`：Avian `0.7` 是 provisional D2 选择；fixed tick、collider rebuild 与 local-origin 必须通过自动 benchmark，block selection 仍用权威 DDA。
-- [x] `PLAY-08`：Leafwing `0.21`是adoption-gated首版输入选择；headless直接注入相同Lattice `PlayerActionV1`／authoritative command DTO，gate失败则回退Bevy native input而不改stable action contract。
+- [x] `PLAY-08`：Leafwing Input Manager `0.21`是首版action mapping选择，exact patch／source／checksum、features与adoption evidence另由lock／receipt固定；Lattice拥有`PlayerActionV1`与`InputBindingV1`，headless与portable路径只消费相同Lattice action／command DTO；若build／rebind／gamepad／headless injection gate失败，可回退Bevy native input而不改这些stable contracts。
 - [x] `PLAY-09`：首版 surface 使用 Bevy UI／widgets／input focus／EditableText／AccessKit；Feathers 仅限 dev workbench，不进入 public surface contract。
 
 ## P0：Settings、資訊 Surface 與 Client Shell
@@ -67,14 +67,14 @@ updated: 2026-08-20
 本组由[决策 0025](../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md)冻结。
 
 - [x] `SET-01`：settings、settings-ui、observability、inspect、dev-tools、world-library、front-end 各有独立 logical package／capability；dev-tools 是 optional root，选中后提供 exactly-one capability。
-- [x] `SET-02`：`SettingValueV1`是bool／i64／exact decimal／string／enum／linear RGBA／typed input binding；visibility与cross constraints是bounded typed expressions，无脚本或regex。
+- [x] `SET-02`：`SettingValueV1`是bool／signed i64／exact finite number（canonical signed 18-decimal fixed-point，不经binary64）／NFC string（spec须给Unicode scalar count上限）／stable-ID enum／四个exact finite 0..1 components的linear RGBA／`InputBindingV1`；单字段constraint只有range／step／allowed variants／length，visibility、enabled与cross-setting constraints只用depth≤8、nodes≤32的typed AST，不接受script、regex、arithmetic、callback或implicit conversion，并在catalog compile时检查dependency、type、cycle与authority／durability domain。
 - [x] `SET-03`：LocalUser 与 WorldOwner 使用分离 authority lanes 和固定 precedence；provenance 保存 stable ID、scope、store／transaction revision、writer kind 与适用 lock／world hash。
 - [x] `SET-04`：Bevy settings plugin 只承接 static device／user store；world／player-world 使用相同 codec、catalog validator 与 `WorldStorage` transaction，不镜像 Bevy API。
 - [x] `SET-05`：apply 是 Immediate／WorldReactivate／ProcessRestart，preview 是独立 reversible policy；GraphRecompose 只属于 composition parameter；prepare 后才 persist／publish／commit。
-- [x] `SET-06`：UI编辑基于base profile／lock的typed draft，产出overlay、candidate lock与完整diff；既有world只能继续frozen lock、为new world使用candidate，或checkpoint／clone后显式upgrade。
+- [x] `SET-06`：`ProfileDraftV1`保存base profile／lock hashes、ordered generated overlay与author provenance；deterministic resolve产出candidate lock，以及package／capability provider与version、feature／parameter／realization、registration／schema／semantic／settings fingerprints、trust／source-build／download／migration／`EngineBuildId` impact的完整diff，且artifact acquisition、build、trust check与world preflight在publish前完成。既有world只能继续frozen lock、为new world使用candidate，或checkpoint／clone后显式upgrade；这不同于不迁移world bytes且确认前不改frozen lock的`ReadyCompatible` reopen。
 - [x] `SET-07`：SDK IR 同时生成 static typed handle 与 dynamic numeric／batched binding；numeric setting key 只在当前 catalog epoch 有效。
 - [x] `SET-08`：sample batch 每 key 返回 Value／Unavailable／Error；freshness 由 host 根据 TTL 与 revision 推导，omitted key 是 protocol error。
-- [x] `SET-09`：subscription plan使用refcount、generation与cancellation；最后subscriber关闭后昂贵query／callback／upload必须为零，首版overlay hard budgets由0025冻结，0026治理后续性能证据与调整。
+- [x] `SET-09`：subscription plan使用refcount、generation与cancellation；最后subscriber关闭后target query／chunk scan／contact collection／dynamic callback与upload必须为零。0025第9节冻结的D2 hard policy是update≤10 Hz、chunk radius default 4／hard 8 chunks、physics radius default 16 m／hard 32 m、≤8,192 primitives／update、≤512 KiB verified upload／update、enabled collection＋layout CPU P95≤0.5 ms／update、overlay CPU／GPU P95各≤0.5 ms／frame，以及disabled callback／query／upload=0且额外CPU P95≤0.05 ms／frame；D10若要改数值须另立后续performance ADR。
 - [x] `SET-10`：target inspect 先做 server-authoritative raycast／reach／permission；Hidden、RequiresTool／Progress、Unavailable 与 Error 是不同 wire states，cache key包含全部 policy／target revisions。
 - [x] `SET-11`：visualizer 只发 host-validated primitive vocabulary，具有 coordinate space、legend、depth、pick、radius 与 hard budgets；超限按 stable key 截断并显示 partial。
 - [x] `SET-12`：client v1 不在同一 process 创建两个 fresh `DefaultPlugins` Apps；shell ↔ world 先完成graceful durability／shutdown barrier，再写atomic `LaunchIntentV1`并由replacement process启动。headless 可同 process 多 `EngineInstance`。
@@ -82,13 +82,13 @@ updated: 2026-08-20
 
 ## P0：性能预算
 
-本组由[决策0026](../decisions/0026-freeze-first-demo-performance-budgets.md)冻结。D10前修改provisional数字须同时提交old／new reference-host evidence与correctness理由；D10 freeze后，收紧可升profile minor，放宽或改变端点／hardware／failure semantics须新profile major与ADR。
+本组由[决策0026](../decisions/0026-freeze-first-demo-performance-budgets.md)裁决：全部适用数字自D2起就是可失败的provisional release gates，只有D10 representative Terrenia journey在exact reference host通过后，实测baseline、exact scene／lock与threshold才标记为frozen。D10前修改provisional数字须同时提交old／new reference-host evidence、玩家或correctness理由、最小变更、RAM／latency／quality影响及不采用backpressure／batching／upstream修正的理由；D10 freeze后，收紧或新增不改旧字段语义的metric可升profile minor，放宽或改变percentile／端点／sample exclusion／hardware／hard-cap failure semantics须新profile major与ADR。
 
 - [x] `PERF-01`：`desktop-reference-v1` 以 60 Hz render／fixed tick为目标；frame P95 ≤ 16.67 ms、P99 ≤ 25 ms，fixed CPU P95 ≤ 8 ms、P99 ≤ 12 ms，RAM ≤ 4 GiB、VRAM ≤ 3 GiB。
-- [x] `PERF-02`：在provisional 32³ chunk下active≤405、resident≤1,183、visible≤512、requested／materializing／prefetch合计≤1,536；改变edge时按覆盖距离与bytes重算。
+- [x] `PERF-02`：在provisional 32³ chunk下，active水平／垂直radius 4／2且≤405，resident radius 6／3且≤1,183，active是resident子集；每frame visible resident≤512，requested／materializing／prefetch合计≤1,536。改变edge时须保持相同world-space coverage，并按decoded、mesh／collider bytes、P95 latency与queue high-water重算，不能只降count通过RAM gate。
 - [x] `PERF-03`：edit→mesh P95／P99 ≤ 100／200 ms，edit→collider ≤ 150／300 ms，warm／cold chunk read P95 ≤ 50／250 ms，dirty→durable P95 ≤ 1 s。
 - [x] `PERF-04`：worldgen／mesh 128 jobs／128 MiB，collider／persistence 64／64 MiB；全局 queued ≤ 512、in-flight ≤ 384 MiB、main-world apply ≤ 2 ms 与 16 MiB／frame。
-- [x] `PERF-05`：典型dynamic row为64 B／entity，target batch 256（允许128–1,024）；单一`LaxBatchView`全部column payload合计≤64 KiB，单callback payload≤1 MiB。
+- [x] `PERF-05`：canonical dynamic case为3–5个SoA columns合计64 B／entity，另有128 B／entity stress case；target batch 256且host可在128–1,024间调整，单一`LaxBatchView`的全部column payload合计≤64 KiB，一次callback的全部batches payload合计≤1 MiB，并禁止per-entity callback／reverse getter。
 - [x] `PERF-06`：每 tick callback soft／hard 64／128，indirect calls 256／512，commands 256 KiB／1 MiB 与 4,096／16,384；超限原子失败，不截断 authoritative mutation。
 - [x] `PERF-07`：真实 dynamic batch 使用 ABI-11 overhead gate；steady-state shim／callback 零 heap allocation，分项记录 pack、FFI、body、validate、apply。
 - [x] `PERF-08`：zero-copy 先看 layout／lifetime资格；≤16 KiB staging，≥64 KiB eligible payload优先 zero-copy，中间区由 benchmark 决定；validation ≤ 0.25 ms／tick。
@@ -105,7 +105,7 @@ updated: 2026-08-20
 - [x] `REND-06`：terrain mesh-source 是独立 logical package；visibility 与 backend 首版由 core Bevy adapter提供，fake fixture 不构成生产拆包证据。
 - [x] `REND-07`：provider 按标准 GPU features／limits／formats 与 profile stable priority选择；vendor仅用于 denylist／workaround，fallback必须acyclic，结果不进 authoritative hash。
 - [x] `REND-08`：压力 fixture 是 static depth fog + portable compute selection outline，并配 two-level CPU voxel LOD／material extension；oracle 比较 plan／command trace而非像素。
-- [x] `REND-09`：没有产品级engine-coupled render consumer；D5只保留test-only exact-build fixture。真实provider须证明`NativeStatic`与portable contract均不足，并通过ADR0014 evidence及exact-build／fault／upgrade gates后才新增窄接口。
+- [x] `REND-09`：没有产品级engine-coupled render consumer；D5只保留test-only exact-build fixture，其最小test table不暴露RenderWorld、wgpu object或通用renderer internals。只有真实terrain／visibility／pass provider证明`NativeStatic`与portable contract均不足，并提交ADR0014的playable reproduction、upstream attempts、measurements、smallest deviation与owner，且通过exact-build／fault／upgrade gates后，才可用新ADR建立窄接口；否则明确不实现。
 
 ## P1：权威世界與持久化
 
@@ -125,7 +125,7 @@ updated: 2026-08-20
 - [x] `WORLD-12`：catalog只扫描显式非重叠 roots 的直接 children，默认不跟 symlink／reparse；header ≤ 64 KiB，thumbnail ≤ 2 MiB／512 px，损坏 entry 使用 typed error。
 - [x] `WORLD-13`：open status 按 ReadyExact、ReadyCompatible、NeedsDownloadOrBuild、NeedsMigration、RecoverableReadOnly、Blocked 的“下一安全动作”算法判定，并保留全部 typed reasons。
 - [x] `WORLD-14`：pure preflight只读 bounded metadata／external receipts且不 dlopen／entry／create／migration；activation重验 ABI 后仍先不开 writer，所有验证成功才进入 `Playing`。
-- [x] `WORLD-15`：checkpoint区分protected与rotating automatic；后者最多保留3个且physical bytes≤min(10 GiB, 20% filesystem capacity)。clone从verified checkpoint建立新ID并re-key，不只改header。
+- [x] `WORLD-15`：checkpoint区分protected（initial、latest-known-clean、pre-migration／pre-graph-change、manual pinned）与rotating automatic；普通rotation不删除protected，而automatic同时受两个独立上限约束：最多保留3个，且retained physical bytes≤`min(10 GiB, 20% filesystem capacity)`。空间不足以保留最低安全点时拒绝migration／clone；clone只从verified checkpoint建立新UUIDv4并re-key、checksum、headless preflight与atomic publish，不只改header。
 - [x] `WORLD-16`：migration从不 in-place；小迁移写新 keyspace 后 metadata switch，大迁移写 sibling DB 后 atomic publish，所有 failpoint 保留原 world／checkpoint。
 - [x] `WORLD-17`：low disk按 absolute reserve + in-flight + WAL／drain + 当前操作估算 admission；Warning停止扩张，Paused在 apply 前拒绝新 authoritative mutation并优先 drain。
 - [x] `WORLD-18`：每 root 使用同 filesystem managed trash；restore先 preflight，live ID冲突只能 Blocked或 restore-as-clone；demo不自动 purge，purge拒绝路径逃逸。
@@ -134,7 +134,7 @@ updated: 2026-08-20
 
 本组由[决策 0028](../decisions/0028-freeze-worldgen-content-and-asset-contract.md)冻结。
 
-- [x] `GEN-01`：每dimension exactly-one coordinator；terrain按channel×territory ownership domain唯一，cave按topology ownership domain唯一；其他贡献只有在typed compositor与hard budget下可多选。
+- [x] `GEN-01`：每个active dimension exactly-one `generation.coordinator@1`并在`Playing`前编译immutable plan；`terrain.base`在每个channel×territory ownership domain恰有一个primary owner，`cave.topology`在每个topology ownership domain恰有一个primary owner；更具体的child territory可接管parent，否则继承parent／dimension default。detail／branch／destination／constraint只有在typed compositor／arbiter、bounded influence与hard budget下可多选，冲突在code／writer前失败。
 - [x] `GEN-02`：D4 两个真实 style 是 temperate woodland 与 arid badlands；共用 cave／materializer／Roles，并以 stable selector 与 named deterministic transition组合。
 - [x] `GEN-03`：`WorldSeedV1` 为 32 bytes；UI int／NFC text分别 domain-separated hash；generator identity包含 stable ID、contract major、algorithm revision 与 implementation fingerprint，SemVer不作随机盐。
 - [x] `GEN-04`：D4 DAG 固定为 semantics／seed→style→terrain field→coarse cave plan→bounded SDF→final occupancy→material→resource／vegetation→draft receipt→atomic snapshot；cave不读取邻 chunk mutable arrays。
@@ -146,10 +146,10 @@ updated: 2026-08-20
 本组由[决策 0028](../decisions/0028-freeze-worldgen-content-and-asset-contract.md)冻结。
 
 - [x] `CONTENT-01`：72 StableIds 保持既定清单；`@terrenia/blocks` 必须交付 canonical 72-row name／asset／intrinsic／physical／state／mining／drop／placement／recipe／worldgen matrix，D8 调平后冻结 content revision。
-- [x] `CONTENT-02`：v1使用共同`ContentHeaderV1`；`BlockDefinitionV1`／`ItemDefinitionV1`／`BiomeDefinitionV1`只持有自身intrinsic字段，drop／tool／recipe／worldgen／semantic contribution使用独立typed rows，不使用万能property bag。
-- [x] `CONTENT-03`：平台首批vocabulary只有copper storage block Tag／Role与normal obsidian Tag；copper ingot须等D8真实consumer、至少两个compatible item fixtures及完整owner／schema／conflict gate，Terrenia terrain／portal contract保持领域私有。
-- [x] `CONTENT-04`：不发布composite `physical@1`；D8 mining与physics各由真实consumer冻结narrow typed map。v1共享state先做axis／facing／lit，form需mesh＋collision＋placement fixture，blast resistance延后。
-- [x] `CONTENT-05`：每cell独立solid／fluid palettes，fluid index 0是Empty；`FluidDefinitionV1`引用`FluidStateV1`，finite level／flow属于`FluidStateV1`，scheduled frontier另存versioned continuation。
+- [x] `CONTENT-02`：v1的block／item／biome definitions共用`ContentHeaderV1`；`BlockDefinitionV1`保存block intrinsic contract、authoritative rule references与optional presentation binding，`ItemDefinitionV1`保存item自身字段与action／schema／presentation references，`BiomeDefinitionV1`保存scope／spatial／territory／boundary／channel／intent／fallback／revision。drop、tool、recipe、worldgen、Tag／Map／Role等贡献仍是独立typed rows，不使用万能property bag。
+- [x] `CONTENT-03`：平台首批vocabulary只有`latticeaxiom:block-tag/storage-blocks/copper@1`、`latticeaxiom:block-tag/obsidians/normal@1`与`latticeaxiom:block-role/storage-block/copper@1`；`latticeaxiom:item-tag/ingots/copper@1`须等D8 item／recipe真实consumer及至少两个compatible item fixtures后才发布。新增平台Tag／Map／Role还必须有owner、target kind、domain、versioned meaning、extensibility／cardinality／conflict policy、真实consumer与至少两个不同exact-target fixtures；Terrenia terrain／portal contract保持领域私有。
+- [x] `CONTENT-04`：不接受composite `physical@1`：D8 break-progress consumer冻结narrow typed mining hardness map／rule，surface friction只在voxel collider／physics contact prototype证明数据流后冻结独立narrow typed map；collision／selection／occlusion／replaceability／fluid occupancy留在intrinsic definition，`blast_resistance`因D0–D10无consumer而延后。共享state首批只有axis／facing／lit；`form`须由mesh、collision与placement prototype共同证明后才可提升。
+- [x] `CONTENT-05`：每cell使用独立solid／fluid palette indices，fluid index 0固定为`Empty`；water／lava的`FluidDefinitionV1`不内嵌流体状态字段，而以`state_schema = FluidStateV1`引用，并另含`replace_or_displace_predicate`、collision／selection policy、fixed tick period、bounded update policy与optional presentation binding；`FluidStateV1`固定`level: u8 0..=7`（0为full／source）与`flow: Still | Down | East | West | South | North`。D9 v1 fluid只与`terrenia:block/air`共存，替换其他replaceable block须先发authoritative replace command；frontier／scheduled tick／RNG／revision另存versioned continuation。
 - [x] `CONTENT-06`：typed asset 是 logical package拥有的 versioned artifact，不是第三类 package；authoritative asset receipt进 lock，presentation只进 presentation fingerprint。
 - [x] `CONTENT-07`：RegistrationImage索引 stable asset→owner／artifact／path#label／type／schema／authority；host只注解 Bevy dependency graph并可沿两个方向输出诊断。
 - [x] `CONTENT-08`：只有纯 presentation dependency可热重载；collision／selection／gameplay／semantic／worldgen／fluid变化必须新 authoritative image并 reactivate／recompose，writable world拒绝原地应用。
@@ -164,9 +164,9 @@ updated: 2026-08-20
 - [x] `GOV-02`：distribution使用 content-addressed release envelope与 TUF-style versioned Ed25519 metadata；yank只影响新 resolve，security revoke阻止 code build／load并保留只读恢复。
 - [x] `GOV-03`：Tier 1 client targets为 Windows x64、Linux x64、Apple arm64，dedicated为 Linux x64；frozen world／`--frozen` 永不从缺失 prebuilt静默 source-build。
 - [x] `GOV-04`：ABI、package、schema各有 machine-readable deprecation字段与独立 support window；telemetry默认本地，外传只能 opt-in aggregate且不能携带 world／player identity。
-- [x] `GOV-05`：production Wasm不阻塞D10；D10完成后仍须有真实外部untrusted非玩具package的static／portable／Wasm等价、hostile／fuzz security corpus与Tier 1性能证据才实现；首版policy为64 MiB／instance、10M fuel／callback及bounded host calls／I/O。
+- [x] `GOV-05`：production `WasmComponent`不阻塞D10；D10后仍须有真实外部untrusted package需要data无法表达的behavior、同一非玩具package的static／portable／Wasm registration与authoritative-state conformance、hostile corpus／fuzzing／runtime security review，以及所有Tier 1 targets的machine-readable资源／性能baseline，四项同时成立才进入产品路线。deny-all policy上限为64 MiB linear memory／instance、256 MiB aggregate memory／package、10M fuel／authoritative callback、100M fuel／instance／s、input＋output合计4 MiB／callback、1,024 host calls／callback、64 queued async jobs／instance及`min(2 ms, fixed-tick budget 10%)` synchronous wall deadline；上线时全部Wasm systems还须P95≤fixed-tick budget 10%、P99≤20%，且按system／batch调用。
 - [x] `GOV-06`：任何 native build／load前 UI明确说明 full-process authority并显示publisher／source／hash／dependency chain；headless无 exact allowlist即 fail closed。
-- [x] `GOV-07`：multiplayer须在D10 clean journey、真实dedicated server、两个automated clients与versioned replication corpus完成后才实现`JoinClosureOffer@1`／`AuthoritativeClosureReceipt@1`；不比较target artifact／realization／EngineBuildId，presentation按optional／recommended／required-interface分级。
+- [x] `GOV-07`：multiplayer须等D10 clean journey、一个真实dedicated server、两个独立automated clients、versioned replication interface与join corpus齐备后才进入产品实现；`JoinClosureOffer@1`／`AuthoritativeClosureReceipt@1`在任何world module business code前协商protocol major、world identity／epoch、authoritative source release hash、package name／version、dependency／capability-provider selection、registration／schema／semantic fingerprints、Role bindings、active bundles、settings fingerprint及required network／replication interface ranges，不比较target artifact、realization、`EngineBuildId`、client／server-only rows或presentation。presentation只分optional、recommended与确属network／input能力的required-client-interface。
 
 ## P2：Bevy 升级與依赖治理
 
