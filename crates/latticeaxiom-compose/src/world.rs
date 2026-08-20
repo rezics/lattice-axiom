@@ -1,4 +1,4 @@
-//! World catalog, durability, and write-before-open planning models.
+//! World catalog, durability, write-before-open planning, and playable session models.
 
 use std::collections::BTreeSet;
 
@@ -202,6 +202,272 @@ pub struct WorldOpenPlan {
     pub writable: bool,
 }
 
+/// Structural host clamps for one playable world session.
+///
+/// These values bound streaming residency and queues in chunk units. They are
+/// not frame-time, latency, or FPS budgets, and they do not replace an accepted
+/// performance ADR.
+#[allow(
+    clippy::struct_field_names,
+    reason = "each clamp is independently named in chunk units"
+)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, try_from = "PlayableWorldHardLimitsWireV1")]
+pub struct PlayableWorldHardLimitsV1 {
+    /// Inclusive chunk radius the client may keep in view.
+    pub view_distance_chunks: u32,
+    /// Inclusive chunk radius the host may generate around the player.
+    pub generation_radius_chunks: u32,
+    /// Maximum chunks retained in the resident working set.
+    pub max_resident_chunks: u32,
+    /// Maximum chunks that may be generating or meshing at once.
+    pub max_in_flight_chunks: u32,
+    /// Inclusive chunk radius that must remain eligible for durable save.
+    pub max_save_radius_chunks: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "wire field names match the public host-clamp contract"
+)]
+struct PlayableWorldHardLimitsWireV1 {
+    view_distance_chunks: u32,
+    generation_radius_chunks: u32,
+    max_resident_chunks: u32,
+    max_in_flight_chunks: u32,
+    max_save_radius_chunks: u32,
+}
+
+impl PlayableWorldHardLimitsV1 {
+    /// Creates nonzero structural host clamps for a playable world session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayableWorldSessionError::ZeroLimit`] when any clamp is zero.
+    pub fn new(
+        view_distance_chunks: u32,
+        generation_radius_chunks: u32,
+        max_resident_chunks: u32,
+        max_in_flight_chunks: u32,
+        max_save_radius_chunks: u32,
+    ) -> Result<Self, PlayableWorldSessionError> {
+        let limits = Self {
+            view_distance_chunks,
+            generation_radius_chunks,
+            max_resident_chunks,
+            max_in_flight_chunks,
+            max_save_radius_chunks,
+        };
+        limits.validate()?;
+        Ok(limits)
+    }
+
+    /// Rejects a clamp of zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayableWorldSessionError::ZeroLimit`] when any clamp is zero.
+    pub const fn validate(self) -> Result<(), PlayableWorldSessionError> {
+        if self.view_distance_chunks == 0 {
+            return Err(PlayableWorldSessionError::ZeroLimit {
+                field: "view_distance_chunks",
+            });
+        }
+        if self.generation_radius_chunks == 0 {
+            return Err(PlayableWorldSessionError::ZeroLimit {
+                field: "generation_radius_chunks",
+            });
+        }
+        if self.max_resident_chunks == 0 {
+            return Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_resident_chunks",
+            });
+        }
+        if self.max_in_flight_chunks == 0 {
+            return Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_in_flight_chunks",
+            });
+        }
+        if self.max_save_radius_chunks == 0 {
+            return Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_save_radius_chunks",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<PlayableWorldHardLimitsWireV1> for PlayableWorldHardLimitsV1 {
+    type Error = PlayableWorldSessionError;
+
+    fn try_from(value: PlayableWorldHardLimitsWireV1) -> Result<Self, Self::Error> {
+        Self::new(
+            value.view_distance_chunks,
+            value.generation_radius_chunks,
+            value.max_resident_chunks,
+            value.max_in_flight_chunks,
+            value.max_save_radius_chunks,
+        )
+    }
+}
+
+/// Version-one playable world session contract.
+///
+/// This is distinct from catalog [`WorldHeader`]: it declares the finite
+/// vertical range, chunk edge, seed, generation epoch, required package
+/// closure, semantic image, and structural host clamps needed to open a
+/// playable session. Seed and generation-epoch hashes are opaque
+/// [`CanonicalHash`] values here; they bind to `WorldSeedV1` and
+/// `GenerationEpochIdV1` when those identities are persisted on this contract.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, try_from = "PlayableWorldSessionWireV1")]
+pub struct PlayableWorldSessionV1 {
+    /// Inclusive lowest finite world voxel Y.
+    pub vertical_min_y: i32,
+    /// Inclusive highest finite world voxel Y. Must be strictly greater than
+    /// [`Self::vertical_min_y`].
+    pub vertical_max_y: i32,
+    /// Edge length of one cubic chunk in voxels.
+    pub chunk_edge_voxels: u16,
+    /// Canonical hash of the world seed. Bound to `WorldSeedV1` later.
+    pub seed_hash: CanonicalHash,
+    /// Canonical hash of the generation epoch. Bound to `GenerationEpochIdV1`
+    /// later.
+    pub generation_epoch_hash: CanonicalHash,
+    /// Exact package names required to open this session.
+    pub required_package_closure: BTreeSet<PackageName>,
+    /// Canonical hash of the compiled semantic image for this session.
+    pub semantic_image_hash: CanonicalHash,
+    /// Structural host clamps for this session.
+    pub hard_limits: PlayableWorldHardLimitsV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlayableWorldSessionWireV1 {
+    vertical_min_y: i32,
+    vertical_max_y: i32,
+    chunk_edge_voxels: u16,
+    seed_hash: CanonicalHash,
+    generation_epoch_hash: CanonicalHash,
+    required_package_closure: BTreeSet<PackageName>,
+    semantic_image_hash: CanonicalHash,
+    hard_limits: PlayableWorldHardLimitsV1,
+}
+
+impl PlayableWorldSessionV1 {
+    /// Creates a validated playable world session contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayableWorldSessionError`] when the vertical range is inverted
+    /// or equal, the chunk edge is zero, the package closure is empty, or any
+    /// hard limit is zero.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the v1 session contract is the complete validated field set"
+    )]
+    pub fn new(
+        vertical_min_y: i32,
+        vertical_max_y: i32,
+        chunk_edge_voxels: u16,
+        seed_hash: CanonicalHash,
+        generation_epoch_hash: CanonicalHash,
+        required_package_closure: BTreeSet<PackageName>,
+        semantic_image_hash: CanonicalHash,
+        hard_limits: PlayableWorldHardLimitsV1,
+    ) -> Result<Self, PlayableWorldSessionError> {
+        let session = Self {
+            vertical_min_y,
+            vertical_max_y,
+            chunk_edge_voxels,
+            seed_hash,
+            generation_epoch_hash,
+            required_package_closure,
+            semantic_image_hash,
+            hard_limits,
+        };
+        session.validate()?;
+        Ok(session)
+    }
+
+    /// Rejects an inverted vertical range, a zero chunk edge, an empty package
+    /// closure, or a zero hard limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayableWorldSessionError`] for any of those contract
+    /// violations.
+    pub fn validate(&self) -> Result<(), PlayableWorldSessionError> {
+        if self.vertical_min_y >= self.vertical_max_y {
+            return Err(PlayableWorldSessionError::InvertedVerticalRange {
+                min: self.vertical_min_y,
+                max: self.vertical_max_y,
+            });
+        }
+        if self.chunk_edge_voxels == 0 {
+            return Err(PlayableWorldSessionError::ZeroChunkEdge);
+        }
+        if self.required_package_closure.is_empty() {
+            return Err(PlayableWorldSessionError::EmptyPackageClosure);
+        }
+        self.hard_limits.validate()
+    }
+
+    /// Canonical hash of this session contract, including structural host clamps.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CanonicalJsonError`] if the session cannot be encoded.
+    pub fn canonical_hash(&self) -> Result<CanonicalHash, CanonicalJsonError> {
+        canonical_json_hash(self)
+    }
+}
+
+impl TryFrom<PlayableWorldSessionWireV1> for PlayableWorldSessionV1 {
+    type Error = PlayableWorldSessionError;
+
+    fn try_from(value: PlayableWorldSessionWireV1) -> Result<Self, Self::Error> {
+        Self::new(
+            value.vertical_min_y,
+            value.vertical_max_y,
+            value.chunk_edge_voxels,
+            value.seed_hash,
+            value.generation_epoch_hash,
+            value.required_package_closure,
+            value.semantic_image_hash,
+            value.hard_limits,
+        )
+    }
+}
+
+/// Playable world session contract validation failure.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum PlayableWorldSessionError {
+    /// `vertical_min_y` is not strictly less than `vertical_max_y`.
+    #[error("playable world session vertical range is inverted: {min} is not less than {max}")]
+    InvertedVerticalRange {
+        /// Inclusive minimum Y that failed validation.
+        min: i32,
+        /// Inclusive maximum Y that failed validation.
+        max: i32,
+    },
+    /// `chunk_edge_voxels` was zero.
+    #[error("playable world session chunk edge must be nonzero")]
+    ZeroChunkEdge,
+    /// `required_package_closure` contained no package names.
+    #[error("playable world session required package closure must not be empty")]
+    EmptyPackageClosure,
+    /// A structural host clamp was zero.
+    #[error("playable world session hard limit `{field}` must be nonzero")]
+    ZeroLimit {
+        /// Invalid limit field.
+        field: &'static str,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +520,204 @@ mod tests {
         value
             .parse()
             .unwrap_or_else(|error| panic!("fixture package `{value}` is invalid: {error}"))
+    }
+
+    #[test]
+    fn playable_world_session_accepts_finite_range_and_round_trips() {
+        let session = fixture_session();
+        assert_eq!(session.vertical_min_y, -64);
+        assert_eq!(session.vertical_max_y, 127);
+        assert_eq!(session.chunk_edge_voxels, 16);
+        assert_eq!(
+            session.required_package_closure,
+            BTreeSet::from([package_name("terrenia")])
+        );
+        session
+            .validate()
+            .unwrap_or_else(|error| panic!("valid session was rejected: {error}"));
+
+        let encoded = serde_json::to_string(&session)
+            .unwrap_or_else(|error| panic!("session JSON encode failed: {error}"));
+        let decoded = serde_json::from_str::<PlayableWorldSessionV1>(&encoded)
+            .unwrap_or_else(|error| panic!("session JSON decode failed: {error}"));
+        assert_eq!(session, decoded);
+        assert!(
+            serde_json::from_str::<PlayableWorldSessionV1>(&encoded.replace(
+                "\"semantic_image_hash\"",
+                "\"mystery\":0,\"semantic_image_hash\""
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn playable_world_session_rejects_inverted_vertical_range() {
+        assert_eq!(
+            PlayableWorldSessionV1::new(
+                8,
+                -8,
+                16,
+                CanonicalHash::digest(b"seed"),
+                CanonicalHash::digest(b"epoch"),
+                BTreeSet::from([package_name("terrenia")]),
+                CanonicalHash::digest(b"semantic"),
+                fixture_limits(),
+            ),
+            Err(PlayableWorldSessionError::InvertedVerticalRange { min: 8, max: -8 })
+        );
+
+        assert_eq!(
+            PlayableWorldSessionV1::new(
+                4,
+                4,
+                16,
+                CanonicalHash::digest(b"seed"),
+                CanonicalHash::digest(b"epoch"),
+                BTreeSet::from([package_name("terrenia")]),
+                CanonicalHash::digest(b"semantic"),
+                fixture_limits(),
+            ),
+            Err(PlayableWorldSessionError::InvertedVerticalRange { min: 4, max: 4 })
+        );
+    }
+
+    #[test]
+    fn playable_world_session_rejects_zero_chunk_edge_and_empty_closure() {
+        assert_eq!(
+            PlayableWorldSessionV1::new(
+                -64,
+                127,
+                0,
+                CanonicalHash::digest(b"seed"),
+                CanonicalHash::digest(b"epoch"),
+                BTreeSet::from([package_name("terrenia")]),
+                CanonicalHash::digest(b"semantic"),
+                fixture_limits(),
+            ),
+            Err(PlayableWorldSessionError::ZeroChunkEdge)
+        );
+
+        assert_eq!(
+            PlayableWorldSessionV1::new(
+                -64,
+                127,
+                16,
+                CanonicalHash::digest(b"seed"),
+                CanonicalHash::digest(b"epoch"),
+                BTreeSet::new(),
+                CanonicalHash::digest(b"semantic"),
+                fixture_limits(),
+            ),
+            Err(PlayableWorldSessionError::EmptyPackageClosure)
+        );
+    }
+
+    #[test]
+    fn playable_world_session_rejects_zero_hard_limit() {
+        assert_eq!(
+            PlayableWorldHardLimitsV1::new(0, 12, 64, 4, 16),
+            Err(PlayableWorldSessionError::ZeroLimit {
+                field: "view_distance_chunks",
+            })
+        );
+        assert_eq!(
+            PlayableWorldHardLimitsV1::new(8, 0, 64, 4, 16),
+            Err(PlayableWorldSessionError::ZeroLimit {
+                field: "generation_radius_chunks",
+            })
+        );
+        assert_eq!(
+            PlayableWorldHardLimitsV1::new(8, 12, 0, 4, 16),
+            Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_resident_chunks",
+            })
+        );
+        assert_eq!(
+            PlayableWorldHardLimitsV1::new(8, 12, 64, 0, 16),
+            Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_in_flight_chunks",
+            })
+        );
+        assert_eq!(
+            PlayableWorldHardLimitsV1::new(8, 12, 64, 4, 0),
+            Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_save_radius_chunks",
+            })
+        );
+
+        let zeroed = PlayableWorldHardLimitsV1 {
+            view_distance_chunks: 0,
+            generation_radius_chunks: 12,
+            max_resident_chunks: 64,
+            max_in_flight_chunks: 4,
+            max_save_radius_chunks: 16,
+        };
+        let session_error = PlayableWorldSessionV1::new(
+            -64,
+            127,
+            16,
+            CanonicalHash::digest(b"seed"),
+            CanonicalHash::digest(b"epoch"),
+            BTreeSet::from([package_name("terrenia")]),
+            CanonicalHash::digest(b"semantic"),
+            zeroed,
+        );
+        assert_eq!(
+            session_error,
+            Err(PlayableWorldSessionError::ZeroLimit {
+                field: "view_distance_chunks",
+            })
+        );
+    }
+
+    #[test]
+    fn playable_world_session_canonical_hash_is_stable() {
+        let session = fixture_session();
+        let hash = session
+            .canonical_hash()
+            .unwrap_or_else(|error| panic!("session hash failed: {error}"));
+        assert_eq!(
+            hash,
+            session
+                .canonical_hash()
+                .unwrap_or_else(|error| panic!("session hash failed: {error}"))
+        );
+
+        let encoded = serde_json::to_value(&session)
+            .unwrap_or_else(|error| panic!("session JSON value encode failed: {error}"));
+        let decoded = serde_json::from_value::<PlayableWorldSessionV1>(encoded)
+            .unwrap_or_else(|error| panic!("session JSON value decode failed: {error}"));
+        assert_eq!(
+            hash,
+            decoded
+                .canonical_hash()
+                .unwrap_or_else(|error| panic!("decoded session hash failed: {error}"))
+        );
+
+        let mut mutated = session.clone();
+        mutated.seed_hash = CanonicalHash::digest(b"other-seed");
+        let mutated_hash = mutated
+            .canonical_hash()
+            .unwrap_or_else(|error| panic!("mutated session hash failed: {error}"));
+        assert_ne!(hash, mutated_hash);
+    }
+
+    fn fixture_session() -> PlayableWorldSessionV1 {
+        PlayableWorldSessionV1::new(
+            -64,
+            127,
+            16,
+            CanonicalHash::digest(b"seed"),
+            CanonicalHash::digest(b"epoch"),
+            BTreeSet::from([package_name("terrenia")]),
+            CanonicalHash::digest(b"semantic"),
+            fixture_limits(),
+        )
+        .unwrap_or_else(|error| panic!("valid fixture session was rejected: {error}"))
+    }
+
+    fn fixture_limits() -> PlayableWorldHardLimitsV1 {
+        PlayableWorldHardLimitsV1::new(8, 12, 64, 4, 16)
+            .unwrap_or_else(|error| panic!("valid fixture limits were rejected: {error}"))
     }
 }

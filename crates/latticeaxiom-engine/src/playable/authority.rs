@@ -420,3 +420,214 @@ fn cell_intersects_player(position: BlockPosition, eye_origin: [f32; 3]) -> bool
     let offset_z = eye_origin[2] - nearest_z;
     offset_x.mul_add(offset_x, offset_z * offset_z) < PLAYER_RADIUS_M * PLAYER_RADIUS_M
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used)] // Test helpers state the fixture invariant being checked.
+mod tests {
+    use std::collections::BTreeMap;
+
+    use latticeaxiom_gameplay::{BlockId, BlockPosition, ChunkRevision, PlayerId};
+    use latticeaxiom_player::{
+        AuthoritativeBlockEditRequestV1, BlockEditActionV1, BlockEditAuthority, BlockEditIntentV1,
+        BlockEditRejectV1, BlockFaceV1, ClientTargetObservationV1, MAX_BLOCK_EDIT_REACH_M,
+        TargetEyePoseV1,
+    };
+
+    use super::{
+        PlayableBlockAuthority, WORLD_HORIZONTAL_MAX, WORLD_HORIZONTAL_MIN, WORLD_VERTICAL_MAX,
+        WORLD_VERTICAL_MIN, is_sand_patch, seeded_playable_world, stable_surface_height,
+    };
+
+    const PLAYER: PlayerId = PlayerId::new(1);
+    const LOOK_WEST_AT_EASTERN_BOUND: TargetEyePoseV1 = TargetEyePoseV1 {
+        origin_m: [9.5, 1.5, 0.5],
+        forward: [-1.0, 0.0, 0.0],
+    };
+    const LOOK_DOWN_ORIGIN: TargetEyePoseV1 = TargetEyePoseV1 {
+        origin_m: [0.5, 6.0, 0.5],
+        forward: [0.0, -1.0, 0.0],
+    };
+    const LOOK_DOWN_NEGATIVE_XZ: TargetEyePoseV1 = TargetEyePoseV1 {
+        origin_m: [-7.5, 6.0, -7.5],
+        forward: [0.0, -1.0, 0.0],
+    };
+
+    fn terrenia_block(identifier: &str) -> BlockId {
+        BlockId::parse(identifier)
+            .expect("trusted Terrenia block identifiers satisfy the gameplay-ID contract")
+    }
+
+    fn playable_world() -> (PlayableBlockAuthority, super::PlayableSeedCells, BlockId) {
+        seeded_playable_world().expect("the built-in playable fixture uses valid gameplay IDs")
+    }
+
+    fn first_hit(authority: &PlayableBlockAuthority, eye_pose: TargetEyePoseV1) -> super::RayHit {
+        authority
+            .first_hit(eye_pose, MAX_BLOCK_EDIT_REACH_M)
+            .expect("the finite fixture exposes a selectable voxel within reach")
+    }
+
+    fn edit_request(
+        action: BlockEditActionV1,
+        eye_pose: TargetEyePoseV1,
+        placement_content: Option<BlockId>,
+        observation: Option<ClientTargetObservationV1>,
+        generation: u64,
+    ) -> AuthoritativeBlockEditRequestV1 {
+        AuthoritativeBlockEditRequestV1 {
+            player: PLAYER,
+            fixed_tick: generation,
+            eye_pose,
+            intent: BlockEditIntentV1 {
+                action,
+                input_generation: generation,
+                placement_content,
+                client_observation: observation,
+            },
+        }
+    }
+
+    fn observation(hit: super::RayHit, revision: ChunkRevision) -> ClientTargetObservationV1 {
+        ClientTargetObservationV1 {
+            position: hit.position,
+            face: hit.face,
+            chunk_revision: revision,
+            distance_mm: 0,
+        }
+    }
+
+    #[test]
+    fn seeded_playable_world_occupies_inclusive_finite_bounds_including_negative_xz() {
+        let grass = terrenia_block("terrenia:block/grass");
+        let dirt = terrenia_block("terrenia:block/dirt");
+        let stone = terrenia_block("terrenia:block/stone");
+        let sand = terrenia_block("terrenia:block/sand");
+
+        let (authority, seed, placement) = playable_world();
+        let (_, seed_again, _) = playable_world();
+        assert_eq!(placement, dirt);
+        assert_eq!(
+            seed.iter()
+                .map(|(position, block)| (position, block.clone()))
+                .collect::<Vec<_>>(),
+            seed_again
+                .iter()
+                .map(|(position, block)| (position, block.clone()))
+                .collect::<Vec<_>>(),
+        );
+
+        let cells: BTreeMap<BlockPosition, BlockId> = seed
+            .iter()
+            .map(|(position, block)| (position, block.clone()))
+            .collect();
+
+        for x in WORLD_HORIZONTAL_MIN..=WORLD_HORIZONTAL_MAX {
+            for z in WORLD_HORIZONTAL_MIN..=WORLD_HORIZONTAL_MAX {
+                let bedrock = BlockPosition { x, y: 0, z };
+                assert_eq!(cells.get(&bedrock), Some(&stone));
+
+                let surface_y = stable_surface_height(x, z);
+                assert!(
+                    (WORLD_VERTICAL_MIN..=WORLD_VERTICAL_MAX).contains(&surface_y),
+                    "surface y {surface_y} is outside the playable vertical range"
+                );
+                if surface_y == 2 {
+                    assert_eq!(cells.get(&BlockPosition { x, y: 1, z }), Some(&dirt));
+                }
+                let surface_block = if is_sand_patch(x, z) { &sand } else { &grass };
+                assert_eq!(
+                    cells.get(&BlockPosition { x, y: surface_y, z }),
+                    Some(surface_block)
+                );
+            }
+        }
+
+        for position in cells.keys() {
+            assert!((WORLD_HORIZONTAL_MIN..=WORLD_HORIZONTAL_MAX).contains(&position.x));
+            assert!((WORLD_VERTICAL_MIN..=WORLD_VERTICAL_MAX).contains(&position.y));
+            assert!((WORLD_HORIZONTAL_MIN..=WORLD_HORIZONTAL_MAX).contains(&position.z));
+        }
+
+        assert!(cells.contains_key(&BlockPosition {
+            x: WORLD_HORIZONTAL_MIN,
+            y: 0,
+            z: WORLD_HORIZONTAL_MIN,
+        }));
+        assert!(cells.contains_key(&BlockPosition { x: -1, y: 0, z: -3 }));
+
+        let negative_hit = first_hit(&authority, LOOK_DOWN_NEGATIVE_XZ);
+        assert!(negative_hit.position.x < 0);
+        assert!(negative_hit.position.z < 0);
+        assert_eq!(negative_hit.position, BlockPosition { x: -8, y: 1, z: -8 });
+    }
+
+    #[test]
+    fn playable_authority_breaks_then_places_advances_revision_and_hits_distinct_faces() {
+        let (mut authority, _, dirt) = playable_world();
+
+        let downward = LOOK_DOWN_ORIGIN;
+        let westward = LOOK_WEST_AT_EASTERN_BOUND;
+        let downward_hit = first_hit(&authority, downward);
+        let westward_hit = first_hit(&authority, westward);
+        assert_eq!(downward_hit.face, BlockFaceV1::PositiveY);
+        assert_eq!(westward_hit.face, BlockFaceV1::PositiveX);
+        assert_ne!(downward_hit.face, westward_hit.face);
+        assert_eq!(downward_hit.position, BlockPosition { x: 0, y: 2, z: 0 });
+        assert_eq!(westward_hit.position, BlockPosition { x: 8, y: 1, z: 0 });
+
+        let out_of_bounds = BlockEditAuthority::apply(
+            &mut authority,
+            edit_request(
+                BlockEditActionV1::Place,
+                westward,
+                Some(dirt.clone()),
+                Some(observation(westward_hit, ChunkRevision::ZERO)),
+                1,
+            ),
+        );
+        assert_eq!(out_of_bounds, Err(BlockEditRejectV1::PermissionDenied));
+
+        let broken = BlockEditAuthority::apply(
+            &mut authority,
+            edit_request(
+                BlockEditActionV1::Break,
+                downward,
+                None,
+                Some(observation(downward_hit, ChunkRevision::ZERO)),
+                2,
+            ),
+        )
+        .expect("breaking the downward first-hit surface cell is in bounds");
+        assert_eq!(broken.position, downward_hit.position);
+        assert_eq!(
+            broken.old_content,
+            Some(terrenia_block("terrenia:block/grass"))
+        );
+        assert_eq!(broken.new_content, None);
+        assert_eq!(broken.committed_chunk_revision, ChunkRevision::new(1));
+
+        let exposed_hit = first_hit(&authority, downward);
+        assert_eq!(exposed_hit.face, BlockFaceV1::PositiveY);
+        assert_eq!(exposed_hit.position, BlockPosition { x: 0, y: 1, z: 0 });
+
+        let placed = BlockEditAuthority::apply(
+            &mut authority,
+            edit_request(
+                BlockEditActionV1::Place,
+                downward,
+                Some(dirt.clone()),
+                Some(observation(exposed_hit, broken.committed_chunk_revision)),
+                3,
+            ),
+        )
+        .expect("placing onto the exposed cell restores the broken surface");
+        assert_eq!(placed.position, downward_hit.position);
+        assert_eq!(placed.old_content, None);
+        assert_eq!(placed.new_content, Some(dirt));
+        assert_eq!(placed.committed_chunk_revision, ChunkRevision::new(2));
+        assert!(
+            placed.committed_chunk_revision.get() > broken.committed_chunk_revision.get(),
+            "a committed place must advance the same chunk revision"
+        );
+    }
+}
