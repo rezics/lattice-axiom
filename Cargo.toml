@@ -13,6 +13,9 @@ members = [
   "crates/latticeaxiom-sdk-macros",
   "crates/latticeaxiom-storage",
   "crates/latticeaxiom-territory",
+  "crates/latticeaxiom-voxel-mesh",
+  "crates/latticeaxiom-voxel-playground",
+  "crates/latticeaxiom-voxel-runtime",
   "crates/latticeaxiom-world-catalog",
   "crates/latticeaxiom-world-db",
   "crates/latticeaxiom-world-wire",
@@ -33,6 +36,7 @@ repository = "https://github.com/rezics/lattice-axiom-demo"
 # the authoritative dependency record, so upgrades are deliberate migrations.
 avian3d = { version = "=0.7.0", default-features = false }
 bevy = "=0.19.1"
+bevy_voxel_world = "=0.17.0"
 criterion = "0.8"
 hex = "0.4.3"
 leafwing-input-manager = { version = "=0.21.0", default-features = false }

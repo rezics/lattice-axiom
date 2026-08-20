@@ -1,0 +1,22 @@
+[package]
+name = "latticeaxiom-voxel-mesh"
+description = "Deterministic CPU voxel face culling and greedy meshing for Lattice Axiom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "meshing"
+harness = false

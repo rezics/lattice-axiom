@@ -1,0 +1,27 @@
+[package]
+name = "latticeaxiom-voxel-runtime"
+description = "Bounded storage-committed voxel projection and derived-job coordination for Lattice Axiom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-core = { path = "../latticeaxiom-core" }
+latticeaxiom-storage = { path = "../latticeaxiom-storage" }
+latticeaxiom-voxel-mesh = { path = "../latticeaxiom-voxel-mesh" }
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "runtime"
+harness = false

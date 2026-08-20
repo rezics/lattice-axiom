@@ -1,0 +1,38 @@
+# latticeaxiom-voxel-runtime
+
+latticeaxiom-voxel-runtime is a bounded, discardable projection cache over
+storage-committed voxel state. It cannot author edits or advance world, chunk,
+or voxel revisions. A host first commits through storage, decodes the published
+voxel payload, then creates a CommittedChunkProjection from a CommitReceipt or
+StoredChunk.
+
+The crate provides:
+
+- deterministic hard-bounded mesh and collider queues;
+- immutable chunk-plus-one-voxel-halo inputs;
+- storage world/chunk/voxel revisions and six-neighbor source receipts;
+- separate presentation-mesh and collision-semantic fingerprints;
+- complete input/result/apply reservation ledgers;
+- cancellation tokens retained until executor acknowledgement;
+- stale completion rejection before caller-owned apply;
+- conservative projected occupancy while colliders are pending or failed;
+- exact clean-projection eviction permits; and
+- native right-handed Y-up committed-state DDA with a five-meter reach cap.
+
+The decoded cell vector and semantic fingerprints are supplied by the schema
+owner. RetainedBytes and ApplyByteDeclaration are conservative provider
+contracts, not allocator instrumentation; under-reporting is a provider fault.
+A successful apply receipt proves only that the caller's typed apply closure
+returned success. The host still owns Bevy task routing, asset/collider
+installation, cancellation delivery, and external streaming-lease liveness.
+
+Because this cache exposes no edit API, every resident projection is clean by
+construction. Eviction validates an exact runtime-issued revision permit,
+moves active jobs to CancelRequested, and keeps all reserved bytes until the
+executor returns owned input/result buffers. Until an exact collider apply
+succeeds, gameplay and physics integration must synchronously honor
+projected_collision_occupied as conservative cover.
+
+The halo layout, source-hash encoding, memory estimates, and equal-axis DDA tie
+handling are deterministic implementation choices, not frozen portable wire
+formats.
