@@ -14,9 +14,9 @@ The first R0 foundation is also present:
   preflight DTOs;
 - `nickel/latticeaxiom` contains the versioned R0 authoring contracts, while
   `fixtures/composition` pins positive canonical outputs and negative diagnostic intent;
-- the current authoring boundary is Nickel library contract 2, R0 authoring
-  corpus 2, package model 2, game-profile model 2, normalized composition
-  schema 2, and registration-manifest schema 1;
+- the current authoring boundary is Nickel library contract 3, authoring
+  corpus 3, package model 3, game-profile model 3, normalized composition
+  schema 3, and registration-manifest schema 1;
 - the composition crate embeds Nickel 0.18 for trusted typed evaluation and
   provides immutable raw-byte source snapshots, deterministic source-table
   preflight, NFC and case-fold collision checks, explicit whole-root
@@ -41,11 +41,14 @@ The in-process evaluator does not enforce the frozen wall-clock, memory, or
 recursion limits and is not an untrusted-code boundary. The controlled worker
 path enforces the complete-request monotonic deadline, but production R0
 receipts still fail closed until the source-table-only Nickel loader, OS memory
-containment, and evaluator call-frame instrumentation are present. Relative
-imports in the current trusted adapter still use Nickel's ambient filesystem
-resolver.
+containment, and evaluator call-frame instrumentation are present. The trusted
+D0 adapter verifies an immutable source closure and stages only receipt-covered
+bytes in a fresh private tree without passing original source paths to Nickel;
+Nickel still reads that private tree through its filesystem resolver, so this
+adapter is not a production containment boundary.
 
-The worker path therefore accepts only explicitly trusted, import-free Tool or
+The production worker path therefore accepts only explicitly trusted,
+import-free Tool or
 test-fixture requests under a non-production policy. Any static import is
 preflighted from immutable snapshots and then rejected with a capability
 diagnostic before Nickel can fall back to the ambient filesystem. Production

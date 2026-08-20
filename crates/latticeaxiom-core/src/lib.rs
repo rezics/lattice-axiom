@@ -25,6 +25,7 @@ pub use provenance::{
     provenance_hash,
 };
 pub use registration::{
-    NamespaceGrantPattern, NamespaceGrantPatternError, RegistrationNamespace,
+    NamespaceGrant, NamespaceGrantError, NamespaceGrantPattern, NamespaceGrantPatternError,
+    NamespaceGrantor, NamespaceGrantorError, NamespaceGrantorRef, RegistrationNamespace,
     RegistrationNamespaceError,
 };

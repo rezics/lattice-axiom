@@ -489,7 +489,7 @@ mod tests {
 
     const TOOL_PACKAGE: &str = r#"
     {
-      model_version = 2,
+      model_version = 3,
       name = "worker-tool",
       version = "0.1.0",
       metadata = { display_name = "Worker tool", license = "MIT", documentation = null },
@@ -502,7 +502,7 @@ mod tests {
           engine_build = null, artifact = { kind = "data-root", path = "data" }
         }
       },
-      domains = ["tool"], parameters = {}, namespace_requests = {}, trust = "data-only",
+      domains = ["tool"], parameters = {}, namespace_requests = [], trust = "data-only",
       registration = {
         registrations = [], semantics = [], settings = [], composition_parameters = [],
         metrics = [], info_items = [], inspect = [], visualizers = []
@@ -518,7 +518,7 @@ mod tests {
 
     const TOOL_PROFILE: &str = r#"
     {
-      model_version = 2,
+      model_version = 3,
       profile = "latticeaxiom:profile/worker-tool@1",
       projection = "tool", projection_domains = ["tool"], roots = {}, capabilities = {},
       source_universe = [], features = {}, parameters = {}, realization_policy = ["data"],

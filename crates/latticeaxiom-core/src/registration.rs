@@ -1,10 +1,10 @@
-use std::{fmt, str::FromStr};
+use std::{collections::BTreeSet, fmt, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 
-use crate::{StableId, grammar::is_canonical_identifier_segment};
+use crate::{PackageName, StableId, grammar::is_canonical_identifier_segment};
 
 /// A registration namespace governed independently from package names.
 ///
@@ -196,6 +196,38 @@ impl NamespaceGrantPattern {
         }
         path_segments.next().is_none()
     }
+
+    /// Returns whether this pattern fully contains every ID accepted by `child`.
+    ///
+    /// This relation is used to reject namespace delegation widening. Both
+    /// patterns must govern the same namespace and registration kind.
+    #[must_use]
+    pub fn covers(&self, child: &Self) -> bool {
+        if self.namespace() != child.namespace() || self.kind() != child.kind() {
+            return false;
+        }
+        let parent_segments = self.path_pattern().split('/').collect::<Vec<_>>();
+        let child_segments = child.path_pattern().split('/').collect::<Vec<_>>();
+        let mut index = 0_usize;
+        while index < parent_segments.len() {
+            let parent = parent_segments[index];
+            if parent == "**" {
+                return true;
+            }
+            let Some(child) = child_segments.get(index) else {
+                return false;
+            };
+            if parent == "*" {
+                if *child == "**" {
+                    return false;
+                }
+            } else if parent != *child {
+                return false;
+            }
+            index = index.saturating_add(1);
+        }
+        index == child_segments.len()
+    }
 }
 
 impl fmt::Display for NamespaceGrantPattern {
@@ -237,6 +269,224 @@ impl<'de> Deserialize<'de> for NamespaceGrantPattern {
     }
 }
 
+/// Authority issuing one effective namespace grant.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NamespaceGrantor(NamespaceGrantorKind);
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum NamespaceGrantorKind {
+    Profile { profile: StableId },
+    Package { package: PackageName },
+}
+
+/// Borrowed view of a validated namespace grantor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NamespaceGrantorRef<'a> {
+    /// The evaluated profile authorizes one locked root package.
+    Profile {
+        /// Exact profile ID bound by the composition receipt.
+        profile: &'a StableId,
+    },
+    /// A locked package delegates part of its effective authority.
+    Package {
+        /// Package issuing the delegation.
+        package: &'a PackageName,
+    },
+}
+
+impl NamespaceGrantor {
+    /// Creates a validated profile grantor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamespaceGrantorError`] unless `profile` uses the exact
+    /// `profile` stable-ID kind.
+    pub fn profile(profile: StableId) -> Result<Self, NamespaceGrantorError> {
+        if profile.kind() != "profile" {
+            return Err(NamespaceGrantorError::InvalidProfileId { profile });
+        }
+        Ok(Self(NamespaceGrantorKind::Profile { profile }))
+    }
+
+    /// Creates a package grantor. Registration compilation additionally proves
+    /// that this package owns the delegated authority.
+    #[must_use]
+    pub const fn package(package: PackageName) -> Self {
+        Self(NamespaceGrantorKind::Package { package })
+    }
+
+    /// Returns a borrowed, exhaustively matchable view of this authority.
+    #[must_use]
+    pub const fn as_ref(&self) -> NamespaceGrantorRef<'_> {
+        match &self.0 {
+            NamespaceGrantorKind::Profile { profile } => NamespaceGrantorRef::Profile { profile },
+            NamespaceGrantorKind::Package { package } => NamespaceGrantorRef::Package { package },
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
+enum NamespaceGrantorFields {
+    Profile { profile: StableId },
+    Package { package: PackageName },
+}
+
+impl<'de> Deserialize<'de> for NamespaceGrantor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match NamespaceGrantorFields::deserialize(deserializer)? {
+            NamespaceGrantorFields::Profile { profile } => {
+                Self::profile(profile).map_err(de::Error::custom)
+            }
+            NamespaceGrantorFields::Package { package } => Ok(Self::package(package)),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+enum NamespaceGrantorSerialization<'a> {
+    Profile { profile: &'a StableId },
+    Package { package: &'a PackageName },
+}
+
+impl Serialize for NamespaceGrantor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let fields = match self.as_ref() {
+            NamespaceGrantorRef::Profile { profile } => {
+                NamespaceGrantorSerialization::Profile { profile }
+            }
+            NamespaceGrantorRef::Package { package } => {
+                NamespaceGrantorSerialization::Package { package }
+            }
+        };
+        fields.serialize(serializer)
+    }
+}
+
+/// An error produced while validating a namespace grantor.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum NamespaceGrantorError {
+    /// A profile grantor carried a stable ID of another registry kind.
+    #[error("namespace profile grantor {profile} does not use the `profile` stable-ID kind")]
+    InvalidProfileId {
+        /// Invalid profile registration ID.
+        profile: StableId,
+    },
+}
+/// One owner-bound effective registration namespace grant.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct NamespaceGrant {
+    namespace: RegistrationNamespace,
+    grantor: NamespaceGrantor,
+    grantee: PackageName,
+    patterns: BTreeSet<NamespaceGrantPattern>,
+}
+
+impl NamespaceGrant {
+    /// Creates a validated owner-bound namespace grant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamespaceGrantError`] when no pattern
+    /// is present or a pattern governs a namespace other than `namespace`.
+    pub fn new(
+        namespace: RegistrationNamespace,
+        grantor: NamespaceGrantor,
+        grantee: PackageName,
+        patterns: BTreeSet<NamespaceGrantPattern>,
+    ) -> Result<Self, NamespaceGrantError> {
+        if patterns.is_empty() {
+            return Err(NamespaceGrantError::EmptyPatterns);
+        }
+        if let Some(pattern) = patterns
+            .iter()
+            .find(|pattern| pattern.namespace() != namespace.as_str())
+        {
+            return Err(NamespaceGrantError::PatternNamespaceMismatch {
+                namespace,
+                pattern: pattern.clone(),
+            });
+        }
+        Ok(Self {
+            namespace,
+            grantor,
+            grantee,
+            patterns,
+        })
+    }
+
+    /// Returns the governed registration namespace.
+    #[must_use]
+    pub const fn namespace(&self) -> &RegistrationNamespace {
+        &self.namespace
+    }
+
+    /// Returns the profile or package issuing this grant.
+    #[must_use]
+    pub const fn grantor(&self) -> &NamespaceGrantor {
+        &self.grantor
+    }
+
+    /// Returns the locked package receiving authority.
+    #[must_use]
+    pub const fn grantee(&self) -> &PackageName {
+        &self.grantee
+    }
+
+    /// Returns the nonempty bounded stable-ID pattern set.
+    #[must_use]
+    pub const fn patterns(&self) -> &BTreeSet<NamespaceGrantPattern> {
+        &self.patterns
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamespaceGrantFields {
+    namespace: RegistrationNamespace,
+    grantor: NamespaceGrantor,
+    grantee: PackageName,
+    patterns: BTreeSet<NamespaceGrantPattern>,
+}
+
+impl<'de> Deserialize<'de> for NamespaceGrant {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let fields = NamespaceGrantFields::deserialize(deserializer)?;
+        Self::new(
+            fields.namespace,
+            fields.grantor,
+            fields.grantee,
+            fields.patterns,
+        )
+        .map_err(de::Error::custom)
+    }
+}
+
+/// An error produced while validating an owner-bound namespace grant.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum NamespaceGrantError {
+    /// No stable-ID pattern was granted.
+    #[error("a namespace grant requires at least one pattern")]
+    EmptyPatterns,
+    /// A pattern governs a namespace other than the row's namespace.
+    #[error("namespace grant for {namespace} contains mismatched pattern {pattern}")]
+    PatternNamespaceMismatch {
+        /// Namespace declared by the grant row.
+        namespace: RegistrationNamespace,
+        /// Pattern carrying a different namespace.
+        pattern: NamespaceGrantPattern,
+    },
+}
 /// An error produced while validating a namespace grant pattern.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum NamespaceGrantPatternError {
@@ -457,6 +707,84 @@ mod tests {
             assert_eq!(pattern.as_str(), value);
             assert_eq!(pattern.namespace(), "terrenia");
         }
+    }
+
+    #[test]
+    fn grant_pattern_containment_rejects_delegation_widening() {
+        let cases = [
+            ("terrenia:block/*", "terrenia:block/stone", true),
+            ("terrenia:block/*", "terrenia:block/*", true),
+            ("terrenia:block/*", "terrenia:block/**", false),
+            ("terrenia:block/storage/**", "terrenia:block/storage", true),
+            (
+                "terrenia:block/storage/**",
+                "terrenia:block/storage/*",
+                true,
+            ),
+            (
+                "terrenia:block/storage/**",
+                "terrenia:block/storage/copper",
+                true,
+            ),
+            ("terrenia:block/storage", "terrenia:block/storage/*", false),
+            ("terrenia:block/storage", "terrenia:block/*", false),
+            (
+                "terrenia:block/storage/**",
+                "terrenia:item/storage/**",
+                false,
+            ),
+            (
+                "terrenia:block/storage/**",
+                "example:block/storage/**",
+                false,
+            ),
+        ];
+        for (parent, child, expected) in cases {
+            assert_eq!(
+                pattern(parent).covers(&pattern(child)),
+                expected,
+                "unexpected containment result for {parent} -> {child}"
+            );
+        }
+    }
+
+    #[test]
+    fn owner_bound_grant_serde_revalidates_cross_field_invariants() {
+        let valid = r#"{
+            "namespace":"terrenia",
+            "grantor":{"kind":"profile","profile":"latticeaxiom:profile/headless"},
+            "grantee":"terrenia",
+            "patterns":["terrenia:block/**"]
+        }"#;
+        let grant = serde_json::from_str::<NamespaceGrant>(valid)
+            .unwrap_or_else(|error| panic!("valid namespace grant was rejected: {error}"));
+        assert_eq!(grant.namespace().as_str(), "terrenia");
+        assert_eq!(
+            grant.patterns(),
+            &BTreeSet::from([pattern("terrenia:block/**")])
+        );
+        assert_eq!(
+            serde_json::from_str::<NamespaceGrant>(valid).ok(),
+            Some(grant)
+        );
+
+        let empty = valid.replace("[\"terrenia:block/**\"]", "[]");
+        assert!(serde_json::from_str::<NamespaceGrant>(&empty).is_err());
+        let mismatch = valid.replace("terrenia:block/**", "example:block/**");
+        assert!(serde_json::from_str::<NamespaceGrant>(&mismatch).is_err());
+        let unknown = valid.replace("\"patterns\":", "\"unexpected\":true,\"patterns\":");
+        assert!(serde_json::from_str::<NamespaceGrant>(&unknown).is_err());
+        let wrong_profile_kind = valid.replace(
+            "latticeaxiom:profile/headless",
+            "latticeaxiom:role/headless",
+        );
+        assert!(serde_json::from_str::<NamespaceGrant>(&wrong_profile_kind).is_err());
+        assert!(
+            serde_json::from_str::<NamespaceGrantor>(
+                r#"{"kind":"profile","profile":"latticeaxiom:role/headless"}"#,
+            )
+            .is_err()
+        );
     }
 
     #[test]

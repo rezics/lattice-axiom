@@ -2,11 +2,11 @@
 #
 # These contracts target nickel-lang-core 0.18 and emit the string encodings
 # consumed by latticeaxiom-core. Rust remains the normative validator.
-let library_contract_major_value = 2 in
-let corpus_major_value = 2 in
-let package_model_version = 2 in
-let game_profile_model_version = 2 in
-let composition_schema_version = 2 in
+let library_contract_major_value = 3 in
+let corpus_major_value = 3 in
+let package_model_version = 3 in
+let game_profile_model_version = 3 in
+let composition_schema_version = 3 in
 let registration_manifest_schema_version = 1 in
 let r0_evaluation_policy_id = "latticeaxiom:nickel-evaluation-policy/r0@1" in
 
@@ -17,6 +17,14 @@ let stable_path = "%{identifier_segment}(/%{identifier_segment})*" in
 let stable_id_pattern = "^%{identifier_segment}:%{identifier_segment}/%{stable_path}(@[1-9][0-9]*)?$"
 in
 let evaluation_policy_pattern = "^latticeaxiom:nickel-evaluation-policy/%{stable_path}@[1-9][0-9]*$"
+in
+let registration_namespace_pattern = "^%{identifier_segment}$" in
+let namespace_grant_segment = "(%{identifier_segment}|\\*)" in
+let namespace_grant_path =
+  "(%{namespace_grant_segment}(/%{namespace_grant_segment})*(/\\*\\*)?|\\*\\*)"
+in
+let namespace_grant_pattern =
+  "^%{identifier_segment}:%{identifier_segment}/%{namespace_grant_path}$"
 in
 let source_id_pattern = "^%{identifier_segment}:source/%{stable_path}$"
 in
@@ -134,6 +142,8 @@ in
     package_name = package_name_pattern,
     stable_id = stable_id_pattern,
     source_id = source_id_pattern,
+    registration_namespace = registration_namespace_pattern,
+    namespace_grant = namespace_grant_pattern,
     realization_id = realization_id_pattern,
     target_triple = target_triple_pattern,
     evaluation_policy = evaluation_policy_pattern,
@@ -143,6 +153,8 @@ in
     PackageName = PackageNameContract,
     StableId = StableIdContract,
     SourceId = SourceIdContract,
+    RegistrationNamespace = std.string.Matches registration_namespace_pattern,
+    NamespaceGrantPattern = std.string.Matches namespace_grant_pattern,
     CapabilityId = CapabilityIdContract,
     SchemaId = SchemaIdContract,
     RealizationId = RealizationIdContract,

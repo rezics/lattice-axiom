@@ -9,9 +9,10 @@
     "documentation": null,
     "license": "MIT OR Apache-2.0"
   },
-  "model_version": 2,
+  "model_version": 3,
   "name": "core",
-  "namespace_requests": {},
+  "namespace_delegations": {},
+  "namespace_requests": [],
   "parameters": {},
   "provenance": {
     "content_hash": "4831ca03e2b83abf0378d850adc50d13f55cb6e05e35c6aebfcc03e0401c445d",

@@ -1,8 +1,8 @@
 # Composition authoring fixtures
 
 This version-independent directory pins exported JSON and diagnostic intent
-for Nickel library contract 2 and R0 authoring corpus 2. Package and game-profile fixtures use
-model 2; the normalized composition fixture uses schema 2; the registration
+for Nickel library contract 3 and R0 authoring corpus 3. Package and game-profile fixtures use
+model 3; the normalized composition fixture uses schema 3; the registration
 manifest remains schema 1. The Rust DTOs remain normative; golden JSON is
 compared as a JSON value, not by object-key order. It is the authoring-contract
 slice, not yet the controlled-import, resource-limit, or structured-provenance
@@ -49,6 +49,10 @@ rendering details, which Nickel may improve without changing the contract.
 | `foreign-tool-evaluation-policy.ncl` | Tool policies must use the `latticeaxiom` policy namespace. |
 | `unversioned-tool-evaluation-policy.ncl` | Tool policies require an explicit major. |
 | `invalid-target-triple.ncl` | Realization targets must use the typed lowercase target-triple grammar, which allows `_` and `.` within components. |
+| `source-build-with-path.ncl` | Source-build artifact intent must not carry a path. |
+| `data-root-without-path.ncl` | Data-root artifact intent requires a canonical logical path. |
+| `auto-realization-with-kind.ncl` | Automatic realization preference must not carry an exact kind. |
+| `exact-realization-without-kind.ncl` | Exact realization preference requires a kind. |
 
 These failures intentionally retain upstream Nickel message substrings for
 authoring feedback. Stable Lattice diagnostic codes and source provenance are

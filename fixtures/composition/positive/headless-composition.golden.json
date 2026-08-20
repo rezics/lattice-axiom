@@ -24,7 +24,7 @@
     "maximum_trust": "build",
     "namespace_grants": {
       "core": [
-        "block/**"
+        "core:block/**"
       ]
     },
     "realization_order": [
@@ -59,7 +59,7 @@
       "version": "=0.1.0"
     }
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "semantic_bindings": {},
   "sources": [
     {

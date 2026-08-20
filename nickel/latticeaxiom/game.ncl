@@ -3,10 +3,28 @@ let common = import "common.ncl" in
 let C = common.contracts in
 let profile_model_version = common.model_versions.game_profile in
 
-let RealizationPreferenceContract = {
-  mode | std.string.Matches "^(auto|exact)$",
-  kind | C.RealizationKind | optional,
-}
+let RealizationPreferenceContract =
+  std.contract.Sequence [
+    {
+      mode | std.string.Matches "^(auto|exact)$",
+      kind | C.RealizationKind | optional,
+    },
+    std.contract.from_validator (fun value =>
+      let has_kind = std.array.elem "kind" (std.record.fields value) in
+      if value.mode == "auto" && has_kind then
+        'Error {
+          message = "auto realization preferences must omit kind",
+          notes = [],
+        }
+      else if value.mode == "exact" && !has_kind then
+        'Error {
+          message = "exact realization preferences require kind",
+          notes = [],
+        }
+      else
+        'Ok
+    ),
+  ]
 in
 let PackageRequestContract = {
   version | C.VersionReq,
@@ -45,7 +63,11 @@ let EvaluationLimitsContract = {
 in
 let r0_evaluation_limits = {} | EvaluationLimitsContract in
 let ProfilePolicyContract = {
-  namespace_grants | { _ : Array String } | default = {},
+  namespace_grants
+    | { _ : Array C.NamespaceGrantPattern }
+    | std.record.FieldsMatch common.patterns.package_name
+    | default
+    = {},
   maximum_trust | C.TrustClass,
   allow_force_override | Bool,
   allow_recovery | Bool,

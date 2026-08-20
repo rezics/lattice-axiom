@@ -20,7 +20,7 @@ use crate::{
 
 const CLOSURE_HASH_DOMAIN: &[u8] = b"latticeaxiom:source-closure/r0\0";
 /// Nickel package alias reserved for the supported `latticeaxiom.lib` major.
-pub const R0_LIBRARY_PACKAGE_ALIAS: &str = "latticeaxiom_lib_v2";
+pub const R0_LIBRARY_PACKAGE_ALIAS: &str = "latticeaxiom_lib_v3";
 const NICKEL_RESERVED_IDENTIFIERS: &[&str] = &[
     "Dyn",
     "Number",

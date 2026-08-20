@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use latticeaxiom_core::{
-    CanonicalHash, CanonicalJsonError, CapabilityId, PackageName, PackageVersion,
+    CanonicalHash, CanonicalJsonError, CapabilityId, NamespaceGrant, PackageName, PackageVersion,
     PackageVersionReq, SchemaId, SourceId, StableId, TargetTriple, canonical_json_hash,
 };
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::{NickelEvaluationLimits, PackageDomain, RealizationId, RealizationKind};
 
 /// Current lock-file schema version.
-pub const LOCK_SCHEMA_VERSION: u32 = 1;
+pub const LOCK_SCHEMA_VERSION: u32 = 2;
 
 /// One exact dependency edge in a frozen graph.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -110,6 +110,8 @@ pub struct LockedGameGraph {
     pub packages: BTreeMap<PackageName, LockedPackage>,
     /// Capability providers in deterministic execution order.
     pub capability_providers: BTreeMap<CapabilityId, Vec<PackageName>>,
+    /// Effective profile grants and direct-dependency delegation chain.
+    pub namespace_grants: BTreeSet<NamespaceGrant>,
     /// Resolution explanation events.
     pub explanation: Vec<ResolutionStep>,
     /// Canonical semantic graph hash, excluding local source paths.
@@ -144,6 +146,12 @@ impl LockedGameGraph {
     /// Returns [`GraphHashError`] if encoding fails or either claim differs
     /// from its normalized payload.
     pub fn verify_hashes(&self) -> Result<(), GraphHashError> {
+        if self.schema_version != LOCK_SCHEMA_VERSION {
+            return Err(GraphHashError::UnsupportedSchema {
+                found: self.schema_version,
+                supported: LOCK_SCHEMA_VERSION,
+            });
+        }
         let graph = self.recompute_graph_hash()?;
         if graph != self.graph_hash {
             return Err(GraphHashError::GraphMismatch {
@@ -171,6 +179,7 @@ struct GraphSemanticIdentity<'a> {
     roots: &'a BTreeSet<PackageName>,
     packages: BTreeMap<&'a PackageName, GraphPackageIdentity<'a>>,
     capability_providers: &'a BTreeMap<CapabilityId, Vec<PackageName>>,
+    namespace_grants: &'a BTreeSet<NamespaceGrant>,
 }
 
 impl<'a> From<&'a LockedGameGraph> for GraphSemanticIdentity<'a> {
@@ -187,6 +196,7 @@ impl<'a> From<&'a LockedGameGraph> for GraphSemanticIdentity<'a> {
                 .map(|(name, package)| (name, GraphPackageIdentity::from(package)))
                 .collect(),
             capability_providers: &graph.capability_providers,
+            namespace_grants: &graph.namespace_grants,
         }
     }
 }
@@ -228,6 +238,7 @@ struct LockIdentity<'a> {
     roots: &'a BTreeSet<PackageName>,
     packages: BTreeMap<&'a PackageName, LockedPackageIdentity<'a>>,
     capability_providers: &'a BTreeMap<CapabilityId, Vec<PackageName>>,
+    namespace_grants: &'a BTreeSet<NamespaceGrant>,
     explanation: &'a [ResolutionStep],
     graph_hash: CanonicalHash,
 }
@@ -247,6 +258,7 @@ impl<'a> From<&'a LockedGameGraph> for LockIdentity<'a> {
                 .map(|(name, package)| (name, LockedPackageIdentity::from(package)))
                 .collect(),
             capability_providers: &graph.capability_providers,
+            namespace_grants: &graph.namespace_grants,
             explanation: &graph.explanation,
             graph_hash: graph.graph_hash,
         }
@@ -298,6 +310,14 @@ pub enum GraphHashError {
     /// Canonical JSON encoding failed.
     #[error(transparent)]
     Canonical(#[from] CanonicalJsonError),
+    /// The lock schema version is unsupported.
+    #[error("unsupported lock schema {found}; supported schema is {supported}")]
+    UnsupportedSchema {
+        /// Version found in the lock.
+        found: u32,
+        /// Version implemented by this crate.
+        supported: u32,
+    },
     /// The semantic graph hash differs from its payload.
     #[error("graph hash mismatch: expected {expected}, recomputed {actual}")]
     GraphMismatch {
@@ -386,6 +406,8 @@ pub struct RuntimeImage {
 
 #[cfg(test)]
 mod tests {
+    use latticeaxiom_core::{NamespaceGrantPattern, NamespaceGrantor, RegistrationNamespace};
+
     use super::*;
 
     #[test]
@@ -421,6 +443,68 @@ mod tests {
         assert!(matches!(
             graph.verify_hashes(),
             Err(GraphHashError::LockMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn namespace_grant_chain_is_required_and_changes_both_hashes() {
+        let mut graph = graph_with_dependencies(["@terrenia/blocks"]);
+        let semantic_without_grant = graph
+            .recompute_graph_hash()
+            .unwrap_or_else(|error| panic!("fixture graph hash failed: {error}"));
+        let lock_without_grant = graph
+            .recompute_lock_hash()
+            .unwrap_or_else(|error| panic!("fixture lock hash failed: {error}"));
+        let profile = "latticeaxiom:profile/headless@1"
+            .parse()
+            .unwrap_or_else(|error| panic!("fixture profile ID is invalid: {error}"));
+        let grantor = NamespaceGrantor::profile(profile)
+            .unwrap_or_else(|error| panic!("fixture profile grantor is invalid: {error}"));
+        let namespace = RegistrationNamespace::new("terrenia")
+            .unwrap_or_else(|error| panic!("fixture namespace is invalid: {error}"));
+        let pattern = NamespaceGrantPattern::new("terrenia:dimension/terrenia")
+            .unwrap_or_else(|error| panic!("fixture grant pattern is invalid: {error}"));
+        let grant = NamespaceGrant::new(
+            namespace,
+            grantor,
+            package_name("terrenia"),
+            BTreeSet::from([pattern]),
+        )
+        .unwrap_or_else(|error| panic!("fixture namespace grant is invalid: {error}"));
+        graph.namespace_grants.insert(grant);
+
+        assert_ne!(
+            graph.recompute_graph_hash().ok(),
+            Some(semantic_without_grant)
+        );
+        assert_ne!(graph.recompute_lock_hash().ok(), Some(lock_without_grant));
+
+        let encoded = serde_json::to_value(&graph)
+            .unwrap_or_else(|error| panic!("locked graph did not serialize: {error}"));
+        let decoded: LockedGameGraph = serde_json::from_value(encoded.clone())
+            .unwrap_or_else(|error| panic!("locked graph did not deserialize: {error}"));
+        assert_eq!(decoded.namespace_grants, graph.namespace_grants);
+        let mut missing = encoded;
+        let serde_json::Value::Object(fields) = &mut missing else {
+            panic!("locked graph must serialize as an object");
+        };
+        fields.remove("namespace_grants");
+        assert!(serde_json::from_value::<LockedGameGraph>(missing).is_err());
+    }
+
+    #[test]
+    fn lock_verification_rejects_the_previous_schema_even_with_matching_hashes() {
+        let mut graph = graph_with_dependencies([]);
+        graph.schema_version = LOCK_SCHEMA_VERSION - 1;
+        graph.graph_hash = graph
+            .recompute_graph_hash()
+            .unwrap_or_else(|error| panic!("fixture graph hash failed: {error}"));
+        graph.lock_hash = graph
+            .recompute_lock_hash()
+            .unwrap_or_else(|error| panic!("fixture lock hash failed: {error}"));
+        assert!(matches!(
+            graph.verify_hashes(),
+            Err(GraphHashError::UnsupportedSchema { .. })
         ));
     }
 
@@ -469,6 +553,7 @@ mod tests {
             roots: BTreeSet::from([root.clone()]),
             packages: BTreeMap::from([(root, package)]),
             capability_providers: BTreeMap::new(),
+            namespace_grants: BTreeSet::new(),
             explanation: Vec::new(),
             graph_hash: CanonicalHash::digest(b"unverified-graph"),
             lock_hash: CanonicalHash::digest(b"unverified-lock"),

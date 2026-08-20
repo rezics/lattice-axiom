@@ -215,7 +215,7 @@ where
     Ok(typed)
 }
 
-fn exact_json_value(value: &NickelValue) -> Result<serde_json::Value, String> {
+pub(crate) fn exact_json_value(value: &NickelValue) -> Result<serde_json::Value, String> {
     match value.content_ref() {
         ValueContentRef::Null => Ok(serde_json::Value::Null),
         ValueContentRef::Bool(value) => Ok(serde_json::Value::Bool(value)),

@@ -146,6 +146,10 @@ fn embedded_negative_corpus_retains_its_stable_diagnostic_intent() {
     assert_negative::<GameProfileSpec>("foreign-tool-evaluation-policy");
     assert_negative::<GameProfileSpec>("unversioned-tool-evaluation-policy");
     assert_negative::<PackageSpec>("invalid-target-triple");
+    assert_negative::<PackageSpec>("source-build-with-path");
+    assert_negative::<PackageSpec>("data-root-without-path");
+    assert_negative::<GameProfileSpec>("auto-realization-with-kind");
+    assert_negative::<GameProfileSpec>("exact-realization-without-kind");
 }
 
 #[test]

@@ -18,6 +18,8 @@ mod semantic;
 mod settings;
 mod source_closure;
 mod supervisor;
+#[cfg(feature = "nickel-evaluator")]
+mod trusted_staging;
 mod versioning;
 #[cfg(feature = "nickel-evaluator")]
 mod worker;
@@ -39,6 +41,8 @@ pub use semantic::*;
 pub use settings::*;
 pub use source_closure::*;
 pub use supervisor::*;
+#[cfg(feature = "nickel-evaluator")]
+pub use trusted_staging::*;
 pub use versioning::*;
 #[cfg(feature = "nickel-evaluator")]
 pub use worker::*;

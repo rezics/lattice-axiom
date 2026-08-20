@@ -1,5 +1,5 @@
 {
-  model_version = 2,
+  model_version = 3,
   name = "worker-tool",
   version = "0.1.0",
   metadata = {
@@ -27,7 +27,7 @@
   },
   domains = ["tool"],
   parameters = {},
-  namespace_requests = {},
+  namespace_requests = [],
   trust = "data-only",
   registration = {
     registrations = [],

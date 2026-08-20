@@ -12,7 +12,7 @@ These modules provide the R0 authoring surface for Nickel configurations:
   contracts.
 
 The modules target `nickel-lang-core` 0.18.x, shipped by Nickel CLI 1.17.x.
-They expose `library_contract_major = 2` and `corpus_major = 2`. The legacy
+They expose `library_contract_major = 3` and `corpus_major = 3`. The legacy
 `contract_major` field is an explicit alias for the library contract axis, not
 the corpus axis. A consumer must reject unsupported majors instead of guessing
 compatibility.
@@ -26,10 +26,11 @@ authorization to resolve, load, or persist a package. The exported JSON must
 still deserialize and validate through Rust.
 
 The composition golden corpus in `../fixtures/composition` is the executable authoring receipt
-for library contract 2 and corpus 2. Package model 2 carries the typed
-target-triple acceptance boundary; game-profile model 2 carries the narrowed
-canonical source-path acceptance boundary; registration-manifest schema 1
-remains wire-compatible. Composition schema 2 records the normalized target
+for library contract 3 and corpus 3. Package model 3 carries typed namespace
+requests plus direct-dependency delegations; game-profile model 3 binds trusted
+namespace grants to exact root-package grantees. Registration-manifest schema 1
+remains wire-compatible. Composition schema 3 records the normalized target,
+owner-bound profile grants,
 and complete profile policy outside the Nickel authoring model. The later
 controlled evaluator corpus adds
 import-policy, resource-limit, and structured-provenance coverage. A breaking

@@ -42,7 +42,7 @@ in
   evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1",
   policy = {
     namespace_grants = {
-      core = ["block/**"],
+      core = ["core:block/**"],
     },
     maximum_trust = "build",
     allow_force_override = true,

@@ -16,7 +16,7 @@
       "headless"
     ]
   },
-  "model_version": 2,
+  "model_version": 3,
   "overlays": [],
   "parameters": {},
   "policy": {
@@ -25,7 +25,7 @@
     "maximum_trust": "build",
     "namespace_grants": {
       "core": [
-        "block/**"
+        "core:block/**"
       ]
     }
   },

@@ -5,8 +5,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use latticeaxiom_core::{
-    CanonicalHash, CanonicalJsonError, CanonicalLogicalPath, PackageName, PackageVersion,
-    PackageVersionReq, SourceId, SourceProvenance, StableId, TargetTriple, canonical_json_hash,
+    CanonicalHash, CanonicalJsonError, CanonicalLogicalPath, NamespaceGrantPattern, PackageName,
+    PackageVersion, PackageVersionReq, SourceId, SourceProvenance, StableId, TargetTriple,
+    canonical_json_hash,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,19 +15,19 @@ use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 
 /// Current schema version for [`CompositionSpec`].
-pub const COMPOSITION_SCHEMA_VERSION: u32 = 2;
+pub const COMPOSITION_SCHEMA_VERSION: u32 = 3;
 
 /// Current model version for [`PackageSpec`].
-pub const PACKAGE_MODEL_VERSION: u32 = 2;
+pub const PACKAGE_MODEL_VERSION: u32 = 3;
 
 /// Current model version for [`GameProfileSpec`].
-pub const GAME_PROFILE_MODEL_VERSION: u32 = 2;
+pub const GAME_PROFILE_MODEL_VERSION: u32 = 3;
 
 /// Major version of the `latticeaxiom.lib` Nickel contract surface.
-pub const NICKEL_LIBRARY_CONTRACT_MAJOR: u32 = 2;
+pub const NICKEL_LIBRARY_CONTRACT_MAJOR: u32 = 3;
 
 /// Major version of the executable R0 authoring corpus.
-pub const R0_AUTHORING_CORPUS_MAJOR: u32 = 2;
+pub const R0_AUTHORING_CORPUS_MAJOR: u32 = 3;
 
 /// Exact Nickel policy implemented by the R0 evaluator contract.
 pub const R0_NICKEL_EVALUATION_POLICY: &str = "latticeaxiom:nickel-evaluation-policy/r0@1";
@@ -249,8 +250,8 @@ pub struct CompositionPolicy {
     pub target: TargetTriple,
     /// Ordered automatic realization preference.
     pub realization_order: Vec<RealizationKind>,
-    /// Registration namespace grants keyed by namespace.
-    pub namespace_grants: BTreeMap<String, BTreeSet<String>>,
+    /// Registration namespace grants keyed by the root package receiving authority.
+    pub namespace_grants: BTreeMap<PackageName, BTreeSet<NamespaceGrantPattern>>,
     /// Highest package trust accepted by this composition.
     pub maximum_trust: TrustClass,
     /// Whether trusted policy overlays may force a conflicting value.
@@ -410,6 +411,11 @@ impl CompositionSpec {
                 });
             }
         }
+        validate_profile_namespace_grants(
+            &self.profile,
+            &self.roots,
+            &self.policy.namespace_grants,
+        )?;
         Ok(())
     }
 
@@ -570,16 +576,6 @@ pub enum ArtifactIntent {
     },
 }
 
-/// Namespace grant requested by a package and authorized by source policy.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct NamespaceRequest {
-    /// Namespace being requested.
-    pub namespace: String,
-    /// Explicit stable registration patterns.
-    pub patterns: BTreeSet<String>,
-}
-
 /// Non-semantic package display and legal metadata.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -660,9 +656,12 @@ pub struct PackageSpec {
     /// Graph-affecting parameter schema as finite normalized JSON data.
     #[serde(default)]
     pub parameters: BTreeMap<StableId, crate::CompositionParameterSpec>,
-    /// Registration namespace access requested from source policy.
+    /// Complete registration patterns requested from incoming owner-bound authority.
     #[serde(default)]
-    pub namespace_requests: BTreeMap<String, NamespaceRequest>,
+    pub namespace_requests: BTreeSet<NamespaceGrantPattern>,
+    /// Registration authority delegated to direct dependencies, keyed by grantee.
+    #[serde(default)]
+    pub namespace_delegations: BTreeMap<PackageName, BTreeSet<NamespaceGrantPattern>>,
     /// Highest trust class required by any package operation.
     pub trust: TrustClass,
     /// Registration fragments emitted by this data package.
@@ -777,12 +776,25 @@ impl PackageSpec {
             }
             ensure_domain_subset(&self.name, key.as_str(), &provision.domains, &self.domains)?;
         }
-        for (key, request) in &self.namespace_requests {
-            if key != &request.namespace {
-                return Err(CompositionError::NamespaceKeyMismatch {
-                    key: key.clone(),
-                    value: request.namespace.clone(),
+        for (grantee, patterns) in &self.namespace_delegations {
+            if !self.dependencies.contains_key(grantee) {
+                return Err(CompositionError::NamespaceDelegationToNonDependency {
+                    package: self.name.clone(),
+                    grantee: grantee.clone(),
                 });
+            }
+            for pattern in patterns {
+                if !self
+                    .namespace_requests
+                    .iter()
+                    .any(|request| request.covers(pattern))
+                {
+                    return Err(CompositionError::NamespaceDelegationWidensAuthority {
+                        package: self.name.clone(),
+                        grantee: grantee.clone(),
+                        pattern: pattern.clone(),
+                    });
+                }
             }
         }
         Ok(())
@@ -942,6 +954,11 @@ impl GameProfileSpec {
                 });
             }
         }
+        validate_profile_namespace_grants(
+            &self.profile,
+            &self.roots,
+            &self.policy.namespace_grants,
+        )?;
         Ok(())
     }
 
@@ -1004,6 +1021,21 @@ impl GameProfileSpec {
         };
         composition.validate()?;
         Ok(composition)
+    }
+}
+
+fn validate_profile_namespace_grants(
+    profile: &StableId,
+    roots: &BTreeMap<PackageName, PackageRequest>,
+    grants: &BTreeMap<PackageName, BTreeSet<NamespaceGrantPattern>>,
+) -> Result<(), CompositionError> {
+    if let Some(grantee) = grants.keys().find(|grantee| !roots.contains_key(*grantee)) {
+        Err(CompositionError::ProfileNamespaceGrantToNonRoot {
+            profile: profile.clone(),
+            grantee: grantee.clone(),
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -1108,8 +1140,8 @@ fn validate_evaluation_policy(
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfilePolicy {
-    /// Registration namespace grants keyed by namespace.
-    pub namespace_grants: BTreeMap<String, BTreeSet<String>>,
+    /// Trusted registration grants keyed by the root package receiving authority.
+    pub namespace_grants: BTreeMap<PackageName, BTreeSet<NamespaceGrantPattern>>,
     /// Highest package trust accepted by this profile.
     pub maximum_trust: TrustClass,
     /// Whether trusted policy overlays may force a conflicting value.
@@ -1163,13 +1195,31 @@ pub enum CompositionError {
         /// Stable row key.
         row: String,
     },
-    /// Namespace map key and row value disagree.
-    #[error("namespace map key `{key}` does not match row value `{value}`")]
-    NamespaceKeyMismatch {
-        /// Map key.
-        key: String,
-        /// Namespace stored in the row.
-        value: String,
+    /// A profile attempts to grant registration authority to a non-root package.
+    #[error("profile {profile} grants namespace authority to non-root package {grantee}")]
+    ProfileNamespaceGrantToNonRoot {
+        /// Profile issuing the trusted grant.
+        profile: StableId,
+        /// Package that is not a root request.
+        grantee: PackageName,
+    },
+    /// A package attempts to delegate registration authority to a non-dependency.
+    #[error("package {package} delegates namespace authority to non-dependency {grantee}")]
+    NamespaceDelegationToNonDependency {
+        /// Package issuing the delegation.
+        package: PackageName,
+        /// Package that is not a direct manifest dependency.
+        grantee: PackageName,
+    },
+    /// A package delegation is not covered by the package's own authority request.
+    #[error("package {package} widens namespace authority for {grantee} with `{pattern}`")]
+    NamespaceDelegationWidensAuthority {
+        /// Package issuing the delegation.
+        package: PackageName,
+        /// Direct dependency receiving the invalid pattern.
+        grantee: PackageName,
+        /// Pattern outside the package's own requested authority.
+        pattern: NamespaceGrantPattern,
     },
     /// Realization map key and row identity disagree.
     #[error("realization map key {key} does not match row value {value}")]
@@ -1411,11 +1461,11 @@ mod tests {
 
     #[test]
     fn breaking_model_boundaries_use_coordinated_majors() {
-        assert_eq!(COMPOSITION_SCHEMA_VERSION, 2);
-        assert_eq!(PACKAGE_MODEL_VERSION, 2);
-        assert_eq!(GAME_PROFILE_MODEL_VERSION, 2);
-        assert_eq!(NICKEL_LIBRARY_CONTRACT_MAJOR, 2);
-        assert_eq!(R0_AUTHORING_CORPUS_MAJOR, 2);
+        assert_eq!(COMPOSITION_SCHEMA_VERSION, 3);
+        assert_eq!(PACKAGE_MODEL_VERSION, 3);
+        assert_eq!(GAME_PROFILE_MODEL_VERSION, 3);
+        assert_eq!(NICKEL_LIBRARY_CONTRACT_MAJOR, 3);
+        assert_eq!(R0_AUTHORING_CORPUS_MAJOR, 3);
     }
 
     #[test]
@@ -1450,11 +1500,13 @@ mod tests {
         };
         fields.remove("features");
         fields.remove("namespace_requests");
+        fields.remove("namespace_delegations");
 
         let decoded = serde_json::from_value::<PackageSpec>(value)
             .unwrap_or_else(|error| panic!("defaulted package did not deserialize: {error}"));
         assert!(decoded.features.is_empty());
         assert!(decoded.namespace_requests.is_empty());
+        assert!(decoded.namespace_delegations.is_empty());
     }
 
     #[test]
@@ -1618,8 +1670,10 @@ mod tests {
             .features
             .insert(root, BTreeSet::from(["worldgen".to_owned()]));
         profile.policy.namespace_grants.insert(
-            "terrenia".to_owned(),
-            BTreeSet::from(["block/**".to_owned()]),
+            profile.roots.keys().next().cloned().unwrap_or_else(|| {
+                panic!("profile fixture must retain its root namespace grantee")
+            }),
+            BTreeSet::from([grant_pattern("terrenia:block/**")]),
         );
         let normalized = profile
             .clone()
@@ -1798,7 +1852,8 @@ mod tests {
             realizations: BTreeMap::from([(realization_id, realization)]),
             domains: BTreeSet::from([PackageDomain::Authoritative]),
             parameters: BTreeMap::new(),
-            namespace_requests: BTreeMap::new(),
+            namespace_requests: BTreeSet::new(),
+            namespace_delegations: BTreeMap::new(),
             trust: TrustClass::DataOnly,
             registration: crate::RegistrationFragment::default(),
             provenance: provenance("latticeaxiom:source/terrenia-blocks", "package.ncl"),
@@ -1817,6 +1872,11 @@ mod tests {
             Vec::new(),
         )
         .unwrap_or_else(|error| panic!("fixture provenance is invalid: {error}"))
+    }
+
+    fn grant_pattern(value: &str) -> NamespaceGrantPattern {
+        NamespaceGrantPattern::new(value)
+            .unwrap_or_else(|error| panic!("fixture namespace pattern is invalid: {error}"))
     }
 
     fn stable_id(value: &str) -> StableId {

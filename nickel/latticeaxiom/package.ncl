@@ -43,10 +43,28 @@ let InterfaceRequirementContract = {
   optional | Bool,
 }
 in
-let ArtifactIntentContract = {
-  kind | std.string.Matches "^(source-build|local-prebuilt|data-root)$",
-  path | C.LexicalLogicalPath | optional,
-}
+let ArtifactIntentContract =
+  std.contract.Sequence [
+    {
+      kind | std.string.Matches "^(source-build|local-prebuilt|data-root)$",
+      path | C.LexicalLogicalPath | optional,
+    },
+    std.contract.from_validator (fun value =>
+      let has_path = std.array.elem "path" (std.record.fields value) in
+      if value.kind == "source-build" && has_path then
+        'Error {
+          message = "source-build artifacts must omit path",
+          notes = [],
+        }
+      else if value.kind != "source-build" && !has_path then
+        'Error {
+          message = "local-prebuilt and data-root artifacts require path",
+          notes = [],
+        }
+      else
+        'Ok
+    ),
+  ]
 in
 let RealizationSpecContract = {
   id | C.RealizationId,
@@ -61,11 +79,7 @@ let RealizationSpecContract = {
   registration_fragment | C.CanonicalHash,
 }
 in
-let NamespaceRequestContract = {
-  namespace | std.string.Matches "^%{common.patterns.realization_id}$",
-  patterns | Array String,
-}
-in
+
 let PackageSpecContract = {
   model_version
     | std.contract.Equal package_model_version
@@ -91,7 +105,12 @@ let PackageSpecContract = {
     | std.record.FieldsMatch common.patterns.realization_id,
   domains | Array C.PackageDomain,
   parameters | { _ : Dyn } | default = {},
-  namespace_requests | { _ : NamespaceRequestContract } | default = {},
+  namespace_requests | Array C.NamespaceGrantPattern | default = [],
+  namespace_delegations
+    | { _ : Array C.NamespaceGrantPattern }
+    | std.record.FieldsMatch common.patterns.package_name
+    | default
+    = {},
   trust | C.TrustClass,
   registration
     | registration_module.contracts.RegistrationFragment
@@ -135,7 +154,6 @@ in
     InterfaceRequirement = InterfaceRequirementContract,
     ArtifactIntent = ArtifactIntentContract,
     RealizationSpec = RealizationSpecContract,
-    NamespaceRequest = NamespaceRequestContract,
     PackageSpec = PackageSpecContract,
   },
   constructors = {
