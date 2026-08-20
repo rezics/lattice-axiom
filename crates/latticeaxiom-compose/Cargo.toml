@@ -6,6 +6,16 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "latticeaxiom-compose"
+path = "src/bin/latticeaxiom-compose.rs"
+required-features = ["nickel-evaluator"]
+
+[[bin]]
+name = "latticeaxiom-compose-worker"
+path = "src/bin/latticeaxiom-compose-worker.rs"
+required-features = ["nickel-evaluator"]
+
 [features]
 default = []
 nickel-evaluator = ["dep:malachite-base", "dep:nickel-lang-core"]

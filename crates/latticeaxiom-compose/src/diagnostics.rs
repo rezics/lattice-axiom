@@ -25,6 +25,11 @@ impl DiagnosticCode {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    #[cfg(feature = "nickel-evaluator")]
+    pub(crate) fn from_builtin(value: &'static str) -> Self {
+        Self(value.to_owned())
+    }
 }
 
 impl fmt::Display for DiagnosticCode {

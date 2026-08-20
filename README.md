@@ -28,15 +28,27 @@ The first R0 foundation is also present:
 - the versioned diagnostic policy has deterministic ordering, exact
   deduplication, and bounded truncation, while evaluation receipts distinguish
   hard, soft, and unsupported deadline, memory, and recursion enforcement.
+- a versioned single-request worker protocol, explicit-path supervisor, and
+  public controller CLI now provide bounded framing, monotonic timeout with
+  kill/reap, host/backend-bound receipts, atomic controller-fatal diagnostics,
+  typed response validation, and byte-identical embedded/CLI worker
+  conformance for import-free trusted fixtures.
 
 These crates deliberately contain no Bevy or process-local handles. The client
 scene is still a temporary bootstrap; it is not yet the package-driven D0 host.
-The in-process evaluator does not yet enforce the frozen wall-clock, memory, or
-recursion limits and is not an untrusted-code boundary. Production R0 receipts
-therefore fail closed until the source-table-only Nickel loader, worker
-supervisor, OS memory containment, and evaluator call-frame instrumentation are
-present. Relative imports in the current trusted adapter still use Nickel's
-ambient filesystem resolver.
+The in-process evaluator does not enforce the frozen wall-clock, memory, or
+recursion limits and is not an untrusted-code boundary. The controlled worker
+path enforces the complete-request monotonic deadline, but production R0
+receipts still fail closed until the source-table-only Nickel loader, OS memory
+containment, and evaluator call-frame instrumentation are present. Relative
+imports in the current trusted adapter still use Nickel's ambient filesystem
+resolver.
+
+The worker path therefore accepts only explicitly trusted, import-free Tool or
+test-fixture requests under a non-production policy. Any static import is
+preflighted from immutable snapshots and then rejected with a capability
+diagnostic before Nickel can fall back to the ambient filesystem. Production
+`r0@1` remains fail-closed.
 
 ## First run
 
