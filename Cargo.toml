@@ -6,6 +6,7 @@ members = [
   "crates/latticeaxiom-content",
   "crates/latticeaxiom-core",
   "crates/latticeaxiom-engine",
+  "crates/latticeaxiom-gameplay",
   "crates/latticeaxiom-registration",
   "crates/latticeaxiom-sdk",
   "crates/latticeaxiom-sdk-macros",
