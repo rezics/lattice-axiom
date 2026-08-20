@@ -17,6 +17,10 @@ decision:
 logical packages、profiles、Nickel contracts、测试 fixtures 与 generated artifacts
 分开组织，任何目录名称都不承担 package 或 stable registration 身份。
 
+生命周期阶段与兼容版本同样不构成目录身份。测试资料以被验证的职责组织，例如
+`fixtures/composition`，不得建立 `fixtures/r0`、`fixtures/r1` 等随阶段永久累积的路径。
+真正进入 wire／hash／policy contract 的 `R0`、`r0@1` 等版本坐标不受此目录规则影响。
+
 Terrenia 是第一个维度的 package closure。`terrenia` 是聚合 package，
 不是产品 package；它让 Lattice Axiom profile 得到一个完整可运行的维度，并在
 package graph 中选择方块、世界生成、玩法与表现实现。
@@ -36,6 +40,7 @@ package manager 自己的实现。
 | --- | --- | --- |
 | `crates/latticeaxiom-packages` | resolver／lock／build／registration kernel 的 Rust 实现 | 否 |
 | `nickel/latticeaxiom` | package／profile authoring contracts | 否 |
+| `fixtures/composition/*` | composition／authoring／worker conformance corpus；目录不携带阶段版本 | 否 |
 | `packages/**/package.ncl` 所在目录 | 随 demo 交付并由 package manager 管理的非重叠 package source root | 是 |
 | `fixtures/packages/*` | 只用于 conformance／failure tests 的 package source | 是，但不随正常 profile 交付 |
 | `profiles/*` | 选择 root packages、source universe 与 policy | 否 |
@@ -122,6 +127,12 @@ lattice-axiom-demo/
 │   ├── headless.ncl
 │   └── test.ncl
 ├── fixtures/
+│   ├── composition/
+│   │   ├── controlled/
+│   │   ├── negative/
+│   │   ├── positive/
+│   │   ├── support/
+│   │   └── typed-negative/
 │   ├── packages/
 │   │   ├── marker/
 │   │   └── dual-gameplay/
@@ -336,6 +347,7 @@ logical package 层。
 - generated directory 全部删除后可从 lock 与 source 确定性重建。
 - shell与world使用独立lock；shell无法读取chunk或绕过world preflight，world缺失时仍可进入settings／recovery UI。
 - 任一fixture package可注入setting／metric／inspect fragment，而不修改platform UI source。
+- fixture物理目录按被验证的职责命名；contract／corpus major升级不新建`fixtures/rN`层级。
 
 ## 相關文件
 

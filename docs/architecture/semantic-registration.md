@@ -305,7 +305,7 @@ builder，data package 与整合包将无法使用同一函数、默认与来源
 
 ### 標準庫表面
 
-概念 API（名称仍由 R0 prototype fixture 冻结）：
+概念 API（名称仍由首个 semantic-registration contract fixture 冻结）：
 
 ```nickel
 la.Registration.concat : Array RegistrationFragment -> Registration
