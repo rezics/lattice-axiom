@@ -11,15 +11,14 @@ use bevy::prelude::{Quat, Resource, Vec3};
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
 use latticeaxiom_core::{SchemaId, WorldId};
 use latticeaxiom_gameplay::{
-    BlockId, BlockPosition, CatalogLimits, CommandOutcomeV1, ContainerId, DimensionChunkKey,
-    DropEntityId, GameplayCatalog, GameplayCatalogSourceV1, GameplayReject, ItemStackV1, PlayerId,
-    RecipeId, SlotIndex, WorkstationId,
+    BlockId, BlockPosition, CommandOutcomeV1, ContainerId, DimensionChunkKey, DropEntityId,
+    GameplayCatalog, GameplayReject, ItemStackV1, PlayerId, RecipeId, SlotIndex, WorkstationId,
 };
 use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
     BlockEditAuthority, BlockEditRejectV1, BlockEditSuccessV1, BlockFaceV1,
     ClientTargetObservationV1, HeadlessTargetInspectV1, MAX_BLOCK_EDIT_REACH_M, TargetEyePoseV1,
-    TargetInspectRejectV1,
+    TargetInspectRejectV1, occupancy_line,
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
@@ -45,6 +44,7 @@ use latticeaxiom_worldgen::{
 
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
+    catalog::{authored_gameplay_catalog, host_worldgen_catalog},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
     worldgen::{compile_plan, host_hard_limits, spine_config},
@@ -176,6 +176,12 @@ impl WorkingSetDiagnosticsV1 {
             self.byte_budget
         )
     }
+
+    /// Occupancy fragment used by the F3 inspect overlay.
+    #[must_use]
+    pub fn inspect_occupancy_line(self) -> String {
+        occupancy_line(self.resident, self.active, self.in_flight, self.dirty)
+    }
 }
 
 fn count_u32(value: usize) -> u32 {
@@ -278,7 +284,7 @@ impl ProductionSpine {
         images: &LockVerifiedComposeImages,
         world: WorldId,
     ) -> Result<Self, ProductionHostError> {
-        Self::materialize_world_with_catalog(images, world, empty_gameplay_catalog()?)
+        Self::materialize_world_with_catalog(images, world, authored_gameplay_catalog()?)
     }
 
     /// Materializes one process-local world with a caller-supplied catalog.
@@ -295,15 +301,21 @@ impl ProductionSpine {
     ) -> Result<Self, ProductionHostError> {
         let config = spine_config();
         let chunk_edge = config.chunk_edge_voxels;
+        let worldgen = host_worldgen_catalog(images)?;
         let plan = compile_plan(
             images.product_lock_hash(),
             images.images().registration().image.image_hash,
+            &worldgen,
         )?;
-        let dimension = super::worldgen::dimension_id()?;
+        let dimension = worldgen.dimension.clone();
         let kernel = Arc::new(MemoryTransactionKernel::new());
-        let palette = catalog_palette()?;
-        let empty = HostVoxel { palette_index: 0 };
-        let placement_content = BlockId::parse("terrenia:block/dirt")?;
+        let palette = worldgen.palette.clone();
+        let empty = HostVoxel {
+            palette_index: palette_index(&palette, &worldgen.empty)
+                .ok_or(ProductionHostError::UnknownDraftBlock)?,
+        };
+        let placement_content = worldgen.placement_content.clone();
+        let probe_content = worldgen.probe_content.clone();
         let voxel_schema: SchemaId = VOXEL_SCHEMA.parse()?;
         let voxel_schema_version =
             PayloadSchemaVersion::new(1).map_err(ProductionHostError::from)?;
@@ -349,7 +361,7 @@ impl ProductionSpine {
             [0, 0],
             FixedTick::new(0),
         )?;
-        place_exposed_probe(&mut inner, &kernel)?;
+        place_exposed_probe(&mut inner, &kernel, &probe_content)?;
         inner.last_success = None;
         inner.spawn_center = find_spawn(&inner)?;
         inner.player_pose.translation = inner.spawn_center;
@@ -1331,15 +1343,21 @@ impl ProductionSpineInner {
         let block_id = self
             .block_id(hit.voxel)
             .ok_or(TargetInspectRejectV1::ContentUnavailable)?;
-        Ok(HeadlessTargetInspectV1 {
-            observation: ClientTargetObservationV1 {
+        let occupancy = WorkingSetDiagnosticsV1::from_runtime(self.runtime.diagnostics());
+        Ok(HeadlessTargetInspectV1::new(
+            ClientTargetObservationV1 {
                 position: hit.position,
                 face: hit.face,
                 chunk_revision: hit.revision,
                 distance_mm: quantized_distance_mm(hit.distance),
             },
             block_id,
-        })
+            chunk_of(hit.position, self.chunk_edge),
+            occupancy.resident(),
+            occupancy.active(),
+            occupancy.in_flight(),
+            occupancy.dirty(),
+        ))
     }
 
     fn selectable_hit(
@@ -1945,33 +1963,6 @@ fn decode_cells(bytes: &[u8], edge: u16) -> Result<Vec<HostVoxel>, ProductionHos
         .collect())
 }
 
-fn catalog_palette() -> Result<Vec<BlockId>, ProductionHostError> {
-    [
-        "air",
-        "grass",
-        "dirt",
-        "stone",
-        "obsidian",
-        "copper-block",
-        "clay",
-        "sand",
-        "red-sand",
-        "gravel",
-        "limestone",
-        "basalt",
-        "sandstone",
-        "red-sandstone",
-        "copper-ore",
-        "oak-log",
-        "oak-leaves",
-        "tall-grass",
-    ]
-    .into_iter()
-    .map(|path| BlockId::parse(&format!("terrenia:block/{path}")))
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(ProductionHostError::from)
-}
-
 fn palette_index(palette: &[BlockId], block: &BlockId) -> Option<u16> {
     palette
         .iter()
@@ -2007,8 +1998,9 @@ fn derived_requests() -> DerivedRequestSet {
 fn place_exposed_probe(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
+    probe_content: &BlockId,
 ) -> Result<(), ProductionHostError> {
-    let stone = palette_index(&inner.palette, &BlockId::parse("terrenia:block/stone")?)
+    let stone = palette_index(&inner.palette, probe_content)
         .ok_or(ProductionHostError::UnknownDraftBlock)?;
     let probe = BlockPosition {
         x: -1,
@@ -2205,13 +2197,6 @@ fn chunk_origin(coordinate: ChunkCoordinate, edge: f32) -> Vec3 {
 #[must_use]
 pub(super) const fn local_player_id() -> PlayerId {
     PlayerId::new(1)
-}
-
-fn empty_gameplay_catalog() -> Result<GameplayCatalog, ProductionHostError> {
-    Ok(GameplayCatalog::compile(
-        GameplayCatalogSourceV1::default(),
-        CatalogLimits::default(),
-    )?)
 }
 
 fn bind_gameplay_session(

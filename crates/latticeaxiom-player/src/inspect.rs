@@ -1,5 +1,5 @@
 use bevy::prelude::Message;
-use latticeaxiom_gameplay::{BlockId, PlayerId};
+use latticeaxiom_gameplay::{BlockId, ChunkCoordinate, PlayerId};
 use thiserror::Error;
 
 use crate::{ClientTargetObservationV1, TargetEyePoseV1};
@@ -8,12 +8,97 @@ use crate::{ClientTargetObservationV1, TargetEyePoseV1};
 ///
 /// The observation copies the DDA hit for presentation diagnostics. Authority
 /// never treats [`ClientTargetObservationV1`] as the selected target.
+/// Occupancy fields are working-set counts, not frame-time budgets.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HeadlessTargetInspectV1 {
     /// Voxel, face, revision, and quantized distance of the DDA hit.
     pub observation: ClientTargetObservationV1,
     /// Stable content of the targeted voxel.
     pub block_id: BlockId,
+    /// Presentation label derived from the targeted block path.
+    pub block_display_name: String,
+    /// Cubic chunk containing the targeted voxel.
+    pub chunk: ChunkCoordinate,
+    /// Resident committed projections at inspect time.
+    pub resident: u32,
+    /// Projections with both mesh and collider last-applied keys.
+    pub active: u32,
+    /// Combined mesh and collider jobs currently in flight.
+    pub in_flight: u32,
+    /// Resident projections pinned because they were edited.
+    pub dirty: u32,
+}
+
+impl HeadlessTargetInspectV1 {
+    /// Builds an inspect DTO from a DDA hit, chunk, and working-set occupancy.
+    #[must_use]
+    pub fn new(
+        observation: ClientTargetObservationV1,
+        block_id: BlockId,
+        chunk: ChunkCoordinate,
+        resident: u32,
+        active: u32,
+        in_flight: u32,
+        dirty: u32,
+    ) -> Self {
+        Self {
+            block_display_name: block_display_name(&block_id),
+            observation,
+            block_id,
+            chunk,
+            resident,
+            active,
+            in_flight,
+            dirty,
+        }
+    }
+
+    /// One-line occupancy fragment used by the F3 inspect overlay.
+    #[must_use]
+    pub fn occupancy_line(&self) -> String {
+        occupancy_line(self.resident, self.active, self.in_flight, self.dirty)
+    }
+
+    /// One-line chunk coordinate used by the F3 inspect overlay.
+    #[must_use]
+    pub fn chunk_line(&self) -> String {
+        chunk_line(self.chunk)
+    }
+}
+
+/// Formats working-set occupancy for the F3 inspect overlay.
+#[must_use]
+pub fn occupancy_line(resident: u32, active: u32, in_flight: u32, dirty: u32) -> String {
+    format!("r{resident} a{active} i{in_flight} d{dirty}")
+}
+
+/// Formats a cubic chunk coordinate for the F3 inspect overlay.
+#[must_use]
+pub fn chunk_line(chunk: ChunkCoordinate) -> String {
+    format!("chunk {},{},{}", chunk.x, chunk.y, chunk.z)
+}
+
+fn block_display_name(block_id: &BlockId) -> String {
+    let path = block_id
+        .as_str()
+        .rsplit_once('/')
+        .map_or(block_id.as_str(), |(_, path)| path);
+    let mut display = String::new();
+    for segment in path.split('-').filter(|part| !part.is_empty()) {
+        if !display.is_empty() {
+            display.push(' ');
+        }
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            display.extend(first.to_uppercase());
+            display.push_str(chars.as_str());
+        }
+    }
+    if display.is_empty() {
+        block_id.as_str().to_owned()
+    } else {
+        display
+    }
 }
 
 /// Request passed across the Lattice-owned authoritative inspect capability.
@@ -72,16 +157,16 @@ pub struct TargetInspectReceiptV1 {
 
 #[cfg(test)]
 mod tests {
-    use latticeaxiom_gameplay::{BlockPosition, ChunkRevision};
+    use latticeaxiom_gameplay::{BlockPosition, ChunkCoordinate, ChunkRevision};
 
     use super::*;
     use crate::BlockFaceV1;
 
     #[test]
-    fn headless_inspect_dto_carries_the_dda_observation_and_block_id() {
-        let block_id = BlockId::parse("terrenia:block/stone").expect("fixture block id");
-        let inspect = HeadlessTargetInspectV1 {
-            observation: ClientTargetObservationV1 {
+    fn headless_inspect_dto_carries_display_name_chunk_and_occupancy() {
+        let block_id = BlockId::parse("terrenia:block/oak-log").expect("fixture block id");
+        let inspect = HeadlessTargetInspectV1::new(
+            ClientTargetObservationV1 {
                 position: BlockPosition {
                     x: -1,
                     y: 30,
@@ -91,11 +176,24 @@ mod tests {
                 chunk_revision: ChunkRevision::new(1),
                 distance_mm: 1_250,
             },
-            block_id: block_id.clone(),
-        };
+            block_id.clone(),
+            ChunkCoordinate::new(-1, 3, -1),
+            12,
+            8,
+            1,
+            2,
+        );
 
         assert_eq!(inspect.block_id, block_id);
+        assert_eq!(inspect.block_display_name, "Oak Log");
         assert_eq!(inspect.observation.position.x, -1);
         assert_eq!(inspect.observation.distance_mm, 1_250);
+        assert_eq!(inspect.chunk, ChunkCoordinate::new(-1, 3, -1));
+        assert_eq!(inspect.resident, 12);
+        assert_eq!(inspect.active, 8);
+        assert_eq!(inspect.in_flight, 1);
+        assert_eq!(inspect.dirty, 2);
+        assert_eq!(inspect.chunk_line(), "chunk -1,3,-1");
+        assert_eq!(inspect.occupancy_line(), "r12 a8 i1 d2");
     }
 }

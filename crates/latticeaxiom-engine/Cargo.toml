@@ -48,6 +48,8 @@ latticeaxiom-storage = { path = "../latticeaxiom-storage" }
 latticeaxiom-voxel-mesh = { path = "../latticeaxiom-voxel-mesh" }
 latticeaxiom-voxel-runtime = { path = "../latticeaxiom-voxel-runtime" }
 latticeaxiom-worldgen = { path = "../latticeaxiom-worldgen" }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

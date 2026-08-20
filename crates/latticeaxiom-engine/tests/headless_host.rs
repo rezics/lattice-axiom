@@ -4,7 +4,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
-    num::{NonZeroU8, NonZeroU32},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -34,19 +33,14 @@ use latticeaxiom_core::{
 use latticeaxiom_engine::{
     ActionAxis2V1, AuthoritativeTransactionKernel, ChunkCoordinate, ChunkLifecycle,
     ChunkMeshCursor, ChunkPresentation, ContainerId, DropEntityId, EngineInstance,
-    EngineInstanceError, GameplayCatalog, GameplayReject, INVENTORY_SLOTS, ItemId, ItemStackV1,
-    LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1,
-    PlayerActionV1, PreparationError, ProductionInspectSurface, ProductionMemoryStart,
-    ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId, SlotIndex,
-    StructurallyValidatedComposeImages, VerifiedProductLockHash, WorkingSetDiagnosticsV1,
-    WorkstationId,
+    EngineInstanceError, GameplayReject, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId,
+    ItemStackV1, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1,
+    PlayerActionFrameV1, PlayerActionV1, PreparationError, ProductionInspectSurface,
+    ProductionMemoryStart, ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId,
+    SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
+    WorkingSetDiagnosticsV1, WorkstationId, authored_gameplay_catalog, empty_gameplay_catalog,
 };
-use latticeaxiom_gameplay::{
-    BlockDefinitionV1, BlockId, CatalogLimits, FrozenItemRoleBindingV1, GameplayCatalogSourceV1,
-    IngredientV1, ItemDefinitionV1, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId,
-    MiningRuleV1, RecipeDefinitionV1, RecipePatternV1, RoleOutputV1, ToolClassId, ToolDefinitionV1,
-    ToolRequirementV1, WorkstationDefinitionV1,
-};
+use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_launcher::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
 use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1};
 use latticeaxiom_registration::{
@@ -291,8 +285,12 @@ const SPINE_TIMESTEP: Duration = Duration::from_nanos(1_000_000_000 / 60);
 fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
     let boot = lock_boot_fixture();
     let images = boot.prepared();
-    let mut instance = EngineInstance::new_headless_host_from_lock(images, SPINE_TIMESTEP)
-        .expect("production spine starts from the reopened lock");
+    let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        images,
+        SPINE_TIMESTEP,
+        empty_gameplay_catalog().expect("empty gameplay catalog compiles"),
+    )
+    .expect("production spine starts from the reopened lock");
 
     let spine = instance
         .app()
@@ -463,8 +461,12 @@ fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
 fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     let boot = lock_boot_fixture();
     let images = boot.prepared();
-    let mut instance = EngineInstance::new_headless_host_from_lock(images, SPINE_TIMESTEP)
-        .expect("production spine starts from the reopened lock");
+    let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        images,
+        SPINE_TIMESTEP,
+        empty_gameplay_catalog().expect("empty gameplay catalog compiles"),
+    )
+    .expect("production spine starts from the reopened lock");
 
     let spine = instance
         .app()
@@ -507,6 +509,23 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
         "targeted block id must be a registered Terrenia block, got {}",
         current.block_id
     );
+    assert_inspect_dto_overlay_fields(&current, &spine);
+    let occupancy = instance
+        .app()
+        .world()
+        .get_resource::<WorkingSetDiagnosticsV1>()
+        .copied()
+        .expect("working-set diagnostics remain installed");
+    assert_eq!(
+        occupancy.inspect_occupancy_line(),
+        format!(
+            "r{} a{} i{} d{}",
+            occupancy.resident(),
+            occupancy.active(),
+            occupancy.in_flight(),
+            occupancy.dirty()
+        )
+    );
 
     instance
         .enqueue_headless_actions([inspect_frame(3)])
@@ -521,6 +540,9 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
         .unwrap_or_else(|reject| panic!("authoritative inspect must succeed, reject={reject:?}"));
     assert_eq!(inspected.block_id, current.block_id);
     assert_eq!(inspected.observation.position, current.observation.position);
+    assert_eq!(inspected.block_display_name, current.block_display_name);
+    assert_eq!(inspected.chunk, current.chunk);
+    assert_inspect_dto_overlay_fields(&inspected, &spine);
 
     instance
         .enqueue_headless_actions([break_frame(4)])
@@ -827,6 +849,41 @@ fn start_shell_graph() -> ClientShellGraph {
 
 fn semantic_id(value: &str) -> SemanticNodeId {
     SemanticNodeId::new(value).expect("semantic ID fixture is valid")
+}
+
+fn assert_inspect_dto_overlay_fields(inspect: &HeadlessTargetInspectV1, spine: &ProductionSpine) {
+    assert!(
+        !inspect.block_display_name.is_empty(),
+        "inspect DTO must carry a targeted block display name"
+    );
+    assert_ne!(inspect.block_display_name, inspect.block_id.as_str());
+    assert_eq!(
+        inspect.chunk,
+        spine
+            .chunk_of(inspect.observation.position)
+            .expect("targeted voxel maps to a host chunk")
+    );
+    assert!(
+        inspect.resident > 0,
+        "inspect DTO must snapshot resident occupancy"
+    );
+    assert!(
+        inspect.active <= inspect.resident,
+        "inspect DTO active {} exceeds resident {}",
+        inspect.active,
+        inspect.resident
+    );
+    assert!(
+        inspect.dirty >= 1,
+        "inspect DTO must snapshot dirty occupancy"
+    );
+    assert_eq!(
+        inspect.occupancy_line(),
+        format!(
+            "r{} a{} i{} d{}",
+            inspect.resident, inspect.active, inspect.in_flight, inspect.dirty
+        )
+    );
 }
 
 fn assert_working_set_diagnostics(
@@ -1545,17 +1602,10 @@ fn manifest_object_bytes(manifest: &RegistrationManifest) -> Vec<u8> {
     .expect("manifest semantic identity canonicalizes")
 }
 
-const TERRENIA_BLOCKS_JSON: &str =
-    include_str!("../../../packages/terrenia/blocks/data/authored-catalog-v1.json");
-const TERRENIA_RULES_JSON: &str =
-    include_str!("../../../packages/terrenia/gameplay/data/authored-rules-v1.json");
-const TERRENIA_TOOLS_JSON: &str =
-    include_str!("../../../packages/terrenia/tools/data/authored-tools-v1.json");
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
-    let catalog = package_gameplay_catalog();
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
     assert!(
         catalog
             .recipe(&parse_recipe("terrenia:recipe/oak-planks@1"))
@@ -1901,333 +1951,4 @@ fn parse_item(id: &str) -> ItemId {
 
 fn parse_recipe(id: &str) -> RecipeId {
     RecipeId::parse(id).unwrap_or_else(|error| panic!("{id} parses: {error}"))
-}
-
-fn package_gameplay_catalog() -> GameplayCatalog {
-    let blocks = serde_json::from_str(TERRENIA_BLOCKS_JSON).expect("blocks JSON");
-    let rules = serde_json::from_str(TERRENIA_RULES_JSON).expect("rules JSON");
-    let tools = serde_json::from_str(TERRENIA_TOOLS_JSON).expect("tools JSON");
-    GameplayCatalog::compile(
-        authored_catalog_source(&blocks, &rules, &tools),
-        CatalogLimits::default(),
-    )
-    .unwrap_or_else(|error| panic!("package gameplay catalog must compile: {error}"))
-}
-
-fn authored_catalog_source(
-    blocks: &Value,
-    rules: &Value,
-    tools: &Value,
-) -> GameplayCatalogSourceV1 {
-    let mut items = BTreeMap::new();
-    let mut item_roles = Vec::new();
-    let mut bindings = Vec::new();
-    let mut recipes = Vec::new();
-    let mut workstations = BTreeMap::new();
-    ingest_items(json_array(rules, "items"), &mut items);
-    ingest_items(json_array(tools, "items"), &mut items);
-    ingest_roles(
-        json_array(rules, "recipe_output_roles"),
-        &mut item_roles,
-        &mut bindings,
-    );
-    ingest_roles(
-        json_array(tools, "recipe_output_roles"),
-        &mut item_roles,
-        &mut bindings,
-    );
-    ingest_recipes(
-        json_array(rules, "recipes"),
-        &mut recipes,
-        &mut workstations,
-        false,
-    );
-    ingest_recipes(
-        json_array(tools, "recipes"),
-        &mut recipes,
-        &mut workstations,
-        true,
-    );
-    let drop_tables = drop_table_map(json_array(rules, "drop_tables"));
-    let tool_requirements = tool_requirement_map(json_array(rules, "tool_requirements"));
-    GameplayCatalogSourceV1 {
-        items: items.into_values().collect(),
-        blocks: compile_blocks(
-            json_array(blocks, "blocks"),
-            &drop_tables,
-            &tool_requirements,
-        ),
-        tools: compile_tools(json_array(tools, "tools")),
-        roles: item_roles,
-        bindings,
-        recipes,
-        workstations: workstations.into_values().collect(),
-        ..GameplayCatalogSourceV1::default()
-    }
-}
-
-fn ingest_items(rows: &[Value], items: &mut BTreeMap<String, ItemDefinitionV1>) {
-    for row in rows {
-        let id = json_text(row, "id");
-        let item = ItemId::parse(id).unwrap_or_else(|error| panic!("{id}: {error}"));
-        let durability = row
-            .get("durability")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .and_then(NonZeroU32::new);
-        let placement = row
-            .get("placement_block")
-            .and_then(Value::as_str)
-            .map(|value| BlockId::parse(value).expect("placement block parses"));
-        let stack = row
-            .get("maximum_stack")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .and_then(NonZeroU32::new)
-            .unwrap_or(NonZeroU32::MIN);
-        items.insert(
-            id.to_owned(),
-            ItemDefinitionV1 {
-                id: item,
-                stack_limit: if durability.is_some() {
-                    NonZeroU32::MIN
-                } else {
-                    stack
-                },
-                placement_block: placement,
-                durability,
-            },
-        );
-    }
-}
-
-fn ingest_roles(
-    rows: &[Value],
-    roles: &mut Vec<ItemRoleDefinitionV1>,
-    bindings: &mut Vec<FrozenItemRoleBindingV1>,
-) {
-    for row in rows {
-        let id = json_text(row, "id");
-        let item = json_text(row, "concrete_item");
-        let role = ItemRoleId::parse(id).unwrap_or_else(|error| panic!("{id}: {error}"));
-        let concrete = ItemId::parse(item).unwrap_or_else(|error| panic!("{item}: {error}"));
-        roles.push(ItemRoleDefinitionV1 {
-            id: role.clone(),
-            accepts: ItemPredicateV1::Exact(concrete.clone()),
-        });
-        bindings.push(FrozenItemRoleBindingV1 {
-            role,
-            item: concrete,
-        });
-    }
-}
-
-fn ingest_recipes(
-    rows: &[Value],
-    recipes: &mut Vec<RecipeDefinitionV1>,
-    workstations: &mut BTreeMap<String, WorkstationDefinitionV1>,
-    require_pattern: bool,
-) {
-    for row in rows {
-        let kind = json_text(row, "kind");
-        if kind == "tool-interaction" {
-            continue;
-        }
-        let id = json_text(row, "id");
-        let Some(pattern) = recipe_pattern(row, kind, require_pattern) else {
-            continue;
-        };
-        let recipe = RecipeId::parse(id).unwrap_or_else(|error| panic!("{id}: {error}"));
-        let workstation = row.get("workstation").and_then(Value::as_str).map(|value| {
-            let workstation =
-                WorkstationId::parse(value).unwrap_or_else(|error| panic!("{value}: {error}"));
-            workstations.insert(
-                value.to_owned(),
-                WorkstationDefinitionV1 {
-                    id: workstation.clone(),
-                },
-            );
-            workstation
-        });
-        recipes.push(RecipeDefinitionV1 {
-            id: recipe,
-            workstation,
-            pattern,
-            output: RoleOutputV1 {
-                role: ItemRoleId::parse(json_text(row, "output_role"))
-                    .expect("recipe output role parses"),
-                quantity: json_quantity(&row["output"], "quantity"),
-            },
-        });
-    }
-}
-
-fn recipe_pattern(row: &Value, kind: &str, require_pattern: bool) -> Option<RecipePatternV1> {
-    if kind == "shapeless" {
-        let ingredients = json_array(row, "inputs")
-            .iter()
-            .map(|input| IngredientV1 {
-                accepts: ItemPredicateV1::Exact(
-                    ItemId::parse(json_text(input, "item")).expect("ingredient item parses"),
-                ),
-                quantity: json_quantity(input, "quantity"),
-            })
-            .collect();
-        return Some(RecipePatternV1::Shapeless { ingredients });
-    }
-    if kind == "shaped" {
-        if let Some(pattern) = row.get("pattern").and_then(Value::as_array) {
-            let width = u8::try_from(row["width"].as_u64().unwrap_or(1)).ok()?;
-            let height = u8::try_from(row["height"].as_u64().unwrap_or(1)).ok()?;
-            let mut cells = Vec::new();
-            for line in pattern {
-                for cell in line.as_array().expect("pattern row") {
-                    cells.push(cell.as_str().map(|item| IngredientV1 {
-                        accepts: ItemPredicateV1::Exact(ItemId::parse(item).expect("cell item")),
-                        quantity: NonZeroU32::MIN,
-                    }));
-                }
-            }
-            return Some(RecipePatternV1::Shaped {
-                width: NonZeroU8::new(width)?,
-                height: NonZeroU8::new(height)?,
-                cells: cells.into_boxed_slice(),
-            });
-        }
-        if require_pattern {
-            return None;
-        }
-        let inputs = json_array(row, "inputs");
-        if json_text(row, "id").ends_with("/workbench@1")
-            && inputs.len() == 1
-            && json_quantity(&inputs[0], "quantity").get() == 4
-        {
-            let plank = ItemId::parse(json_text(&inputs[0], "item")).expect("workbench plank");
-            let cell = Some(IngredientV1 {
-                accepts: ItemPredicateV1::Exact(plank),
-                quantity: NonZeroU32::MIN,
-            });
-            return Some(RecipePatternV1::Shaped {
-                width: NonZeroU8::new(2)?,
-                height: NonZeroU8::new(2)?,
-                cells: vec![cell.clone(), cell.clone(), cell.clone(), cell].into_boxed_slice(),
-            });
-        }
-    }
-    None
-}
-
-fn compile_blocks(
-    rows: &[Value],
-    drop_tables: &BTreeMap<String, ItemStackV1>,
-    tool_requirements: &BTreeMap<String, Option<ToolRequirementV1>>,
-) -> Vec<BlockDefinitionV1> {
-    let mut blocks = Vec::new();
-    for row in rows {
-        let id = json_text(&row["definition"]["header"], "stable_id");
-        let hardness = row["physical"]["hardness_ticks"].as_u64().unwrap_or(0);
-        let Some(hardness) = u32::try_from(hardness).ok().and_then(NonZeroU32::new) else {
-            continue;
-        };
-        let drop_id = json_text(&row["definition"]["rules"], "drop_table");
-        let Some(drop) = drop_tables.get(drop_id).cloned() else {
-            continue;
-        };
-        let tool_id = json_text(row, "tool_requirement");
-        let tool = tool_requirements.get(tool_id).cloned().flatten();
-        blocks.push(BlockDefinitionV1 {
-            id: BlockId::parse(id).expect("block id parses"),
-            mining: MiningRuleV1 { hardness, tool },
-            drop,
-        });
-    }
-    blocks
-}
-
-fn compile_tools(rows: &[Value]) -> Vec<ToolDefinitionV1> {
-    rows.iter()
-        .map(|row| {
-            let item = json_text(row, "item");
-            let class = json_text(row, "class");
-            let durability = json_quantity(row, "durability");
-            let multiplier = row
-                .get("mining_multiplier")
-                .and_then(Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
-                .and_then(NonZeroU32::new)
-                .unwrap_or(NonZeroU32::MIN);
-            ToolDefinitionV1 {
-                item: ItemId::parse(item).expect("tool item parses"),
-                class: ToolClassId::parse(class).expect("tool class parses"),
-                tier: u8::try_from(row["tier"].as_u64().unwrap_or(1)).unwrap_or(1),
-                work_per_step: multiplier,
-                maximum_durability: durability,
-            }
-        })
-        .collect()
-}
-
-fn drop_table_map(rows: &[Value]) -> BTreeMap<String, ItemStackV1> {
-    let mut tables = BTreeMap::new();
-    for row in rows {
-        let outputs = json_array(row, "outputs");
-        if outputs.len() != 1 {
-            continue;
-        }
-        let item = json_text(&outputs[0], "item");
-        let quantity = json_quantity(&outputs[0], "quantity");
-        tables.insert(
-            json_text(row, "id").to_owned(),
-            ItemStackV1::plain(ItemId::parse(item).expect("drop item"), quantity.get())
-                .expect("drop stack"),
-        );
-    }
-    tables
-}
-
-fn tool_requirement_map(rows: &[Value]) -> BTreeMap<String, Option<ToolRequirementV1>> {
-    let mut requirements = BTreeMap::new();
-    for row in rows {
-        let class = json_text(row, "tool_class");
-        let minimum_tier = u8::try_from(row["minimum_tier"].as_u64().unwrap_or(0)).unwrap_or(0);
-        let required =
-            if matches!(class, "none" | "hand") || (class != "pickaxe" && minimum_tier == 0) {
-                None
-            } else {
-                let id = if class.contains(':') {
-                    class.to_owned()
-                } else {
-                    format!("latticeaxiom:tool-class/{class}@1")
-                };
-                Some(ToolRequirementV1 {
-                    class: ToolClassId::parse(&id).expect("required tool class"),
-                    minimum_tier,
-                })
-            };
-        requirements.insert(json_text(row, "id").to_owned(), required);
-    }
-    requirements
-}
-
-fn json_array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map_or(&[], Vec::as_slice)
-}
-
-fn json_text<'a>(value: &'a Value, key: &str) -> &'a str {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("{key} is text"))
-}
-
-fn json_quantity(value: &Value, key: &str) -> NonZeroU32 {
-    let quantity = value
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .unwrap_or(1);
-    NonZeroU32::new(quantity).expect("quantity is non-zero")
 }

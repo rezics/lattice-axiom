@@ -38,6 +38,7 @@ pub use host::{
     ProductionHostError, ProductionHostPlugin, ProductionInspectSurface, ProductionInventoryView,
     ProductionMemoryStart, ProductionMemoryStartError, ProductionPlayerPose, ProductionSpine,
     ProductionWorldList, ProductionWorldStorage, WorkingSetDiagnosticsV1,
+    authored_gameplay_catalog, empty_gameplay_catalog,
 };
 pub use instance::{
     EngineInstance, EngineInstanceError, EngineProfile, FixedTickCount, MAX_TICKS_PER_ADVANCE,

@@ -7,6 +7,7 @@
 //! a durable writer and must not be confused with the `playable` development
 //! fixture.
 
+mod catalog;
 #[cfg(feature = "client")]
 mod client;
 mod gameplay;
@@ -52,6 +53,7 @@ use latticeaxiom_voxel_runtime::RuntimeError;
 use latticeaxiom_worldgen::WorldgenError;
 use thiserror::Error;
 
+pub use catalog::{authored_gameplay_catalog, empty_gameplay_catalog};
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
 pub use spine::{ProductionSpine, ProductionWorldStorage, WorkingSetDiagnosticsV1};
 pub use start::{ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList};
@@ -204,7 +206,9 @@ impl Plugin for ProductionHostPlugin {
         .add_systems(
             FixedPostUpdate,
             (
-                hud::sync_production_inspect_hud.after(refresh_crosshair_target),
+                hud::sync_production_inspect_hud
+                    .after(refresh_crosshair_target)
+                    .after(sync_working_set_diagnostics),
                 hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
                 hud::sync_production_hotbar_hud.after(refresh_crosshair_target),
             ),
@@ -625,6 +629,31 @@ pub enum ProductionHostError {
     /// The gameplay kernel rejected a catalog, inventory, or command.
     #[error(transparent)]
     Gameplay(#[from] GameplayReject),
+    /// Authored package JSON could not be decoded.
+    #[error("authored catalog `{name}` is invalid JSON: {source}")]
+    InvalidAuthoredCatalog {
+        /// Catalog artifact name.
+        name: &'static str,
+        /// Decoder diagnostic.
+        source: serde_json::Error,
+    },
+    /// An authored catalog field was missing or the wrong JSON type.
+    #[error("authored catalog field `{field}` is invalid")]
+    InvalidCatalogField {
+        /// Field name.
+        field: &'static str,
+    },
+    /// A required catalog identity was absent.
+    #[error("authored catalog is missing {kind} `{id}`")]
+    MissingCatalogDefinition {
+        /// Catalog row kind.
+        kind: &'static str,
+        /// Missing identity or path.
+        id: String,
+    },
+    /// The registration image named more than one dimension.
+    #[error("registration image names more than one dimension")]
+    AmbiguousDimension,
 }
 
 impl fmt::Debug for ProductionSpine {

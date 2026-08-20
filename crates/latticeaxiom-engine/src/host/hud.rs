@@ -1,4 +1,4 @@
-//! Minimal production HUD: crosshair, inspect target, and working-set overlay.
+//! Minimal production HUD: crosshair, F3 inspect overlay, and working-set overlay.
 
 use bevy::{
     prelude::{
@@ -7,10 +7,11 @@ use bevy::{
     },
     ui::FocusPolicy,
 };
+use latticeaxiom_player::HeadlessTargetInspectV1;
 
 use super::spine::{ProductionSpine, WorkingSetDiagnosticsV1};
 
-/// Marker on the compact inspect readout node.
+/// Marker on the F3 inspect overlay node.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionInspectReadout;
 
@@ -97,13 +98,16 @@ fn spawn_crosshair(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) 
 fn spawn_inspect_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
     parent.spawn((
         ProductionInspectReadout,
-        Name::new(no_target_label()),
+        Name::new(inspect_overlay_label(
+            None,
+            WorkingSetDiagnosticsV1::default(),
+        )),
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(18.0),
-            height: Val::Px(24.0),
+            left: Val::Px(18.0),
             padding: UiRect::all(Val::Px(5.0)),
-            align_items: AlignItems::Center,
+            align_items: AlignItems::FlexStart,
             ..Node::default()
         },
         BackgroundColor(Color::srgba(0.03, 0.04, 0.035, 0.64)),
@@ -152,17 +156,30 @@ fn spawn_working_set_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComm
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_inspect_hud(
     spine: Res<'_, ProductionSpine>,
+    snapshot: Res<'_, WorkingSetDiagnosticsV1>,
     mut readout: Query<'_, '_, &mut Name, With<ProductionInspectReadout>>,
 ) {
     let Ok(mut name) = readout.single_mut() else {
         return;
     };
-    let label = spine.current_target().map_or_else(
-        || no_target_label().to_owned(),
-        |target| format!("Inspect {}", target.block_id),
-    );
+    let label = inspect_overlay_label(spine.current_target().as_ref(), *snapshot);
     if name.as_str() != label {
         *name = Name::new(label);
+    }
+}
+
+fn inspect_overlay_label(
+    target: Option<&HeadlessTargetInspectV1>,
+    snapshot: WorkingSetDiagnosticsV1,
+) -> String {
+    let occupancy = snapshot.inspect_occupancy_line();
+    match target {
+        Some(hit) => format!(
+            "{}\n{}\n{occupancy}",
+            hit.block_display_name,
+            hit.chunk_line()
+        ),
+        None => format!("{}\n{}\n{occupancy}", no_target_label(), no_chunk_label()),
     }
 }
 
@@ -182,6 +199,10 @@ pub(super) fn sync_production_working_set_hud(
 
 const fn no_target_label() -> &'static str {
     "Inspect — no target"
+}
+
+const fn no_chunk_label() -> &'static str {
+    "chunk —"
 }
 
 const fn empty_hotbar_label() -> &'static str {

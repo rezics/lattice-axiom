@@ -29,7 +29,7 @@ pub use edit::{
 };
 pub use inspect::{
     AuthoritativeTargetInspectRequestV1, HeadlessTargetInspectV1, TargetInspectReceiptV1,
-    TargetInspectRejectV1,
+    TargetInspectRejectV1, chunk_line, occupancy_line,
 };
 #[cfg(feature = "client-input")]
 pub use leafwing_adapter::{
