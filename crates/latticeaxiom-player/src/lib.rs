@@ -33,7 +33,8 @@ pub use inspect::{
 };
 #[cfg(feature = "client-input")]
 pub use leafwing_adapter::{
-    LeafwingInputAdapterPlugin, LeafwingPlayerAction, default_leafwing_input_map,
+    LeafwingInputAdapterPlugin, LeafwingPlayerAction, LocalPlayerClientInputBundle,
+    default_leafwing_input_map,
 };
 pub use movement::{
     CurrentPlayerActionFrame, D2Player, D2PlayerBundle, DetachedSpectator, LocalPlayerInput,

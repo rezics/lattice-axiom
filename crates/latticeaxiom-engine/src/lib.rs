@@ -14,8 +14,12 @@
 //! [`LockVerifiedComposeImages`], stores voxels through
 //! [`latticeaxiom_storage::MemoryTransactionKernel`], streams a bounded chunk
 //! working set around the local player, and presents chunk meshes rather than
-//! one entity per block. The `playable` module remains a non-production fixture.
+//! one entity per block. The default client binary boots that host from a
+//! reopened lock. The `playable` module remains a non-production fixture
+//! reachable only through the `latticeaxiom-playable-fixture` extra binary.
 
+#[cfg(feature = "client")]
+mod client;
 mod host;
 mod instance;
 #[cfg(feature = "client")]
@@ -24,6 +28,11 @@ mod prepared;
 #[cfg(feature = "client")]
 mod presentation_fixture;
 
+#[cfg(feature = "client")]
+pub use client::{
+    ProductionClientError, load_lock_verified_images, run_client_host_from_lock,
+    run_client_host_from_workspace,
+};
 pub use host::{
     ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ProductionHostError, ProductionHostPlugin,
     ProductionInspectSurface, ProductionPlayerPose, ProductionSpine, ProductionWorldStorage,

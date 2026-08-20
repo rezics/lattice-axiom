@@ -2,7 +2,7 @@ use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
     input::{gamepad::GamepadButton, keyboard::KeyCode, mouse::MouseButton},
-    prelude::{Query, Reflect, ResMut, With},
+    prelude::{Bundle, Query, Reflect, ResMut, With},
 };
 use leafwing_input_manager::{
     Actionlike,
@@ -87,6 +87,22 @@ pub fn default_leafwing_input_map() -> InputMap<LeafwingPlayerAction> {
 
 #[derive(Debug, Default, bevy::prelude::Resource)]
 struct LeafwingInputGeneration(u64);
+
+/// Leafwing action state and default map for the local production client player.
+#[derive(Bundle, Debug)]
+pub struct LocalPlayerClientInputBundle {
+    action_state: ActionState<LeafwingPlayerAction>,
+    input_map: InputMap<LeafwingPlayerAction>,
+}
+
+impl Default for LocalPlayerClientInputBundle {
+    fn default() -> Self {
+        Self {
+            action_state: ActionState::default(),
+            input_map: default_leafwing_input_map(),
+        }
+    }
+}
 
 /// Static client adapter from Leafwing 0.21 state to Lattice action frames.
 #[derive(Clone, Copy, Debug, Default)]

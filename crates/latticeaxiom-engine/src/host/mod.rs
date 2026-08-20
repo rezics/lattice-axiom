@@ -8,6 +8,8 @@
 //! fixture.
 
 #[cfg(feature = "client")]
+mod client;
+#[cfg(feature = "client")]
 mod hud;
 mod spine;
 mod stream;
@@ -16,8 +18,6 @@ mod worldgen;
 use std::fmt;
 
 use avian3d::PhysicsPlugins;
-#[cfg(feature = "client")]
-use bevy::app::Startup;
 use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
@@ -26,6 +26,11 @@ use bevy::{
         Transform, With, Without,
     },
     transform::TransformPlugin,
+};
+#[cfg(feature = "client")]
+use bevy::{
+    app::{Startup, Update},
+    prelude::{ClearColor, Color},
 };
 use latticeaxiom_compose::LockedGameGraph;
 use latticeaxiom_core::IdentifierError;
@@ -36,6 +41,8 @@ use latticeaxiom_player::{
     LocalPlayerInput, PlayerActionV1, PlayerFixedTick, PlayerMovementProfileV1, PlayerPlugin,
     PlayerSystemSet, PlayerViewV1, TargetEyePoseV1, TargetInspectReceiptV1,
 };
+#[cfg(feature = "client")]
+use latticeaxiom_player::{LeafwingInputAdapterPlugin, LocalPlayerClientInputBundle};
 use latticeaxiom_registration::CompiledRegistration;
 use latticeaxiom_storage::{ChunkCoordinate, ChunkRevision, StorageError};
 use latticeaxiom_voxel_mesh::{MeshError, MeshReceipt};
@@ -179,14 +186,24 @@ impl Plugin for ProductionHostPlugin {
             ),
         );
         #[cfg(feature = "client")]
-        app.add_systems(Startup, spawn_production_hud_if_client)
-            .add_systems(
-                FixedPostUpdate,
-                (
-                    hud::sync_production_inspect_hud.after(refresh_crosshair_target),
-                    hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
-                ),
-            );
+        app.add_systems(
+            Startup,
+            (
+                spawn_production_hud_if_client,
+                client::spawn_production_client_view,
+            ),
+        )
+        .add_systems(
+            Update,
+            (client::sync_production_camera, client::exit_on_pause),
+        )
+        .add_systems(
+            FixedPostUpdate,
+            (
+                hud::sync_production_inspect_hud.after(refresh_crosshair_target),
+                hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
+            ),
+        );
     }
 
     fn finish(&self, app: &mut App) {
@@ -286,6 +303,11 @@ fn install_production_host(
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(ProductionHostPlugin);
+    #[cfg(feature = "client")]
+    if !include_transform {
+        app.insert_resource(ClearColor(Color::srgb(0.48, 0.70, 0.91)))
+            .add_plugins(LeafwingInputAdapterPlugin);
+    }
 }
 
 fn spawn_host_entities(world: &mut bevy::prelude::World) {
@@ -293,6 +315,18 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
         return;
     };
     let spawn = spine.spawn_center();
+    #[cfg(feature = "client")]
+    {
+        let client = world.get_resource::<EngineProfile>() == Some(&EngineProfile::Client);
+        let mut player = world.spawn(D2PlayerBundle::new(
+            spine::local_player_id(),
+            Transform::from_translation(spawn),
+        ));
+        if client {
+            player.insert(LocalPlayerClientInputBundle::default());
+        }
+    }
+    #[cfg(not(feature = "client"))]
     world.spawn(D2PlayerBundle::new(
         spine::local_player_id(),
         Transform::from_translation(spawn),

@@ -4040,6 +4040,7 @@ dependencies = [
  "latticeaxiom-core",
  "latticeaxiom-gameplay",
  "latticeaxiom-launcher",
+ "latticeaxiom-packages",
  "latticeaxiom-player",
  "latticeaxiom-registration",
  "latticeaxiom-storage",

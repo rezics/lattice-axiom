@@ -141,6 +141,9 @@ impl<'de> Deserialize<'de> for LaunchAttempt {
 pub struct ProcessEpoch(u64);
 
 impl ProcessEpoch {
+    /// First valid process epoch for a directly launched client.
+    pub const FIRST: Self = Self(1);
+
     /// Creates a non-zero process epoch supplied by the external launcher.
     ///
     /// # Errors

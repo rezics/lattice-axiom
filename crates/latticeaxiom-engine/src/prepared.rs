@@ -7,15 +7,20 @@ use std::{
 
 use bevy::prelude::Resource;
 use latticeaxiom_compose::{
-    GraphHashError, LOCK_SCHEMA_VERSION, LockedGameGraph, RealizationKind, RuntimeBinding,
-    RuntimeImage, TargetRealizationLockV1,
+    GraphHashError, LOCK_SCHEMA_VERSION, LockV1, LockedDependency, LockedGameGraph, LockedPackage,
+    ManifestProducer, ObservabilityCatalog, RealizationKind, RegistrationImage, ResolutionStep,
+    RuntimeBinding, RuntimeImage, SemanticCatalog, SettingsCatalog, TargetRealizationLockV1,
 };
 use latticeaxiom_core::{
     CanonicalHash, CanonicalJsonError, CapabilityId, PackageName, PackageVersion, SchemaId,
     StableId, TargetTriple, canonical_json_hash,
 };
 use latticeaxiom_launcher::ReopenedFinalLockV1;
-use latticeaxiom_registration::{CallbackMapReceipt, CompiledRegistration, ReceiptValidationError};
+use latticeaxiom_registration::{
+    CallbackMapReceipt, CompiledRegistration, CompiledSemanticImage, PackageProvenanceReceipt,
+    REGISTRATION_COMPILE_RECEIPT_SCHEMA_VERSION, ReceiptValidationError, RegistrationImageReceipt,
+    RegistrationProvenanceReceipt, SemanticResolutionReceipt,
+};
 use thiserror::Error;
 
 /// Exact lock, compiled registration, and runtime image accepted by the host gate.
@@ -196,6 +201,241 @@ impl LockVerifiedComposeImages {
     pub fn into_images(self) -> StructurallyValidatedComposeImages {
         self.images
     }
+
+    /// Reconstructs compose images from a reopened final product lock.
+    ///
+    /// The locked graph is rebuilt from portable resolution and the selected
+    /// target realization. Placeholder compiler receipts are bound when the
+    /// lock sealed an empty registration image. Native modules are not mapped
+    /// and no world writer is opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PreparationError`] when the selected target is absent, a
+    /// realization package is missing, reconstructed hashes do not match the
+    /// lock, or structural image validation fails.
+    pub fn from_reopened_product_lock(
+        lock: &ReopenedFinalLockV1,
+        target: &TargetTriple,
+    ) -> Result<Self, PreparationError> {
+        let graph = reconstruct_locked_graph(lock.product_lock(), target)?;
+        let registration = placeholder_compiled_registration(&graph)?;
+        Self::from_reopened_lock(lock, target, graph, registration)
+    }
+}
+
+fn reconstruct_locked_graph(
+    lock: &LockV1,
+    target: &TargetTriple,
+) -> Result<LockedGameGraph, PreparationError> {
+    let Some(realization) = lock.realizations.get(target) else {
+        return Err(PreparationError::MissingTargetRealization {
+            target: target.clone(),
+        });
+    };
+    let mut packages = BTreeMap::new();
+    for (name, portable) in &lock.portable_resolution.packages {
+        let Some(realized) = realization.packages.get(name) else {
+            return Err(PreparationError::MissingRealizationPackage {
+                package: name.clone(),
+            });
+        };
+        let mut dependencies = BTreeMap::new();
+        if let Some(aliases) = lock.portable_resolution.alias_edges.get(name) {
+            for edge in aliases.values() {
+                dependencies.insert(
+                    edge.package.clone(),
+                    LockedDependency {
+                        version: edge.version.clone(),
+                        features: edge.features.clone(),
+                    },
+                );
+            }
+        }
+        packages.insert(
+            name.clone(),
+            LockedPackage {
+                name: name.clone(),
+                version: portable.version.clone(),
+                source_id: portable.source_id.clone(),
+                source_hash: portable.source_digest,
+                provenance_hash: portable.provenance_hash,
+                realization: realized.kind,
+                realization_id: realized.realization_id.clone(),
+                manifest_hash: portable.manifest_digest,
+                artifact_hash: realized.artifact_digest,
+                interfaces: BTreeMap::new(),
+                engine_build_id: realized.engine_build_id,
+                domains: portable.domains.clone(),
+                dependencies,
+                schemas: BTreeSet::new(),
+                source_path: String::new(),
+            },
+        );
+    }
+
+    let mut explanation = Vec::new();
+    for package in &lock.portable_resolution.roots {
+        explanation.push(ResolutionStep::Root {
+            package: package.clone(),
+        });
+    }
+    for name in lock.portable_resolution.packages.keys() {
+        if let Some(aliases) = lock.portable_resolution.alias_edges.get(name) {
+            for edge in aliases.values() {
+                explanation.push(ResolutionStep::Dependency {
+                    required_by: name.clone(),
+                    package: edge.package.clone(),
+                });
+            }
+        }
+    }
+    for (capability, providers) in &lock.portable_resolution.capabilities {
+        for provider in providers {
+            explanation.push(ResolutionStep::Capability {
+                capability: capability.clone(),
+                provider: provider.clone(),
+            });
+        }
+    }
+
+    let mut graph = LockedGameGraph {
+        schema_version: LOCK_SCHEMA_VERSION,
+        composition_hash: lock.composition.composition_hash,
+        composition_provenance_hash: lock.composition.composition_provenance_hash,
+        evaluation_policy: lock.portable_resolution.evaluation_policy.clone(),
+        evaluation_limits: lock.portable_resolution.evaluation_limits,
+        roots: lock.portable_resolution.roots.clone(),
+        packages,
+        capability_providers: lock.portable_resolution.capabilities.clone(),
+        namespace_grants: BTreeSet::new(),
+        explanation,
+        graph_hash: CanonicalHash::digest(b"unverified-graph"),
+        lock_hash: CanonicalHash::digest(b"unverified-lock"),
+    };
+    graph.graph_hash = graph.recompute_graph_hash()?;
+    graph.lock_hash = graph.recompute_lock_hash()?;
+    graph.verify_hashes().map_err(PreparationError::GraphHash)?;
+    Ok(graph)
+}
+
+#[allow(clippy::too_many_lines)] // Receipt construction fills every compiler-owned table.
+fn placeholder_compiled_registration(
+    graph: &LockedGameGraph,
+) -> Result<CompiledRegistration, PreparationError> {
+    let mut image = RegistrationImage {
+        graph_hash: graph.graph_hash,
+        numeric_ids: BTreeMap::new(),
+        owners: BTreeMap::new(),
+        schema_owners: BTreeMap::new(),
+        semantics: SemanticCatalog {
+            tags: BTreeMap::new(),
+            maps: BTreeMap::new(),
+            role_bindings: BTreeMap::new(),
+            active_bundles: BTreeSet::new(),
+        },
+        settings: SettingsCatalog {
+            runtime: BTreeMap::new(),
+            composition: BTreeMap::new(),
+        },
+        observability: ObservabilityCatalog {
+            info_items: BTreeMap::new(),
+            metrics: BTreeMap::new(),
+            inspect: BTreeMap::new(),
+            visualizers: BTreeMap::new(),
+        },
+        schedule: Vec::new(),
+        authoritative: BTreeSet::new(),
+        image_hash: CanonicalHash::digest(b"unverified-image"),
+    };
+    image.image_hash = image.recompute_image_hash()?;
+    let registration_semantic_hash = canonical_json_hash(&image.semantics)?;
+
+    let mut semantic_image = CompiledSemanticImage {
+        tags: BTreeMap::new(),
+        maps: BTreeMap::new(),
+        state_properties: BTreeMap::new(),
+        affordances: BTreeMap::new(),
+        roles: BTreeMap::new(),
+        role_bindings: BTreeMap::new(),
+        semantic_hash: CanonicalHash::digest(b"unsealed-semantic-image"),
+    };
+    semantic_image.semantic_hash = semantic_image.recompute_hash()?;
+
+    let mut semantic_receipt = SemanticResolutionReceipt {
+        schema_version: REGISTRATION_COMPILE_RECEIPT_SCHEMA_VERSION,
+        graph_hash: graph.graph_hash,
+        registration_semantic_hash,
+        semantic_image_hash: semantic_image.semantic_hash,
+        active_bundles: BTreeSet::new(),
+        role_bindings: BTreeMap::new(),
+        explanation: Vec::new(),
+        receipt_hash: CanonicalHash::digest(b"unsealed-semantic-receipt"),
+    };
+    semantic_receipt.receipt_hash = semantic_receipt.recompute_hash()?;
+
+    let mut image_receipt = RegistrationImageReceipt {
+        schema_version: REGISTRATION_COMPILE_RECEIPT_SCHEMA_VERSION,
+        graph_hash: graph.graph_hash,
+        registration_semantic_hash,
+        image_hash: image.image_hash,
+        numeric_ids: BTreeMap::new(),
+        schedule: Vec::new(),
+        receipt_hash: CanonicalHash::digest(b"unsealed-image-receipt"),
+    };
+    image_receipt.receipt_hash = image_receipt.recompute_hash()?;
+
+    let mut callback_receipt = CallbackMapReceipt {
+        schema_version: REGISTRATION_COMPILE_RECEIPT_SCHEMA_VERSION,
+        graph_hash: graph.graph_hash,
+        registration_semantic_hash,
+        callbacks: BTreeMap::new(),
+        systems: BTreeMap::new(),
+        callback_map_hash: CanonicalHash::digest(b"unsealed-callback-receipt"),
+    };
+    callback_receipt.callback_map_hash = callback_receipt.recompute_hash()?;
+
+    let producer_version = "0.0.0"
+        .parse()
+        .unwrap_or_else(|error| panic!("0.0.0 is a valid package version: {error}"));
+    let producer = ManifestProducer {
+        tool: "latticeaxiom".to_owned(),
+        version: producer_version,
+        input_hash: CanonicalHash::digest(b"placeholder-registration"),
+    };
+    let mut packages = BTreeMap::new();
+    for (name, locked) in &graph.packages {
+        packages.insert(
+            name.clone(),
+            PackageProvenanceReceipt {
+                manifest_semantic_hash: locked.manifest_hash,
+                manifest_provenance_hash: locked.provenance_hash,
+                producer: producer.clone(),
+            },
+        );
+    }
+    let mut provenance_receipt = RegistrationProvenanceReceipt {
+        schema_version: REGISTRATION_COMPILE_RECEIPT_SCHEMA_VERSION,
+        graph_lock_hash: graph.lock_hash,
+        composition_provenance_hash: graph.composition_provenance_hash,
+        registration_semantic_hash,
+        packages,
+        provenance_hash: CanonicalHash::digest(b"unsealed-provenance-receipt"),
+    };
+    provenance_receipt.provenance_hash = provenance_receipt.recompute_hash()?;
+
+    let compiled = CompiledRegistration {
+        image,
+        semantic_image,
+        semantic_receipt,
+        image_receipt,
+        callback_receipt,
+        provenance_receipt,
+    };
+    compiled
+        .verify()
+        .map_err(PreparationError::CompiledRegistration)?;
+    Ok(compiled)
 }
 
 fn bind_graph_to_lock(
@@ -763,6 +1003,12 @@ pub enum PreparationError {
     MissingTargetRealization {
         /// Requested build target.
         target: TargetTriple,
+    },
+    /// The selected target realization is missing a portable-resolution package.
+    #[error("reopened product lock realization is missing package {package}")]
+    MissingRealizationPackage {
+        /// Package present in portable resolution but absent from the target.
+        package: PackageName,
     },
     /// The compiled registration image hash does not match the reopened lock.
     #[error("registration image hash {registration} does not match reopened product lock {locked}")]

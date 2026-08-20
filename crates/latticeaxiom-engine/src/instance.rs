@@ -261,6 +261,15 @@ impl EngineInstance {
         self.fixed_timestep
     }
 
+    /// Hands the instance to Bevy's client event-loop runner.
+    ///
+    /// Construction already finished and cleaned up plugins. The winit runner
+    /// observes [`bevy::app::PluginsState::Cleaned`] and does not finish again.
+    #[cfg(feature = "client")]
+    pub fn run(mut self) -> bevy::app::AppExit {
+        self.app.run()
+    }
+
     /// Returns the number of completed fixed-schedule iterations.
     #[must_use]
     pub fn completed_fixed_ticks(&self) -> u64 {

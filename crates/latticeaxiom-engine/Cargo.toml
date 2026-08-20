@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 repository.workspace = true
+default-run = "latticeaxiom-engine"
 
 [features]
 # Dynamic linking makes iterative Bevy builds substantially faster. Disable
@@ -18,12 +19,18 @@ client = [
   "bevy/keyboard",
   "bevy/mouse",
   "bevy/ui",
+  "latticeaxiom-player/client-input",
 ]
 development = ["client", "bevy/dynamic_linking"]
 
 [[bin]]
 name = "latticeaxiom-engine"
 path = "src/main.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "latticeaxiom-playable-fixture"
+path = "src/bin/playable_fixture.rs"
 required-features = ["client"]
 
 [dependencies]
@@ -33,6 +40,7 @@ latticeaxiom-compose = { path = "../latticeaxiom-compose" }
 latticeaxiom-core = { path = "../latticeaxiom-core" }
 latticeaxiom-gameplay = { path = "../latticeaxiom-gameplay" }
 latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
+latticeaxiom-packages = { path = "../latticeaxiom-packages" }
 latticeaxiom-player = { path = "../latticeaxiom-player" }
 latticeaxiom-registration = { path = "../latticeaxiom-registration" }
 latticeaxiom-storage = { path = "../latticeaxiom-storage" }

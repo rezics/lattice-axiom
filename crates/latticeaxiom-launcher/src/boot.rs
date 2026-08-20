@@ -31,6 +31,31 @@ pub struct HostBuildReceipts {
     pub engine_build_id: Option<CanonicalHash>,
 }
 
+impl HostBuildReceipts {
+    /// Returns the toolchain and engine-build identity sealed by a product lock.
+    ///
+    /// Frozen reopen uses this so the client does not reconstruct host identity
+    /// from ambient compiler state. Registration and runtime fingerprints are
+    /// still rebound independently after this token is produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductLockBootError::ProductLock`] when the lock has no
+    /// target realization.
+    pub fn sealed_by_lock(lock: &LockV1) -> Result<Self, ProductLockBootError> {
+        let Some(realization) = lock.realizations.values().next() else {
+            return Err(ProductLockError::InvalidStructure {
+                reason: "reopened product lock has no target realization".to_owned(),
+            }
+            .into());
+        };
+        Ok(Self {
+            toolchain: lock.producer.toolchain,
+            engine_build_id: realization.engine_build_id,
+        })
+    }
+}
+
 /// Failure to reopen or freeze-verify a final product lock for launch.
 #[derive(Debug, Error)]
 pub enum ProductLockBootError {
