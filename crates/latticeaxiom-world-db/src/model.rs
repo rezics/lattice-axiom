@@ -965,6 +965,38 @@ pub struct ActivationPermitV1 {
     pub(crate) projection_hash: DigestV1,
 }
 
+impl ActivationPermitV1 {
+    /// Returns the world named by this permit.
+    #[must_use]
+    pub const fn world(&self) -> WorldId {
+        self.world
+    }
+
+    /// Returns the immutable physical store-generation identity.
+    #[must_use]
+    pub const fn store_id(&self) -> &StoreId {
+        &self.store_id
+    }
+
+    /// Returns the metadata epoch captured by preflight.
+    #[must_use]
+    pub const fn metadata_epoch(&self) -> MetadataEpoch {
+        self.metadata_epoch
+    }
+
+    /// Returns the authoritative metadata hash captured by preflight.
+    #[must_use]
+    pub const fn metadata_hash(&self) -> DigestV1 {
+        self.metadata_hash
+    }
+
+    /// Returns the header projection hash captured by preflight.
+    #[must_use]
+    pub const fn projection_hash(&self) -> DigestV1 {
+        self.projection_hash
+    }
+}
+
 /// Catalog acceptance and storage evidence consumed together at activation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WriterActivationV1 {
@@ -974,6 +1006,9 @@ pub struct WriterActivationV1 {
 
 impl WriterActivationV1 {
     /// Binds an explicitly accepted writable catalog plan to storage evidence.
+    ///
+    /// The storage permit is not writer authority by itself. Activation still
+    /// requires a sealed receipt on the accepted plan.
     ///
     /// # Errors
     ///
@@ -994,11 +1029,24 @@ impl WriterActivationV1 {
         })
     }
 
-    pub(crate) const fn permit(&self) -> &ActivationPermitV1 {
+    /// Returns the world named by the bound storage permit.
+    #[must_use]
+    pub const fn world(&self) -> WorldId {
+        self.permit.world
+    }
+
+    /// Returns the storage permit bound to this activation.
+    ///
+    /// The permit is not writer authority without the accepted plan's sealed
+    /// receipt.
+    #[must_use]
+    pub const fn permit(&self) -> &ActivationPermitV1 {
         &self.permit
     }
 
-    pub(crate) const fn accepted_plan(&self) -> &AcceptedWorldOpenPlan {
+    /// Returns the accepted catalog plan bound to this activation.
+    #[must_use]
+    pub const fn accepted_plan(&self) -> &AcceptedWorldOpenPlan {
         &self.accepted_plan
     }
 }

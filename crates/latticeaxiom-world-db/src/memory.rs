@@ -2103,6 +2103,104 @@ mod tests {
     }
 
     #[test]
+    fn sealed_writer_missing_receipt_fails_closed() {
+        let (storage, _, world) = fixture_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+
+        assert!(matches!(
+            storage.activate_writer(fixture_activation(world, permit)),
+            Err(WorldDbError::ActivationEvidenceUnavailable { world: found }) if found == world
+        ));
+    }
+
+    #[test]
+    fn sealed_writer_stale_receipt_fails_closed() {
+        let (storage, _, world) = fixture_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let activation = fixture_sealed_activation(world, permit.clone());
+        storage
+            .activate_writer(activation.clone())
+            .expect("first sealed writer activation succeeds")
+            .close()
+            .expect("sealed writer closes");
+
+        assert!(matches!(
+            storage.activate_writer(activation),
+            Err(WorldDbError::ActivationPermitStale { world: found, .. }) if found == world
+        ));
+
+        let reopened = storage
+            .preflight(world)
+            .expect("closed writer leaves preflight evidence")
+            .activation_permit()
+            .expect("ready store retains activation evidence")
+            .clone();
+        let stale_receipt = fixture_activation_with_binding(
+            world,
+            reopened,
+            Some(SealedActivationBindingV1 {
+                store_id: permit.store_id.clone(),
+                metadata_epoch: permit.metadata_epoch.get(),
+                metadata_hash: CanonicalHash::from_bytes(*permit.metadata_hash.as_bytes()),
+                projection_hash: CanonicalHash::from_bytes(*permit.projection_hash.as_bytes()),
+                plan_generation: permit.metadata_epoch.get(),
+            }),
+        );
+        assert!(
+            matches!(
+                storage.activate_writer(stale_receipt),
+                Err(WorldDbError::ActivationEvidenceUnavailable { world: found })
+                    | Err(WorldDbError::ActivationPermitInvalid { world: found, .. })
+                    | Err(WorldDbError::ActivationPermitHashMismatch { world: found, .. })
+                    | Err(WorldDbError::ActivationPermitStale { world: found, .. })
+                    if found == world
+            ),
+            "a sealed receipt from a prior epoch must fail closed against a fresh permit"
+        );
+    }
+
+    #[test]
+    fn sealed_writer_mismatched_receipt_fails_closed() {
+        let (storage, _, world) = fixture_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let mut binding = SealedActivationBindingV1 {
+            store_id: permit.store_id.clone(),
+            metadata_epoch: permit.metadata_epoch.get(),
+            metadata_hash: CanonicalHash::from_bytes(*permit.metadata_hash.as_bytes()),
+            projection_hash: CanonicalHash::from_bytes(*permit.projection_hash.as_bytes()),
+            plan_generation: permit.metadata_epoch.get(),
+        };
+        binding.store_id =
+            StoreId::new("store-generation-forged").expect("forged store ID is valid");
+        assert!(matches!(
+            storage.activate_writer(fixture_activation_with_binding(
+                world,
+                permit.clone(),
+                Some(binding.clone()),
+            )),
+            Err(WorldDbError::ActivationEvidenceUnavailable { world: found }) if found == world
+        ));
+
+        binding.store_id = permit.store_id.clone();
+        binding.metadata_hash = CanonicalHash::digest(b"forged-metadata");
+        assert!(matches!(
+            storage.activate_writer(fixture_activation_with_binding(
+                world,
+                permit,
+                Some(binding),
+            )),
+            Err(WorldDbError::ActivationPermitHashMismatch {
+                world: found,
+                field: "metadata_hash",
+                ..
+            }) if found == world
+        ));
+    }
+
+    #[test]
     fn pre_batch_fault_is_atomic_and_exact_retry_is_idempotent() {
         let (storage, _, world) = fixture_storage();
         let metadata = fixture_metadata();

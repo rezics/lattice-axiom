@@ -3,8 +3,9 @@
 //! [`DeterministicWorldStorage`] proves only deterministic in-process atomic
 //! transitions. It reports [`StorageDurabilityCapabilityV1::VolatileReference`]
 //! and rejects durable, flush, and physical-checkpoint operations. Writer
-//! activation also remains blocked until the catalog supplies non-forgeable
-//! plan evidence that storage can bind and revalidate under its final lock.
+//! activation is authorized only when [`WriterActivationV1`] carries a sealed
+//! catalog receipt that matches the storage permit; missing, stale, or
+//! mismatched receipts fail closed. The storage permit alone is not authority.
 //! No filesystem, WAL, restart, or storage-media durability is claimed.
 mod contract;
 mod error;
