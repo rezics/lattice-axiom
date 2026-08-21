@@ -19,16 +19,16 @@ decision:
 它不改写 [第一個可玩 demo](roadmap-first-demo.md) 的 D0–D10 出场门禁，也不授权把 Minecraft
 全局注册表、Mixin、或同进程 title+world 搬进 Lattice。
 
-外部对照只吸收可验证原则：
+外部对照只吸收可验证原则。实现研究可在 demo 仓库 `.temp/reference/` 下阅读（gitignore，不入库）：
 
-| 对照 | 可吸收 | 不搬入 |
-| --- | --- | --- |
-| Minecraft 生存循环 | 挖／放／背包／热键栏／视距／设定 | 引擎内置维度、Numeric block ID、同进程标题页 |
-| Terraria | 双轴探索节奏、近战／工具手感（后 D10） | 2D 专用物理或第二套 renderer |
-| GregTech | 材料／电压／配方图作为 **science package** | 对 host 硬编码机器 Tick |
-| Botania／奥术类魔法模组 | 植物／魔力／仪式作为 **thaumaturgy package** | Mixin 改原版配方 |
-| FTB Quests / ATM 任务页 | 有向任务图、进度、成就 = **progress packages** | 任务 ID 写进 host |
-| Touhou Little Maid | 作为 **relations consumer** 的同伴实体包 | 把女仆 AI 写进 core host |
+| 对照 | 本地对照 | 可吸收 | 不搬入 |
+| --- | --- | --- | --- |
+| Minecraft 生存循环 | — | 挖／放／背包／热键栏／视距／设定 | 引擎内置维度、Numeric block ID、同进程标题页 |
+| Terraria | — | 双轴探索节奏、近战／工具手感（后 D10） | 2D 专用物理或第二套 renderer |
+| GregTech CEu Modern | `GregTech-Modern` | **材料表 + 电压层 + 配方图** 作为 science package 的 typed model；铜／青铜／电缆是材料行，不是 host enum | Mixin、对原版 Tick 的机器硬编码、把 `gtceu:*` 写进 engine |
+| Botania | `Botania` | 自然魔法：mana 是独立 `StatePropertyKey`，与电压不是同一个整数 | Mixin、refmap、把植物 ID 写进 host |
+| FTB Quests | `FTB-Quests` | `Chapter → Quest → Task/Reward` 有向图、依赖环在 **compile** 失败（对照 `DependencyLoopException`）、task 种类由包注册 | 全局 `ServerQuestFile` 单例、team 进度绕过 world snapshot |
+| Touhou Little Maid | `TouhouLittleMaid` | `IMaidTask` 式 **可注册工作** + 关系边；同伴包声明 task UID 与物品权限 | 全局 `TaskManager`、把女仆 AI／模型格式写进 core host |
 
 ## 初步可玩（本页不延期的玩家循环）
 
@@ -90,8 +90,9 @@ ATM／FTB Quests 的价值是 **可数据驱动的有向图**，不是任务 GUI
 
 `@latticeaxiom/progress` 拥有：
 
-- 稳定 `QuestId`／`ChapterId`／`AchievementId`；
-- 有向边、互斥、隐藏、与 `ContentPredicate` 输入；
+- 稳定 `QuestId`／`ChapterId`／`AchievementId`（对照 FTB 的 Quest / Chapter，但 ID 走 Lattice `StableId`）；
+- 有向边、互斥、隐藏、与 `ContentPredicate` 输入；compile 检测环，禁止 runtime 单例 quest file；
+- Task／Reward **种类**由包注册（对照 FTB `TaskTypes`／`RewardTypes`），平台包不穷举「击杀僵尸」；
 - 完成 receipt 进入 world snapshot（权威），UI 是 presentation。
 
 `@terrenia/journey` 只贡献章节内容。发现顺序不得改变图 hash。禁止 host 写死「第一个任务是打树」。
@@ -106,8 +107,9 @@ ATM／FTB Quests 的价值是 **可数据驱动的有向图**，不是任务 GUI
 - kind 由包注册（`pet`、`friend`、`subject`、`companion`），不是 host enum 穷举；
 - 边的权威状态进 snapshot；AI／路径是 presentation／gameplay consumers。
 
-Touhou Little Maid 类内容是 **consumer 包**：声明 companion kind、日程、物品权限，通过 relations
-capability 绑到玩家。core host 不出现 `terrenia:maid` 或 `tlm:*`。
+Touhou Little Maid 类内容是 **consumer 包**：声明 companion kind、可注册工作（对照 `IMaidTask` UID）、
+日程与物品权限，通过 relations capability 绑到玩家。core host 不出现 `terrenia:maid` 或 `tlm:*`，
+也不实现全局 TaskManager。
 
 ## 明确不做（在本页变成 ADR 之前）
 
