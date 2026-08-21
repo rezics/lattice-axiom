@@ -1,6 +1,6 @@
 # Lattice Axiom v1 Playable Delivery Plan
 
-Status: active; sparse infinite streaming precedes durability  
+Status: active; sparse infinite streaming precedes durability; sealed writer activation is authorized for v1 playable  
 Repository baseline: `0c38407` (`feat(engine): add playable host and dual fixture`)  
 Date: 2026-08-21
 
@@ -456,9 +456,12 @@ generation already exist; this milestone does not invent unbounded traversal.
 
 Security prerequisite:
 
-- Obtain explicit authorization for a sealed catalog-to-world-db activation
-  validation receipt. This plan does not grant that authority. Until it exists,
-  `ActivationEvidenceUnavailable` remains the correct production result.
+- Sealed catalog-to-world-db activation is authorized for this v1 playable
+  implementation. A writer may open only after a non-forgeable receipt binds
+  world ID, store ID, metadata epoch/hash, projection hash, and plan
+  generation. Missing, stale, or mismatched evidence must still fail closed as
+  `ActivationEvidenceUnavailable`. Do not treat a storage permit alone as
+  authority.
 
 Deliverables after authorization:
 
