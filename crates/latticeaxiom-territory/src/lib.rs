@@ -13,6 +13,7 @@ mod error;
 mod hashes;
 mod hydrology;
 mod provider;
+mod query;
 
 pub use atlas::{
     AtlasConfigV1, AtlasScaleV1, AtlasStatisticsV1, SurfaceTerritoryCandidateV1,
@@ -41,8 +42,10 @@ pub use provider::{
     CoordinatorOfferV1, PrimaryChannelV1, PrimaryOwnershipDomainV1, PrimaryProviderOfferV1,
     ResolvedPrimaryOwnerV1, SpatialContributionV1, TerritoryLimitsV1,
 };
+pub use query::{SurfaceTerritoryQueryV1, TerritoryQueryCoverageV1, UndergroundTerritoryQueryV1};
 
 pub use latticeaxiom_worldgen::{
-    DimensionId, GenerationEpochIdV1, PlanningCellCoordinateV1, ProviderGenerationIdentityV1,
-    WorldSeedV1,
+    ChunkCoordinate, DimensionId, GenerationEpochIdV1, LockedClosureFingerprintV1,
+    PlanningCellCoordinateV1, ProviderGenerationIdentityV1, WorldSeedV1, WorldgenConfigHashV1,
+    WorldgenConfigV1,
 };

@@ -176,6 +176,30 @@ impl SurfaceTerritoryCandidateV1 {
     pub const fn domain(&self) -> &TerritoryDomainIdV1 {
         &self.domain
     }
+
+    /// Returns the parent ownership domain required by this candidate.
+    #[must_use]
+    pub const fn parent_domain(&self) -> &TerritoryDomainIdV1 {
+        &self.parent_domain
+    }
+
+    /// Returns the Atlas scale that may select this candidate.
+    #[must_use]
+    pub const fn scale_level(&self) -> u8 {
+        self.scale_level
+    }
+
+    /// Returns the candidate's planning-cell anchor.
+    #[must_use]
+    pub const fn anchor(&self) -> PlanningCellCoordinateV1 {
+        self.anchor
+    }
+
+    /// Returns the positive selection weight.
+    #[must_use]
+    pub const fn weight(&self) -> NonZeroU32 {
+        self.weight
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -230,16 +254,40 @@ pub struct TerritoryQueryLevelV1 {
 }
 
 impl TerritoryQueryLevelV1 {
+    /// Returns the Atlas scale that produced this decision.
+    #[must_use]
+    pub const fn scale(&self) -> AtlasScaleV1 {
+        self.scale
+    }
+
     /// Returns the selected domain after this scale.
     #[must_use]
     pub const fn domain(&self) -> &TerritoryDomainIdV1 {
         &self.domain
     }
 
+    /// Returns the winning candidate identity, if this scale selected one.
+    #[must_use]
+    pub const fn winning_candidate(&self) -> Option<&StableId> {
+        self.winning_candidate.as_ref()
+    }
+
+    /// Returns the runner-up candidate identity, if a second candidate scored.
+    #[must_use]
+    pub const fn runner_up_candidate(&self) -> Option<&StableId> {
+        self.runner_up_candidate.as_ref()
+    }
+
     /// Returns conservative distance to the nearest tile boundary.
     #[must_use]
     pub const fn boundary_distance_cells(&self) -> u32 {
         self.boundary_distance_cells
+    }
+
+    /// Returns whether this non-unit scale is inside its transition band.
+    #[must_use]
+    pub const fn in_transition_band(&self) -> bool {
+        self.in_transition_band
     }
 }
 
@@ -255,6 +303,12 @@ pub struct TerritoryQueryV1 {
 }
 
 impl TerritoryQueryV1 {
+    /// Returns the queried planning cell.
+    #[must_use]
+    pub const fn cell(&self) -> PlanningCellCoordinateV1 {
+        self.cell
+    }
+
     /// Returns the final surface terrain domain.
     #[must_use]
     pub const fn terrain_domain(&self) -> &TerritoryDomainIdV1 {
@@ -487,6 +541,18 @@ impl TerritoryPlanV1 {
         self.plan_hash
     }
 
+    /// Returns the exact persisted world seed.
+    #[must_use]
+    pub const fn world_seed(&self) -> WorldSeedV1 {
+        self.world_seed
+    }
+
+    /// Returns the compilation and query hard limits.
+    #[must_use]
+    pub const fn limits(&self) -> TerritoryLimitsV1 {
+        self.limits
+    }
+
     /// Returns the selected coordinator.
     #[must_use]
     pub const fn coordinator(&self) -> &ProviderGenerationIdentityV1 {
@@ -497,6 +563,36 @@ impl TerritoryPlanV1 {
     #[must_use]
     pub fn primary_owners(&self) -> &[ResolvedPrimaryOwnerV1] {
         &self.primary_owners
+    }
+
+    /// Returns the compiled Atlas hierarchy.
+    #[must_use]
+    pub const fn atlas(&self) -> &AtlasConfigV1 {
+        &self.atlas
+    }
+
+    /// Returns the dimension-default terrain ownership domain.
+    #[must_use]
+    pub const fn default_terrain_domain(&self) -> &TerritoryDomainIdV1 {
+        &self.default_terrain_domain
+    }
+
+    /// Returns the dimension-default cave-topology ownership domain.
+    #[must_use]
+    pub const fn default_cave_domain(&self) -> &CaveTopologyDomainIdV1 {
+        &self.default_cave_domain
+    }
+
+    /// Returns canonically ordered surface Atlas candidates.
+    #[must_use]
+    pub fn surface_candidates(&self) -> &[SurfaceTerritoryCandidateV1] {
+        &self.surface_candidates
+    }
+
+    /// Returns canonically ordered underground child territories.
+    #[must_use]
+    pub fn underground_territories(&self) -> &[UndergroundTerritoryV1] {
+        &self.underground_territories
     }
 
     /// Runs a pure deterministic surface query.

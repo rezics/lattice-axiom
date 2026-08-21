@@ -1,17 +1,19 @@
 //! D7 territory, cave, and epoch conformance tests.
 
-use std::num::NonZeroU32;
+use std::{collections::BTreeSet, num::NonZeroU32};
 
-use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_bytes};
+use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_bytes, canonical_json_hash};
 use latticeaxiom_territory::{
     AtlasConfigV1, AtlasScaleV1, AxisV1, CardinalDirectionV1, CavePortalV1, CaveTopologyDomainIdV1,
-    CaveTopologyParentV1, ContributionBudgetV1, ContributionChannelV1, ContributionCompositorV1,
-    ContributionTargetV1, CoordinatorOfferV1, GenerationEpochIdV1, HydrologyBasinV1,
-    HydrologyConnectionV1, HydrologyPlanV1, PlanningCellBoundsV1, PlanningCellCoordinateV1,
-    PlanningCellEpochLedgerV1, PlanningCellTransitionAdapterV1, PlanningCellTransitionReceiptV1,
-    PortalHydrologyContractV1, PrimaryProviderOfferV1, ProviderGenerationIdentityV1,
-    SpatialContributionV1, SurfaceTerritoryCandidateV1, TerritoryDomainIdV1, TerritoryLimitsV1,
-    TerritoryPlanInputV1, TerritoryPlanV1, UndergroundTerritoryV1, VerticalRangeV1, WorldSeedV1,
+    CaveTopologyParentV1, ChunkCoordinate, ContributionBudgetV1, ContributionChannelV1,
+    ContributionCompositorV1, ContributionTargetV1, CoordinatorOfferV1, GenerationEpochIdV1,
+    HydrologyBasinV1, HydrologyConnectionV1, HydrologyPlanV1, LockedClosureFingerprintV1,
+    PlanningCellBoundsV1, PlanningCellCoordinateV1, PlanningCellEpochLedgerV1,
+    PlanningCellTransitionAdapterV1, PlanningCellTransitionReceiptV1, PortalHydrologyContractV1,
+    PrimaryProviderOfferV1, ProviderGenerationIdentityV1, SpatialContributionV1,
+    SurfaceTerritoryCandidateV1, TerritoryDomainIdV1, TerritoryLimitsV1, TerritoryPlanInputV1,
+    TerritoryPlanV1, TerritoryQueryCoverageV1, UndergroundTerritoryV1, VerticalRangeV1,
+    WorldSeedV1, WorldgenConfigV1,
 };
 use proptest::prelude::*;
 
@@ -483,6 +485,250 @@ fn drainage_portal_must_match_abstract_hydrology_domains() {
     )
     .unwrap_or_else(|error| panic!("drainage portal setup failed: {error}"));
     assert!(TerritoryPlanV1::compile(fixture).is_err());
+}
+
+fn production_surface_candidates() -> Vec<SurfaceTerritoryCandidateV1> {
+    let default = terrain_domain("terrenia");
+    let woodland = terrain_domain("woodland");
+    let dunes = terrain_domain("dunes");
+    let badlands = terrain_domain("badlands");
+    [
+        (
+            "woodland",
+            woodland.clone(),
+            default.clone(),
+            0_u8,
+            0_i64,
+            3_u32,
+        ),
+        ("dunes", dunes, default.clone(), 0, 64, 2),
+        ("badlands", badlands, default, 0, -64, 2),
+        (
+            "woodland-hills",
+            terrain_domain("woodland-hills"),
+            woodland.clone(),
+            1,
+            0,
+            1,
+        ),
+        (
+            "woodland-grove",
+            terrain_domain("woodland-grove"),
+            terrain_domain("woodland-hills"),
+            2,
+            0,
+            1,
+        ),
+    ]
+    .into_iter()
+    .map(|(name, domain, parent, level, anchor, weight)| {
+        SurfaceTerritoryCandidateV1::new(
+            stable(&format!("latticeaxiom:territory-candidate/{name}")),
+            domain,
+            parent,
+            level,
+            PlanningCellCoordinateV1::new(anchor, -anchor),
+            nz(weight),
+        )
+        .unwrap_or_else(|error| panic!("valid production candidate {name} was rejected: {error}"))
+    })
+    .collect()
+}
+
+fn production_input() -> TerritoryPlanInputV1 {
+    let mut fixture = input(3);
+    fixture.surface_candidates = production_surface_candidates();
+    fixture.contributions.clear();
+    fixture.primary_offers = vec![
+        PrimaryProviderOfferV1::terrain(terrain_domain("terrenia"), provider("terrain-default", 1)),
+        PrimaryProviderOfferV1::terrain(
+            terrain_domain("woodland"),
+            provider("terrain-woodland", 1),
+        ),
+        PrimaryProviderOfferV1::terrain(terrain_domain("dunes"), provider("terrain-dunes", 1)),
+        PrimaryProviderOfferV1::terrain(
+            terrain_domain("badlands"),
+            provider("terrain-badlands", 1),
+        ),
+        PrimaryProviderOfferV1::cave(cave_domain("default"), provider("cave-default", 2)),
+        PrimaryProviderOfferV1::cave(cave_domain("limestone"), provider("cave-limestone", 1)),
+        PrimaryProviderOfferV1::cave(cave_domain("crystal"), provider("cave-crystal", 1)),
+    ];
+    fixture
+}
+
+fn production_plan() -> TerritoryPlanV1 {
+    TerritoryPlanV1::compile(production_input())
+        .unwrap_or_else(|error| panic!("valid production territory plan was rejected: {error}"))
+}
+
+fn production_lock() -> LockedClosureFingerprintV1 {
+    LockedClosureFingerprintV1::from_hash(CanonicalHash::digest(b"lock-a"))
+}
+
+fn production_chunks() -> Vec<ChunkCoordinate> {
+    let mut chunks = vec![
+        ChunkCoordinate::new(8, -2, 8),
+        ChunkCoordinate::new(40, 3, 8),
+        ChunkCoordinate::new(0, 0, 0),
+        ChunkCoordinate::new(160, 4, 160),
+        ChunkCoordinate::new(8, 7, 8),
+    ];
+    for index in -6_i32..=6 {
+        chunks.push(ChunkCoordinate::new(
+            index.saturating_mul(512),
+            index.rem_euclid(5).saturating_sub(2),
+            index.saturating_mul(-384),
+        ));
+    }
+    chunks
+}
+
+#[test]
+fn production_queries_expose_three_surface_and_two_underground_territories() {
+    let plan = production_plan();
+    let mut surface = BTreeSet::new();
+    let mut surface_owners = BTreeSet::new();
+    for tile_z in -8_i64..=8 {
+        for tile_x in -8_i64..=8 {
+            let cell = PlanningCellCoordinateV1::new(
+                tile_x.saturating_mul(64).saturating_add(32),
+                tile_z.saturating_mul(64).saturating_add(32),
+            );
+            let query = plan
+                .surface_territory_query(cell)
+                .unwrap_or_else(|error| panic!("surface ownership query failed: {error}"));
+            assert!(!query.primary().as_str().is_empty());
+            assert!(!query.secondary().as_str().is_empty());
+            assert_eq!(
+                query.primary_owner().domain().as_str(),
+                query.primary().as_str()
+            );
+            assert_eq!(
+                query.secondary_owner().domain().as_str(),
+                query.secondary().as_str()
+            );
+            surface.insert(query.primary().clone());
+            surface_owners.insert(query.primary_owner().provider().clone());
+        }
+    }
+    assert!(
+        surface.len() >= 3,
+        "production Atlas must expose at least three surface territories, found {surface:?}"
+    );
+    assert!(
+        surface_owners.len() >= 3,
+        "production surface territories must keep stable distinct primary owners"
+    );
+
+    let limestone = plan
+        .underground_territory_query(PlanningCellCoordinateV1::new(1, 1), -32)
+        .unwrap_or_else(|error| panic!("limestone ownership query failed: {error}"));
+    let crystal = plan
+        .underground_territory_query(PlanningCellCoordinateV1::new(5, 1), -32)
+        .unwrap_or_else(|error| panic!("crystal ownership query failed: {error}"));
+    let default_cave = plan
+        .underground_territory_query(PlanningCellCoordinateV1::new(20, 20), -32)
+        .unwrap_or_else(|error| panic!("default cave ownership query failed: {error}"));
+    assert_eq!(limestone.primary(), &cave_domain("limestone"));
+    assert_eq!(crystal.primary(), &cave_domain("crystal"));
+    assert_eq!(default_cave.primary(), plan.default_cave_domain());
+    assert_ne!(limestone.primary(), crystal.primary());
+    assert_ne!(
+        limestone.primary_owner().provider(),
+        crystal.primary_owner().provider()
+    );
+    assert_eq!(limestone.secondary(), plan.default_cave_domain());
+    assert_eq!(crystal.secondary(), plan.default_cave_domain());
+    assert_ne!(default_cave.secondary(), default_cave.primary());
+    assert_eq!(limestone.boundary_distance_cells(), 1);
+    assert_eq!(crystal.boundary_distance_cells(), 1);
+}
+
+#[test]
+fn production_plan_hash_matches_golden() {
+    let plan = production_plan();
+    assert_eq!(
+        plan.plan_hash().to_string(),
+        include_str!("goldens/production-plan-hash.txt").trim()
+    );
+}
+
+#[test]
+fn production_coverage_bytes_are_identical_under_shuffled_chunk_order() {
+    let plan = production_plan();
+    let config = WorldgenConfigV1::default();
+    let lock = production_lock();
+    let chunks = production_chunks();
+    let forward = TerritoryQueryCoverageV1::from_chunks(&plan, lock, &config, chunks.clone(), -32)
+        .unwrap_or_else(|error| panic!("forward production coverage failed: {error}"));
+    let reverse =
+        TerritoryQueryCoverageV1::from_chunks(&plan, lock, &config, chunks.into_iter().rev(), -32)
+            .unwrap_or_else(|error| panic!("reversed production coverage failed: {error}"));
+    let forward_bytes = canonical_json_bytes(&forward)
+        .unwrap_or_else(|error| panic!("forward coverage encoding failed: {error}"));
+    let reverse_bytes = canonical_json_bytes(&reverse)
+        .unwrap_or_else(|error| panic!("reversed coverage encoding failed: {error}"));
+    assert_eq!(forward_bytes, reverse_bytes);
+    assert_eq!(
+        canonical_json_hash(&forward)
+            .unwrap_or_else(|error| panic!("coverage hash failed: {error}"))
+            .to_string(),
+        include_str!("goldens/production-coverage-hash.txt").trim()
+    );
+
+    let surface = forward
+        .surface()
+        .iter()
+        .map(latticeaxiom_territory::SurfaceTerritoryQueryV1::primary)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let underground = forward
+        .underground()
+        .iter()
+        .map(latticeaxiom_territory::UndergroundTerritoryQueryV1::primary)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert!(
+        surface.len() >= 3,
+        "shuffled chunk coverage must keep at least three surface territories, found {surface:?}"
+    );
+    assert!(
+        underground.len() >= 2,
+        "shuffled chunk coverage must keep at least two underground territories, found {underground:?}"
+    );
+
+    let mutated_lock = LockedClosureFingerprintV1::from_hash(CanonicalHash::digest(b"lock-b"));
+    let mutated = TerritoryQueryCoverageV1::from_chunks(
+        &plan,
+        mutated_lock,
+        &config,
+        production_chunks(),
+        -32,
+    )
+    .unwrap_or_else(|error| panic!("lock-divergent coverage failed: {error}"));
+    assert_ne!(
+        canonical_json_bytes(&mutated)
+            .unwrap_or_else(|error| panic!("divergent coverage encoding failed: {error}")),
+        forward_bytes
+    );
+}
+
+#[test]
+fn production_plan_bytes_ignore_registration_and_chunk_order() {
+    let first = production_plan();
+    let mut reordered = production_input();
+    reordered.surface_candidates.reverse();
+    reordered.primary_offers.reverse();
+    reordered.underground_territories.reverse();
+    reordered.cave_portals.reverse();
+    let second = TerritoryPlanV1::compile(reordered)
+        .unwrap_or_else(|error| panic!("reordered production plan was rejected: {error}"));
+    assert_eq!(first.plan_hash(), second.plan_hash());
+    assert_eq!(
+        canonical_json_bytes(&first).ok(),
+        canonical_json_bytes(&second).ok()
+    );
 }
 
 proptest! {

@@ -104,6 +104,44 @@ impl PlanningCellBoundsV1 {
             && other.min_z < self.max_z_exclusive
     }
 
+    /// Returns conservative distance in planning cells to this rectangle's boundary.
+    ///
+    /// Contained cells use the minimum distance to an edge, which is zero on the
+    /// rim. Outside cells use Chebyshev distance to the nearest contained cell.
+    #[must_use]
+    pub fn boundary_distance_cells(self, cell: PlanningCellCoordinateV1) -> u32 {
+        if self.contains(cell) {
+            let west = cell.x.saturating_sub(self.min_x);
+            let east = self
+                .max_x_exclusive
+                .saturating_sub(1)
+                .saturating_sub(cell.x);
+            let north = cell.z.saturating_sub(self.min_z);
+            let south = self
+                .max_z_exclusive
+                .saturating_sub(1)
+                .saturating_sub(cell.z);
+            return u32::try_from(west.min(east).min(north.min(south))).unwrap_or(u32::MAX);
+        }
+        let dx = if cell.x < self.min_x {
+            self.min_x.saturating_sub(cell.x)
+        } else if cell.x >= self.max_x_exclusive {
+            cell.x
+                .saturating_sub(self.max_x_exclusive.saturating_sub(1))
+        } else {
+            0
+        };
+        let dz = if cell.z < self.min_z {
+            self.min_z.saturating_sub(cell.z)
+        } else if cell.z >= self.max_z_exclusive {
+            cell.z
+                .saturating_sub(self.max_z_exclusive.saturating_sub(1))
+        } else {
+            0
+        };
+        u32::try_from(dx.max(dz)).unwrap_or(u32::MAX)
+    }
+
     /// Returns the number of planning cells in this finite rectangle.
     ///
     /// # Errors
@@ -197,6 +235,18 @@ mod tests {
         assert!(bounds.contains(PlanningCellCoordinateV1::new(2, 6)));
         assert!(!bounds.contains(PlanningCellCoordinateV1::new(3, 6)));
         assert_eq!(bounds.area().ok(), Some(15));
+        assert_eq!(
+            bounds.boundary_distance_cells(PlanningCellCoordinateV1::new(-2, 4)),
+            0
+        );
+        assert_eq!(
+            bounds.boundary_distance_cells(PlanningCellCoordinateV1::new(0, 5)),
+            1
+        );
+        assert_eq!(
+            bounds.boundary_distance_cells(PlanningCellCoordinateV1::new(4, 5)),
+            2
+        );
     }
 
     #[test]
