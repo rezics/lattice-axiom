@@ -320,6 +320,12 @@ impl<K> MeshBuffer<K> {
             .sum()
     }
 
+    /// Total number of triangle-list vertices, four per quad.
+    #[must_use]
+    pub fn vertex_count(&self) -> usize {
+        self.quad_count() * 4
+    }
+
     /// Total number of triangle-list indices.
     #[must_use]
     pub fn index_count(&self) -> usize {
@@ -423,6 +429,18 @@ mod tests {
                 dot(second, face.normal()) > 0.0,
                 "second triangle: {face:?}"
             );
+            let indices = [0_u32, 1, 2, 0, 2, 3];
+            assert_eq!(Face::quad_indices(0), Some(indices));
+            for triangle in indices.chunks_exact(3) {
+                let a = corners[triangle[0] as usize];
+                let b = corners[triangle[1] as usize];
+                let c = corners[triangle[2] as usize];
+                let winding = cross(subtract(b, a), subtract(c, a));
+                assert!(
+                    dot(winding, face.normal()) > 0.0,
+                    "indexed triangle {triangle:?} for {face:?}"
+                );
+            }
             for normal in face.quad_normals() {
                 assert_vector_eq(normal, face.normal());
             }

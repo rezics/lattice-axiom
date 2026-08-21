@@ -449,6 +449,7 @@ mod tests {
         let mesh = greedy_quads(&voxels, dimensions, source()).expect("valid samples");
 
         assert_eq!(mesh.geometry().quad_count(), 6);
+        assert_eq!(mesh.geometry().vertex_count(), 24);
         assert_eq!(mesh.geometry().triangle_count(), 12);
         assert_eq!(mesh.geometry().index_count(), 36);
         assert_eq!(
@@ -501,18 +502,24 @@ mod tests {
             voxels[index] = TestVoxel::opaque(2);
 
             let mesh = visible_faces(&voxels, dimensions, source()).expect("valid samples");
-            assert!(
-                mesh.geometry().group(MeshGroup::Opaque, face).is_empty(),
-                "halo failed to cull {face:?}"
+            assert_halo_culls_only_boundary_face(mesh.geometry(), face);
+            let greedy = greedy_quads(&voxels, dimensions, source()).expect("valid samples");
+            assert_halo_culls_only_boundary_face(greedy.geometry(), face);
+        }
+    }
+
+    fn assert_halo_culls_only_boundary_face(geometry: &MeshBuffer<u8>, face: Face) {
+        assert!(
+            geometry.group(MeshGroup::Opaque, face).is_empty(),
+            "halo failed to cull {face:?}"
+        );
+        assert_eq!(geometry.quad_count(), 5, "halo at {face:?}");
+        for other in Face::ALL.into_iter().filter(|candidate| *candidate != face) {
+            assert_eq!(
+                geometry.group(MeshGroup::Opaque, other).len(),
+                1,
+                "halo at {face:?} incorrectly culled {other:?}"
             );
-            assert_eq!(mesh.geometry().quad_count(), 5, "halo at {face:?}");
-            for other in Face::ALL.into_iter().filter(|candidate| *candidate != face) {
-                assert_eq!(
-                    mesh.geometry().group(MeshGroup::Opaque, other).len(),
-                    1,
-                    "halo at {face:?} incorrectly culled {other:?}"
-                );
-            }
         }
     }
 
