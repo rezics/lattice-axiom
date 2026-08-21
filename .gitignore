@@ -6,3 +6,13 @@
 # Local runtime state and scratch files.
 /run
 /.temp
+
+# Generated ordinary-launch evidence. Compose lock writes these locally;
+# frozen reopen never invents them.
+/latticeaxiom.lock
+/latticeaxiom.lock.tmp
+/latticeaxiom.lock.bak
+/catalog
+
+
+.grok/

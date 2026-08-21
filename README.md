@@ -56,13 +56,31 @@ diagnostic before Nickel can fall back to the ambient filesystem. Production
 
 ## First run
 
+Ordinary launch reopens `latticeaxiom.lock` and freeze-verifies `catalog/cas`.
+Those files are generated locally and are not committed. The production client
+does not create them.
+
+From the workspace root, lock the client-world bootstrap, then launch:
+
 ```powershell
-cargo run
+cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap profiles/dev.toml
+cargo run -p latticeaxiom-engine --no-default-features --features client
 ```
 
-The first build compiles Bevy and can take several minutes. A successful run
-opens a window containing a lit blue cube on a dark ground plane. The scene
-uses Bevy's native right-handed Y-up coordinate system.
+`profiles/dev.toml` is the `client-world` projection. Workspace-root
+`latticeaxiom.toml` is the dedicated-server projection and is not the
+interactive client lock. After a lock exists, `cargo run` from the workspace
+root is the same production client (default members and default features).
+
+The first Bevy build can take several minutes. Missing lock or CAS fails
+closed. Relock after changing shipped packages.
+
+A lock-free development slice remains available as an extra binary; it is not
+ordinary launch:
+
+```powershell
+cargo run -p latticeaxiom-engine --bin latticeaxiom-playable-fixture --no-default-features --features client
+```
 
 Development builds enable Bevy dynamic linking and use `rust-lld` on Windows
 to shorten later link times. A distributable build must disable the

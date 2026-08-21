@@ -11,6 +11,7 @@ mod authority;
 mod bootstrap;
 mod hud;
 mod input;
+mod pause;
 mod scene;
 
 pub use bootstrap::{PlayableClientError, run_playable_client};

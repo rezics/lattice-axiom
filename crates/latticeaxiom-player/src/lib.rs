@@ -36,6 +36,9 @@ pub use leafwing_adapter::{
     LeafwingInputAdapterPlugin, LeafwingPlayerAction, LocalPlayerClientInputBundle,
     default_leafwing_input_map,
 };
+/// Leafwing action-state type used by the static client adapter.
+#[cfg(feature = "client-input")]
+pub use leafwing_input_manager::action_state::ActionState;
 pub use movement::{
     CurrentPlayerActionFrame, D2Player, D2PlayerBundle, DetachedSpectator, LocalPlayerInput,
     PlayerControllerState, PlayerMovementProfileError, PlayerMovementProfileV1, PlayerViewV1,

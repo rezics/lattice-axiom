@@ -270,8 +270,15 @@ pub(super) struct ProductionSpineInner {
 /// Collider upserts and evictions consumed by the production presentation system.
 #[derive(Debug)]
 pub(super) struct PresentationDelta {
-    pub(super) upserts: Vec<(ChunkCoordinate, Collider, Vec3)>,
+    pub(super) upserts: Vec<(ChunkCoordinate, Collider, Vec3, Vec<OccupiedCell>)>,
     pub(super) removals: Vec<ChunkCoordinate>,
+}
+
+/// Occupied interior cell used to build a chunk collider and GPU mesh.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct OccupiedCell {
+    pub(super) local: [u16; 3],
+    pub(super) palette_index: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -280,6 +287,7 @@ struct ChunkDerived {
     mesh_source: Option<MeshSource>,
     faces: BTreeSet<Face>,
     collider: Option<Collider>,
+    occupied: Vec<OccupiedCell>,
     revision: ChunkRevision,
 }
 
@@ -301,7 +309,7 @@ impl HostVoxel {
 #[derive(Clone, Debug)]
 struct HostDerivedMesh {
     mesh: Option<(MeshReceipt, MeshSource, BTreeSet<Face>)>,
-    occupied: Vec<[u16; 3]>,
+    occupied: Vec<OccupiedCell>,
 }
 
 impl ProductionSpine {
@@ -604,6 +612,28 @@ impl ProductionSpine {
         self.lock_inner()
             .ok()
             .map(|inner| inner.placement_content.clone())
+    }
+
+    /// Returns the locked solid palette in index order.
+    #[must_use]
+    pub(super) fn palette_ids(&self) -> Vec<BlockId> {
+        self.lock_inner()
+            .map(|inner| inner.palette.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns occupied interior cells retained for a presented chunk.
+    #[must_use]
+    pub(super) fn occupied_cells(&self, coordinate: ChunkCoordinate) -> Vec<OccupiedCell> {
+        self.lock_inner()
+            .ok()
+            .and_then(|inner| {
+                inner
+                    .derived
+                    .get(&coordinate)
+                    .map(|derived| derived.occupied.clone())
+            })
+            .unwrap_or_default()
     }
 
     /// Returns the union of derived mesh faces currently retained.
@@ -1275,7 +1305,12 @@ impl ProductionSpine {
             };
             match derived.collider.clone() {
                 Some(collider) => {
-                    upserts.push((coordinate, collider, chunk_origin(coordinate, edge)));
+                    upserts.push((
+                        coordinate,
+                        collider,
+                        chunk_origin(coordinate, edge),
+                        derived.occupied.clone(),
+                    ));
                 }
                 None if cave_entry_ready_inner(&inner, coordinate) => {
                     removals.push(coordinate);
@@ -2351,29 +2386,37 @@ fn apply_derived(
     let entry = inner
         .derived
         .entry(coordinate)
-        .or_insert_with(|| ChunkDerived {
-            mesh_receipt: None,
-            mesh_source: None,
-            faces: BTreeSet::new(),
-            collider: None,
-            revision,
-        });
+        .or_insert_with(|| empty_derived(revision));
     entry.revision = revision;
     if let Some((receipt, source, faces)) = value.mesh {
         entry.mesh_receipt = Some(receipt);
         entry.mesh_source = Some(source);
         entry.faces = faces;
     }
+    if !value.occupied.is_empty() {
+        entry.occupied = value.occupied;
+    }
     if kind == DerivedKind::Collider && entry.mesh_receipt.is_some() {
-        entry.collider = compound_collider(&value.occupied);
+        entry.collider = compound_collider(&entry.occupied);
     }
     inner.dirty.insert(coordinate);
+}
+
+fn empty_derived(revision: ChunkRevision) -> ChunkDerived {
+    ChunkDerived {
+        mesh_receipt: None,
+        mesh_source: None,
+        faces: BTreeSet::new(),
+        collider: None,
+        occupied: Vec::new(),
+        revision,
+    }
 }
 
 fn occupied_voxels(
     samples: &[HostVoxel],
     dimensions: PaddedChunk,
-) -> Result<Vec<[u16; 3]>, ProductionHostError> {
+) -> Result<Vec<OccupiedCell>, ProductionHostError> {
     let interior = dimensions.interior_size();
     let mut occupied = Vec::new();
     for z in 0..interior[2] {
@@ -2383,35 +2426,36 @@ fn occupied_voxels(
                 let index = dimensions
                     .linearize(padded)
                     .ok_or(ProductionHostError::PaddedIndex)?;
-                if samples
-                    .get(index)
-                    .is_some_and(CollisionSemantics::collision_occupied)
-                {
-                    occupied.push([
+                let Some(sample) = samples.get(index) else {
+                    continue;
+                };
+                if !sample.collision_occupied() {
+                    continue;
+                }
+                occupied.push(OccupiedCell {
+                    local: [
                         u16::try_from(x).map_err(|_| ProductionHostError::PaddedIndex)?,
                         u16::try_from(y).map_err(|_| ProductionHostError::PaddedIndex)?,
                         u16::try_from(z).map_err(|_| ProductionHostError::PaddedIndex)?,
-                    ]);
-                }
+                    ],
+                    palette_index: sample.palette_index,
+                });
             }
         }
     }
     Ok(occupied)
 }
 
-fn compound_collider(occupied: &[[u16; 3]]) -> Option<Collider> {
+fn compound_collider(occupied: &[OccupiedCell]) -> Option<Collider> {
     if occupied.is_empty() {
         return None;
     }
     let shapes = occupied
         .iter()
-        .map(|[x, y, z]| {
+        .map(|cell| {
+            let [x, y, z] = cell.local;
             (
-                Vec3::new(
-                    f32::from(*x) + 0.5,
-                    f32::from(*y) + 0.5,
-                    f32::from(*z) + 0.5,
-                ),
+                Vec3::new(f32::from(x) + 0.5, f32::from(y) + 0.5, f32::from(z) + 0.5),
                 Quat::IDENTITY,
                 Collider::cuboid(1.0, 1.0, 1.0),
             )
@@ -2761,16 +2805,11 @@ fn seal_unready_cave_voids(inner: &mut ProductionSpineInner, coordinate: ChunkCo
     let entry = inner
         .derived
         .entry(coordinate)
-        .or_insert_with(|| ChunkDerived {
-            mesh_receipt: None,
-            mesh_source: None,
-            faces: BTreeSet::new(),
-            collider: None,
-            revision,
-        });
+        .or_insert_with(|| empty_derived(revision));
     entry.revision = revision;
     if entry.mesh_receipt.is_none() {
-        entry.collider = compound_collider(&occupied);
+        entry.occupied = occupied;
+        entry.collider = compound_collider(&entry.occupied);
         inner.dirty.insert(coordinate);
     }
 }
@@ -2778,9 +2817,9 @@ fn seal_unready_cave_voids(inner: &mut ProductionSpineInner, coordinate: ChunkCo
 fn conservative_occupied_voxels(
     inner: &ProductionSpineInner,
     coordinate: ChunkCoordinate,
-) -> Vec<[u16; 3]> {
+) -> Vec<OccupiedCell> {
     let edge = inner.chunk_edge;
-    let mut occupied = BTreeSet::new();
+    let mut occupied = BTreeMap::new();
     for z in 0..edge {
         for y in 0..edge {
             for x in 0..edge {
@@ -2788,21 +2827,25 @@ fn conservative_occupied_voxels(
                 let world_y = i64::from(coordinate.y) * i64::from(edge) + i64::from(y);
                 let world_z = i64::from(coordinate.z) * i64::from(edge) + i64::from(z);
                 let voxel = VoxelCoordinate::new(world_x, world_y, world_z);
-                let solid = inner
-                    .runtime
-                    .cell(voxel)
-                    .is_ok_and(CollisionSemantics::collision_occupied);
+                let sample = inner.runtime.cell(voxel).ok();
+                let solid = sample.is_some_and(CollisionSemantics::collision_occupied);
                 let cave_void = inner
                     .plan
                     .cave_occupancy_arbitration(world_x, world_y, world_z)
                     .is_finally_void();
                 if solid || cave_void {
-                    occupied.insert([x, y, z]);
+                    occupied.insert(
+                        [x, y, z],
+                        OccupiedCell {
+                            local: [x, y, z],
+                            palette_index: sample.map_or(1, |voxel| voxel.palette_index.max(1)),
+                        },
+                    );
                 }
             }
         }
     }
-    occupied.into_iter().collect()
+    occupied.into_values().collect()
 }
 
 fn cell_faces_cave_void(inner: &ProductionSpineInner, position: BlockPosition) -> bool {

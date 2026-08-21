@@ -1,14 +1,18 @@
 //! Bootstrap for the deliberately non-durable local playable fixture.
 
 use avian3d::PhysicsPlugins;
-use bevy::prelude::{
-    App, ClearColor, Color, DefaultPlugins, PluginGroup, Startup, Update, Window, WindowPlugin,
+use bevy::{
+    ecs::schedule::IntoScheduleConfigs,
+    prelude::{
+        App, ClearColor, Color, DefaultPlugins, FixedFirst, FixedUpdate, PluginGroup, Startup,
+        Update, Window, WindowPlugin,
+    },
 };
 use latticeaxiom_gameplay::GameplayIdError;
-use latticeaxiom_player::{BlockEditAuthorityResource, PlayerPlugin};
+use latticeaxiom_player::{BlockEditAuthorityResource, PlayerPlugin, PlayerSystemSet};
 use thiserror::Error;
 
-use super::{authority, hud, input, scene};
+use super::{authority, hud, input, pause, scene};
 use crate::{EngineInstanceError, instance::reserve_client_event_loop};
 
 /// Failure to construct the single-session playable client fixture.
@@ -42,24 +46,43 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
         .insert_resource(seed_cells)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Lattice Axiom — WASD move · mouse look · Space jump · left break · right place · Esc quit".into(),
+                title: "Lattice Axiom — WASD move · mouse look · Space jump · left break · right place · Esc pause".into(),
                 ..Window::default()
             }),
             ..WindowPlugin::default()
         }))
+        .insert_resource(pause::PlayablePause::default())
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(input::PlayableInputPlugin::new(placement_content))
         .add_systems(
             Startup,
-            (scene::setup_playable_scene, hud::setup_playable_hud),
+            (
+                scene::setup_playable_scene,
+                hud::setup_playable_hud,
+                pause::setup_pause_overlay,
+            ),
         )
         .add_systems(
             Update,
             (
                 scene::apply_playable_block_receipts,
                 scene::sync_playable_camera,
+                pause::toggle_pause,
+                pause::sync_pause_overlay,
+                pause::sync_cursor_capture,
+                pause::pause_menu_buttons,
             ),
+        )
+        .add_systems(
+            FixedFirst,
+            pause::suppress_gameplay_while_paused.before(PlayerSystemSet::SampleInput),
+        )
+        .add_systems(
+            FixedUpdate,
+            pause::freeze_player_while_paused
+                .after(PlayerSystemSet::PrepareMovement)
+                .before(PlayerSystemSet::MoveCapsule),
         );
 
     app.run();

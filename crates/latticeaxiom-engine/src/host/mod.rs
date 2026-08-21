@@ -9,11 +9,15 @@
 
 mod catalog;
 #[cfg(feature = "client")]
+mod chunk_mesh;
+#[cfg(feature = "client")]
 mod client;
 mod display;
 mod gameplay;
 #[cfg(feature = "client")]
 mod hud;
+#[cfg(feature = "client")]
+mod pause;
 mod spine;
 mod start;
 mod stream;
@@ -27,15 +31,16 @@ use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
     prelude::{
-        Commands, Component, Entity, FixedPostUpdate, FixedUpdate, MessageWriter, Query, Res,
-        ResMut, Resource, Transform, With, Without,
+        Commands, Component, Entity, FixedFirst, FixedPostUpdate, FixedUpdate, MessageWriter,
+        Query, Res, ResMut, Resource, Transform, With, Without,
     },
     transform::TransformPlugin,
 };
 #[cfg(feature = "client")]
 use bevy::{
     app::{Startup, Update},
-    prelude::{ClearColor, Color},
+    asset::Assets,
+    prelude::{ClearColor, Color, Mesh},
 };
 use latticeaxiom_compose::LockedGameGraph;
 use latticeaxiom_core::IdentifierError;
@@ -246,11 +251,31 @@ impl Plugin for ProductionHostPlugin {
             (
                 spawn_production_hud_if_client,
                 client::spawn_production_client_view,
-            ),
+                pause::spawn_pause_overlay_if_client,
+                attach_initial_chunk_meshes.after(client::spawn_production_client_view),
+            )
+                .run_if(is_interactive_client),
         )
         .add_systems(
             Update,
-            (client::sync_production_camera, client::exit_on_pause),
+            (
+                client::sync_production_camera,
+                pause::toggle_pause,
+                pause::sync_pause_overlay,
+                pause::sync_cursor_capture,
+                pause::pause_menu_buttons,
+            )
+                .run_if(is_interactive_client),
+        )
+        .add_systems(
+            FixedFirst,
+            pause::suppress_gameplay_while_paused.before(PlayerSystemSet::SampleInput),
+        )
+        .add_systems(
+            FixedUpdate,
+            pause::freeze_player_while_paused
+                .after(PlayerSystemSet::PrepareMovement)
+                .before(PlayerSystemSet::MoveCapsule),
         )
         .add_systems(
             FixedPostUpdate,
@@ -375,6 +400,9 @@ fn install_production_host(
         app.add_plugins(TransformPlugin);
     }
     let working_set = spine.working_set_diagnostics();
+    #[cfg(feature = "client")]
+    let terrain_palette = (!include_transform)
+        .then(|| chunk_mesh::ProductionTerrainPalette::from_ids(&spine.palette_ids()));
     app.insert_resource(product_lock_hash)
         .insert_resource(inspect_surface)
         .insert_resource(spine.storage())
@@ -386,8 +414,9 @@ fn install_production_host(
         .add_plugins(PlayerPlugin)
         .add_plugins(ProductionHostPlugin);
     #[cfg(feature = "client")]
-    if !include_transform {
+    if let Some(terrain_palette) = terrain_palette {
         app.insert_resource(ClearColor(Color::srgb(0.48, 0.70, 0.91)))
+            .insert_resource(terrain_palette)
             .add_plugins(LeafwingInputAdapterPlugin);
     }
 }
@@ -414,7 +443,7 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
         Transform::from_translation(spawn),
     ));
     if let Ok(delta) = spine.take_presentation() {
-        for (coordinate, collider, origin) in delta.upserts {
+        for (coordinate, collider, origin, _occupied) in delta.upserts {
             world.spawn((
                 ChunkPresentation { coordinate },
                 avian3d::prelude::RigidBody::Static,
@@ -446,6 +475,12 @@ fn sync_working_set_diagnostics(
 }
 
 #[cfg(feature = "client")]
+#[allow(clippy::needless_pass_by_value)] // Bevy run conditions receive SystemParams by value.
+fn is_interactive_client(profile: Res<'_, EngineProfile>) -> bool {
+    *profile == EngineProfile::Client
+}
+
+#[cfg(feature = "client")]
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 fn spawn_production_hud_if_client(commands: Commands<'_, '_>, profile: Res<'_, EngineProfile>) {
     if *profile == EngineProfile::Client {
@@ -454,6 +489,7 @@ fn spawn_production_hud_if_client(commands: Commands<'_, '_>, profile: Res<'_, E
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::too_many_arguments)] // Client mesh params are optional presentation resources.
 #[allow(clippy::type_complexity)] // Chunk collider query is one presentation mapping.
 fn sync_chunk_colliders(
     mut commands: Commands<'_, '_>,
@@ -468,6 +504,10 @@ fn sync_chunk_colliders(
             &mut Transform,
         ),
     >,
+    #[cfg(feature = "client")] mut meshes: Option<ResMut<'_, Assets<Mesh>>>,
+    #[cfg(feature = "client")] material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
+    #[cfg(feature = "client")] palette: Option<Res<'_, chunk_mesh::ProductionTerrainPalette>>,
+    #[cfg(feature = "client")] gpu_meshes: Query<'_, '_, &chunk_mesh::ChunkGpuMesh>,
 ) {
     let Ok(delta) = spine.take_presentation() else {
         return;
@@ -480,21 +520,99 @@ fn sync_chunk_colliders(
             commands.entity(entity).despawn();
         }
     }
-    for (coordinate, collider, origin) in delta.upserts {
-        if let Some((_, _, mut existing, mut transform)) = chunks
+    for (coordinate, collider, origin, occupied) in delta.upserts {
+        if let Some((entity, _, mut existing, mut transform)) = chunks
             .iter_mut()
             .find(|(_, presentation, _, _)| presentation.coordinate == coordinate)
         {
             *existing = collider;
             transform.translation = origin;
+            #[cfg(feature = "client")]
+            attach_chunk_mesh(
+                &mut commands,
+                meshes.as_mut(),
+                material.as_ref(),
+                palette.as_ref(),
+                entity,
+                &occupied,
+                gpu_meshes.get(entity).ok(),
+            );
             continue;
         }
-        commands.spawn((
-            ChunkPresentation { coordinate },
-            avian3d::prelude::RigidBody::Static,
-            collider,
-            Transform::from_translation(origin),
-        ));
+        let entity = commands
+            .spawn((
+                ChunkPresentation { coordinate },
+                avian3d::prelude::RigidBody::Static,
+                collider,
+                Transform::from_translation(origin),
+            ))
+            .id();
+        #[cfg(feature = "client")]
+        attach_chunk_mesh(
+            &mut commands,
+            meshes.as_mut(),
+            material.as_ref(),
+            palette.as_ref(),
+            entity,
+            &occupied,
+            None,
+        );
+        #[cfg(not(feature = "client"))]
+        {
+            let _ = entity;
+            let _ = occupied;
+        }
+    }
+}
+
+#[cfg(feature = "client")]
+fn attach_chunk_mesh(
+    commands: &mut Commands<'_, '_>,
+    meshes: Option<&mut ResMut<'_, Assets<Mesh>>>,
+    material: Option<&Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
+    palette: Option<&Res<'_, chunk_mesh::ProductionTerrainPalette>>,
+    entity: Entity,
+    occupied: &[spine::OccupiedCell],
+    existing: Option<&chunk_mesh::ChunkGpuMesh>,
+) {
+    let Some(meshes) = meshes else {
+        return;
+    };
+    let Some(material) = material else {
+        return;
+    };
+    let Some(palette) = palette else {
+        return;
+    };
+    chunk_mesh::apply_chunk_mesh(
+        commands, meshes, material, palette, entity, occupied, existing,
+    );
+}
+
+#[cfg(feature = "client")]
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn attach_initial_chunk_meshes(
+    mut commands: Commands<'_, '_>,
+    spine: Res<'_, ProductionSpine>,
+    chunks: Query<'_, '_, (Entity, &ChunkPresentation), Without<chunk_mesh::ChunkGpuMesh>>,
+    mut meshes: Option<ResMut<'_, Assets<Mesh>>>,
+    material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
+    palette: Option<Res<'_, chunk_mesh::ProductionTerrainPalette>>,
+) {
+    for (entity, presentation) in &chunks {
+        let occupied = spine.occupied_cells(presentation.coordinate);
+        if occupied.is_empty() {
+            continue;
+        }
+        attach_chunk_mesh(
+            &mut commands,
+            meshes.as_mut(),
+            material.as_ref(),
+            palette.as_ref(),
+            entity,
+            &occupied,
+            None,
+        );
     }
 }
 

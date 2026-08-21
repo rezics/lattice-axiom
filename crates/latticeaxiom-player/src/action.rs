@@ -249,6 +249,21 @@ impl ActionFrameInbox {
         self.live_available = true;
     }
 
+    /// Clears movement, look, and buttons on the unpublished live sample.
+    ///
+    /// Pause overlays use this so the next fixed tick does not walk, look, or
+    /// edit while the overlay is open. Queued headless frames are not modified.
+    pub fn suppress_live_gameplay(&mut self) {
+        if !self.live_available {
+            return;
+        }
+        self.live.movement = ActionAxis2V1::default();
+        self.live.look_radians = ActionAxis2V1::default();
+        self.live.held = PlayerActionButtonsV1::empty();
+        self.live.started = PlayerActionButtonsV1::empty();
+        self.live_look_rate_radians_per_second = ActionAxis2V1::default();
+    }
+
     #[cfg(feature = "client-input")]
     pub(crate) fn replace_live_with_neutral(&mut self, generation: u64) {
         let generation_floor = self
@@ -361,6 +376,32 @@ mod tests {
         assert!(first.started.contains(PlayerActionV1::Jump));
         assert!(!second.started.contains(PlayerActionV1::Jump));
         assert_eq!(second.movement, ActionAxis2V1 { x: 1.0, y: 0.0 });
+    }
+
+    #[test]
+    fn suppress_live_gameplay_clears_axes_and_buttons() {
+        let mut inbox = ActionFrameInbox::default();
+        let mut started = PlayerActionButtonsV1::empty();
+        started.insert(PlayerActionV1::Jump);
+        let mut held = PlayerActionButtonsV1::empty();
+        held.insert(PlayerActionV1::PlaceBlock);
+        inbox.publish_live(PlayerActionFrameV1 {
+            generation: 3,
+            movement: ActionAxis2V1 { x: 1.0, y: -1.0 },
+            look_radians: ActionAxis2V1 { x: 0.2, y: 0.1 },
+            held,
+            started,
+            ..PlayerActionFrameV1::default()
+        });
+
+        inbox.suppress_live_gameplay();
+        let frame = inbox.next_fixed_frame();
+
+        assert_eq!(frame.movement, ActionAxis2V1::default());
+        assert_eq!(frame.look_radians, ActionAxis2V1::default());
+        assert_eq!(frame.held, PlayerActionButtonsV1::empty());
+        assert_eq!(frame.started, PlayerActionButtonsV1::empty());
+        assert_eq!(frame.generation, 3);
     }
 
     #[test]

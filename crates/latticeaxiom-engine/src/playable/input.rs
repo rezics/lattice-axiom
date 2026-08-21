@@ -1,15 +1,14 @@
 //! Keyboard and mouse input for the local playable slice.
 
 use bevy::{
-    app::{App, AppExit, Plugin, PreUpdate, Startup},
+    app::{App, Plugin, PreUpdate},
     ecs::schedule::IntoScheduleConfigs,
     input::{
         ButtonInput, InputSystems,
         keyboard::KeyCode,
         mouse::{AccumulatedMouseMotion, MouseButton},
     },
-    prelude::{MessageWriter, Query, Res, ResMut, Resource, With},
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
+    prelude::{Res, ResMut, Resource},
 };
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_player::{
@@ -38,7 +37,6 @@ impl Plugin for PlayableInputPlugin {
                 generation: 0,
                 placement_content: self.placement_content.clone(),
             })
-            .add_systems(Startup, capture_primary_cursor)
             .add_systems(PreUpdate, sample_keyboard_and_mouse.after(InputSystems));
     }
 }
@@ -49,14 +47,6 @@ struct PlayableInputState {
     placement_content: BlockId,
 }
 
-fn capture_primary_cursor(mut cursors: Query<'_, '_, &mut CursorOptions, With<PrimaryWindow>>) {
-    let Ok(mut cursor) = cursors.single_mut() else {
-        return;
-    };
-    cursor.grab_mode = CursorGrabMode::Locked;
-    cursor.visible = false;
-}
-
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 fn sample_keyboard_and_mouse(
     keyboard: Res<'_, ButtonInput<KeyCode>>,
@@ -64,12 +54,7 @@ fn sample_keyboard_and_mouse(
     mouse_motion: Res<'_, AccumulatedMouseMotion>,
     mut state: ResMut<'_, PlayableInputState>,
     mut inbox: ResMut<'_, ActionFrameInbox>,
-    mut exits: MessageWriter<'_, AppExit>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        exits.write(AppExit::Success);
-    }
-
     state.generation = state.generation.saturating_add(1);
 
     let movement = ActionAxis2V1::finite_or_zero(

@@ -30,13 +30,13 @@ pub enum ProductionClientError {
         source: io::Error,
     },
     /// `latticeaxiom.lock` is absent from the launch workspace.
-    #[error("product lock is missing at {path}")]
+    #[error("product lock is missing at {path}; ordinary launch does not create it")]
     MissingLock {
         /// Expected lock path.
         path: PathBuf,
     },
     /// Catalog CAS is absent; frozen reopen never creates the store.
-    #[error("catalog CAS object store is missing at {path}")]
+    #[error("catalog CAS object store is missing at {path}; frozen reopen never creates the store")]
     MissingCas {
         /// Expected CAS directory.
         path: PathBuf,
@@ -62,6 +62,26 @@ pub enum ProductionClientError {
     /// This process already claimed its client App lease.
     #[error(transparent)]
     Lease(#[from] ClientAppLeaseError),
+}
+
+impl ProductionClientError {
+    /// Compose command that writes the client-world product lock and catalog CAS.
+    pub const LOCK_COMMAND: &'static str = "cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap profiles/dev.toml";
+
+    /// Returns a recovery line for ordinary-launch absences.
+    ///
+    /// Frozen reopen never creates the lock or CAS. Missing evidence therefore
+    /// points at [`Self::LOCK_COMMAND`] rather than inventing receipts.
+    #[must_use]
+    pub const fn recovery_hint(&self) -> Option<&'static str> {
+        match self {
+            Self::MissingLock { .. } | Self::MissingCas { .. } => Some(Self::LOCK_COMMAND),
+            Self::MissingHostRealization => Some(
+                "relock with --bootstrap profiles/dev.toml so the product lock seals a client-world realization for this host",
+            ),
+            _ => None,
+        }
+    }
 }
 
 /// Boots the V2/V4 production host from a reopened `latticeaxiom.lock`.
@@ -210,8 +230,17 @@ mod tests {
     fn missing_lock_fails_closed() {
         let directory = TestDirectory::create();
         match load_lock_verified_images(&directory.0) {
-            Err(ProductionClientError::MissingLock { path }) => {
-                assert_eq!(path, directory.0.join("latticeaxiom.lock"));
+            Err(ref error @ ProductionClientError::MissingLock { ref path }) => {
+                assert_eq!(path, &directory.0.join("latticeaxiom.lock"));
+                assert_eq!(
+                    error.recovery_hint(),
+                    Some(ProductionClientError::LOCK_COMMAND)
+                );
+                assert!(
+                    ProductionClientError::LOCK_COMMAND.contains("--bin latticeaxiom-compose")
+                        && ProductionClientError::LOCK_COMMAND.contains("profiles/dev.toml"),
+                    "client lock command must name the compose binary and client-world bootstrap"
+                );
             }
             other => panic!("expected missing lock, got {other:?}"),
         }
@@ -223,8 +252,12 @@ mod tests {
         fs::write(directory.0.join("latticeaxiom.lock"), b"{}")
             .expect("placeholder lock bytes were written");
         match load_lock_verified_images(&directory.0) {
-            Err(ProductionClientError::MissingCas { path }) => {
-                assert_eq!(path, directory.0.join("catalog").join("cas"));
+            Err(ref error @ ProductionClientError::MissingCas { ref path }) => {
+                assert_eq!(path, &directory.0.join("catalog").join("cas"));
+                assert_eq!(
+                    error.recovery_hint(),
+                    Some(ProductionClientError::LOCK_COMMAND)
+                );
             }
             other => panic!("expected missing CAS, got {other:?}"),
         }

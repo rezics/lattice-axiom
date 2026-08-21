@@ -16,6 +16,7 @@ client = [
   "bevy/3d",
   "bevy/audio",
   "bevy/bevy_settings",
+  "bevy/default_font",
   "bevy/keyboard",
   "bevy/mouse",
   "bevy/ui",
