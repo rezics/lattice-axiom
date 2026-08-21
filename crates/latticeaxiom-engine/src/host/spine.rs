@@ -47,9 +47,7 @@ use latticeaxiom_world_db::{
     AuthoritativeMetadataInputV1, CommitDurabilityV1, DeterministicWorldStorage, PersistedChunkV1,
     WorldCommitRequestV1, WorldStorage,
 };
-use latticeaxiom_worldgen::{
-    BoundedGeneratedRegionV1, GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS,
-};
+use latticeaxiom_worldgen::{GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS};
 
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
@@ -57,7 +55,10 @@ use super::{
     catalog::{authored_content_catalog, authored_gameplay_catalog, host_worldgen_catalog},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
-    worldgen::{compile_plan, host_hard_limits, spine_config},
+    worldgen::{
+        compile_plan, generate_plan_chunks, host_hard_limits, spawn_center as player_spawn_center,
+        spine_config, validated_spawn,
+    },
 };
 use crate::LockVerifiedComposeImages;
 
@@ -297,10 +298,11 @@ struct HostDerivedMesh {
 }
 
 impl ProductionSpine {
-    /// Materializes spawn-neighborhood interest into memory storage and projection.
+    /// Materializes validated-spawn interest into memory storage and projection.
     ///
-    /// The host does not pre-generate a large finite map. Further chunks stream
-    /// from player interest. This path does not open a durable writer.
+    /// The host does not pre-generate a large finite map. Chunks stream from the
+    /// compiled V5 plan around player interest. This path does not open a
+    /// durable writer.
     ///
     /// # Errors
     ///
@@ -324,8 +326,9 @@ impl ProductionSpine {
 
     /// Materializes one process-local world identity into the memory kernel.
     ///
-    /// The host does not pre-generate a large finite map. Further chunks stream
-    /// from player interest. This path does not open a durable writer.
+    /// The host does not pre-generate a large finite map. Chunks stream from the
+    /// compiled V5 plan around player interest. This path does not open a
+    /// durable writer.
     ///
     /// # Errors
     ///
@@ -459,23 +462,17 @@ impl ProductionSpine {
             gameplay: None,
             world_store,
         };
-        fill_working_set(
-            &mut inner,
-            &kernel,
-            ChunkCoordinate::new(0, 0, 0),
-            [0, 0],
-            FixedTick::new(0),
-        )?;
-        if !probe_already_occupied(&inner) {
-            place_exposed_probe(&mut inner, &kernel, &probe_content)?;
-        }
-        inner.last_success = None;
-        inner.spawn_center = find_spawn(&inner)?;
+        let spawn = validated_spawn(&inner.plan, &worldgen.bindings)?;
+        inner.spawn_center = player_spawn_center(spawn)?;
         inner.player_pose.translation = inner.spawn_center;
         inner.stream_anchor_xz = [inner.spawn_center.x, inner.spawn_center.z];
         let spawn_chunk = translation_chunk(inner.spawn_center, inner.chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
         fill_working_set(&mut inner, &kernel, spawn_chunk, [0, 0], FixedTick::new(0))?;
+        if !probe_already_occupied(&inner) {
+            place_exposed_probe(&mut inner, &kernel, &probe_content)?;
+        }
+        inner.last_success = None;
         bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk)?;
 
         Ok(Self {
@@ -2005,10 +2002,7 @@ fn publish_generated(
     coordinates: &[ChunkCoordinate],
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
-    let region = BoundedGeneratedRegionV1::materialize_coordinates(
-        &inner.plan,
-        coordinates.iter().copied(),
-    )?;
+    let region = generate_plan_chunks(&inner.plan, coordinates.iter().copied())?;
     let mut mutations = Vec::with_capacity(region.len());
     for (coordinate, candidate) in region.candidates() {
         if !inner
@@ -2536,53 +2530,6 @@ fn place_exposed_probe(
         .commit_cell(kernel, 0, probe, inner.empty, HostVoxel::from_solid(stone))
         .map_err(|_| ProductionHostError::NoSafeSpawn)?;
     Ok(())
-}
-
-#[allow(clippy::cast_precision_loss)] // Spawn stays inside the finite near-origin V2 region.
-fn find_spawn(inner: &ProductionSpineInner) -> Result<Vec3, ProductionHostError> {
-    let profile = latticeaxiom_player::PlayerMovementProfileV1::default();
-    for z in -5..-1 {
-        for x in -5..-1 {
-            if let Some(surface_y) = surface_y(inner, x, z) {
-                let feet_y = (surface_y + 1) as f32;
-                return Ok(Vec3::new(
-                    x as f32 + 0.5,
-                    feet_y + profile.capsule_total_height_m() * 0.5,
-                    z as f32 + 0.5,
-                ));
-            }
-        }
-    }
-    Err(ProductionHostError::NoSafeSpawn)
-}
-
-fn surface_y(inner: &ProductionSpineInner, x: i32, z: i32) -> Option<i32> {
-    let ceiling = i32::from(inner.chunk_edge) * 4 - 1;
-    for y in (0..=ceiling).rev() {
-        let coordinate = VoxelCoordinate::new(i64::from(x), i64::from(y), i64::from(z));
-        match inner.runtime.cell(coordinate) {
-            Ok(voxel) if voxel.collision_occupied() => {
-                let above = VoxelCoordinate::new(i64::from(x), i64::from(y) + 1, i64::from(z));
-                let head = VoxelCoordinate::new(i64::from(x), i64::from(y) + 2, i64::from(z));
-                let clear = inner
-                    .runtime
-                    .cell(above)
-                    .ok()
-                    .is_some_and(|cell| !cell.collision_occupied())
-                    && inner
-                        .runtime
-                        .cell(head)
-                        .ok()
-                        .is_some_and(|cell| !cell.collision_occupied());
-                if clear {
-                    return Some(y);
-                }
-            }
-            Ok(_) => {}
-            Err(_) => return None,
-        }
-    }
-    None
 }
 
 #[allow(clippy::cast_possible_truncation)] // Origins are rejected unless they fit `i32` chunks.

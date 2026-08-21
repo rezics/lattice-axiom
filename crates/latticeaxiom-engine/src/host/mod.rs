@@ -628,7 +628,7 @@ pub enum ProductionHostError {
     /// Padded mesh indexing left the interior.
     #[error("padded voxel index is outside the captured halo")]
     PaddedIndex,
-    /// No safe surface column exists in the generated spawn neighborhood.
+    /// No safe surface column exists in the validated V5 spawn search.
     #[error("no safe spawn column exists in the generated region")]
     NoSafeSpawn,
     /// Generation reused storage evidence on a vacant request.

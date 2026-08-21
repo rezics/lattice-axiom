@@ -22,7 +22,8 @@ use latticeaxiom_gameplay::{
 };
 use latticeaxiom_storage::DimensionId;
 use latticeaxiom_worldgen::{
-    D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, FrozenRoleBindingsV1,
+    AuthoredWorldgenBindingsV1, D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1,
+    FrozenRoleBindingsV1,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -52,6 +53,7 @@ pub(super) struct HostWorldgenCatalog {
     pub(super) role_vocabulary: D4RoleVocabularyV1,
     pub(super) role_bindings: FrozenRoleBindingsV1,
     pub(super) block_catalog: D4BlockCatalogClosureV1,
+    pub(super) bindings: AuthoredWorldgenBindingsV1,
 }
 
 /// Compiles the package-authored gameplay catalog.
@@ -146,6 +148,7 @@ pub(super) fn host_worldgen_catalog(
     let catalog_ids =
         authored_catalog_block_ids(&parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?)?;
     require_d9_golden_block_ids(&catalog_ids)?;
+    let bindings = AuthoredWorldgenBindingsV1::from_json(AUTHORED_BINDINGS_JSON.as_bytes())?;
     let authored: AuthoredBlockBindings =
         serde_json::from_str(AUTHORED_BINDINGS_JSON).map_err(|source| {
             ProductionHostError::InvalidAuthoredCatalog {
@@ -237,6 +240,7 @@ pub(super) fn host_worldgen_catalog(
         role_vocabulary,
         role_bindings,
         block_catalog,
+        bindings,
     })
 }
 

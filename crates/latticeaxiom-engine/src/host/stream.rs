@@ -1,7 +1,9 @@
 //! Player-interest chunk streaming for the production host working set.
 //!
 //! Desired chunks are derived from the local player plus a clamped view and
-//! generation radius. Near-to-far order and movement look-ahead only affect
+//! generation radius around the validated V5 spawn, then around the moving
+//! player. Generation uses the compiled V5 plan rather than the D4 four-chunk
+//! origin neighborhood. Near-to-far order and movement look-ahead only affect
 //! admission priority; they do not change authoritative voxel bytes.
 
 use std::collections::BTreeSet;
@@ -39,7 +41,7 @@ pub(super) struct StreamClamps {
 }
 
 impl StreamClamps {
-    /// Derives streaming clamps from playable hard limits and the D4 config.
+    /// Derives streaming clamps from playable hard limits and the V5 plan config.
     ///
     /// # Errors
     ///
@@ -265,7 +267,9 @@ mod tests {
     };
     use latticeaxiom_compose::PlayableWorldHardLimitsV1;
     use latticeaxiom_storage::ChunkCoordinate;
-    use latticeaxiom_worldgen::WorldgenConfigV1;
+    use latticeaxiom_worldgen::{
+        ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1, PlanningCellCoordinateV1, WorldgenConfigV1,
+    };
     use std::collections::BTreeSet;
 
     fn clamps() -> StreamClamps {
@@ -289,6 +293,24 @@ mod tests {
         assert_eq!(clamps.vertical_min_chunk, 0);
         assert_eq!(clamps.vertical_max_chunk, 3);
         assert!(clamps.max_in_flight() <= 16);
+        assert_eq!(
+            PlanningCellCoordinateV1::from_chunk(ChunkCoordinate::new(17, 2, -9), 8),
+            PlanningCellCoordinateV1::new(2, -2)
+        );
+    }
+
+    #[test]
+    fn desired_chunks_are_not_the_d4_origin_neighborhood() {
+        let origin = ChunkCoordinate::new(4, 2, -3);
+        let desired = desired_chunks(origin, clamps(), [0, 0], &BTreeSet::new());
+        for chunk in ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1 {
+            assert!(
+                !desired.contains(&chunk),
+                "interest around a far origin must not collapse to {chunk:?}"
+            );
+        }
+        assert!(desired.contains(&ChunkCoordinate::new(4, 0, -3)));
+        assert!(desired.contains(&ChunkCoordinate::new(5, 3, -2)));
     }
 
     #[test]
