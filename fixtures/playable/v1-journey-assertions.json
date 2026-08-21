@@ -11,7 +11,7 @@
         "Create uses the shipped local package closure and seed rather than a host-hidden Terrenia fallback.",
         "V0 does not claim a production lock and does not claim a durable writer; the current finite -8..8 playable fixture is a non-production smoke only."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "spawn",
@@ -23,7 +23,7 @@
         "Spawn clearance, footing, hazard, fluid, cave, and active-chunk readiness checks pass before the player is placed.",
         "Distances are meters and angles are radians."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "explore",
@@ -112,15 +112,15 @@
     },
     {
       "id": "exit",
-      "description": "Exit the world with a confirmed clean shutdown after the latest durable state is preserved.",
-      "client_expectation": "The client leaves the world only after the latest durable revision is preserved and the clean-shutdown marker is written.",
-      "headless_expectation": "Headless command injection exits the same world session with the same clean-shutdown marker and without a window or GPU.",
+      "description": "Exit the world after flushing dirty chunks through the sealed writer as Written commits. This is not a RocksDB checkpoint or flush_durable claim.",
+      "client_expectation": "The client leaves the world after a sealed-writer save/close. Pause does not change the world hash. This is not a physical durable checkpoint.",
+      "headless_expectation": "Headless pause/save/exit/continue reopens the same WorldId from DeterministicWorldStorage without a window or GPU. Missing receipts still fail closed.",
       "authoritative_assertions": [
         "Exit preserves the latest durable player and world state before the session ends.",
         "A clean-shutdown marker is written only after durable state is committed.",
         "Low-disk and shutdown-timeout paths still preserve the latest durable state."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "reopen",
@@ -132,7 +132,7 @@
         "Reopen restores the exact generation epoch without regenerating materialized chunks.",
         "Stale async work cannot overwrite a newer revision after reopen."
       ],
-      "implemented": false
+      "implemented": true
     }
   ]
 }

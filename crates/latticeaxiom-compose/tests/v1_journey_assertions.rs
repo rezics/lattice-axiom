@@ -27,10 +27,20 @@ const REQUIRED_STEP_IDS: [&str; 11] = [
     "reopen",
 ];
 const FINITE_FIXTURE_SMOKE_STEPS: [&str; 4] = ["create", "spawn", "explore", "place"];
-/// In-memory production host steps evidenced by headless host tests.
-/// These flags are not a durable-writer or crash-recovery claim.
-const MEMORY_HOST_IMPLEMENTED_STEPS: [&str; 6] =
-    ["explore", "enter-cave", "gather", "craft", "mine", "place"];
+/// In-memory production host steps evidenced by existing tests.
+/// These flags are not a durable-writer, checkpoint, or crash-recovery claim.
+const MEMORY_HOST_IMPLEMENTED_STEPS: [&str; 10] = [
+    "create",
+    "spawn",
+    "explore",
+    "enter-cave",
+    "gather",
+    "craft",
+    "mine",
+    "place",
+    "exit",
+    "reopen",
+];
 const REQUIRED_ASSERTION_PHRASES: [&str; 9] = [
     "frozen lock preflight",
     "Y-up",
