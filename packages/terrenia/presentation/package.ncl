@@ -1,4 +1,4 @@
-# D0 empty Terrenia presentation skeleton; assets arrive with rendered content.
+# Client-only Terrenia presentation: placeholder materials, icons, and HUD display.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in

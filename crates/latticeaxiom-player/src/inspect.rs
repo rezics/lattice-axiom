@@ -17,6 +17,8 @@ pub struct HeadlessTargetInspectV1 {
     pub block_id: BlockId,
     /// Presentation label derived from the targeted block path.
     pub block_display_name: String,
+    /// Deterministic icon identity used when presentation assets are omitted.
+    pub block_display_icon: String,
     /// Cubic chunk containing the targeted voxel.
     pub chunk: ChunkCoordinate,
     /// Resident committed projections at inspect time.
@@ -42,7 +44,8 @@ impl HeadlessTargetInspectV1 {
         dirty: u32,
     ) -> Self {
         Self {
-            block_display_name: block_display_name(&block_id),
+            block_display_name: missing_presentation_display_name(block_id.as_str()),
+            block_display_icon: missing_presentation_icon(block_id.as_str()),
             observation,
             block_id,
             chunk,
@@ -78,11 +81,10 @@ pub fn chunk_line(chunk: ChunkCoordinate) -> String {
     format!("chunk {},{},{}", chunk.x, chunk.y, chunk.z)
 }
 
-fn block_display_name(block_id: &BlockId) -> String {
-    let path = block_id
-        .as_str()
+fn missing_presentation_display_name(content_id: &str) -> String {
+    let path = content_id
         .rsplit_once('/')
-        .map_or(block_id.as_str(), |(_, path)| path);
+        .map_or(content_id, |(_, path)| path);
     let mut display = String::new();
     for segment in path.split('-').filter(|part| !part.is_empty()) {
         if !display.is_empty() {
@@ -95,10 +97,20 @@ fn block_display_name(block_id: &BlockId) -> String {
         }
     }
     if display.is_empty() {
-        block_id.as_str().to_owned()
+        content_id.to_owned()
     } else {
         display
     }
+}
+
+fn missing_presentation_icon(content_id: &str) -> String {
+    let Some((namespace, rest)) = content_id.split_once(':') else {
+        return content_id.to_owned();
+    };
+    let Some((kind, path)) = rest.split_once('/') else {
+        return content_id.to_owned();
+    };
+    format!("{namespace}:asset/icon-{kind}-{path}")
 }
 
 /// Request passed across the Lattice-owned authoritative inspect capability.
@@ -186,6 +198,10 @@ mod tests {
 
         assert_eq!(inspect.block_id, block_id);
         assert_eq!(inspect.block_display_name, "Oak Log");
+        assert_eq!(
+            inspect.block_display_icon,
+            "terrenia:asset/icon-block-oak-log"
+        );
         assert_eq!(inspect.observation.position.x, -1);
         assert_eq!(inspect.observation.distance_mm, 1_250);
         assert_eq!(inspect.chunk, ChunkCoordinate::new(-1, 3, -1));

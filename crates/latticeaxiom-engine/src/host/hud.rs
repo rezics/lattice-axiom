@@ -15,6 +15,10 @@ use super::spine::{ProductionSpine, WorkingSetDiagnosticsV1};
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionInspectReadout;
 
+/// Marker on the inspect overlay's missing-presentation icon swatch.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionInspectIcon;
+
 /// Marker on the one-line working-set occupancy overlay.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionWorkingSetReadout;
@@ -22,6 +26,10 @@ pub(super) struct ProductionWorkingSetReadout;
 /// Marker on the selected hotbar slot readout.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionHotbarReadout;
+
+/// Marker on the hotbar overlay's missing-presentation icon swatch.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionHotbarIcon;
 
 /// Spawns a non-interactive crosshair and inspect readout.
 ///
@@ -96,42 +104,73 @@ fn spawn_crosshair(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) 
 }
 
 fn spawn_inspect_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
-    parent.spawn((
-        ProductionInspectReadout,
-        Name::new(inspect_overlay_label(
-            None,
-            WorkingSetDiagnosticsV1::default(),
-        )),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(18.0),
-            left: Val::Px(18.0),
-            padding: UiRect::all(Val::Px(5.0)),
-            align_items: AlignItems::FlexStart,
-            ..Node::default()
-        },
-        BackgroundColor(Color::srgba(0.03, 0.04, 0.035, 0.64)),
-        FocusPolicy::Pass,
-        Pickable::IGNORE,
-    ));
+    parent
+        .spawn((
+            ProductionInspectReadout,
+            Name::new(inspect_overlay_label(
+                None,
+                WorkingSetDiagnosticsV1::default(),
+            )),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(18.0),
+                left: Val::Px(18.0),
+                padding: UiRect::all(Val::Px(5.0)),
+                align_items: AlignItems::FlexStart,
+                ..Node::default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.04, 0.035, 0.64)),
+            FocusPolicy::Pass,
+            Pickable::IGNORE,
+        ))
+        .with_children(|overlay| {
+            overlay.spawn((
+                ProductionInspectIcon,
+                Name::new("Inspect icon"),
+                Node {
+                    width: Val::Px(14.0),
+                    height: Val::Px(14.0),
+                    ..Node::default()
+                },
+                BackgroundColor(icon_swatch_color("")),
+                FocusPolicy::Pass,
+                Pickable::IGNORE,
+            ));
+        });
 }
 
 fn spawn_hotbar_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
-    parent.spawn((
-        ProductionHotbarReadout,
-        Name::new(empty_hotbar_label()),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(18.0),
-            height: Val::Px(24.0),
-            padding: UiRect::all(Val::Px(5.0)),
-            align_items: AlignItems::Center,
-            ..Node::default()
-        },
-        BackgroundColor(Color::srgba(0.03, 0.04, 0.035, 0.64)),
-        FocusPolicy::Pass,
-        Pickable::IGNORE,
-    ));
+    parent
+        .spawn((
+            ProductionHotbarReadout,
+            Name::new(empty_hotbar_label()),
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(18.0),
+                height: Val::Px(24.0),
+                padding: UiRect::all(Val::Px(5.0)),
+                align_items: AlignItems::Center,
+                ..Node::default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.04, 0.035, 0.64)),
+            FocusPolicy::Pass,
+            Pickable::IGNORE,
+        ))
+        .with_children(|overlay| {
+            overlay.spawn((
+                ProductionHotbarIcon,
+                Name::new("Hotbar icon"),
+                Node {
+                    width: Val::Px(14.0),
+                    height: Val::Px(14.0),
+                    margin: UiRect::right(Val::Px(4.0)),
+                    ..Node::default()
+                },
+                BackgroundColor(icon_swatch_color("")),
+                FocusPolicy::Pass,
+                Pickable::IGNORE,
+            ));
+        });
 }
 
 fn spawn_working_set_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
@@ -158,13 +197,24 @@ pub(super) fn sync_production_inspect_hud(
     spine: Res<'_, ProductionSpine>,
     snapshot: Res<'_, WorkingSetDiagnosticsV1>,
     mut readout: Query<'_, '_, &mut Name, With<ProductionInspectReadout>>,
+    mut icon: Query<'_, '_, &mut BackgroundColor, With<ProductionInspectIcon>>,
 ) {
     let Ok(mut name) = readout.single_mut() else {
         return;
     };
-    let label = inspect_overlay_label(spine.current_target().as_ref(), *snapshot);
+    let target = spine.current_target();
+    let label = inspect_overlay_label(target.as_ref(), *snapshot);
     if name.as_str() != label {
         *name = Name::new(label);
+    }
+    let swatch = target.as_ref().map_or_else(
+        || icon_swatch_color(""),
+        |hit| icon_swatch_color(&hit.block_display_icon),
+    );
+    if let Ok(mut color) = icon.single_mut()
+        && color.0 != swatch
+    {
+        *color = BackgroundColor(swatch);
     }
 }
 
@@ -213,23 +263,57 @@ const fn empty_hotbar_label() -> &'static str {
 pub(super) fn sync_production_hotbar_hud(
     spine: Res<'_, ProductionSpine>,
     mut readout: Query<'_, '_, &mut Name, With<ProductionHotbarReadout>>,
+    mut icon: Query<'_, '_, &mut BackgroundColor, With<ProductionHotbarIcon>>,
 ) {
     let Ok(mut name) = readout.single_mut() else {
         return;
     };
-    let label = spine.inventory_view().map_or_else(
-        || empty_hotbar_label().to_owned(),
+    let (label, swatch) = spine.inventory_view().map_or_else(
+        || (empty_hotbar_label().to_owned(), icon_swatch_color("")),
         |view| match view.selected() {
-            Some(stack) => format!(
-                "Hotbar {} {} x{}",
-                view.hotbar_slot(),
-                stack.item(),
-                stack.quantity()
+            Some(stack) => {
+                let display = spine.content_display(stack.item().as_str());
+                (
+                    format!(
+                        "Hotbar {} {} x{}",
+                        view.hotbar_slot(),
+                        display.name,
+                        stack.quantity()
+                    ),
+                    icon_swatch_color(&display.icon),
+                )
+            }
+            None => (
+                format!("Hotbar {} — empty", view.hotbar_slot()),
+                icon_swatch_color(""),
             ),
-            None => format!("Hotbar {} — empty", view.hotbar_slot()),
         },
     );
     if name.as_str() != label {
         *name = Name::new(label);
     }
+    if let Ok(mut color) = icon.single_mut()
+        && color.0 != swatch
+    {
+        *color = BackgroundColor(swatch);
+    }
+}
+
+fn icon_swatch_color(icon: &str) -> Color {
+    if icon.is_empty() {
+        return Color::srgba(0.18, 0.20, 0.18, 0.85);
+    }
+    let mut hash = 2_166_136_261_u32;
+    for byte in icon.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    let red = 0.22 + f32::from(channel(hash >> 16)) / 255.0 * 0.55;
+    let green = 0.22 + f32::from(channel(hash >> 8)) / 255.0 * 0.55;
+    let blue = 0.22 + f32::from(channel(hash)) / 255.0 * 0.55;
+    Color::srgb(red, green, blue)
+}
+
+fn channel(value: u32) -> u8 {
+    u8::try_from(value & 0xff).unwrap_or(0)
 }
