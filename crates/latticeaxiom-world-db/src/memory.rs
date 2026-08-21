@@ -2057,6 +2057,52 @@ mod tests {
     }
 
     #[test]
+    fn sealed_writer_commit_survives_close_and_reactivation() {
+        let (storage, _, world) = fixture_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let mut writer = storage
+            .activate_writer(fixture_sealed_activation(world, permit.clone()))
+            .expect("sealed writer activation succeeds");
+        writer
+            .commit(fixture_request(
+                world,
+                7,
+                CommitDurabilityV1::Written,
+                &metadata,
+            ))
+            .expect("sealed writer commits a chunk");
+        writer.close().expect("sealed writer closes");
+
+        let loaded = storage
+            .begin_read(world)
+            .expect("closed world remains readable")
+            .load_chunk(&fixture_key(world))
+            .expect("portable record decodes")
+            .expect("committed chunk exists");
+        assert_eq!(loaded.chunk_revision(), ChunkRevision::new(1));
+
+        let reopened = storage
+            .preflight(world)
+            .expect("closed writer leaves preflight evidence")
+            .activation_permit()
+            .expect("ready store retains activation evidence")
+            .clone();
+        storage
+            .activate_writer(fixture_sealed_activation(world, reopened))
+            .expect("sealed reactivation succeeds after close")
+            .close()
+            .expect("reactivated writer closes");
+        let reloaded = storage
+            .begin_read(world)
+            .expect("reactivated world remains readable")
+            .load_chunk(&fixture_key(world))
+            .expect("portable record still decodes")
+            .expect("committed chunk survived reactivation");
+        assert_eq!(reloaded.chunk_revision(), ChunkRevision::new(1));
+    }
+
+    #[test]
     fn pre_batch_fault_is_atomic_and_exact_retry_is_idempotent() {
         let (storage, _, world) = fixture_storage();
         let metadata = fixture_metadata();
