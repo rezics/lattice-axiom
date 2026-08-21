@@ -29,6 +29,7 @@ pub use model::{
     MAX_AUTHORITATIVE_REACH_METERS, MemoryStage, MeshSemanticFingerprint, NeighborRevision,
     NeighborRevisions, ProjectionDecision, ProjectionEvidence, ProjectionReceipt, RetainedBytes,
     RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate, WorkingSetScope, WorldEpoch,
+    cpu_heavy_concurrency, host_parallelism,
 };
 pub use working_set::VoxelRuntime;
 

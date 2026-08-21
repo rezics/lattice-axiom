@@ -16,13 +16,13 @@ use latticeaxiom_voxel_mesh::{Face, PaddedChunk};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ApplyByteDeclaration, CancellationAckOutcome, CancellationReleaseReceipt, ColliderFailure,
-    ColliderSafetyState, ColliderSemanticFingerprint, CollisionSemantics, CommittedChunkProjection,
-    CompletionOutcome, DerivedApplyReceipt, DerivedEnqueueReceipt, DerivedInput, DerivedJobId,
-    DerivedJobKey, DerivedKind, DerivedRequest, DerivedRequestSet, DerivedSemanticFingerprint,
-    DerivedSourceFingerprint, DispatchOutcome, EnqueueDecision, EvictionLeaseGeneration,
-    EvictionPermit, EvictionReceipt, FixedTick, InterestWindow, MemoryStage,
-    MeshSemanticFingerprint, NeighborRevision, NeighborRevisions, ProjectionDecision,
+    ApplyByteDeclaration, BackpressureReason, CancellationAckOutcome, CancellationReleaseReceipt,
+    ColliderFailure, ColliderSafetyState, ColliderSemanticFingerprint, CollisionSemantics,
+    CommittedChunkProjection, CompletionOutcome, DerivedApplyReceipt, DerivedEnqueueReceipt,
+    DerivedInput, DerivedJobId, DerivedJobKey, DerivedKind, DerivedRequest, DerivedRequestSet,
+    DerivedSemanticFingerprint, DerivedSourceFingerprint, DispatchOutcome, EnqueueDecision,
+    EvictionLeaseGeneration, EvictionPermit, EvictionReceipt, FixedTick, InterestWindow,
+    MemoryStage, MeshSemanticFingerprint, NeighborRevision, NeighborRevisions, ProjectionDecision,
     ProjectionReceipt, RetainedBytes, RuntimeDiagnostics, RuntimeError, RuntimeGeneration,
     RuntimeLimits, RuntimeResult, StaleReason, VoxelCoordinate, WorkingSetScope,
     model::ProjectionParts,
@@ -617,17 +617,90 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         Ok(self.enqueue_key(key, tick, request))
     }
 
+    /// Combined mesh and collider jobs currently in flight.
+    #[must_use]
+    pub fn in_flight_jobs(&self) -> usize {
+        self.queues[DerivedKind::Mesh.index()]
+            .diagnostics()
+            .in_flight()
+            .saturating_add(
+                self.queues[DerivedKind::Collider.index()]
+                    .diagnostics()
+                    .in_flight(),
+            )
+    }
+
+    /// Records a computed result that is waiting for host presentation apply.
+    ///
+    /// Waiting bytes are distinct from in-flight reservations: they are the
+    /// measured result payload after executor completion and before
+    /// [`Self::complete_derived`].
+    pub fn record_waiting_to_apply(&mut self, bytes: u64) {
+        self.diagnostics.waiting_to_apply_jobs =
+            self.diagnostics.waiting_to_apply_jobs.saturating_add(1);
+        self.diagnostics.waiting_to_apply_bytes = self
+            .diagnostics
+            .waiting_to_apply_bytes
+            .saturating_add(bytes);
+        self.diagnostics.waiting_to_apply_bytes_high_water = self
+            .diagnostics
+            .waiting_to_apply_bytes_high_water
+            .max(self.diagnostics.waiting_to_apply_bytes);
+    }
+
+    /// Releases waiting-to-apply accounting after receipt check or discard.
+    pub fn consume_waiting_to_apply(&mut self, bytes: u64) {
+        self.diagnostics.waiting_to_apply_jobs =
+            self.diagnostics.waiting_to_apply_jobs.saturating_sub(1);
+        self.diagnostics.waiting_to_apply_bytes = self
+            .diagnostics
+            .waiting_to_apply_bytes
+            .saturating_sub(bytes);
+    }
+
+    /// Starts ready jobs until empty, backpressured, or `max_jobs` is reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::CounterOverflow`] if process-local job identity
+    /// is exhausted.
+    pub fn dispatch_ready(
+        &mut self,
+        kind: DerivedKind,
+        max_jobs: usize,
+    ) -> RuntimeResult<Vec<DerivedInput<V>>> {
+        let mut started = Vec::new();
+        for _ in 0..max_jobs {
+            match self.dispatch_next(kind)? {
+                DispatchOutcome::Started(input) => started.push(input),
+                DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
+                DispatchOutcome::MemoryContractViolation { .. } => {}
+            }
+        }
+        Ok(started)
+    }
+
     /// Starts the next stable-priority job if count and byte budgets allow it.
     ///
     /// The returned input owns a full chunk plus one voxel on every side. It is
     /// deliberately non-cloneable and must later be returned to completion or
-    /// cancellation acknowledgement.
+    /// cancellation acknowledgement. Dispatch does not execute the job; the
+    /// caller owns Bevy task routing and must return the input to
+    /// [`Self::complete_derived`] or cancellation acknowledgement.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeError::CounterOverflow`] if process-local job identity
     /// is exhausted.
     pub fn dispatch_next(&mut self, kind: DerivedKind) -> RuntimeResult<DispatchOutcome<V>> {
+        let in_flight = self.in_flight_jobs();
+        if in_flight >= self.limits.cpu_heavy_concurrency()
+            || in_flight >= self.limits.max_combined_in_flight()
+        {
+            return Ok(DispatchOutcome::Backpressured {
+                reason: BackpressureReason::InFlightJobs,
+            });
+        }
         let global_available = self
             .limits
             .max_combined_reserved_bytes()

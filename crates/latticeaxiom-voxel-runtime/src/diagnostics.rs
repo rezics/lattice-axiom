@@ -153,6 +153,9 @@ pub struct RuntimeDiagnostics {
     pub(crate) last_commit_to_apply_ticks: Option<u64>,
     pub(crate) max_commit_to_apply_ticks: u64,
     pub(crate) conservative_colliders: usize,
+    pub(crate) waiting_to_apply_jobs: usize,
+    pub(crate) waiting_to_apply_bytes: u64,
+    pub(crate) waiting_to_apply_bytes_high_water: u64,
     pub(crate) mesh: QueueDiagnostics,
     pub(crate) collider: QueueDiagnostics,
 }
@@ -240,6 +243,21 @@ impl RuntimeDiagnostics {
     #[must_use]
     pub const fn conservative_colliders(self) -> usize {
         self.conservative_colliders
+    }
+    /// Receipt-checked results waiting for host presentation apply.
+    #[must_use]
+    pub const fn waiting_to_apply_jobs(self) -> usize {
+        self.waiting_to_apply_jobs
+    }
+    /// Measured result bytes waiting for host presentation apply.
+    #[must_use]
+    pub const fn waiting_to_apply_bytes(self) -> u64 {
+        self.waiting_to_apply_bytes
+    }
+    /// Maximum observed waiting-to-apply result bytes.
+    #[must_use]
+    pub const fn waiting_to_apply_bytes_high_water(self) -> u64 {
+        self.waiting_to_apply_bytes_high_water
     }
     /// Mesh queue diagnostics.
     #[must_use]

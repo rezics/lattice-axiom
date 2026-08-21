@@ -478,6 +478,17 @@ impl DerivedKind {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DerivedPriority(u16);
 impl DerivedPriority {
+    /// Player core working set that must stay resident.
+    pub const CORE: Self = Self(0);
+    /// Collider work required before the local capsule can step.
+    pub const COLLIDER_SAFETY: Self = Self(1);
+    /// Authoritative edits that must become visible.
+    pub const EDIT_TO_VISIBLE: Self = Self(2);
+    /// Hysteresis ring retained after leaving core.
+    pub const RETAIN: Self = Self(3);
+    /// Distant prefetch that yields at the soft high-water.
+    pub const PREFETCH: Self = Self(4);
+
     /// Creates a priority bucket.
     #[must_use]
     pub const fn new(value: u16) -> Self {
@@ -748,6 +759,15 @@ pub struct DerivedQueueLimits {
     reserved_byte_budget: u64,
 }
 impl DerivedQueueLimits {
+    /// ADR 0026 mesh queued-job hard cap.
+    pub const MESH_JOB_CAP: usize = 128;
+    /// ADR 0026 mesh in-flight byte hard cap.
+    pub const MESH_BYTE_CAP: u64 = 128 * 1024 * 1024;
+    /// ADR 0026 collider queued-job hard cap.
+    pub const COLLIDER_JOB_CAP: usize = 64;
+    /// ADR 0026 collider in-flight byte hard cap.
+    pub const COLLIDER_BYTE_CAP: u64 = 64 * 1024 * 1024;
+
     /// Validates queue limits.
     ///
     /// # Errors
@@ -779,6 +799,26 @@ impl DerivedQueueLimits {
             reserved_byte_budget: max_reserved_bytes,
         })
     }
+    /// Mesh queue hard caps from ADR 0026 `desktop-reference-v1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the accepted caps are zero.
+    pub const fn mesh_desktop_reference_v1() -> RuntimeResult<Self> {
+        Self::new(Self::MESH_JOB_CAP, Self::MESH_JOB_CAP, Self::MESH_BYTE_CAP)
+    }
+    /// Collider queue hard caps from ADR 0026 `desktop-reference-v1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the accepted caps are zero.
+    pub const fn collider_desktop_reference_v1() -> RuntimeResult<Self> {
+        Self::new(
+            Self::COLLIDER_JOB_CAP,
+            Self::COLLIDER_JOB_CAP,
+            Self::COLLIDER_BYTE_CAP,
+        )
+    }
     /// Pending hard limit.
     #[must_use]
     pub const fn max_pending(self) -> usize {
@@ -794,6 +834,24 @@ impl DerivedQueueLimits {
     pub const fn max_reserved_bytes(self) -> u64 {
         self.reserved_byte_budget
     }
+    /// 75% pending occupancy that stops prefetch and coalesces revisions.
+    #[must_use]
+    pub const fn soft_high_water_jobs(self) -> usize {
+        percent_of_usize(self.pending_slots, RuntimeLimits::SOFT_HIGH_WATER_PERCENT)
+    }
+    /// 75% reserved-byte occupancy that stops prefetch and coalesces revisions.
+    #[must_use]
+    pub const fn soft_high_water_bytes(self) -> u64 {
+        percent_of_u64(
+            self.reserved_byte_budget,
+            RuntimeLimits::SOFT_HIGH_WATER_PERCENT,
+        )
+    }
+    /// Returns whether pending count or reserved bytes reached the soft high-water.
+    #[must_use]
+    pub const fn at_soft_high_water(self, pending: usize, reserved_bytes: u64) -> bool {
+        pending >= self.soft_high_water_jobs() || reserved_bytes >= self.soft_high_water_bytes()
+    }
 }
 
 /// Hard limits for a committed projection working set.
@@ -801,11 +859,26 @@ impl DerivedQueueLimits {
 pub struct RuntimeLimits {
     resident_chunks: usize,
     combined_reserved_bytes: u64,
+    combined_in_flight: usize,
+    cpu_heavy_concurrency: usize,
     mesh: DerivedQueueLimits,
     collider: DerivedQueueLimits,
 }
 impl RuntimeLimits {
+    /// ADR 0026 combined queued-job hard cap.
+    pub const COMBINED_JOB_CAP: usize = 512;
+    /// ADR 0026 combined in-flight byte hard cap.
+    pub const COMBINED_BYTE_CAP: u64 = 384 * 1024 * 1024;
+    /// ADR 0026 main-world completion apply byte cap per render frame.
+    pub const MAIN_WORLD_APPLY_BYTE_CAP: u64 = 16 * 1024 * 1024;
+    /// Occupancy that stops remote prefetch and coalesces pending revisions.
+    pub const SOFT_HIGH_WATER_PERCENT: u32 = 75;
+
     /// Validates global limits.
+    ///
+    /// Combined in-flight defaults to the sum of the per-kind caps, clamped by
+    /// [`Self::COMBINED_JOB_CAP`]. CPU-heavy concurrency defaults to that same
+    /// combined cap; hosts should then apply [`cpu_heavy_concurrency`].
     ///
     /// # Errors
     ///
@@ -826,11 +899,45 @@ impl RuntimeLimits {
                 name: "max_combined_reserved_bytes",
             });
         }
+        let combined = mesh
+            .max_in_flight()
+            .saturating_add(collider.max_in_flight());
+        let combined_in_flight = if combined < Self::COMBINED_JOB_CAP {
+            combined
+        } else {
+            Self::COMBINED_JOB_CAP
+        };
         Ok(Self {
             resident_chunks: max_resident_chunks,
             combined_reserved_bytes: max_combined_reserved_bytes,
+            combined_in_flight,
+            cpu_heavy_concurrency: combined_in_flight,
             mesh,
             collider,
+        })
+    }
+    /// Restricts simultaneous CPU-heavy derived jobs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `cpu_heavy_concurrency` is zero.
+    pub const fn with_cpu_heavy_concurrency(
+        self,
+        cpu_heavy_concurrency: usize,
+    ) -> RuntimeResult<Self> {
+        if cpu_heavy_concurrency == 0 {
+            return Err(RuntimeError::InvalidLimit {
+                name: "cpu_heavy_concurrency",
+            });
+        }
+        let cpu_heavy_concurrency = if cpu_heavy_concurrency < self.combined_in_flight {
+            cpu_heavy_concurrency
+        } else {
+            self.combined_in_flight
+        };
+        Ok(Self {
+            cpu_heavy_concurrency,
+            ..self
         })
     }
     /// Resident projection limit.
@@ -843,6 +950,16 @@ impl RuntimeLimits {
     pub const fn max_combined_reserved_bytes(self) -> u64 {
         self.combined_reserved_bytes
     }
+    /// Cross-kind combined in-flight job limit.
+    #[must_use]
+    pub const fn max_combined_in_flight(self) -> usize {
+        self.combined_in_flight
+    }
+    /// Maximum simultaneous CPU-heavy derived jobs.
+    #[must_use]
+    pub const fn cpu_heavy_concurrency(self) -> usize {
+        self.cpu_heavy_concurrency
+    }
     /// Mesh limits.
     #[must_use]
     pub const fn mesh(self) -> DerivedQueueLimits {
@@ -853,6 +970,31 @@ impl RuntimeLimits {
     pub const fn collider(self) -> DerivedQueueLimits {
         self.collider
     }
+}
+
+/// ADR 0026 CPU-heavy concurrency: `max(1, physical_core_count - 2)`.
+#[must_use]
+pub const fn cpu_heavy_concurrency(physical_core_count: usize) -> usize {
+    let reduced = physical_core_count.saturating_sub(2);
+    if reduced == 0 { 1 } else { reduced }
+}
+
+/// Process-visible parallelism used to size CPU-heavy derived work.
+///
+/// This is the OS parallel-unit count, not a project-owned thread runtime.
+#[must_use]
+pub fn host_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .max(1)
+}
+
+const fn percent_of_usize(value: usize, percent: u32) -> usize {
+    value.saturating_mul(percent as usize) / 100
+}
+
+const fn percent_of_u64(value: u64, percent: u32) -> u64 {
+    value.saturating_mul(percent as u64) / 100
 }
 
 /// Inclusive Chebyshev cube of chunks retained around a streaming interest center.

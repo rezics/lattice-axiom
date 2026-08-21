@@ -23,7 +23,7 @@ use crate::{
     DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, FixedTick, InterestWindow,
     MemoryStage, MeshSemanticFingerprint, ProjectionDecision, ProjectionEvidence, RetainedBytes,
     RuntimeError, RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate, VoxelRuntime,
-    WorkingSetScope, WorldEpoch,
+    WorkingSetScope, WorldEpoch, cpu_heavy_concurrency, host_parallelism,
 };
 
 const EDGE: u16 = 4;
@@ -1291,6 +1291,107 @@ fn dda_validates_reach_and_negative_boundary_ownership() {
             ..
         })
     ));
+}
+
+#[test]
+fn cpu_heavy_concurrency_reserves_two_cores() {
+    assert_eq!(cpu_heavy_concurrency(0), 1);
+    assert_eq!(cpu_heavy_concurrency(1), 1);
+    assert_eq!(cpu_heavy_concurrency(2), 1);
+    assert_eq!(cpu_heavy_concurrency(6), 4);
+    assert_eq!(cpu_heavy_concurrency(8), 6);
+    assert!(host_parallelism() >= 1);
+}
+
+#[test]
+fn dispatch_is_split_from_apply_and_respects_cpu_heavy_cap() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let first = ChunkCoordinate::new(0, 0, 0);
+    let second = ChunkCoordinate::new(1, 0, 0);
+    let (_, stored_first) = commit_chunk(&storage, &runtime_scope, first, vec![1; CELL_COUNT], 1);
+    let (_, stored_second) = commit_chunk(&storage, &runtime_scope, second, vec![2; CELL_COUNT], 2);
+    let queue = queue_limits(8, 4, 1024 * 1024);
+    let limits = RuntimeLimits::new(4, 2 * 1024 * 1024, queue, queue)
+        .expect("fixture limits are positive")
+        .with_cpu_heavy_concurrency(1)
+        .expect("cpu-heavy cap is positive");
+    let mut runtime =
+        VoxelRuntime::new(runtime_scope, RuntimeGeneration::new(1), EDGE, 0_u8, limits)
+            .expect("runtime is valid");
+    project_stored(&mut runtime, &stored_first, 0, 1, 1);
+    project_stored(&mut runtime, &stored_second, 1, 1, 1);
+
+    let mesh = match runtime
+        .dispatch_next(DerivedKind::Mesh)
+        .expect("job identity remains in range")
+    {
+        DispatchOutcome::Started(input) => input,
+        other => panic!("first mesh job must start, got {other:?}"),
+    };
+    assert_eq!(runtime.in_flight_jobs(), 1);
+    assert!(matches!(
+        runtime
+            .dispatch_next(DerivedKind::Mesh)
+            .expect("job identity remains in range"),
+        DispatchOutcome::Backpressured {
+            reason: BackpressureReason::InFlightJobs
+        }
+    ));
+    assert!(matches!(
+        runtime
+            .dispatch_next(DerivedKind::Collider)
+            .expect("job identity remains in range"),
+        DispatchOutcome::Backpressured {
+            reason: BackpressureReason::InFlightJobs
+        }
+    ));
+
+    runtime.record_waiting_to_apply(32);
+    assert_eq!(runtime.diagnostics().waiting_to_apply_jobs(), 1);
+    assert_eq!(runtime.diagnostics().waiting_to_apply_bytes(), 32);
+    runtime.consume_waiting_to_apply(32);
+    assert_eq!(runtime.diagnostics().waiting_to_apply_jobs(), 0);
+    assert_eq!(runtime.diagnostics().waiting_to_apply_bytes(), 0);
+
+    assert!(matches!(
+        runtime.complete_derived(
+            mesh,
+            0_u8,
+            ApplyByteDeclaration::new(0),
+            FixedTick::new(2),
+            |_| Ok::<(), ()>(()),
+        ),
+        CompletionOutcome::Applied { .. }
+    ));
+    assert_eq!(runtime.in_flight_jobs(), 0);
+    assert!(matches!(
+        runtime
+            .dispatch_next(DerivedKind::Mesh)
+            .expect("released cap admits the next job"),
+        DispatchOutcome::Started(_)
+    ));
+}
+
+#[test]
+fn desktop_reference_queue_caps_and_soft_high_water_match_adr_0026() {
+    let mesh =
+        DerivedQueueLimits::mesh_desktop_reference_v1().expect("accepted mesh caps are nonzero");
+    let collider = DerivedQueueLimits::collider_desktop_reference_v1()
+        .expect("accepted collider caps are nonzero");
+    assert_eq!(mesh.max_pending(), 128);
+    assert_eq!(mesh.max_reserved_bytes(), 128 * 1024 * 1024);
+    assert_eq!(collider.max_pending(), 64);
+    assert_eq!(collider.max_reserved_bytes(), 64 * 1024 * 1024);
+    assert_eq!(mesh.soft_high_water_jobs(), 96);
+    assert_eq!(collider.soft_high_water_jobs(), 48);
+    assert!(mesh.at_soft_high_water(96, 0));
+    assert!(!mesh.at_soft_high_water(95, 0));
+    let limits = RuntimeLimits::new(64, RuntimeLimits::COMBINED_BYTE_CAP, mesh, collider)
+        .expect("accepted combined caps are nonzero");
+    assert_eq!(limits.max_combined_in_flight(), 192);
+    assert_eq!(limits.max_combined_reserved_bytes(), 384 * 1024 * 1024);
+    assert_eq!(RuntimeLimits::MAIN_WORLD_APPLY_BYTE_CAP, 16 * 1024 * 1024);
 }
 
 proptest! {
