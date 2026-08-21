@@ -2,15 +2,20 @@
 //!
 //! This is the production-client session catalog until a durable writer exists.
 //! Continue resumes the same process-local [`WorldId`]; it does not load a
-//! checkpoint, restore trash, or publish a catalog sidecar.
+//! checkpoint, restore trash, or publish a catalog sidecar. An optional shared
+//! [`DeterministicWorldStorage`] fills [`WorldOpenPlan::activation_binding`]
+//! from storage preflight. When storage is absent, create stays memory-only.
 
 use std::collections::BTreeMap;
 
-use latticeaxiom_core::{StableId, WorldId};
+use latticeaxiom_core::{CanonicalHash, StableId, WorldId};
 use latticeaxiom_world_catalog::{
     CatalogEntry, CatalogEntryState, CatalogProjection, DisplayNameError, LiveWorldLocation,
-    ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
-    WorldRootId,
+    ReconciliationState, SealedActivationBindingV1, StoreId, WorldOpenAction, WorldOpenPlan,
+    WorldOpenRisk, WorldOpenStatus, WorldRootId,
+};
+use latticeaxiom_world_db::{
+    ActivationPermitV1, DeterministicWorldStorage, WorldDbError, WorldStorage,
 };
 use thiserror::Error;
 
@@ -69,6 +74,9 @@ impl InMemoryWorldList {
 
     /// Inserts a new in-memory session world without opening a writer.
     ///
+    /// `activation_binding` is catalog evidence from storage preflight. Memory-only
+    /// sessions pass [`None`] and remain unwritable.
+    ///
     /// # Errors
     ///
     /// Returns [`WorldShellError::DuplicateWorldId`] when `world_id` is already
@@ -79,6 +87,7 @@ impl InMemoryWorldList {
         intent: &QuickCreateIntent,
         world_id: WorldId,
         now_ms: u64,
+        activation_binding: Option<SealedActivationBindingV1>,
     ) -> Result<WorldId, WorldShellError> {
         if self.records.contains_key(&world_id) {
             return Err(WorldShellError::DuplicateWorldId);
@@ -101,7 +110,7 @@ impl InMemoryWorldList {
                 game_summary: Some(intent.root_game_package.to_string()),
                 dimension_summary: None,
             },
-            Some(memory_session_open_plan(world_id)),
+            Some(memory_session_open_plan(world_id, activation_binding)),
         )?;
         self.records.insert(world_id, record);
         Ok(world_id)
@@ -143,6 +152,7 @@ pub struct MemoryStartFlow {
     worlds: InMemoryWorldList,
     draft: Option<QuickCreateIntent>,
     now_ms: u64,
+    storage: Option<DeterministicWorldStorage>,
 }
 
 impl MemoryStartFlow {
@@ -155,6 +165,7 @@ impl MemoryStartFlow {
             worlds,
             draft: None,
             now_ms: 1,
+            storage: None,
         }
     }
 
@@ -186,22 +197,65 @@ impl MemoryStartFlow {
         self.draft = Some(intent);
     }
 
+    /// Clock used when semantic quick-create publishes a session world.
+    #[must_use]
+    pub const fn now_ms(&self) -> u64 {
+        self.now_ms
+    }
+
+    /// Shares a deterministic world store used to bind create plans from preflight.
+    ///
+    /// When absent, create stays memory-only and
+    /// [`WorldOpenPlan::activation_binding`] remains [`None`].
+    pub fn set_storage(&mut self, storage: DeterministicWorldStorage) {
+        self.storage = Some(storage);
+    }
+
+    /// Returns the shared world store, when one is attached.
+    #[must_use]
+    pub const fn storage(&self) -> Option<&DeterministicWorldStorage> {
+        self.storage.as_ref()
+    }
+
     /// Publishes an in-memory world and refreshes the shell list.
+    ///
+    /// When storage is attached, the open plan's activation binding is filled
+    /// from read-only storage preflight. The [`WorldId`] is still published to
+    /// the in-memory list.
     ///
     /// # Errors
     ///
-    /// Returns [`WorldShellError`] when the identity already exists.
+    /// Returns [`WorldShellError`] when the identity already exists, or
+    /// [`MemoryStartError`] when attached storage preflight is not ready.
     pub fn create(
         &mut self,
         intent: &QuickCreateIntent,
         world_id: WorldId,
         now_ms: u64,
-    ) -> Result<WorldId, WorldShellError> {
-        let world_id = self.worlds.create(intent, world_id, now_ms)?;
+    ) -> Result<WorldId, MemoryStartError> {
+        let activation_binding = self.activation_binding_from_storage(world_id)?;
+        let world_id = self
+            .worlds
+            .create(intent, world_id, now_ms, activation_binding)?;
         self.draft = None;
         self.sync_worlds();
         self.shell.screen = ShellScreen::Home;
         Ok(world_id)
+    }
+
+    /// Validates and applies a semantic command without publishing a world.
+    ///
+    /// Quick-create returns [`ShellEffect::RequestQuickCreate`] so a host that
+    /// owns storage can provision before [`Self::create`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MemoryStartError`] when the current tree rejects the command.
+    pub fn apply_shell_command(
+        &mut self,
+        command: &SemanticCommand,
+    ) -> Result<ShellEffect, MemoryStartError> {
+        Ok(self.shell.inject(command)?)
     }
 
     /// Records that an in-memory session was entered.
@@ -241,7 +295,7 @@ impl MemoryStartFlow {
         &mut self,
         command: &SemanticCommand,
     ) -> Result<MemoryStartEffect, MemoryStartError> {
-        match self.shell.inject(command)? {
+        match self.apply_shell_command(command)? {
             ShellEffect::RequestQuickCreate => {
                 let intent = self
                     .draft
@@ -256,6 +310,22 @@ impl MemoryStartFlow {
 
     fn sync_worlds(&mut self) {
         self.shell.worlds = self.worlds.list(WorldSort::LastPlayed);
+    }
+
+    fn activation_binding_from_storage(
+        &self,
+        world_id: WorldId,
+    ) -> Result<Option<SealedActivationBindingV1>, MemoryStartError> {
+        let Some(storage) = &self.storage else {
+            return Ok(None);
+        };
+        let preflight = storage
+            .preflight(world_id)
+            .map_err(|error| MemoryStartError::from_storage("preflight", error))?;
+        let Some(permit) = preflight.activation_permit() else {
+            return Err(MemoryStartError::StorageActivationUnavailable { world: world_id });
+        };
+        Ok(Some(sealed_activation_binding(permit)))
     }
 }
 
@@ -283,6 +353,34 @@ pub enum MemoryStartError {
     /// Quick-create was activated without a typed intent.
     #[error("quick-create draft is missing")]
     MissingQuickCreateDraft,
+    /// Attached world storage rejected a create-time preflight.
+    #[error("world storage {operation} failed: {detail}")]
+    Storage {
+        /// Storage operation that failed.
+        operation: &'static str,
+        /// Typed storage diagnostic.
+        detail: String,
+    },
+    /// Attached storage preflight did not yield ready activation evidence.
+    #[error("world storage preflight did not yield activation evidence for {world}")]
+    StorageActivationUnavailable {
+        /// World whose preflight lacked a ready permit.
+        world: WorldId,
+    },
+}
+
+impl MemoryStartError {
+    fn from_storage(operation: &'static str, error: WorldDbError) -> Self {
+        match error {
+            WorldDbError::ActivationEvidenceUnavailable { world } => {
+                Self::StorageActivationUnavailable { world }
+            }
+            error => Self::Storage {
+                operation,
+                detail: error.to_string(),
+            },
+        }
+    }
 }
 
 /// Template identity for a process-local memory session world.
@@ -294,7 +392,19 @@ pub fn memory_session_template() -> StableId {
     }
 }
 
-fn memory_session_open_plan(world_id: WorldId) -> WorldOpenPlan {
+/// Store-generation identity used when a memory session provisions into shared storage.
+#[must_use]
+pub fn memory_session_store_id() -> StoreId {
+    match StoreId::new("latticeaxiom-memory-session") {
+        Ok(id) => id,
+        Err(error) => unreachable!("validated memory-session store ID: {error}"),
+    }
+}
+
+fn memory_session_open_plan(
+    world_id: WorldId,
+    activation_binding: Option<SealedActivationBindingV1>,
+) -> WorldOpenPlan {
     WorldOpenPlan {
         world_id,
         status: WorldOpenStatus::ReadyExact,
@@ -303,7 +413,17 @@ fn memory_session_open_plan(world_id: WorldId) -> WorldOpenPlan {
         next_safe_step: Some(WorldOpenAction::UseFrozenLock),
         actions: vec![WorldOpenAction::UseFrozenLock],
         diagnostics: Vec::new(),
-        activation_binding: None,
+        activation_binding,
+    }
+}
+
+fn sealed_activation_binding(permit: &ActivationPermitV1) -> SealedActivationBindingV1 {
+    SealedActivationBindingV1 {
+        store_id: permit.store_id().clone(),
+        metadata_epoch: permit.metadata_epoch().get(),
+        metadata_hash: CanonicalHash::from_bytes(*permit.metadata_hash().as_bytes()),
+        projection_hash: CanonicalHash::from_bytes(*permit.projection_hash().as_bytes()),
+        plan_generation: permit.metadata_epoch().get(),
     }
 }
 
@@ -332,7 +452,7 @@ mod tests {
     fn create_list_and_continue_share_the_same_world_id() {
         let mut list = InMemoryWorldList::new();
         let world = WorldId::new_v4();
-        list.create(&intent(), world, 10)
+        list.create(&intent(), world, 10, None)
             .unwrap_or_else(|error| panic!("create: {error}"));
         let model = list.list(WorldSort::LastPlayed);
         assert_eq!(model.records().len(), 1);
@@ -354,11 +474,32 @@ mod tests {
     fn duplicate_session_identity_is_rejected() {
         let mut list = InMemoryWorldList::new();
         let world = WorldId::new_v4();
-        list.create(&intent(), world, 1)
+        list.create(&intent(), world, 1, None)
             .unwrap_or_else(|error| panic!("first create: {error}"));
         assert_eq!(
-            list.create(&intent(), world, 2),
+            list.create(&intent(), world, 2, None),
             Err(WorldShellError::DuplicateWorldId)
+        );
+    }
+
+    #[test]
+    fn create_attaches_supplied_activation_binding() {
+        let mut list = InMemoryWorldList::new();
+        let world = WorldId::new_v4();
+        let binding = SealedActivationBindingV1 {
+            store_id: memory_session_store_id(),
+            metadata_epoch: 1,
+            metadata_hash: CanonicalHash::digest(b"metadata"),
+            projection_hash: CanonicalHash::digest(b"projection"),
+            plan_generation: 1,
+        };
+        list.create(&intent(), world, 1, Some(binding.clone()))
+            .unwrap_or_else(|error| panic!("create: {error}"));
+        assert_eq!(
+            list.get(world)
+                .and_then(|record| record.open_plan.as_ref())
+                .and_then(|plan| plan.activation_binding.as_ref()),
+            Some(&binding)
         );
     }
 }

@@ -12,6 +12,7 @@ latticeaxiom-core = { path = "../latticeaxiom-core" }
 latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
 latticeaxiom-runtime-contracts = { path = "../latticeaxiom-runtime-contracts" }
 latticeaxiom-world-catalog = { path = "../latticeaxiom-world-catalog" }
+latticeaxiom-world-db = { path = "../latticeaxiom-world-db" }
 serde.workspace = true
 thiserror.workspace = true
 
