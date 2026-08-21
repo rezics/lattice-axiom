@@ -94,8 +94,8 @@ D11 remains a post-baseline biome expansion track after V9.
 1. 从开始页选择／创建world，并看到health／lock／durability摘要。
 2. preflight从frozen lock建立游戏closure，任何写入前处理compatibility。
 3. 在Y-up voxel terrain出生。
-4. target inspect显示方块名称；walk／look／jump、raycast、break／place。
-5. mesh／collision在预算内更新，debug preset能解释chunk／collider状态。
+4. target inspect显示方块名称；walk／look／jump、raycast、break／place；9 格热键栏可切换；打开背包；Pause 设定可调渲染距离（受 host hard clamp）。
+5. mesh／collision在预算内更新；状态条显示挖掘进度／工具耐久／活力展示；debug preset能解释chunk／collider状态。
 6. 退出／crash fixture后回到world catalog。
 7. 已durable修改正确恢复；checkpoint／trash可由UI恢复。
 
@@ -497,6 +497,7 @@ D0–D6完成第一個package-driven playable vertical slice；只有D0–D10全
 - [待決問題](open-questions.md)
 - [語義註冊、內容判定與選擇](../architecture/semantic-registration.md)
 - [Terrenia 方块内容规划](terrenia-block-catalog.md)
+- [Terrenia 科学／魔法双轨与关系包](terrenia-science-magic-and-relations.md)
 - [Package 设置与配置](../architecture/settings-and-configuration.md)
 - [诊断、检查与除错可视化](../architecture/diagnostics-inspection-and-debug-visualization.md)
 - [World目录、开始页与安全生命周期](../architecture/world-lifecycle-and-start-ui.md)

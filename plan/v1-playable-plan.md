@@ -28,7 +28,7 @@ production player journey does not exist.
 
 | Area | Present now | Missing for v1 |
 | --- | --- | --- |
-| Client interaction | Production host from a reopened `latticeaxiom.lock`: walk, look, jump, inspect, break/place, pause/save/exit | Package-driven **shell process** (`ClientShellGraph` → `LaunchIntentV1` → replacement game process), not a same-App title screen |
+| Client interaction | Production host from a reopened `latticeaxiom.lock`: walk, look, jump, inspect, break/place, pause/save/exit | Visible HUD (hotbar, inventory, status, settings, view-distance); package-driven **shell process** (`ClientShellGraph` → `LaunchIntentV1` → replacement game process), not a same-App title screen |
 | Composition | Resolver, registration, SDK, launcher contracts, profiles, CAS, and frozen product lock exist | One supervisor-driven shell→world pipeline using those already-sealed launcher contracts |
 | World data | Storage, world-wire, catalog, world-db, and sealed writer activation exist | Crash-recovery / checkpoint / trash UI on the shell catalog, and writer authority remaining receipt-gated |
 | World generation | Production V5 coordinator streams D4/V5 chunks around the player with retain/prefetch | Complete Terrenia territory/cave/hydrology plan at D7 scale; P4 chunk-edge profile evidence |
