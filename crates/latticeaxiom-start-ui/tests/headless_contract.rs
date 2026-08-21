@@ -694,3 +694,80 @@ fn memory_create_list_continue_semantic_flow_preserves_world_id() {
     );
     assert_eq!(flow.continue_world_id(), Some(created));
 }
+
+#[test]
+fn memory_pause_save_exit_continue_semantic_flow_does_not_checkpoint() {
+    let mut flow = MemoryStartFlow::new(shell_graph());
+    let intent = QuickCreateIntent::new(
+        "Memory Session",
+        memory_session_template(),
+        package("@example/game"),
+        CanonicalHash::digest(b"profile"),
+    )
+    .unwrap_or_else(|error| panic!("quick create: {error}"));
+    let created = flow
+        .create(&intent, WorldId::new_v4(), 10)
+        .unwrap_or_else(|error| panic!("create: {error}"));
+
+    flow.enter_playing();
+    assert_eq!(flow.shell().screen, ShellScreen::Playing);
+    let pause = flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("playing/pause")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::PauseWorld,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("pause: {error}"));
+    assert_eq!(
+        pause,
+        MemoryStartEffect::Shell(ShellEffect::Navigate(ShellScreen::Pause))
+    );
+    assert_eq!(flow.shell().screen, ShellScreen::Pause);
+
+    let save = flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("pause/save")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::SaveWorld,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("save: {error}"));
+    assert_eq!(
+        save,
+        MemoryStartEffect::Shell(ShellEffect::RequestSaveWorld)
+    );
+    assert_eq!(
+        flow.shell().screen,
+        ShellScreen::Pause,
+        "save must not leave the pause overlay or write a checkpoint"
+    );
+
+    let exit = flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("pause/exit")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::ExitWorld,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("exit: {error}"));
+    assert_eq!(
+        exit,
+        MemoryStartEffect::Shell(ShellEffect::RequestExitWorld)
+    );
+    assert_eq!(flow.shell().screen, ShellScreen::Home);
+    assert_eq!(flow.continue_world_id(), Some(created));
+
+    let continued = flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("home/continue")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::ContinueWorld,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("continue: {error}"));
+    assert_eq!(
+        continued,
+        MemoryStartEffect::Shell(ShellEffect::RequestExactWorldLaunch(created))
+    );
+}

@@ -28,8 +28,8 @@ use latticeaxiom_player::{
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
     ChunkMutation, ChunkRevision, ChunkRevisionExpectation, ContinuationId, DimensionId,
-    MemoryTransactionKernel, PayloadSchemaVersion, PersistentEntityId, StoredChunk, TransactionId,
-    VersionedPayload, WorldRevision, WorldTransaction,
+    MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion, PersistentEntityId,
+    StoredChunk, TransactionId, VersionedPayload, WorldRevision, WorldTransaction,
 };
 use latticeaxiom_voxel_mesh::{
     Face, FaceDescriptor, FaceOcclusion, MeshGroup, MeshReceipt, MeshSource, PaddedChunk, Voxel,
@@ -503,6 +503,26 @@ impl ProductionSpine {
     #[must_use]
     pub fn kernel(&self) -> &MemoryTransactionKernel {
         self.storage.kernel()
+    }
+
+    /// Returns the memory-kernel materialized-chunk world hash.
+    ///
+    /// Pause must leave this digest unchanged. It is not a durable catalog hash
+    /// and is not a physical checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when the spine lock is poisoned or the
+    /// memory kernel cannot snapshot.
+    pub fn materialized_chunk_state_hash(
+        &self,
+    ) -> Result<MaterializedChunkStateHash, ProductionHostError> {
+        let world = self.lock_inner()?.world;
+        Ok(self
+            .storage
+            .kernel()
+            .reference_snapshot(world)?
+            .materialized_chunk_state_hash())
     }
 
     /// Commits edited working-set chunks through an already activated host writer.

@@ -1,10 +1,12 @@
-//! In-memory start-ui create/list/continue for the production host.
+//! In-memory start-ui create/list/pause/save/exit/continue for the production host.
 //!
 //! Worlds published here live in [`crate::MemoryTransactionKernel`] for the
-//! current process. Continue resumes that session; it does not open a durable
-//! catalog writer, trash, restore, or checkpoint path. Reopen after a sealed
-//! writer flush reads [`DeterministicWorldStorage`] first and only then fills
-//! the memory kernel as a working-set cache.
+//! current process. Pause opens the start-ui overlay and does not mutate the
+//! materialized-chunk world hash. Save flushes dirty chunks through
+//! [`SealedWorldWriterHost`] as Written commits and closes the writer; it does
+//! not call [`SealedWorldWriterHost::flush_durable`]. Exit drops the live host
+//! so Continue on a storage-backed world reopens [`DeterministicWorldStorage`]
+//! first. This is not a physical checkpoint, trash, or restore path.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -15,10 +17,10 @@ use bevy::prelude::Resource;
 use latticeaxiom_compose::LockedGameGraph;
 use latticeaxiom_core::{CapabilityId, IdentifierError, WorldId};
 use latticeaxiom_start_ui::{
-    ClientShellGraph, ClientShellGraphError, HomePrimaryAction, InMemoryWorldList,
-    MemoryStartEffect, MemoryStartError, MemoryStartFlow, QuickCreateIntent, SemanticCommand,
-    ShellCapability, ShellEffect, ShellPackageProvider, WorldShellError, WorldSort,
-    memory_session_store_id, memory_session_template,
+    ClientShellGraph, ClientShellGraphError, HomePrimaryAction, InMemoryWorldList, InputSource,
+    MemoryStartEffect, MemoryStartError, MemoryStartFlow, QuickCreateIntent, SemanticActionId,
+    SemanticCommand, SemanticNodeId, ShellCapability, ShellEffect, ShellPackageProvider,
+    WorldShellError, WorldSort, memory_session_store_id, memory_session_template,
 };
 use latticeaxiom_world_catalog::{
     ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
@@ -31,8 +33,8 @@ use latticeaxiom_world_db::{
 use thiserror::Error;
 
 use super::{
-    ProductionHostError, ProductionInspectSurface, ProductionSpine, SealedWorldWriterHost,
-    SealedWriterHostError, sealed_activation_binding,
+    ProductionHostError, ProductionInspectSurface, ProductionSessionPause, ProductionSpine,
+    SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding,
 };
 use crate::{EngineInstance, LockVerifiedComposeImages, VerifiedProductLockHash};
 
@@ -265,10 +267,15 @@ impl ProductionMemoryStart {
 
     /// Continues the exact-ready recent world into a GPU-free production host.
     ///
+    /// Storage-backed worlds reopen [`DeterministicWorldStorage`] first so
+    /// Continue cannot reuse a previous memory kernel. Memory-only sessions
+    /// still reuse the process-local spine.
+    ///
     /// # Errors
     ///
     /// Returns [`ProductionMemoryStartError::NoContinueWorld`] when Continue is
-    /// not available, and otherwise the same failures as [`Self::play_headless`].
+    /// not available, and otherwise the same failures as [`Self::play_headless`]
+    /// or [`Self::play_reopened_headless`].
     pub fn play_continued_headless(
         &mut self,
         played_at_ms: u64,
@@ -277,8 +284,97 @@ impl ProductionMemoryStart {
         let world_id = self
             .continue_world_id()
             .ok_or(ProductionMemoryStartError::NoContinueWorld)?;
-        let instance = self.play_headless(world_id, played_at_ms, fixed_timestep)?;
+        let instance = if self.storage.is_some() {
+            self.play_reopened_headless(world_id, played_at_ms, fixed_timestep)?
+        } else {
+            self.play_headless(world_id, played_at_ms, fixed_timestep)?
+        };
         Ok((world_id, instance))
+    }
+
+    /// Opens the in-session pause overlay without mutating world state.
+    ///
+    /// Chunk streaming is skipped while paused. The materialized-chunk hash is
+    /// unchanged. This is not a checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the pause command is
+    /// rejected by the start-ui tree.
+    pub fn pause_session(
+        &mut self,
+        instance: &mut EngineInstance,
+    ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
+        self.flow.enter_playing();
+        let effect = self.inject(&session_command(
+            "playing/pause",
+            SemanticActionId::PauseWorld,
+        ))?;
+        set_session_paused(instance, true);
+        Ok(effect)
+    }
+
+    /// Resumes a paused world session without writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the pause overlay is not open.
+    pub fn resume_session(
+        &mut self,
+        instance: &mut EngineInstance,
+    ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
+        let effect = self.inject(&session_command(
+            "pause/resume",
+            SemanticActionId::ResumeWorld,
+        ))?;
+        set_session_paused(instance, false);
+        Ok(effect)
+    }
+
+    /// Flushes dirty chunks through the sealed writer and then closes it.
+    ///
+    /// Missing sealed receipts still fail closed as
+    /// [`WorldDbError::ActivationEvidenceUnavailable`]. This is not a physical
+    /// checkpoint and does not call [`SealedWorldWriterHost::flush_durable`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the pause overlay is not
+    /// open, the world is absent, preflight/activation fails, or the commit is
+    /// rejected.
+    pub fn save_world(
+        &mut self,
+        world_id: WorldId,
+        writer: &mut SealedWorldWriterHost,
+    ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
+        let effect = self.inject(&session_command("pause/save", SemanticActionId::SaveWorld))?;
+        self.flush_dirty_chunks(world_id, writer)?;
+        Ok(effect)
+    }
+
+    /// Drops the live host and returns to the start shell.
+    ///
+    /// Storage-backed worlds drop the cached spine so the next Continue reopens
+    /// storage-first. Memory-only sessions keep the process-local spine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the pause overlay is not
+    /// open or the world is absent from the session list.
+    pub fn exit_world(
+        &mut self,
+        world_id: WorldId,
+        instance: EngineInstance,
+    ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
+        if self.flow.worlds().get(world_id).is_none() {
+            return Err(WorldShellError::MissingLiveWorld.into());
+        }
+        let effect = self.inject(&session_command("pause/exit", SemanticActionId::ExitWorld))?;
+        drop(instance);
+        if self.storage.is_some() {
+            self.spines.remove(&world_id);
+        }
+        Ok(effect)
     }
 
     /// Publishes edited working-set chunks through an activated sealed writer.
@@ -455,6 +551,32 @@ impl From<WorldShellError> for ProductionMemoryStartError {
     fn from(error: WorldShellError) -> Self {
         Self::Start(error.into())
     }
+}
+
+fn session_command(target: &'static str, action: SemanticActionId) -> SemanticCommand {
+    SemanticCommand {
+        target: match SemanticNodeId::new(target) {
+            Ok(id) => id,
+            Err(error) => unreachable!("validated static semantic ID `{target}`: {error}"),
+        },
+        action,
+        source: InputSource::Headless,
+    }
+}
+
+fn set_session_paused(instance: &mut EngineInstance, paused: bool) {
+    if let Some(mut latch) = instance
+        .app
+        .world_mut()
+        .get_resource_mut::<ProductionSessionPause>()
+    {
+        latch.set(paused);
+        return;
+    }
+    instance
+        .app
+        .world_mut()
+        .insert_resource(ProductionSessionPause::new(paused));
 }
 
 fn writable_open_plan(world_id: WorldId, permit: &ActivationPermitV1) -> WorldOpenPlan {

@@ -2,7 +2,9 @@
 //!
 //! This is the production-client session catalog until a durable writer exists.
 //! Continue resumes the same process-local [`WorldId`]; it does not load a
-//! checkpoint, restore trash, or publish a catalog sidecar. An optional shared
+//! checkpoint, restore trash, or publish a catalog sidecar. Pause opens an
+//! overlay without mutating world state. Save and Exit are host effects and
+//! are not a physical checkpoint path. An optional shared
 //! [`DeterministicWorldStorage`] fills [`WorldOpenPlan::activation_binding`]
 //! from storage preflight. When storage is absent, create stays memory-only.
 
@@ -256,6 +258,13 @@ impl MemoryStartFlow {
         command: &SemanticCommand,
     ) -> Result<ShellEffect, MemoryStartError> {
         Ok(self.shell.inject(command)?)
+    }
+
+    /// Advertises the in-session pause overlay for a live world.
+    ///
+    /// Pause does not write, flush, or otherwise mutate world state.
+    pub fn enter_playing(&mut self) {
+        self.shell.screen = ShellScreen::Playing;
     }
 
     /// Records that an in-memory session was entered.

@@ -103,6 +103,14 @@ pub enum SemanticActionId {
     QuickCreate,
     /// Continue the exact-ready recent world.
     ContinueWorld,
+    /// Open the in-session pause overlay without mutating world state.
+    PauseWorld,
+    /// Resume a paused world session.
+    ResumeWorld,
+    /// Flush dirty chunks through the host sealed writer, then close it.
+    SaveWorld,
+    /// Leave the current world session and return to the start shell.
+    ExitWorld,
     /// Review a recent world that is not exact-ready.
     ReviewWorld,
     /// Cancel a loading stage at a safe boundary.

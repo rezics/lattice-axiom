@@ -29,6 +29,10 @@ pub enum ShellScreen {
     Settings,
     /// World activation progress.
     Loading,
+    /// Live world session; the start library is not the front surface.
+    Playing,
+    /// In-session pause overlay. Save and Exit are explicit; this is not a checkpoint.
+    Pause,
 }
 
 /// Headless state used by both CI and the future Bevy client adapter.
@@ -74,6 +78,8 @@ impl StartShellModel {
             ShellScreen::NewWorld => Self::new_world_nodes(),
             ShellScreen::Settings => self.settings_nodes(),
             ShellScreen::Loading => self.loading_nodes(),
+            ShellScreen::Playing => Self::playing_nodes(),
+            ShellScreen::Pause => Self::pause_nodes(),
         };
         SemanticNode {
             id: node_id("shell"),
@@ -104,6 +110,27 @@ impl StartShellModel {
             SemanticActionId::FocusNext | SemanticActionId::FocusPrevious
         ) {
             ShellEffect::FocusTraversal(action)
+        } else if self.screen == ShellScreen::Playing
+            && (target == "playing/pause" || action == SemanticActionId::PauseWorld)
+        {
+            self.screen = ShellScreen::Pause;
+            ShellEffect::Navigate(ShellScreen::Pause)
+        } else if self.screen == ShellScreen::Pause
+            && (target == "pause/resume"
+                || action == SemanticActionId::ResumeWorld
+                || action == SemanticActionId::Back)
+        {
+            self.screen = ShellScreen::Playing;
+            ShellEffect::Navigate(ShellScreen::Playing)
+        } else if self.screen == ShellScreen::Pause
+            && (target == "pause/save" || action == SemanticActionId::SaveWorld)
+        {
+            ShellEffect::RequestSaveWorld
+        } else if self.screen == ShellScreen::Pause
+            && (target == "pause/exit" || action == SemanticActionId::ExitWorld)
+        {
+            self.screen = ShellScreen::Home;
+            ShellEffect::RequestExitWorld
         } else if target == "home/worlds" || action == SemanticActionId::OpenWorlds {
             self.screen = ShellScreen::Worlds;
             ShellEffect::Navigate(ShellScreen::Worlds)
@@ -319,6 +346,38 @@ impl StartShellModel {
             ),
         ]
     }
+
+    fn playing_nodes() -> Vec<SemanticNode> {
+        vec![button(
+            "playing/pause",
+            "Pause",
+            "Open the pause overlay without mutating world state",
+            [SemanticActionId::Activate, SemanticActionId::PauseWorld],
+        )]
+    }
+
+    fn pause_nodes() -> Vec<SemanticNode> {
+        vec![
+            button(
+                "pause/resume",
+                "Resume",
+                "Return to the live world session without writing",
+                [SemanticActionId::Activate, SemanticActionId::ResumeWorld],
+            ),
+            button(
+                "pause/save",
+                "Save",
+                "Flush dirty chunks through the sealed writer and close it",
+                [SemanticActionId::Activate, SemanticActionId::SaveWorld],
+            ),
+            button(
+                "pause/exit",
+                "Exit",
+                "Leave the world session and return to the start shell",
+                [SemanticActionId::Activate, SemanticActionId::ExitWorld],
+            ),
+        ]
+    }
 }
 
 fn button<const N: usize>(
@@ -382,6 +441,10 @@ pub enum ShellEffect {
     RequestSettingsApply,
     /// Loading cancellation policy derived from the writer boundary.
     CancelLoading(crate::LoadingCancelDisposition),
+    /// Host should flush dirty chunks through the sealed writer and close it.
+    RequestSaveWorld,
+    /// Host should drop the live world session and return to the start shell.
+    RequestExitWorld,
 }
 
 /// Invalid shell command injection.

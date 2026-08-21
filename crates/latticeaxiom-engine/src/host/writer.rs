@@ -197,6 +197,12 @@ impl SealedWorldWriterHost {
             .map_err(SealedWriterHostError::from)
     }
 
+    /// Returns whether a sealed writer lease is currently open.
+    #[must_use]
+    pub const fn is_writer_active(&self) -> bool {
+        self.writer.is_some()
+    }
+
     /// Closes the writer lease explicitly.
     ///
     /// # Errors

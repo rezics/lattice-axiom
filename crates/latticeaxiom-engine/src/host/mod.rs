@@ -107,6 +107,34 @@ pub struct ChunkPresentation {
     pub coordinate: ChunkCoordinate,
 }
 
+/// In-session pause latch for a production host.
+///
+/// Pause does not flush, commit, or otherwise mutate the materialized-chunk
+/// world hash. Chunk streaming is skipped while paused.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
+pub struct ProductionSessionPause {
+    paused: bool,
+}
+
+impl ProductionSessionPause {
+    /// Creates a latch in the requested state.
+    #[must_use]
+    pub const fn new(paused: bool) -> Self {
+        Self { paused }
+    }
+
+    /// Returns whether the session is paused.
+    #[must_use]
+    pub const fn is_paused(self) -> bool {
+        self.paused
+    }
+
+    /// Sets the pause latch.
+    pub const fn set(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+}
+
 /// Latest local-player pose copied from the authoritative capsule.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ProductionPlayerPose {
@@ -348,6 +376,7 @@ fn install_production_host(
         .insert_resource(spine.storage())
         .insert_resource(BlockEditAuthorityResource::new(spine.clone()))
         .insert_resource(working_set)
+        .insert_resource(ProductionSessionPause::default())
         .insert_resource(spine)
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
@@ -393,7 +422,14 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-fn sync_chunk_stream(tick: Res<'_, PlayerFixedTick>, spine: Res<'_, ProductionSpine>) {
+fn sync_chunk_stream(
+    tick: Res<'_, PlayerFixedTick>,
+    spine: Res<'_, ProductionSpine>,
+    pause: Option<Res<'_, ProductionSessionPause>>,
+) {
+    if pause.is_some_and(|pause| pause.is_paused()) {
+        return;
+    }
     let _ = spine.sync_interest(tick.get());
 }
 
