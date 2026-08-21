@@ -303,6 +303,7 @@ fn memory_session_open_plan(world_id: WorldId) -> WorldOpenPlan {
         next_safe_step: Some(WorldOpenAction::UseFrozenLock),
         actions: vec![WorldOpenAction::UseFrozenLock],
         diagnostics: Vec::new(),
+        activation_binding: None,
     }
 }
 

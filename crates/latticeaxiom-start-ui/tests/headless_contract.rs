@@ -69,6 +69,7 @@ fn plan(id: WorldId, status: WorldOpenStatus) -> WorldOpenPlan {
         next_safe_step: actions.first().cloned(),
         actions,
         diagnostics: Vec::new(),
+        activation_binding: None,
     }
 }
 

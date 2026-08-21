@@ -1,5 +1,8 @@
-use latticeaxiom_core::{CanonicalHash, PackageName, WorldId};
+use latticeaxiom_core::{
+    CanonicalHash, CanonicalJsonError, PackageName, WorldId, canonical_json_hash,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
@@ -447,6 +450,105 @@ pub struct PreflightContext {
     pub duplicate_live_world_id: bool,
 }
 
+/// Bound catalog evidence used to mint a sealed writer-activation receipt.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SealedActivationBindingV1 {
+    /// Storage-generation identity.
+    pub store_id: StoreId,
+    /// Authoritative metadata epoch captured by preflight.
+    pub metadata_epoch: u64,
+    /// Hash of the authoritative metadata body.
+    pub metadata_hash: CanonicalHash,
+    /// Header projection hash committed with that epoch.
+    pub projection_hash: CanonicalHash,
+    /// Plan generation captured by this preflight.
+    pub plan_generation: u64,
+}
+
+/// Non-forgeable catalog receipt required to open a world writer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SealedWorldActivationReceiptV1 {
+    /// World named by the receipt.
+    pub world_id: WorldId,
+    /// Storage-generation identity.
+    pub store_id: StoreId,
+    /// Authoritative metadata epoch.
+    pub metadata_epoch: u64,
+    /// Hash of the authoritative metadata body.
+    pub metadata_hash: CanonicalHash,
+    /// Header projection hash.
+    pub projection_hash: CanonicalHash,
+    /// Plan generation.
+    pub plan_generation: u64,
+    /// Canonical checksum of the bound fields.
+    pub checksum: CanonicalHash,
+}
+
+impl SealedWorldActivationReceiptV1 {
+    /// Seals catalog activation evidence for one writable accept.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CanonicalJsonError`] when the receipt cannot be hashed.
+    pub fn seal(
+        world_id: WorldId,
+        binding: &SealedActivationBindingV1,
+    ) -> Result<Self, CanonicalJsonError> {
+        let mut receipt = Self {
+            world_id,
+            store_id: binding.store_id.clone(),
+            metadata_epoch: binding.metadata_epoch,
+            metadata_hash: binding.metadata_hash,
+            projection_hash: binding.projection_hash,
+            plan_generation: binding.plan_generation,
+            checksum: CanonicalHash::digest(b""),
+        };
+        receipt.checksum = receipt.recompute_checksum()?;
+        Ok(receipt)
+    }
+
+    /// Recomputes the checksum excluding the stored checksum field.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CanonicalJsonError`] when encoding fails.
+    pub fn recompute_checksum(&self) -> Result<CanonicalHash, CanonicalJsonError> {
+        let mut value = serde_json::to_value(self)?;
+        if let Value::Object(fields) = &mut value {
+            fields.remove("checksum");
+        }
+        canonical_json_hash(&value)
+    }
+
+    /// Verifies the stored checksum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedReceiptError`] when encoding fails or the checksum
+    /// does not match.
+    pub fn verify(&self) -> Result<(), SealedReceiptError> {
+        let actual = self.recompute_checksum()?;
+        if actual == self.checksum {
+            Ok(())
+        } else {
+            Err(SealedReceiptError::ChecksumMismatch)
+        }
+    }
+}
+
+/// Failure to verify a sealed writer-activation receipt.
+#[derive(Debug, Error)]
+pub enum SealedReceiptError {
+    /// Canonical encoding failed.
+    #[error(transparent)]
+    Canonical(#[from] CanonicalJsonError),
+    /// The stored checksum does not match the bound fields.
+    #[error("sealed activation receipt checksum mismatch")]
+    ChecksumMismatch,
+}
+
 /// Immutable result of read-only sidecar and metadata preflight.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -465,6 +567,9 @@ pub struct WorldOpenPlan {
     pub actions: Vec<WorldOpenAction>,
     /// Stable structured diagnostics; never an untyped string bag.
     pub diagnostics: Vec<WorldDiagnostic>,
+    /// Bound catalog evidence for minting a writer-activation receipt.
+    #[serde(default)]
+    pub activation_binding: Option<SealedActivationBindingV1>,
 }
 
 impl WorldOpenPlan {
@@ -480,10 +585,20 @@ impl WorldOpenPlan {
         if !self.actions.contains(&action) {
             return Err(PlanAcceptanceError::ActionNotOffered);
         }
-        Ok(AcceptedWorldOpenPlan {
+        let mut accepted = AcceptedWorldOpenPlan {
             status: self.status,
             action,
-        })
+            activation_receipt: None,
+        };
+        if accepted.writable()
+            && let Some(binding) = &self.activation_binding
+        {
+            accepted.activation_receipt = Some(
+                SealedWorldActivationReceiptV1::seal(self.world_id, binding)
+                    .map_err(|_| PlanAcceptanceError::Receipt)?,
+            );
+        }
+        Ok(accepted)
     }
 }
 
@@ -492,6 +607,7 @@ impl WorldOpenPlan {
 pub struct AcceptedWorldOpenPlan {
     status: WorldOpenStatus,
     action: WorldOpenAction,
+    activation_receipt: Option<SealedWorldActivationReceiptV1>,
 }
 
 impl AcceptedWorldOpenPlan {
@@ -517,6 +633,13 @@ impl AcceptedWorldOpenPlan {
     pub const fn action(&self) -> &WorldOpenAction {
         &self.action
     }
+
+    /// Returns the sealed writer-activation receipt when this accept is writable
+    /// and preflight supplied bound catalog evidence.
+    #[must_use]
+    pub const fn activation_receipt(&self) -> Option<&SealedWorldActivationReceiptV1> {
+        self.activation_receipt.as_ref()
+    }
 }
 
 /// Failure to accept an immutable preflight plan.
@@ -525,6 +648,9 @@ pub enum PlanAcceptanceError {
     /// The action was not part of the immutable plan.
     #[error("world-open action was not offered by this preflight plan")]
     ActionNotOffered,
+    /// Sealing the catalog activation receipt failed.
+    #[error("failed to seal the catalog activation receipt")]
+    Receipt,
 }
 
 /// Pure metadata-only preflight service.
@@ -606,6 +732,7 @@ impl WorldPreflight {
                         WorldOpenAction::Export,
                     ],
                     diagnostics: vec![WorldDiagnostic::HeaderRepairRequired { reason }],
+                    activation_binding: None,
                 };
             }
             ReconciliationState::InSync { .. } => {}
@@ -641,6 +768,7 @@ impl WorldPreflight {
                 next_safe_step,
                 actions,
                 diagnostics,
+                activation_binding: None,
             };
         }
 
@@ -655,6 +783,7 @@ impl WorldPreflight {
                     next_safe_step: Some(WorldOpenAction::OpenReadOnly),
                     actions: vec![WorldOpenAction::OpenReadOnly, WorldOpenAction::Export],
                     diagnostics: vec![diagnostic],
+                    activation_binding: None,
                 };
             }
             return WorldOpenPlan {
@@ -665,6 +794,7 @@ impl WorldPreflight {
                 next_safe_step: None,
                 actions: Vec::new(),
                 diagnostics: vec![diagnostic],
+                activation_binding: None,
             };
         }
 
@@ -676,6 +806,7 @@ impl WorldPreflight {
                 WorldOpenRisk::None,
                 WorldOpenAction::UseFrozenLock,
                 warning_diagnostics(context.disk),
+                binding_from_metadata(metadata),
             ),
             CompatibilityAssessment::Compatible { differences } => ready_plan(
                 world_id,
@@ -684,6 +815,7 @@ impl WorldPreflight {
                 WorldOpenRisk::Low,
                 WorldOpenAction::ResolveCompatibleGraph,
                 vec![WorldDiagnostic::CompatibleDiff { differences }],
+                binding_from_metadata(metadata),
             ),
             CompatibilityAssessment::NeedsPreparation { packages } => {
                 let next_safe_step =
@@ -707,6 +839,7 @@ impl WorldPreflight {
                     next_safe_step,
                     actions,
                     diagnostics: vec![WorldDiagnostic::PackagePreparationRequired { packages }],
+                    activation_binding: None,
                 }
             }
             CompatibilityAssessment::Migration { plan } => {
@@ -724,6 +857,7 @@ impl WorldPreflight {
                             WorldOpenAction::Export,
                         ],
                         diagnostics: vec![WorldDiagnostic::MigrationRequired],
+                        activation_binding: None,
                     }
                 } else {
                     WorldOpenPlan {
@@ -737,6 +871,7 @@ impl WorldPreflight {
                             WorldDiagnostic::MigrationRequired,
                             disk_diagnostic(context.disk),
                         ],
+                        activation_binding: None,
                     }
                 }
             }
@@ -748,6 +883,7 @@ impl WorldPreflight {
                 next_safe_step: Some(WorldOpenAction::OpenReadOnly),
                 actions: vec![WorldOpenAction::OpenReadOnly, WorldOpenAction::Export],
                 diagnostics: vec![WorldDiagnostic::AuthoritativeDataReadOnly { missing_owners }],
+                activation_binding: None,
             },
             CompatibilityAssessment::Unsafe { reasons } => WorldOpenPlan {
                 world_id,
@@ -757,6 +893,7 @@ impl WorldPreflight {
                 next_safe_step: None,
                 actions: Vec::new(),
                 diagnostics: vec![WorldDiagnostic::AuthoritativeDataBlocked { reasons }],
+                activation_binding: None,
             },
         }
     }
@@ -785,6 +922,7 @@ fn blocked_plan_with_state(
         next_safe_step: None,
         actions: Vec::new(),
         diagnostics: vec![WorldDiagnostic::ReconciliationBlocked { reason }],
+        activation_binding: None,
     }
 }
 
@@ -795,6 +933,7 @@ fn ready_plan(
     risk: WorldOpenRisk,
     action: WorldOpenAction,
     diagnostics: Vec<WorldDiagnostic>,
+    binding: SealedActivationBindingV1,
 ) -> WorldOpenPlan {
     WorldOpenPlan {
         world_id,
@@ -804,6 +943,18 @@ fn ready_plan(
         next_safe_step: Some(action.clone()),
         actions: vec![action],
         diagnostics,
+        activation_binding: Some(binding),
+    }
+}
+
+fn binding_from_metadata(metadata: &AuthoritativeMetadataV1) -> SealedActivationBindingV1 {
+    let projection = &metadata.projected_header;
+    SealedActivationBindingV1 {
+        store_id: projection.store_id.clone(),
+        metadata_epoch: projection.metadata_epoch,
+        metadata_hash: projection.authoritative_metadata_hash,
+        projection_hash: metadata.expected_header_projection_hash,
+        plan_generation: projection.metadata_epoch,
     }
 }
 
@@ -841,8 +992,31 @@ mod tests {
             .accept(WorldOpenAction::UseFrozenLock)
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(accepted.writable());
+        let receipt = accepted
+            .activation_receipt()
+            .unwrap_or_else(|| panic!("exact accept must mint a sealed activation receipt"));
+        receipt.verify().unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(receipt.world_id, plan.world_id);
         assert_eq!(source.audit().header_reads, 1);
         assert_eq!(source.audit().metadata_reads, 1);
+    }
+
+    #[test]
+    fn sealed_activation_receipt_checksum_covers_bound_fields() {
+        let binding = SealedActivationBindingV1 {
+            store_id: StoreId::new("store-generation-1").unwrap_or_else(|error| panic!("{error}")),
+            metadata_epoch: 1,
+            metadata_hash: CanonicalHash::digest(b"metadata"),
+            projection_hash: CanonicalHash::digest(b"projection"),
+            plan_generation: 1,
+        };
+        let world = crate::header::tests::fixture_projection().world_id;
+        let receipt = SealedWorldActivationReceiptV1::seal(world, &binding)
+            .unwrap_or_else(|error| panic!("{error}"));
+        receipt.verify().unwrap_or_else(|error| panic!("{error}"));
+        let mut mutated = receipt.clone();
+        mutated.metadata_epoch = 2;
+        assert!(mutated.verify().is_err());
     }
 
     #[test]
