@@ -2802,18 +2802,104 @@ fn occupied_voxels(
     Ok(occupied)
 }
 
+/// Inclusive local origin and voxel extents of one merged collision cuboid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OccupiedBox {
+    origin: [u16; 3],
+    size: [u16; 3],
+}
+
+/// Deterministic greedy merge of occupied cells into axis-aligned cuboids.
+///
+/// Cells are visited in local `(x, y, z)` order via [`BTreeSet`]. Each unused
+/// cell grows along `+X`, then `+Y` while every x-run in the rectangle stays
+/// occupied, then `+Z` while every xy-slab stays occupied. The cuboids never
+/// overlap and cover exactly the input occupancy set.
+fn merge_occupied_boxes(occupied: &[OccupiedCell]) -> Vec<OccupiedBox> {
+    let mut remaining: BTreeSet<[u16; 3]> = occupied.iter().map(|cell| cell.local).collect();
+    let mut boxes = Vec::new();
+    while let Some(origin) = remaining.first().copied() {
+        let merged = grow_occupied_box(&remaining, origin);
+        remove_occupied_box(&mut remaining, merged);
+        boxes.push(merged);
+    }
+    boxes
+}
+
+fn grow_occupied_box(remaining: &BTreeSet<[u16; 3]>, origin: [u16; 3]) -> OccupiedBox {
+    let [x0, y0, z0] = origin;
+    let mut size_x = 1_u16;
+    while let Some(x) = x0.checked_add(size_x) {
+        if !remaining.contains(&[x, y0, z0]) {
+            break;
+        }
+        let Some(next) = size_x.checked_add(1) else {
+            break;
+        };
+        size_x = next;
+    }
+
+    let mut size_y = 1_u16;
+    while let Some(y) = y0.checked_add(size_y) {
+        if !(0..size_x).all(|dx| remaining.contains(&[x0 + dx, y, z0])) {
+            break;
+        }
+        let Some(next) = size_y.checked_add(1) else {
+            break;
+        };
+        size_y = next;
+    }
+
+    let mut size_z = 1_u16;
+    while let Some(z) = z0.checked_add(size_z) {
+        let slab_occupied =
+            (0..size_y).all(|dy| (0..size_x).all(|dx| remaining.contains(&[x0 + dx, y0 + dy, z])));
+        if !slab_occupied {
+            break;
+        }
+        let Some(next) = size_z.checked_add(1) else {
+            break;
+        };
+        size_z = next;
+    }
+
+    OccupiedBox {
+        origin,
+        size: [size_x, size_y, size_z],
+    }
+}
+
+fn remove_occupied_box(remaining: &mut BTreeSet<[u16; 3]>, merged: OccupiedBox) {
+    let [x0, y0, z0] = merged.origin;
+    let [size_x, size_y, size_z] = merged.size;
+    for dz in 0..size_z {
+        for dy in 0..size_y {
+            for dx in 0..size_x {
+                remaining.remove(&[x0 + dx, y0 + dy, z0 + dz]);
+            }
+        }
+    }
+}
+
+/// Builds a finite Avian compound from greedily merged occupancy cuboids.
 fn compound_collider(occupied: &[OccupiedCell]) -> Option<Collider> {
-    if occupied.is_empty() {
+    let boxes = merge_occupied_boxes(occupied);
+    if boxes.is_empty() {
         return None;
     }
-    let shapes = occupied
+    let shapes = boxes
         .iter()
-        .map(|cell| {
-            let [x, y, z] = cell.local;
+        .map(|merged| {
+            let [x, y, z] = merged.origin;
+            let [sx, sy, sz] = merged.size;
             (
-                Vec3::new(f32::from(x) + 0.5, f32::from(y) + 0.5, f32::from(z) + 0.5),
+                Vec3::new(
+                    f32::from(x) + f32::from(sx) * 0.5,
+                    f32::from(y) + f32::from(sy) * 0.5,
+                    f32::from(z) + f32::from(sz) * 0.5,
+                ),
                 Quat::IDENTITY,
-                Collider::cuboid(1.0, 1.0, 1.0),
+                Collider::cuboid(f32::from(sx), f32::from(sy), f32::from(sz)),
             )
         })
         .collect();
@@ -3557,4 +3643,183 @@ fn commit_gameplay_storage(
     })?;
     refresh_lifecycle(inner);
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::{OccupiedBox, OccupiedCell, compound_collider, merge_occupied_boxes};
+    use std::collections::BTreeSet;
+
+    fn cell(x: u16, y: u16, z: u16) -> OccupiedCell {
+        OccupiedCell {
+            local: [x, y, z],
+            palette_index: 1,
+        }
+    }
+
+    fn rasterize(boxes: &[OccupiedBox]) -> BTreeSet<[u16; 3]> {
+        let mut cells = BTreeSet::new();
+        for merged in boxes {
+            for dz in 0..merged.size[2] {
+                for dy in 0..merged.size[1] {
+                    for dx in 0..merged.size[0] {
+                        assert!(
+                            cells.insert([
+                                merged.origin[0] + dx,
+                                merged.origin[1] + dy,
+                                merged.origin[2] + dz,
+                            ]),
+                            "merged boxes must not overlap at {:?}",
+                            [
+                                merged.origin[0] + dx,
+                                merged.origin[1] + dy,
+                                merged.origin[2] + dz,
+                            ]
+                        );
+                    }
+                }
+            }
+        }
+        cells
+    }
+
+    fn assert_occupancy_equivalent(occupied: &[OccupiedCell]) {
+        let expected: BTreeSet<[u16; 3]> = occupied.iter().map(|cell| cell.local).collect();
+        let merged = merge_occupied_boxes(occupied);
+        assert_eq!(rasterize(&merged), expected);
+    }
+
+    #[test]
+    fn empty_occupancy_has_no_collider() {
+        assert!(merge_occupied_boxes(&[]).is_empty());
+        assert!(compound_collider(&[]).is_none());
+    }
+
+    #[test]
+    fn single_voxel_is_one_unit_box() {
+        let occupied = [cell(3, 4, 5)];
+        let merged = merge_occupied_boxes(&occupied);
+        assert_eq!(
+            merged,
+            [OccupiedBox {
+                origin: [3, 4, 5],
+                size: [1, 1, 1],
+            }]
+        );
+        assert_occupancy_equivalent(&occupied);
+        assert!(compound_collider(&occupied).is_some());
+    }
+
+    #[test]
+    fn rectangular_prism_merges_to_one_box() {
+        let mut occupied = Vec::new();
+        for z in 2..4u16 {
+            for y in 1..4u16 {
+                for x in 0..4u16 {
+                    occupied.push(cell(x, y, z));
+                }
+            }
+        }
+        let merged = merge_occupied_boxes(&occupied);
+        assert_eq!(
+            merged,
+            [OccupiedBox {
+                origin: [0, 1, 2],
+                size: [4, 3, 2],
+            }]
+        );
+        assert_occupancy_equivalent(&occupied);
+    }
+
+    #[test]
+    fn l_shape_keeps_exact_occupancy() {
+        let occupied = [cell(0, 0, 0), cell(1, 0, 0), cell(0, 1, 0)];
+        assert_occupancy_equivalent(&occupied);
+        assert_eq!(merge_occupied_boxes(&occupied).len(), 2);
+    }
+
+    #[test]
+    fn merge_order_is_stable_for_shuffled_input() {
+        let occupied = [
+            cell(2, 2, 2),
+            cell(0, 0, 0),
+            cell(1, 0, 0),
+            cell(0, 1, 0),
+            cell(5, 1, 3),
+        ];
+        let mut reversed = occupied;
+        reversed.reverse();
+        assert_eq!(
+            merge_occupied_boxes(&occupied),
+            merge_occupied_boxes(&reversed)
+        );
+        assert_occupancy_equivalent(&occupied);
+    }
+
+    #[test]
+    fn solid_chunk_shape_count_is_far_below_occupied_count() {
+        let mut occupied = Vec::with_capacity(512);
+        for z in 0..8u16 {
+            for y in 0..8u16 {
+                for x in 0..8u16 {
+                    occupied.push(cell(x, y, z));
+                }
+            }
+        }
+        let merged = merge_occupied_boxes(&occupied);
+        assert_occupancy_equivalent(&occupied);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged.first().map(|merged| merged.size), Some([8, 8, 8]));
+        assert!(
+            merged.len() * 8 < occupied.len(),
+            "solid chunk shape count must be significantly below occupied count (shapes={}, occupied={})",
+            merged.len(),
+            occupied.len()
+        );
+        assert!(compound_collider(&occupied).is_some());
+    }
+
+    /// Exhaustive small-volume property test: merged boxes occupy exactly the
+    /// same cells as the original occupancy set.
+    #[test]
+    fn property_merged_boxes_match_all_two_by_two_by_two_occupancy() {
+        for occupancy in 0_u16..=u8::MAX.into() {
+            let mut occupied = Vec::new();
+            for z in 0..2u16 {
+                for y in 0..2u16 {
+                    for x in 0..2u16 {
+                        let bit = x + 2 * (y + 2 * z);
+                        if occupancy & (1 << bit) != 0 {
+                            occupied.push(cell(x, y, z));
+                        }
+                    }
+                }
+            }
+            assert_occupancy_equivalent(&occupied);
+        }
+    }
+
+    /// Deterministic generated property corpus uses asymmetric extents so axis
+    /// swaps and visit-order bugs cannot cancel out.
+    #[test]
+    fn property_merged_boxes_match_generated_asymmetric_occupancy() {
+        for seed in 0_u64..96 {
+            let mut state = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut occupied = Vec::new();
+            for z in 0..5u16 {
+                for y in 0..4u16 {
+                    for x in 0..3u16 {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        if state % 3 != 0 {
+                            occupied.push(cell(x, y, z));
+                        }
+                    }
+                }
+            }
+            assert_occupancy_equivalent(&occupied);
+        }
+    }
 }
