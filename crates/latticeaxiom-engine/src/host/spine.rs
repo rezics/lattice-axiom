@@ -32,8 +32,8 @@ use latticeaxiom_storage::{
     StoredChunk, TransactionId, VersionedPayload, WorldRevision, WorldTransaction,
 };
 use latticeaxiom_voxel_mesh::{
-    Face, FaceDescriptor, FaceOcclusion, MeshGroup, MeshReceipt, MeshSource, PaddedChunk, Voxel,
-    visible_faces,
+    Aabb, Face, FaceDescriptor, FaceOcclusion, GreedyMesher, MeshBuffer, MeshGroup, MeshReceipt,
+    MeshSource, PaddedChunk, Voxel,
 };
 use latticeaxiom_voxel_runtime::{
     ApplyByteDeclaration, CellSelection, ColliderSafetyState, ColliderSemanticFingerprint,
@@ -60,7 +60,10 @@ use super::{
         presentation_package_selected,
     },
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
-    stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
+    stream::{
+        InterestClass, LOOK_AHEAD_EXPIRY_TICKS, StreamClamps, chebyshev_xz, desired_chunks,
+        interest_class, prioritize_chunks, retain_protected, sticky_look_ahead,
+    },
     worldgen::{
         RequiredCaveEntranceV1, compile_plan, generate_plan_chunks, host_hard_limits,
         required_cave_entrance, spawn_center as player_spawn_center, spine_config, validated_spawn,
@@ -248,12 +251,21 @@ pub(super) struct ProductionSpineInner {
     voxel_schema: SchemaId,
     voxel_schema_version: PayloadSchemaVersion,
     derived: BTreeMap<ChunkCoordinate, ChunkDerived>,
-    dirty: BTreeSet<ChunkCoordinate>,
+    mesh_dirty: BTreeSet<ChunkCoordinate>,
+    collider_dirty: BTreeSet<ChunkCoordinate>,
     removed: BTreeSet<ChunkCoordinate>,
+    mesher: GreedyMesher<u16>,
     edited: BTreeSet<ChunkCoordinate>,
     lifecycle: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
     eviction_lease: u64,
+    residency: BTreeMap<ChunkCoordinate, ChunkResidency>,
     stream_anchor_xz: [f32; 2],
+    look_ahead_axis: [i32; 2],
+    look_ahead_tick: u64,
+    last_reconciled_tick: Option<u64>,
+    last_desired: BTreeSet<ChunkCoordinate>,
+    stream_admissions: u64,
+    stream_evictions: u64,
     spawn_center: Vec3,
     placement_content: BlockId,
     last_success: Option<BlockEditSuccessV1>,
@@ -265,16 +277,44 @@ pub(super) struct ProductionSpineInner {
     gameplay: Option<ProductionGameplay>,
     world_store: Option<DeterministicWorldStorage>,
     display: ContentDisplayCatalogV1,
+    /// Full `sync_interest` calls; schedule tests lock one per fixed tick.
+    interest_reconciliations: u64,
 }
 
-/// Collider upserts and evictions consumed by the production presentation system.
+/// Admission and core clocks used by retain/grace eviction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ChunkResidency {
+    admitted_tick: u64,
+    last_core_tick: Option<u64>,
+}
+
+/// Mesh, collider, and eviction events consumed by production presentation.
 #[derive(Debug)]
 pub(super) struct PresentationDelta {
-    pub(super) upserts: Vec<(ChunkCoordinate, Collider, Vec3, Vec<OccupiedCell>)>,
+    pub(super) mesh_update: Vec<MeshPresentation>,
+    pub(super) collider_update: Vec<ColliderPresentation>,
     pub(super) removals: Vec<ChunkCoordinate>,
 }
 
-/// Occupied interior cell used to build a chunk collider and GPU mesh.
+/// Accepted halo-aware geometry ready to replace a chunk GPU mesh.
+#[derive(Clone, Debug)]
+#[cfg_attr(not(feature = "client"), allow(dead_code))]
+pub(super) struct MeshPresentation {
+    pub(super) coordinate: ChunkCoordinate,
+    pub(super) origin: Vec3,
+    pub(super) geometry: MeshBuffer<u16>,
+    pub(super) bounds: Option<Aabb>,
+}
+
+/// Accepted collider ready to replace a chunk physics shape.
+#[derive(Clone, Debug)]
+pub(super) struct ColliderPresentation {
+    pub(super) coordinate: ChunkCoordinate,
+    pub(super) origin: Vec3,
+    pub(super) collider: Collider,
+}
+
+/// Occupied interior cell used only to build a chunk collider.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct OccupiedCell {
     pub(super) local: [u16; 3],
@@ -285,7 +325,8 @@ pub(super) struct OccupiedCell {
 struct ChunkDerived {
     mesh_receipt: Option<MeshReceipt>,
     mesh_source: Option<MeshSource>,
-    faces: BTreeSet<Face>,
+    geometry: Option<MeshBuffer<u16>>,
+    bounds: Option<Aabb>,
     collider: Option<Collider>,
     occupied: Vec<OccupiedCell>,
     revision: ChunkRevision,
@@ -308,7 +349,13 @@ impl HostVoxel {
 
 #[derive(Clone, Debug)]
 struct HostDerivedMesh {
-    mesh: Option<(MeshReceipt, MeshSource, BTreeSet<Face>)>,
+    receipt: MeshReceipt,
+    source: MeshSource,
+    geometry: MeshBuffer<u16>,
+}
+
+#[derive(Clone, Debug)]
+struct HostDerivedCollider {
     occupied: Vec<OccupiedCell>,
 }
 
@@ -461,12 +508,21 @@ impl ProductionSpine {
             voxel_schema,
             voxel_schema_version,
             derived: BTreeMap::new(),
-            dirty: BTreeSet::new(),
+            mesh_dirty: BTreeSet::new(),
+            collider_dirty: BTreeSet::new(),
             removed: BTreeSet::new(),
+            mesher: GreedyMesher::new(),
             edited: BTreeSet::new(),
             lifecycle: BTreeMap::new(),
             eviction_lease: 0,
+            residency: BTreeMap::new(),
             stream_anchor_xz: [0.0, 0.0],
+            look_ahead_axis: [0, 0],
+            look_ahead_tick: 0,
+            last_reconciled_tick: None,
+            last_desired: BTreeSet::new(),
+            stream_admissions: 0,
+            stream_evictions: 0,
             spawn_center: Vec3::ZERO,
             placement_content,
             last_success: None,
@@ -478,6 +534,7 @@ impl ProductionSpine {
             gameplay: None,
             world_store,
             display,
+            interest_reconciliations: 0,
         };
         let spawn = validated_spawn(&inner.plan, &worldgen.bindings)?;
         inner.spawn_center = player_spawn_center(spawn)?;
@@ -616,24 +673,23 @@ impl ProductionSpine {
 
     /// Returns the locked solid palette in index order.
     #[must_use]
+    #[cfg(feature = "client")]
     pub(super) fn palette_ids(&self) -> Vec<BlockId> {
         self.lock_inner()
             .map(|inner| inner.palette.clone())
             .unwrap_or_default()
     }
 
-    /// Returns occupied interior cells retained for a presented chunk.
+    /// Returns accepted derived geometry retained for a presented chunk.
     #[must_use]
-    pub(super) fn occupied_cells(&self, coordinate: ChunkCoordinate) -> Vec<OccupiedCell> {
-        self.lock_inner()
-            .ok()
-            .and_then(|inner| {
-                inner
-                    .derived
-                    .get(&coordinate)
-                    .map(|derived| derived.occupied.clone())
-            })
-            .unwrap_or_default()
+    #[cfg(feature = "client")]
+    pub(super) fn derived_geometry(&self, coordinate: ChunkCoordinate) -> Option<MeshBuffer<u16>> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .derived
+                .get(&coordinate)
+                .and_then(|derived| derived.geometry.clone())
+        })
     }
 
     /// Returns the union of derived mesh faces currently retained.
@@ -643,7 +699,9 @@ impl ProductionSpine {
             Ok(inner) => {
                 let mut faces = BTreeSet::new();
                 for derived in inner.derived.values() {
-                    faces.extend(derived.faces.iter().copied());
+                    if let Some(geometry) = &derived.geometry {
+                        faces.extend(geometry.iter().map(|(_, face, _)| face));
+                    }
                 }
                 faces
             }
@@ -780,6 +838,55 @@ impl ProductionSpine {
         result
     }
 
+    /// Ensures colliders for the current player capsule without reconciling interest.
+    ///
+    /// This is the movement-time safety gate: it may complete pending collider
+    /// jobs and emit conservative shapes for occupied chunks, but it does not
+    /// generate, evict, or consume a presentation delta.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when the player pose is outside the
+    /// chunk domain or collider derivation fails.
+    pub(super) fn ensure_collider_safety(
+        &self,
+        fixed_tick: u64,
+    ) -> Result<Vec<ColliderPresentation>, ProductionHostError> {
+        let result = self.ensure_collider_safety_inner(fixed_tick);
+        if result.is_err()
+            && let Ok(mut inner) = self.lock_inner()
+        {
+            inner.last_stream_error = result.as_ref().err().map(ToString::to_string);
+        }
+        result
+    }
+
+    /// Number of full interest reconciliations performed by [`Self::sync_interest`].
+    #[must_use]
+    pub fn interest_reconciliation_count(&self) -> u64 {
+        self.lock_inner()
+            .map_or(0, |inner| inner.interest_reconciliations)
+    }
+
+    /// Chunks admitted into the working set since materialization.
+    #[must_use]
+    pub fn stream_admission_count(&self) -> u64 {
+        self.lock_inner().map_or(0, |inner| inner.stream_admissions)
+    }
+
+    /// Chunks evicted from the working set since materialization.
+    #[must_use]
+    pub fn stream_eviction_count(&self) -> u64 {
+        self.lock_inner().map_or(0, |inner| inner.stream_evictions)
+    }
+
+    /// Sticky look-ahead axis used by the latest interest reconciliation.
+    #[must_use]
+    pub fn interest_look_ahead(&self) -> [i32; 2] {
+        self.lock_inner()
+            .map_or([0, 0], |inner| inner.look_ahead_axis)
+    }
+
     /// Returns the last chunk-stream failure, if any.
     #[must_use]
     pub fn last_stream_error(&self) -> Option<String> {
@@ -790,13 +897,26 @@ impl ProductionSpine {
 
     fn sync_interest_inner(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
         let mut inner = self.lock_inner()?;
+        if inner.last_reconciled_tick == Some(fixed_tick) {
+            return Ok(());
+        }
+        inner.last_reconciled_tick = Some(fixed_tick);
+        inner.interest_reconciliations = inner.interest_reconciliations.saturating_add(1);
         let translation = inner.player_pose.translation;
         let chunk = translation_chunk(translation, inner.chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
-        let look_ahead = look_ahead_axis([
-            translation.x - inner.stream_anchor_xz[0],
-            translation.z - inner.stream_anchor_xz[1],
-        ]);
+        let (look_ahead, look_ahead_tick) = sticky_look_ahead(
+            [
+                translation.x - inner.stream_anchor_xz[0],
+                translation.z - inner.stream_anchor_xz[1],
+            ],
+            inner.look_ahead_axis,
+            inner.look_ahead_tick,
+            fixed_tick,
+            LOOK_AHEAD_EXPIRY_TICKS,
+        );
+        inner.look_ahead_axis = look_ahead;
+        inner.look_ahead_tick = look_ahead_tick;
         inner.stream_anchor_xz = [translation.x, translation.z];
         let admit_limit = inner.clamps.max_in_flight();
         sync_working_set(
@@ -807,6 +927,41 @@ impl ProductionSpine {
             FixedTick::new(fixed_tick),
             admit_limit,
         )
+    }
+
+    fn ensure_collider_safety_inner(
+        &self,
+        fixed_tick: u64,
+    ) -> Result<Vec<ColliderPresentation>, ProductionHostError> {
+        let mut inner = self.lock_inner()?;
+        let tick = FixedTick::new(fixed_tick);
+        let translation = inner.player_pose.translation;
+        let mut occupied = player_occupied_chunks(translation, inner.chunk_edge)?;
+        if let Some(chunk) = translation_chunk(translation, inner.chunk_edge) {
+            occupied.insert(chunk);
+        }
+        drain_player_colliders(&mut inner, &occupied, tick)?;
+        let edge = f32::from(inner.chunk_edge);
+        let mut updates = Vec::new();
+        for coordinate in occupied {
+            if !inner.runtime.is_resident(coordinate) {
+                continue;
+            }
+            seal_unready_cave_voids(&mut inner, coordinate);
+            let Some(derived) = inner.derived.get(&coordinate) else {
+                continue;
+            };
+            let Some(collider) = derived.collider.clone() else {
+                continue;
+            };
+            updates.push(ColliderPresentation {
+                coordinate,
+                origin: chunk_origin(coordinate, edge),
+                collider,
+            });
+        }
+        refresh_lifecycle(&mut inner);
+        Ok(updates)
     }
 
     /// Returns a cursor used to detect mesh invalidation after an edit.
@@ -1294,31 +1449,50 @@ impl ProductionSpine {
 
     pub(super) fn take_presentation(&self) -> Result<PresentationDelta, ProductionHostError> {
         let mut inner = self.lock_inner()?;
-        let dirty = mem::take(&mut inner.dirty);
-        let mut removals: Vec<ChunkCoordinate> =
-            mem::take(&mut inner.removed).into_iter().collect();
+        let mesh_dirty = mem::take(&mut inner.mesh_dirty);
+        let collider_dirty = mem::take(&mut inner.collider_dirty);
+        let removals: Vec<ChunkCoordinate> = mem::take(&mut inner.removed).into_iter().collect();
         let edge = f32::from(inner.chunk_edge);
-        let mut upserts = Vec::new();
-        for coordinate in dirty {
+        let mut mesh_update = Vec::new();
+        let mut collider_update = Vec::new();
+        for coordinate in mesh_dirty {
+            if removals.binary_search(&coordinate).is_ok() {
+                continue;
+            }
             let Some(derived) = inner.derived.get(&coordinate) else {
                 continue;
             };
-            match derived.collider.clone() {
-                Some(collider) => {
-                    upserts.push((
-                        coordinate,
-                        collider,
-                        chunk_origin(coordinate, edge),
-                        derived.occupied.clone(),
-                    ));
-                }
-                None if cave_entry_ready_inner(&inner, coordinate) => {
-                    removals.push(coordinate);
-                }
-                None => {}
-            }
+            let Some(geometry) = derived.geometry.clone() else {
+                continue;
+            };
+            mesh_update.push(MeshPresentation {
+                coordinate,
+                origin: chunk_origin(coordinate, edge),
+                geometry,
+                bounds: derived.bounds,
+            });
         }
-        Ok(PresentationDelta { upserts, removals })
+        for coordinate in collider_dirty {
+            if removals.binary_search(&coordinate).is_ok() {
+                continue;
+            }
+            let Some(derived) = inner.derived.get(&coordinate) else {
+                continue;
+            };
+            let Some(collider) = derived.collider.clone() else {
+                continue;
+            };
+            collider_update.push(ColliderPresentation {
+                coordinate,
+                origin: chunk_origin(coordinate, edge),
+                collider,
+            });
+        }
+        Ok(PresentationDelta {
+            mesh_update,
+            collider_update,
+            removals,
+        })
     }
 
     pub(super) fn record_player_pose(&self, pose: ProductionPlayerPose) {
@@ -1997,6 +2171,14 @@ impl Voxel for HostVoxel {
 impl RetainedBytes for HostDerivedMesh {
     fn retained_bytes(&self) -> u64 {
         4_096_u64.saturating_add(
+            u64::try_from(self.geometry.quad_count().saturating_mul(48)).unwrap_or(u64::MAX),
+        )
+    }
+}
+
+impl RetainedBytes for HostDerivedCollider {
+    fn retained_bytes(&self) -> u64 {
+        4_096_u64.saturating_add(
             u64::try_from(self.occupied.len().saturating_mul(16)).unwrap_or(u64::MAX),
         )
     }
@@ -2037,28 +2219,101 @@ fn sync_working_set(
     admit_limit: usize,
 ) -> Result<(), ProductionHostError> {
     let desired = desired_chunks(origin, inner.clamps, look_ahead, &inner.edited);
-    evict_unwanted(inner, &desired, tick)?;
-    let ordered = prioritize_chunks(&desired, origin, look_ahead);
-    admit_desired(inner, kernel, &ordered, tick, admit_limit)?;
+    refresh_residency(inner, origin, look_ahead, tick);
+    let needs_mutate = inner.last_desired != desired
+        || desired
+            .iter()
+            .any(|coordinate| !inner.runtime.is_resident(*coordinate));
+    if needs_mutate {
+        evict_unwanted(inner, origin, look_ahead, &desired, tick)?;
+        let ordered = prioritize_chunks(&desired, origin, look_ahead);
+        admit_desired(
+            inner,
+            kernel,
+            origin,
+            look_ahead,
+            &ordered,
+            tick,
+            admit_limit,
+        )?;
+        inner.last_desired.clone_from(&desired);
+    }
     drain_derived(inner, tick)?;
     refresh_lifecycle(inner);
     Ok(())
 }
 
+fn refresh_residency(
+    inner: &mut ProductionSpineInner,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
+    tick: FixedTick,
+) {
+    let now = tick.get();
+    let coordinates = inner.lifecycle.keys().copied().collect::<Vec<_>>();
+    for coordinate in coordinates {
+        let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let residency = inner.residency.entry(coordinate).or_insert(ChunkResidency {
+            admitted_tick: now,
+            last_core_tick: None,
+        });
+        match class {
+            InterestClass::Pin | InterestClass::Core => {
+                residency.last_core_tick = Some(now);
+            }
+            InterestClass::Retain | InterestClass::Prefetch => {}
+        }
+    }
+}
+
 fn evict_unwanted(
     inner: &mut ProductionSpineInner,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
     desired: &BTreeSet<ChunkCoordinate>,
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
-    let victims = inner
+    let now = tick.get();
+    let mut victims = inner
         .lifecycle
         .keys()
         .copied()
-        .filter(|coordinate| !desired.contains(coordinate) && !inner.edited.contains(coordinate))
+        .filter(|coordinate| {
+            if desired.contains(coordinate)
+                || inner.edited.contains(coordinate)
+                || inner.runtime.is_dirty(*coordinate)
+            {
+                return false;
+            }
+            if matches!(
+                interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited),
+                InterestClass::Pin | InterestClass::Core
+            ) {
+                return false;
+            }
+            inner.residency.get(coordinate).is_none_or(|residency| {
+                !retain_protected(now, residency.admitted_tick, residency.last_core_tick)
+            })
+        })
         .collect::<Vec<_>>();
+    victims.sort_by_key(|coordinate| {
+        let was_core = inner
+            .residency
+            .get(coordinate)
+            .and_then(|residency| residency.last_core_tick)
+            .is_some();
+        (
+            u8::from(was_core),
+            std::cmp::Reverse(chebyshev_xz(*coordinate, origin)),
+            coordinate.x,
+            coordinate.y,
+            coordinate.z,
+        )
+    });
     for coordinate in victims {
         if !inner.runtime.is_resident(coordinate) {
             forget_chunk(inner, coordinate);
+            inner.stream_evictions = inner.stream_evictions.saturating_add(1);
             continue;
         }
         inner.eviction_lease = inner.eviction_lease.saturating_add(1);
@@ -2070,6 +2325,7 @@ fn evict_unwanted(
             .runtime
             .evict_committed(permit, tick, derived_requests())?;
         forget_chunk(inner, coordinate);
+        inner.stream_evictions = inner.stream_evictions.saturating_add(1);
     }
     Ok(())
 }
@@ -2077,6 +2333,8 @@ fn evict_unwanted(
 fn admit_desired(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
     ordered: &[ChunkCoordinate],
     tick: FixedTick,
     admit_limit: usize,
@@ -2091,6 +2349,7 @@ fn admit_desired(
         .map(|storage| storage.begin_read(inner.world))
         .transpose()?;
     let admit_limit = admit_limit.max(1);
+    let high_water = inner.clamps.prefetch_high_water();
     for coordinate in ordered {
         if inner.runtime.is_resident(*coordinate) {
             continue;
@@ -2101,6 +2360,10 @@ fn admit_desired(
             .resident_chunks()
             .saturating_add(generate.len())
             .saturating_add(hydrate.len());
+        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        if class == InterestClass::Prefetch && upcoming >= high_water {
+            continue;
+        }
         if upcoming >= inner.clamps.max_resident() || admitted >= admit_limit {
             break;
         }
@@ -2112,6 +2375,7 @@ fn admit_desired(
                 .lifecycle
                 .insert(*coordinate, ChunkLifecycle::Resident);
             seal_unready_cave_voids(inner, *coordinate);
+            remember_admission(inner, *coordinate, class, tick);
             admitted = admitted.saturating_add(1);
             continue;
         }
@@ -2123,6 +2387,7 @@ fn admit_desired(
         {
             inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
             hydrate.push((*coordinate, persisted));
+            remember_admission(inner, *coordinate, class, tick);
             admitted = admitted.saturating_add(1);
             continue;
         }
@@ -2133,6 +2398,7 @@ fn admit_desired(
             .lifecycle
             .insert(*coordinate, ChunkLifecycle::Generate);
         generate.push(*coordinate);
+        remember_admission(inner, *coordinate, class, tick);
         admitted = admitted.saturating_add(1);
     }
     if !hydrate.is_empty() {
@@ -2197,7 +2463,6 @@ fn publish_hydrated(
             .lifecycle
             .insert(*coordinate, ChunkLifecycle::Resident);
         seal_unready_cave_voids(inner, *coordinate);
-        inner.edited.insert(*coordinate);
     }
     Ok(())
 }
@@ -2230,6 +2495,7 @@ fn publish_generated(
         for coordinate in coordinates {
             if inner.lifecycle.get(coordinate) == Some(&ChunkLifecycle::Generate) {
                 inner.lifecycle.remove(coordinate);
+                inner.residency.remove(coordinate);
             }
         }
         return Ok(());
@@ -2262,10 +2528,31 @@ fn publish_generated(
     Ok(())
 }
 
+fn remember_admission(
+    inner: &mut ProductionSpineInner,
+    coordinate: ChunkCoordinate,
+    class: InterestClass,
+    tick: FixedTick,
+) {
+    let now = tick.get();
+    inner.residency.insert(
+        coordinate,
+        ChunkResidency {
+            admitted_tick: now,
+            last_core_tick: matches!(class, InterestClass::Pin | InterestClass::Core)
+                .then_some(now),
+        },
+    );
+    inner.stream_admissions = inner.stream_admissions.saturating_add(1);
+}
+
 fn forget_chunk(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
     inner.lifecycle.remove(&coordinate);
     inner.derived.remove(&coordinate);
-    inner.dirty.remove(&coordinate);
+    inner.mesh_dirty.remove(&coordinate);
+    inner.collider_dirty.remove(&coordinate);
+    inner.residency.remove(&coordinate);
+    inner.last_desired.remove(&coordinate);
     inner.removed.insert(coordinate);
 }
 
@@ -2327,45 +2614,105 @@ fn drain_derived(
     Ok(())
 }
 
+fn drain_player_colliders(
+    inner: &mut ProductionSpineInner,
+    occupied: &BTreeSet<ChunkCoordinate>,
+    tick: FixedTick,
+) -> Result<(), ProductionHostError> {
+    loop {
+        let pending = occupied.iter().any(|coordinate| {
+            inner.runtime.is_resident(*coordinate)
+                && !matches!(
+                    inner.runtime.collider_safety(*coordinate),
+                    Some(ColliderSafetyState::Ready { .. })
+                )
+        });
+        if !pending {
+            break;
+        }
+        match inner.runtime.dispatch_next(DerivedKind::Collider)? {
+            DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
+            DispatchOutcome::Started(input) => {
+                complete_derived(inner, DerivedKind::Collider, input, tick)?;
+            }
+            DispatchOutcome::MemoryContractViolation { .. } => {
+                return Err(ProductionHostError::DerivedMemory);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn complete_derived(
     inner: &mut ProductionSpineInner,
     kind: DerivedKind,
     input: DerivedInput<HostVoxel>,
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
+    match kind {
+        DerivedKind::Mesh => complete_mesh_derived(inner, input, tick),
+        DerivedKind::Collider => complete_collider_derived(inner, input, tick),
+    }
+}
+
+fn complete_mesh_derived(
+    inner: &mut ProductionSpineInner,
+    input: DerivedInput<HostVoxel>,
+    tick: FixedTick,
+) -> Result<(), ProductionHostError> {
     let coordinate = input.ticket().key().coordinate();
     let revision = input.ticket().key().revision();
-    let derived = match kind {
-        DerivedKind::Mesh => {
-            let source = input
-                .ticket()
-                .key()
-                .mesh_source()
-                .ok_or(ProductionHostError::MissingMeshSource { coordinate })?;
-            let mesh = visible_faces(input.samples(), input.dimensions(), source)?;
-            let faces = mesh
-                .geometry()
-                .iter()
-                .map(|(_, face, _)| face)
-                .collect::<BTreeSet<_>>();
-            HostDerivedMesh {
-                mesh: Some((mesh.receipt(), source, faces)),
-                occupied: occupied_voxels(input.samples(), input.dimensions())?,
-            }
-        }
-        DerivedKind::Collider => HostDerivedMesh {
-            mesh: None,
-            occupied: occupied_voxels(input.samples(), input.dimensions())?,
-        },
+    let source = input
+        .ticket()
+        .key()
+        .mesh_source()
+        .ok_or(ProductionHostError::MissingMeshSource { coordinate })?;
+    let mut geometry = MeshBuffer::default();
+    let receipt =
+        inner
+            .mesher
+            .mesh_into(input.samples(), input.dimensions(), source, &mut geometry)?;
+    let derived = HostDerivedMesh {
+        receipt,
+        source,
+        geometry,
     };
+    finish_derived(inner, input, derived, tick, |inner, value| {
+        apply_mesh_derived(inner, coordinate, revision, value);
+    })
+}
+
+fn complete_collider_derived(
+    inner: &mut ProductionSpineInner,
+    input: DerivedInput<HostVoxel>,
+    tick: FixedTick,
+) -> Result<(), ProductionHostError> {
+    let coordinate = input.ticket().key().coordinate();
+    let revision = input.ticket().key().revision();
+    let derived = HostDerivedCollider {
+        occupied: occupied_voxels(input.samples(), input.dimensions())?,
+    };
+    finish_derived(inner, input, derived, tick, |inner, value| {
+        apply_collider_derived(inner, coordinate, revision, value);
+    })
+}
+
+fn finish_derived<R: RetainedBytes>(
+    inner: &mut ProductionSpineInner,
+    input: DerivedInput<HostVoxel>,
+    derived: R,
+    tick: FixedTick,
+    apply: impl FnOnce(&mut ProductionSpineInner, R),
+) -> Result<(), ProductionHostError> {
     let apply_bytes = ApplyByteDeclaration::new(derived.retained_bytes());
-    match inner
+    let outcome = inner
         .runtime
         .complete_derived(input, derived, apply_bytes, tick, |value| {
-            Ok::<HostDerivedMesh, ProductionHostError>(value)
-        }) {
+            Ok::<R, ProductionHostError>(value)
+        });
+    match outcome {
         CompletionOutcome::Applied { value, .. } => {
-            apply_derived(inner, coordinate, revision, kind, value);
+            apply(inner, value);
             Ok(())
         }
         CompletionOutcome::StaleRejected { .. } | CompletionOutcome::Cancelled { .. } => Ok(()),
@@ -2376,11 +2723,10 @@ fn complete_derived(
     }
 }
 
-fn apply_derived(
+fn apply_mesh_derived(
     inner: &mut ProductionSpineInner,
     coordinate: ChunkCoordinate,
     revision: ChunkRevision,
-    kind: DerivedKind,
     value: HostDerivedMesh,
 ) {
     let entry = inner
@@ -2388,25 +2734,35 @@ fn apply_derived(
         .entry(coordinate)
         .or_insert_with(|| empty_derived(revision));
     entry.revision = revision;
-    if let Some((receipt, source, faces)) = value.mesh {
-        entry.mesh_receipt = Some(receipt);
-        entry.mesh_source = Some(source);
-        entry.faces = faces;
-    }
-    if !value.occupied.is_empty() {
-        entry.occupied = value.occupied;
-    }
-    if kind == DerivedKind::Collider && entry.mesh_receipt.is_some() {
-        entry.collider = compound_collider(&entry.occupied);
-    }
-    inner.dirty.insert(coordinate);
+    entry.mesh_receipt = Some(value.receipt);
+    entry.mesh_source = Some(value.source);
+    entry.bounds = value.geometry.bounds();
+    entry.geometry = Some(value.geometry);
+    inner.mesh_dirty.insert(coordinate);
+}
+
+fn apply_collider_derived(
+    inner: &mut ProductionSpineInner,
+    coordinate: ChunkCoordinate,
+    revision: ChunkRevision,
+    value: HostDerivedCollider,
+) {
+    let entry = inner
+        .derived
+        .entry(coordinate)
+        .or_insert_with(|| empty_derived(revision));
+    entry.revision = revision;
+    entry.occupied = value.occupied;
+    entry.collider = compound_collider(&entry.occupied);
+    inner.collider_dirty.insert(coordinate);
 }
 
 fn empty_derived(revision: ChunkRevision) -> ChunkDerived {
     ChunkDerived {
         mesh_receipt: None,
         mesh_source: None,
-        faces: BTreeSet::new(),
+        geometry: None,
+        bounds: None,
         collider: None,
         occupied: Vec::new(),
         revision,
@@ -2810,7 +3166,7 @@ fn seal_unready_cave_voids(inner: &mut ProductionSpineInner, coordinate: ChunkCo
     if entry.mesh_receipt.is_none() {
         entry.occupied = occupied;
         entry.collider = compound_collider(&entry.occupied);
-        inner.dirty.insert(coordinate);
+        inner.collider_dirty.insert(coordinate);
     }
 }
 
@@ -2880,6 +3236,17 @@ fn player_sample_cells(translation: Vec3) -> [[i64; 3]; 2] {
             f32_floor_i64(translation.z),
         ],
     ]
+}
+
+fn player_occupied_chunks(
+    translation: Vec3,
+    edge: u16,
+) -> Result<BTreeSet<ChunkCoordinate>, ProductionHostError> {
+    let _ = translation_chunk(translation, edge).ok_or(ProductionHostError::InvalidPlayerPose)?;
+    Ok(player_sample_cells(translation)
+        .iter()
+        .map(|&[x, y, z]| world_chunk(x, y, z, edge))
+        .collect())
 }
 
 fn world_chunk(x: i64, y: i64, z: i64, edge: u16) -> ChunkCoordinate {

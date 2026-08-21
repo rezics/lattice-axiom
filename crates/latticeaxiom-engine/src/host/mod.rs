@@ -24,21 +24,21 @@ mod stream;
 mod worldgen;
 mod writer;
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use avian3d::PhysicsPlugins;
 use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
     prelude::{
-        Commands, Component, Entity, FixedFirst, FixedPostUpdate, FixedUpdate, MessageWriter,
-        Query, Res, ResMut, Resource, Transform, With, Without,
+        Commands, Component, Entity, FixedPostUpdate, FixedUpdate, MessageWriter, Query, Res,
+        ResMut, Resource, Transform, With, Without,
     },
     transform::TransformPlugin,
 };
 #[cfg(feature = "client")]
 use bevy::{
-    app::{Startup, Update},
+    app::{FixedFirst, Startup, Update},
     asset::Assets,
     prelude::{ClearColor, Color, Mesh},
 };
@@ -80,6 +80,8 @@ use crate::EngineProfile;
 use crate::{
     EngineInstance, EngineInstanceError, LockVerifiedComposeImages, VerifiedProductLockHash,
 };
+
+use self::spine::ColliderPresentation;
 
 /// Cursor capturing derived mesh identity before an authoritative edit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,6 +219,11 @@ fn capability_present(graph: &LockedGameGraph, capability: &str) -> bool {
 }
 
 /// Bevy plugin that spawns chunk colliders and the local player.
+///
+/// `FixedUpdate` only applies the current capsule's collider safety gate.
+/// Interest is reconciled once in `FixedPostUpdate` from the final pose after
+/// movement, Avian writeback, and edit evaluation. Camera `Update` copies the
+/// eye transform and does not write chunk interest.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProductionHostPlugin;
 
@@ -225,12 +232,7 @@ impl Plugin for ProductionHostPlugin {
         app.add_message::<TargetInspectReceiptV1>()
             .add_systems(
                 FixedUpdate,
-                (
-                    sync_player_pose,
-                    sync_chunk_stream.after(sync_player_pose),
-                    sync_chunk_colliders.after(sync_chunk_stream),
-                )
-                    .before(PlayerSystemSet::ProbeGround),
+                sync_collider_safety.before(PlayerSystemSet::ProbeGround),
             )
             .add_systems(
                 FixedPostUpdate,
@@ -239,7 +241,7 @@ impl Plugin for ProductionHostPlugin {
                     sync_player_pose.after(PlayerSystemSet::EvaluateEdit),
                     sync_chunk_stream.after(sync_player_pose),
                     sync_chunk_colliders.after(sync_chunk_stream),
-                    sync_working_set_diagnostics.after(sync_chunk_stream),
+                    sync_working_set_diagnostics.after(sync_chunk_colliders),
                     refresh_crosshair_target
                         .after(sync_player_pose)
                         .after(evaluate_target_inspect),
@@ -443,12 +445,14 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
         Transform::from_translation(spawn),
     ));
     if let Ok(delta) = spine.take_presentation() {
-        for (coordinate, collider, origin, _occupied) in delta.upserts {
+        for update in delta.collider_update {
             world.spawn((
-                ChunkPresentation { coordinate },
+                ChunkPresentation {
+                    coordinate: update.coordinate,
+                },
                 avian3d::prelude::RigidBody::Static,
-                collider,
-                Transform::from_translation(origin),
+                update.collider,
+                Transform::from_translation(update.origin),
             ));
         }
     }
@@ -464,6 +468,38 @@ fn sync_chunk_stream(
         return;
     }
     let _ = spine.sync_interest(tick.get());
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::type_complexity)] // Player-capsule collider mapping is one safety query.
+fn sync_collider_safety(
+    tick: Res<'_, PlayerFixedTick>,
+    mut commands: Commands<'_, '_>,
+    spine: Res<'_, ProductionSpine>,
+    pause: Option<Res<'_, ProductionSessionPause>>,
+    chunks: Query<'_, '_, (Entity, &ChunkPresentation)>,
+    mut transforms: Query<'_, '_, &mut Transform>,
+    mut colliders: Query<'_, '_, &mut avian3d::prelude::Collider>,
+) {
+    if pause.is_some_and(|pause| pause.is_paused()) {
+        return;
+    }
+    let Ok(updates) = spine.ensure_collider_safety(tick.get()) else {
+        return;
+    };
+    let mut by_coordinate = chunks
+        .iter()
+        .map(|(entity, presentation)| (presentation.coordinate, entity))
+        .collect::<BTreeMap<_, _>>();
+    for update in updates {
+        apply_collider_update(
+            &mut commands,
+            &mut transforms,
+            &mut colliders,
+            &mut by_coordinate,
+            update,
+        );
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
@@ -494,16 +530,9 @@ fn spawn_production_hud_if_client(commands: Commands<'_, '_>, profile: Res<'_, E
 fn sync_chunk_colliders(
     mut commands: Commands<'_, '_>,
     spine: Res<'_, ProductionSpine>,
-    mut chunks: Query<
-        '_,
-        '_,
-        (
-            Entity,
-            &ChunkPresentation,
-            &mut avian3d::prelude::Collider,
-            &mut Transform,
-        ),
-    >,
+    chunks: Query<'_, '_, (Entity, &ChunkPresentation)>,
+    mut transforms: Query<'_, '_, &mut Transform>,
+    mut colliders: Query<'_, '_, &mut avian3d::prelude::Collider>,
     #[cfg(feature = "client")] mut meshes: Option<ResMut<'_, Assets<Mesh>>>,
     #[cfg(feature = "client")] material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
     #[cfg(feature = "client")] palette: Option<Res<'_, chunk_mesh::ProductionTerrainPalette>>,
@@ -512,67 +541,103 @@ fn sync_chunk_colliders(
     let Ok(delta) = spine.take_presentation() else {
         return;
     };
+    let mut by_coordinate = chunks
+        .iter()
+        .map(|(entity, presentation)| (presentation.coordinate, entity))
+        .collect::<BTreeMap<_, _>>();
     for coordinate in delta.removals {
-        if let Some((entity, _, _, _)) = chunks
-            .iter()
-            .find(|(_, presentation, _, _)| presentation.coordinate == coordinate)
-        {
+        if let Some(entity) = by_coordinate.remove(&coordinate) {
             commands.entity(entity).despawn();
         }
     }
-    for (coordinate, collider, origin, occupied) in delta.upserts {
-        if let Some((entity, _, mut existing, mut transform)) = chunks
-            .iter_mut()
-            .find(|(_, presentation, _, _)| presentation.coordinate == coordinate)
-        {
-            *existing = collider;
-            transform.translation = origin;
-            #[cfg(feature = "client")]
-            attach_chunk_mesh(
-                &mut commands,
-                meshes.as_mut(),
-                material.as_ref(),
-                palette.as_ref(),
-                entity,
-                &occupied,
-                gpu_meshes.get(entity).ok(),
-            );
-            continue;
-        }
-        let entity = commands
-            .spawn((
-                ChunkPresentation { coordinate },
-                avian3d::prelude::RigidBody::Static,
-                collider,
-                Transform::from_translation(origin),
-            ))
-            .id();
-        #[cfg(feature = "client")]
+    for update in delta.collider_update {
+        apply_collider_update(
+            &mut commands,
+            &mut transforms,
+            &mut colliders,
+            &mut by_coordinate,
+            update,
+        );
+    }
+    #[cfg(not(feature = "client"))]
+    {
+        let _ = delta.mesh_update;
+    }
+    #[cfg(feature = "client")]
+    for update in delta.mesh_update {
+        let entity = if let Some(&entity) = by_coordinate.get(&update.coordinate) {
+            if let Ok(mut transform) = transforms.get_mut(entity) {
+                transform.translation = update.origin;
+            }
+            entity
+        } else {
+            let entity = commands
+                .spawn((
+                    ChunkPresentation {
+                        coordinate: update.coordinate,
+                    },
+                    Transform::from_translation(update.origin),
+                ))
+                .id();
+            by_coordinate.insert(update.coordinate, entity);
+            entity
+        };
         attach_chunk_mesh(
             &mut commands,
             meshes.as_mut(),
             material.as_ref(),
             palette.as_ref(),
             entity,
-            &occupied,
-            None,
+            &update.geometry,
+            update.bounds,
+            gpu_meshes.get(entity).ok(),
         );
-        #[cfg(not(feature = "client"))]
-        {
-            let _ = entity;
-            let _ = occupied;
-        }
     }
 }
 
+fn apply_collider_update(
+    commands: &mut Commands<'_, '_>,
+    transforms: &mut Query<'_, '_, &mut Transform>,
+    colliders: &mut Query<'_, '_, &mut avian3d::prelude::Collider>,
+    by_coordinate: &mut BTreeMap<ChunkCoordinate, Entity>,
+    update: ColliderPresentation,
+) {
+    if let Some(&entity) = by_coordinate.get(&update.coordinate) {
+        if let Ok(mut transform) = transforms.get_mut(entity) {
+            transform.translation = update.origin;
+        }
+        if let Ok(mut existing) = colliders.get_mut(entity) {
+            *existing = update.collider;
+        } else {
+            commands
+                .entity(entity)
+                .insert((avian3d::prelude::RigidBody::Static, update.collider));
+        }
+        return;
+    }
+    let entity = commands
+        .spawn((
+            ChunkPresentation {
+                coordinate: update.coordinate,
+            },
+            avian3d::prelude::RigidBody::Static,
+            update.collider,
+            Transform::from_translation(update.origin),
+        ))
+        .id();
+    by_coordinate.insert(update.coordinate, entity);
+}
+
 #[cfg(feature = "client")]
+#[allow(clippy::too_many_arguments)] // Geometry, bounds, and previous GPU mesh are presentation inputs.
 fn attach_chunk_mesh(
     commands: &mut Commands<'_, '_>,
     meshes: Option<&mut ResMut<'_, Assets<Mesh>>>,
     material: Option<&Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
     palette: Option<&Res<'_, chunk_mesh::ProductionTerrainPalette>>,
     entity: Entity,
-    occupied: &[spine::OccupiedCell],
+    geometry: &latticeaxiom_voxel_mesh::MeshBuffer<u16>,
+    bounds: Option<latticeaxiom_voxel_mesh::Aabb>,
     existing: Option<&chunk_mesh::ChunkGpuMesh>,
 ) {
     let Some(meshes) = meshes else {
@@ -585,7 +650,7 @@ fn attach_chunk_mesh(
         return;
     };
     chunk_mesh::apply_chunk_mesh(
-        commands, meshes, material, palette, entity, occupied, existing,
+        commands, meshes, material, palette, entity, geometry, bounds, existing,
     );
 }
 
@@ -600,17 +665,17 @@ fn attach_initial_chunk_meshes(
     palette: Option<Res<'_, chunk_mesh::ProductionTerrainPalette>>,
 ) {
     for (entity, presentation) in &chunks {
-        let occupied = spine.occupied_cells(presentation.coordinate);
-        if occupied.is_empty() {
+        let Some(geometry) = spine.derived_geometry(presentation.coordinate) else {
             continue;
-        }
+        };
         attach_chunk_mesh(
             &mut commands,
             meshes.as_mut(),
             material.as_ref(),
             palette.as_ref(),
             entity,
-            &occupied,
+            &geometry,
+            geometry.bounds(),
             None,
         );
     }

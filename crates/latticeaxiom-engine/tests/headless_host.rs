@@ -32,10 +32,10 @@ use latticeaxiom_core::{
 };
 use latticeaxiom_engine::{
     ActionAxis2V1, AuthoritativeTransactionKernel, CellOccupancyV1, ChunkCoordinate, ChunkFaceV1,
-    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ContainerId, DropEntityId, EngineInstance,
-    EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayReject,
+    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ChunkRevision, ContainerId, DropEntityId,
+    EngineInstance, EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayReject,
     HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1, LockVerifiedComposeImages,
-    MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
+    MAX_TICKS_PER_ADVANCE, MeshReceipt, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
     PreparationError, ProductionInspectSurface, ProductionMemoryStart, ProductionSessionPause,
     ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId, SealedWorldWriterHost,
     SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
@@ -767,6 +767,285 @@ fn production_host_exposes_working_set_diagnostics() {
         .expect("working-set diagnostics remain installed");
     assert_eq!(refreshed, spine.working_set_diagnostics());
     assert_working_set_diagnostics(refreshed, limits);
+}
+
+#[test]
+fn camera_yaw_pitch_only_does_not_change_presentation_state() {
+    const TICKS: u32 = 6;
+    let mut idle =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("idle production spine starts from the reopened lock");
+    let mut looking =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("look-only production spine starts from the reopened lock");
+    let idle_spine = idle
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("idle production spine is installed")
+        .clone();
+    let looking_spine = looking
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("look-only production spine is installed")
+        .clone();
+
+    looking
+        .enqueue_headless_actions([
+            look_frame(1, -std::f32::consts::FRAC_PI_2, 0.7),
+            look_frame(2, -0.4, -0.3),
+            idle_frame(3),
+            idle_frame(4),
+            idle_frame(5),
+            idle_frame(6),
+        ])
+        .expect("yaw/pitch-only frames enqueue");
+    idle.advance_fixed_ticks(TICKS).expect("idle ticks advance");
+    looking
+        .advance_fixed_ticks(TICKS)
+        .expect("look-only ticks advance");
+
+    let idle_pose = idle_spine.player_pose();
+    let looking_pose = looking_spine.player_pose();
+    assert!(
+        looking_pose.yaw_radians.abs() > 0.5,
+        "look frames must change yaw, got {}",
+        looking_pose.yaw_radians
+    );
+    assert!(
+        idle_pose.yaw_radians.abs() < 0.01,
+        "idle frames must not change yaw, got {}",
+        idle_pose.yaw_radians
+    );
+    assert!(
+        (looking_pose.translation.x - idle_pose.translation.x).abs() < 0.01
+            && (looking_pose.translation.z - idle_pose.translation.z).abs() < 0.01,
+        "look-only frames must not translate on XZ versus idle (idle {:?}, looking {:?})",
+        idle_pose.translation,
+        looking_pose.translation
+    );
+    assert_eq!(
+        presentation_invariant_snapshot(&looking, &looking_spine),
+        presentation_invariant_snapshot(&idle, &idle_spine),
+        "yaw/pitch-only camera motion must not change resident set, lifecycle, mesh receipt, entity count, or queue counters"
+    );
+}
+
+#[test]
+fn at_most_one_interest_reconciliation_per_fixed_tick() {
+    const TICKS: u32 = 4;
+    let boot = lock_boot_fixture();
+    let images = boot.prepared();
+    let mut instance = EngineInstance::new_headless_host_from_lock(images, SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    let before = spine.interest_reconciliation_count();
+    instance
+        .advance_fixed_ticks(TICKS)
+        .expect("fixed ticks advance");
+    let observed = spine.interest_reconciliation_count().saturating_sub(before);
+    assert_eq!(
+        observed,
+        u64::from(TICKS),
+        "interest reconciliation ran {observed} times across {TICKS} fixed ticks"
+    );
+}
+
+#[test]
+fn intra_chunk_motion_does_not_distance_evict_or_remesh() {
+    const SETTLE: u32 = 8;
+    const HOLD: u32 = 24;
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let edge = f32::from(spine.chunk_edge());
+    let spawn = spine.player_pose().translation;
+    let local_x = spawn.x.rem_euclid(edge);
+    let yaw = if local_x <= edge * 0.5 {
+        std::f32::consts::FRAC_PI_2
+    } else {
+        -std::f32::consts::FRAC_PI_2
+    };
+    instance
+        .enqueue_headless_actions([look_frame(1, yaw, 0.0), idle_frame(2)])
+        .expect("look frame enqueues");
+    instance.advance_fixed_ticks(2).expect("look ticks advance");
+    let mut generation = 3_u64;
+    generation = enqueue_walk(&mut instance, generation, 1.0, u64::from(SETTLE));
+    instance
+        .advance_fixed_ticks(SETTLE)
+        .expect("settle walk advances");
+    let origin = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
+    let before = presentation_invariant_snapshot(&instance, &spine);
+    let admissions = spine.stream_admission_count();
+    let evictions = spine.stream_eviction_count();
+    enqueue_walk(&mut instance, generation, 1.0, u64::from(HOLD));
+    instance
+        .advance_fixed_ticks(HOLD)
+        .expect("intra-chunk walk advances");
+    let after_chunk = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
+    let after = presentation_invariant_snapshot(&instance, &spine);
+    assert_eq!(
+        after_chunk,
+        origin,
+        "test must stay inside the same player chunk (start {origin:?}, end {after_chunk:?}, pose {:?})",
+        spine.player_pose().translation
+    );
+    assert_eq!(
+        spine.stream_admission_count(),
+        admissions,
+        "same-chunk motion must not admit by distance"
+    );
+    assert_eq!(
+        spine.stream_eviction_count(),
+        evictions,
+        "same-chunk motion must not evict by distance"
+    );
+    assert_eq!(
+        after.resident, before.resident,
+        "same-chunk motion must not change the resident set"
+    );
+    for (chunk, receipt) in &before.receipts {
+        assert_eq!(
+            after.receipts.get(chunk),
+            Some(receipt),
+            "same-chunk motion must not remesh {chunk:?}"
+        );
+    }
+}
+
+#[test]
+fn retain_keeps_former_core_after_immediate_boundary_reversal() {
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let start = chunk_from_translation(spine.spawn_center(), spine.chunk_edge());
+    let mut generation =
+        enqueue_look_then_walk(&mut instance, 1, std::f32::consts::FRAC_PI_2, 0.0, 1.0, 16);
+    instance.advance_fixed_ticks(2).expect("look ticks advance");
+    let mut crossed = start;
+    for _ in 0..24 {
+        instance
+            .advance_fixed_ticks(8)
+            .expect("boundary walk advances");
+        crossed = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
+        if crossed.x != start.x {
+            break;
+        }
+        generation = enqueue_walk(&mut instance, generation, 1.0, 8);
+    }
+    assert_ne!(
+        crossed.x,
+        start.x,
+        "player must cross one chunk boundary before reversing (start {start:?}, pose {:?})",
+        spine.player_pose().translation
+    );
+    let retained = spine
+        .resident_chunks()
+        .into_iter()
+        .filter(|chunk| chunk.x.abs_diff(start.x).max(chunk.z.abs_diff(start.z)) <= 1)
+        .collect::<BTreeSet<_>>();
+    let receipts = retained
+        .iter()
+        .filter_map(|chunk| {
+            spine
+                .mesh_cursor(*chunk)
+                .map(|cursor| (*chunk, (cursor.receipt(), cursor.revision())))
+        })
+        .collect::<BTreeMap<_, _>>();
+    enqueue_look_then_walk(
+        &mut instance,
+        generation,
+        -std::f32::consts::FRAC_PI_2,
+        0.0,
+        1.0,
+        12,
+    );
+    instance
+        .advance_fixed_ticks(14)
+        .expect("immediate reversal advances");
+    for chunk in &retained {
+        assert!(
+            spine.resident_chunks().contains(chunk),
+            "retain must keep {chunk:?} resident after an immediate reversal"
+        );
+        if let Some(before) = receipts.get(chunk) {
+            let after = spine
+                .mesh_cursor(*chunk)
+                .map(|cursor| (cursor.receipt(), cursor.revision()));
+            assert_eq!(
+                after.as_ref(),
+                Some(before),
+                "retain must not rematerialize {chunk:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn look_ahead_survives_zero_delta_idle_ticks() {
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    enqueue_look_then_walk(&mut instance, 1, std::f32::consts::FRAC_PI_2, 0.0, 1.0, 12);
+    instance
+        .advance_fixed_ticks(14)
+        .expect("look-ahead walk advances");
+    assert_eq!(
+        spine.interest_look_ahead(),
+        [1, 0],
+        "continuous +X motion must keep a sticky look-ahead axis"
+    );
+    let origin = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
+    let ahead = ChunkCoordinate::new(origin.x + 2, origin.y, origin.z);
+    assert!(
+        spine
+            .resident_chunks()
+            .iter()
+            .any(|chunk| chunk.x == ahead.x && chunk.z == ahead.z),
+        "look-ahead column {ahead:?} must be admitted before idle ticks"
+    );
+    instance
+        .enqueue_headless_actions([idle_frame(20), idle_frame(21), idle_frame(22)])
+        .expect("idle frames enqueue");
+    instance.advance_fixed_ticks(3).expect("idle ticks advance");
+    assert_eq!(
+        spine.interest_look_ahead(),
+        [1, 0],
+        "a short zero-delta idle must not revoke look-ahead"
+    );
+    assert!(
+        spine
+            .resident_chunks()
+            .iter()
+            .any(|chunk| chunk.x == ahead.x && chunk.z == ahead.z),
+        "look-ahead column must remain after a short idle"
+    );
 }
 
 #[test]
@@ -1611,6 +1890,25 @@ fn assert_fluid_occupancy(
     );
 }
 
+fn enqueue_walk(
+    instance: &mut EngineInstance,
+    start_generation: u64,
+    forward: f32,
+    walk_ticks: u64,
+) -> u64 {
+    let frames = (0..walk_ticks)
+        .map(|offset| PlayerActionFrameV1 {
+            generation: start_generation + offset,
+            movement: ActionAxis2V1 { x: 0.0, y: forward },
+            ..PlayerActionFrameV1::default()
+        })
+        .collect::<Vec<_>>();
+    instance
+        .enqueue_headless_actions(frames)
+        .expect("walk frames enqueue");
+    start_generation + walk_ticks
+}
+
 fn enqueue_look_then_walk(
     instance: &mut EngineInstance,
     start_generation: u64,
@@ -1690,6 +1988,41 @@ fn presented_chunks(instance: &EngineInstance) -> BTreeSet<ChunkCoordinate> {
                 .map(|chunk| chunk.coordinate)
         })
         .collect()
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PresentationInvariantSnapshot {
+    resident: BTreeSet<ChunkCoordinate>,
+    lifecycles: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
+    receipts: BTreeMap<ChunkCoordinate, (MeshReceipt, ChunkRevision)>,
+    entity_count: usize,
+    diagnostics: WorkingSetDiagnosticsV1,
+}
+
+fn presentation_invariant_snapshot(
+    instance: &EngineInstance,
+    spine: &ProductionSpine,
+) -> PresentationInvariantSnapshot {
+    let resident = spine.resident_chunks();
+    let lifecycles = resident
+        .iter()
+        .map(|chunk| (*chunk, spine.chunk_lifecycle(*chunk)))
+        .collect();
+    let receipts = resident
+        .iter()
+        .filter_map(|chunk| {
+            spine
+                .mesh_cursor(*chunk)
+                .map(|cursor| (*chunk, (cursor.receipt(), cursor.revision())))
+        })
+        .collect();
+    PresentationInvariantSnapshot {
+        resident,
+        lifecycles,
+        receipts,
+        entity_count: instance.production_chunk_entity_count(),
+        diagnostics: spine.working_set_diagnostics(),
+    }
 }
 
 #[allow(clippy::cast_possible_truncation)]
