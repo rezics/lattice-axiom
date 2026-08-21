@@ -38,8 +38,9 @@ pub use host::{
     INVENTORY_SLOTS, ProductionHostError, ProductionHostPlugin, ProductionInspectSurface,
     ProductionInventoryView, ProductionMemoryStart, ProductionMemoryStartError,
     ProductionPlayerPose, ProductionSpine, ProductionWorldList, ProductionWorldStorage,
-    WorkingSetDiagnosticsV1, authored_content_catalog, authored_gameplay_catalog,
-    empty_gameplay_catalog,
+    SealedWorldWriterHost, SealedWriterHostError, WorkingSetDiagnosticsV1,
+    authored_content_catalog, authored_gameplay_catalog, empty_gameplay_catalog,
+    sealed_activation_binding,
 };
 pub use instance::{
     EngineInstance, EngineInstanceError, EngineProfile, FixedTickCount, MAX_TICKS_PER_ADVANCE,

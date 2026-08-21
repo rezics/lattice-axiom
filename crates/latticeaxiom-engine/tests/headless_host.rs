@@ -37,9 +37,9 @@ use latticeaxiom_engine::{
     HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1, LockVerifiedComposeImages,
     MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
     PreparationError, ProductionInspectSurface, ProductionMemoryStart, ProductionSpine,
-    ProductionWorldList, ProductionWorldStorage, RecipeId, SlotIndex,
-    StructurallyValidatedComposeImages, VerifiedProductLockHash, WorkingSetDiagnosticsV1,
-    WorkstationId, authored_gameplay_catalog, empty_gameplay_catalog,
+    ProductionWorldList, ProductionWorldStorage, RecipeId, SealedWorldWriterHost,
+    SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
+    WorkingSetDiagnosticsV1, WorkstationId, authored_gameplay_catalog, empty_gameplay_catalog,
 };
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_launcher::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
@@ -52,6 +52,8 @@ use latticeaxiom_start_ui::{
     ClientShellGraph, InputSource, MemoryStartEffect, SemanticActionId, SemanticCommand,
     SemanticNodeId, ShellCapability, ShellEffect, ShellPackageProvider,
 };
+use latticeaxiom_world_catalog::WorldOpenAction;
+use latticeaxiom_world_db::{WorldDbError, WorldStorage};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -902,6 +904,181 @@ fn start_ui_create_play_continue_preserves_in_memory_world_id() {
         MemoryStartEffect::Shell(ShellEffect::RequestExactWorldLaunch(created))
     );
     assert_eq!(start.continue_world_id(), Some(created));
+}
+
+#[test]
+fn start_ui_create_fills_activation_binding_from_shared_storage_preflight() {
+    let images = lock_boot_fixture().prepared();
+    let record_owner = "latticeaxiom:schema/world-db-chunk@1"
+        .parse()
+        .expect("fixture record owner is canonical");
+    let writer_host =
+        SealedWorldWriterHost::volatile_reference_with_default_publisher(record_owner);
+    let mut start = ProductionMemoryStart::new(images, start_shell_graph())
+        .with_storage(writer_host.storage().clone());
+    let intent = start
+        .quick_create_intent("Memory Session")
+        .expect("quick-create intent binds the lock graph root");
+    let created = start
+        .create(&intent, 10)
+        .expect("create provisions shared storage and publishes the WorldId");
+    assert_eq!(start.continue_world_id(), Some(created));
+    let plan = start
+        .flow()
+        .worlds()
+        .get(created)
+        .and_then(|record| record.open_plan.as_ref())
+        .expect("created session publishes an open plan");
+    assert!(
+        plan.activation_binding.is_some(),
+        "storage preflight must bind catalog activation evidence"
+    );
+    start
+        .storage()
+        .expect("shared storage remains attached")
+        .preflight(created)
+        .expect("provisioned world remains readable to preflight");
+}
+
+#[test]
+fn start_ui_create_without_storage_keeps_memory_only_open_plan() {
+    let images = lock_boot_fixture().prepared();
+    let mut start = ProductionMemoryStart::new(images, start_shell_graph());
+    let intent = start
+        .quick_create_intent("Memory Session")
+        .expect("quick-create intent binds the lock graph root");
+    let created = start
+        .create(&intent, 10)
+        .expect("memory-only create publishes a WorldId");
+    let plan = start
+        .flow()
+        .worlds()
+        .get(created)
+        .and_then(|record| record.open_plan.as_ref())
+        .expect("created session publishes an open plan");
+    assert!(plan.activation_binding.is_none());
+    assert!(start.storage().is_none());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn start_ui_break_place_flush_reopens_edited_cell_from_world_db() {
+    let images = lock_boot_fixture().prepared();
+    let record_owner = "latticeaxiom:schema/world-db-chunk@1"
+        .parse()
+        .expect("fixture record owner is canonical");
+    let mut writer_host =
+        SealedWorldWriterHost::volatile_reference_with_default_publisher(record_owner);
+    let mut start = ProductionMemoryStart::new(images, start_shell_graph())
+        .with_storage(writer_host.storage().clone());
+    let intent = start
+        .quick_create_intent("Reopen Session")
+        .expect("quick-create intent binds the lock graph root");
+    let created = start
+        .create(&intent, 10)
+        .expect("create provisions shared storage and publishes the WorldId");
+
+    let mut instance = start
+        .play_headless(created, 20, SPINE_TIMESTEP)
+        .expect("first play materializes the provisioned world");
+    instance
+        .advance_fixed_ticks(1)
+        .expect("one production tick plays");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    assert_eq!(spine.world_id(), Some(created));
+
+    let dirt = parse_block("terrenia:block/dirt");
+    let dirt_item = parse_item("terrenia:item/dirt");
+    let broken_pos = spine
+        .first_resident_block(&dirt)
+        .expect("generated dirt exists in the streamed set");
+    let occupancy_before = spine
+        .inspect_occupancy(broken_pos)
+        .expect("dirt cell is inspectable before the break");
+    assert_eq!(occupancy_before.solid.as_ref(), Some(&dirt));
+    let broken = mine_until_broken(&spine, broken_pos);
+    pickup_remaining(&spine);
+    let occupancy_gone = spine
+        .inspect_occupancy(broken.position)
+        .expect("broken cell remains inspectable");
+    assert_ne!(
+        occupancy_gone.solid.as_ref(),
+        Some(&dirt),
+        "break must clear the dirt cell before flush"
+    );
+
+    let place_target = spine
+        .first_resident_block(&dirt)
+        .expect("a second dirt cell remains after the first break");
+    mine_until_broken(&spine, place_target);
+    pickup_remaining(&spine);
+    select_item_in_hotbar(&spine, &dirt_item);
+    let place_anchor = latticeaxiom_gameplay::BlockPosition {
+        x: place_target.x,
+        y: place_target.y.saturating_add(1),
+        z: place_target.z,
+    };
+    let placed = spine
+        .place_from_hotbar(place_anchor, BlockFaceV1::NegativeY)
+        .expect("placement from the hotbar consumes gathered dirt");
+    let occupancy_placed = spine
+        .inspect_occupancy(placed.position)
+        .expect("placed cell is inspectable");
+    assert_eq!(occupancy_placed.solid.as_ref(), Some(&dirt));
+    assert_ne!(
+        placed.position, broken.position,
+        "placed cell must stay distinct from the broken cell"
+    );
+
+    let mut missing_binding = start
+        .flow()
+        .worlds()
+        .get(created)
+        .and_then(|record| record.open_plan.clone())
+        .expect("created session publishes an open plan");
+    missing_binding.activation_binding = None;
+    assert!(
+        matches!(
+            writer_host.accept(&missing_binding, WorldOpenAction::UseFrozenLock),
+            Err(SealedWriterHostError::WorldDb(
+                WorldDbError::ActivationEvidenceUnavailable { world }
+            )) if world == created
+        ),
+        "permit-only frozen-lock accept must fail closed without a receipt"
+    );
+
+    start
+        .flush_dirty_chunks(created, &mut writer_host)
+        .expect("edited chunks flush through the sealed host writer");
+    drop(spine);
+    drop(instance);
+
+    let mut reopened = start
+        .play_reopened_headless(created, 30, SPINE_TIMESTEP)
+        .expect("reopen constructs a new host from the same storage and WorldId");
+    reopened
+        .advance_fixed_ticks(1)
+        .expect("reopened host advances one tick");
+    let reopened_spine = reopened
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("reopened production spine is installed")
+        .clone();
+    assert_eq!(reopened_spine.world_id(), Some(created));
+    let gone = reopened_spine
+        .inspect_occupancy(broken.position)
+        .expect("broken cell is resident after storage-first reopen");
+    assert_eq!(gone.solid, occupancy_gone.solid);
+    let restored_place = reopened_spine
+        .inspect_occupancy(placed.position)
+        .expect("placed cell is resident after storage-first reopen");
+    assert_eq!(restored_place.solid, occupancy_placed.solid);
 }
 
 fn start_shell_graph() -> ClientShellGraph {
@@ -2096,6 +2273,28 @@ fn gather_until_inventory_has(
         count >= quantity,
         "gathering {item} must yield at least {quantity}, got {count}"
     );
+}
+
+fn select_item_in_hotbar(spine: &ProductionSpine, item: &ItemId) {
+    let view = spine.inventory_view().expect("inventory is bound");
+    let slot = view
+        .slots()
+        .iter()
+        .position(|stack| stack.as_ref().is_some_and(|stack| stack.item() == item))
+        .unwrap_or_else(|| panic!("{item} must occupy an inventory slot after gathering"));
+    if slot >= 9 {
+        let stack = view.slots()[slot].clone();
+        spine
+            .seed_inventory_slot(SlotIndex::new(0), stack)
+            .expect("item moves into the hotbar");
+        spine
+            .select_hotbar_slot(0)
+            .expect("hotbar slot 0 is selected");
+    } else {
+        spine
+            .select_hotbar_slot(u16::try_from(slot).expect("hotbar index fits"))
+            .expect("gathered item is selected");
+    }
 }
 
 fn mine_until_broken(

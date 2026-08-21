@@ -2,9 +2,14 @@
 //!
 //! Worlds published here live in [`crate::MemoryTransactionKernel`] for the
 //! current process. Continue resumes that session; it does not open a durable
-//! catalog writer, trash, restore, or checkpoint path.
+//! catalog writer, trash, restore, or checkpoint path. Reopen after a sealed
+//! writer flush reads [`DeterministicWorldStorage`] first and only then fills
+//! the memory kernel as a working-set cache.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use bevy::prelude::Resource;
 use latticeaxiom_compose::LockedGameGraph;
@@ -12,11 +17,23 @@ use latticeaxiom_core::{CapabilityId, IdentifierError, WorldId};
 use latticeaxiom_start_ui::{
     ClientShellGraph, ClientShellGraphError, HomePrimaryAction, InMemoryWorldList,
     MemoryStartEffect, MemoryStartError, MemoryStartFlow, QuickCreateIntent, SemanticCommand,
-    ShellCapability, ShellPackageProvider, WorldShellError, WorldSort, memory_session_template,
+    ShellCapability, ShellEffect, ShellPackageProvider, WorldShellError, WorldSort,
+    memory_session_store_id, memory_session_template,
+};
+use latticeaxiom_world_catalog::{
+    ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
+};
+use latticeaxiom_world_db::{
+    ActivationPermitV1, AuthoritativeMetadataInputV1, DeterministicWorldStorage, DigestV1,
+    FrozenLockReceiptV1, WorldCreateRequestV1, WorldDbError, WorldRequirementClosureV1,
+    WorldStorage,
 };
 use thiserror::Error;
 
-use super::{ProductionHostError, ProductionInspectSurface, ProductionSpine};
+use super::{
+    ProductionHostError, ProductionInspectSurface, ProductionSpine, SealedWorldWriterHost,
+    SealedWriterHostError, sealed_activation_binding,
+};
 use crate::{EngineInstance, LockVerifiedComposeImages, VerifiedProductLockHash};
 
 /// Process-local world list installed on a production host after Continue.
@@ -52,12 +69,16 @@ impl ProductionWorldList {
 ///
 /// Each created world materializes a [`ProductionSpine`] on first play. The
 /// spine and list stay in process memory so Continue observes the same
-/// [`WorldId`].
+/// [`WorldId`]. An optional shared [`DeterministicWorldStorage`] fills
+/// [`latticeaxiom_world_catalog::WorldOpenPlan::activation_binding`] from
+/// storage preflight; create still publishes the identity to the in-memory
+/// list. When storage is absent, create stays memory-only.
 #[derive(Debug)]
 pub struct ProductionMemoryStart {
     images: LockVerifiedComposeImages,
     flow: MemoryStartFlow,
     spines: BTreeMap<WorldId, ProductionSpine>,
+    storage: Option<DeterministicWorldStorage>,
 }
 
 impl ProductionMemoryStart {
@@ -68,7 +89,30 @@ impl ProductionMemoryStart {
             images,
             flow: MemoryStartFlow::new(graph),
             spines: BTreeMap::new(),
+            storage: None,
         }
+    }
+
+    /// Shares a deterministic world store used to bind create plans from preflight.
+    ///
+    /// The same store is attached to the start-ui memory session. When absent,
+    /// create stays memory-only and activation bindings remain unset.
+    pub fn set_storage(&mut self, storage: DeterministicWorldStorage) {
+        self.flow.set_storage(storage.clone());
+        self.storage = Some(storage);
+    }
+
+    /// Shares a deterministic world store and returns the start surface.
+    #[must_use]
+    pub fn with_storage(mut self, storage: DeterministicWorldStorage) -> Self {
+        self.set_storage(storage);
+        self
+    }
+
+    /// Returns the shared world store, when one is attached.
+    #[must_use]
+    pub const fn storage(&self) -> Option<&DeterministicWorldStorage> {
+        self.storage.as_ref()
     }
 
     /// Resolves the shell graph from lock-selected capability providers.
@@ -134,16 +178,24 @@ impl ProductionMemoryStart {
 
     /// Publishes an in-memory world without opening a catalog writer.
     ///
+    /// When shared storage is attached, the world is provisioned and the open
+    /// plan's activation binding is filled from storage preflight. The
+    /// [`WorldId`] is still published to the in-memory list. When storage is
+    /// [`None`], create stays memory-only.
+    ///
     /// # Errors
     ///
     /// Returns [`ProductionMemoryStartError`] when the session list rejects the
-    /// new identity.
+    /// new identity, provisioning fails, or attached storage preflight is not
+    /// ready for activation.
     pub fn create(
         &mut self,
         intent: &QuickCreateIntent,
         now_ms: u64,
     ) -> Result<WorldId, ProductionMemoryStartError> {
-        Ok(self.flow.create(intent, WorldId::new_v4(), now_ms)?)
+        let world_id = WorldId::new_v4();
+        self.provision_created_world(world_id, intent)?;
+        Ok(self.flow.create(intent, world_id, now_ms)?)
     }
 
     /// Returns the exact-ready Continue target, when one exists.
@@ -154,6 +206,9 @@ impl ProductionMemoryStart {
 
     /// Applies a start-ui semantic command to the in-memory session list.
     ///
+    /// Quick-create provisions shared storage before the session list publishes
+    /// the same [`WorldId`].
+    ///
     /// # Errors
     ///
     /// Returns [`ProductionMemoryStartError`] when the current tree rejects the
@@ -162,13 +217,26 @@ impl ProductionMemoryStart {
         &mut self,
         command: &SemanticCommand,
     ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
-        Ok(self.flow.inject(command)?)
+        match self.flow.apply_shell_command(command)? {
+            ShellEffect::RequestQuickCreate => {
+                let intent = self
+                    .flow
+                    .draft()
+                    .cloned()
+                    .ok_or(MemoryStartError::MissingQuickCreateDraft)?;
+                let world_id = self.create(&intent, self.flow.now_ms())?;
+                Ok(MemoryStartEffect::Created(world_id))
+            }
+            effect => Ok(MemoryStartEffect::Shell(effect)),
+        }
     }
 
     /// Materializes the in-memory session into a GPU-free production host.
     ///
     /// A previously played world reuses the same spine so Continue stays on the
-    /// same [`WorldId`] and memory kernel.
+    /// same [`WorldId`] and memory kernel. Storage-backed worlds still generate
+    /// into that cache on first play; [`Self::play_reopened_headless`] reads
+    /// world-db first after a sealed writer flush.
     ///
     /// # Errors
     ///
@@ -213,6 +281,70 @@ impl ProductionMemoryStart {
         Ok((world_id, instance))
     }
 
+    /// Publishes edited working-set chunks through an activated sealed writer.
+    ///
+    /// The writer is activated from a fresh storage preflight and
+    /// [`WorldOpenAction::UseFrozenLock`] is accepted only when that preflight
+    /// yields a sealed [`crate::sealed_activation_binding`]. Missing catalog
+    /// evidence still fails closed as
+    /// [`WorldDbError::ActivationEvidenceUnavailable`]. The writer is closed
+    /// after the Written commit. [`SealedWorldWriterHost::flush_durable`] is
+    /// not called.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the world is absent from the
+    /// session list or spine cache, preflight/activation fails, or the commit
+    /// is rejected.
+    pub fn flush_dirty_chunks(
+        &mut self,
+        world_id: WorldId,
+        writer: &mut SealedWorldWriterHost,
+    ) -> Result<(), ProductionMemoryStartError> {
+        if self.flow.worlds().get(world_id).is_none() {
+            return Err(WorldShellError::MissingLiveWorld.into());
+        }
+        let spine = self
+            .spines
+            .get(&world_id)
+            .cloned()
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        let preflight = writer.preflight(world_id)?;
+        let permit = preflight
+            .activation_permit()
+            .cloned()
+            .ok_or(ProductionMemoryStartError::StorageActivationUnavailable { world: world_id })?;
+        let plan = writable_open_plan(world_id, &permit);
+        writer.reactivate(&plan, permit)?;
+        spine.flush_dirty_chunks(writer, preflight.metadata())?;
+        writer.close()?;
+        Ok(())
+    }
+
+    /// Constructs a new GPU-free host from shared world-db for `world_id`.
+    ///
+    /// The cached spine is dropped so the new host cannot reuse the previous
+    /// memory kernel. Materialization reads [`DeterministicWorldStorage`] first
+    /// and uses [`crate::MemoryTransactionKernel`] only as the working-set cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError::StorageRequired`] when no shared
+    /// store is attached, [`WorldShellError::MissingLiveWorld`] when the
+    /// identity is absent, or the same failures as [`Self::play_headless`].
+    pub fn play_reopened_headless(
+        &mut self,
+        world_id: WorldId,
+        played_at_ms: u64,
+        fixed_timestep: Duration,
+    ) -> Result<EngineInstance, ProductionMemoryStartError> {
+        if self.storage.is_none() {
+            return Err(ProductionMemoryStartError::StorageRequired);
+        }
+        self.spines.remove(&world_id);
+        self.play_headless(world_id, played_at_ms, fixed_timestep)
+    }
+
     fn ensure_spine(
         &mut self,
         world_id: WorldId,
@@ -220,9 +352,34 @@ impl ProductionMemoryStart {
         if let Some(spine) = self.spines.get(&world_id) {
             return Ok(spine.clone());
         }
-        let spine = ProductionSpine::materialize_world(&self.images, world_id)?;
+        let spine = match &self.storage {
+            Some(storage) => ProductionSpine::materialize_world_from_storage(
+                &self.images,
+                world_id,
+                storage.clone(),
+            )?,
+            None => ProductionSpine::materialize_world(&self.images, world_id)?,
+        };
         self.spines.insert(world_id, spine.clone());
         Ok(spine)
+    }
+
+    fn provision_created_world(
+        &self,
+        world_id: WorldId,
+        intent: &QuickCreateIntent,
+    ) -> Result<(), ProductionMemoryStartError> {
+        let Some(storage) = &self.storage else {
+            return Ok(());
+        };
+        let metadata = memory_session_authoritative_metadata(&self.images)?;
+        storage.provision_world(WorldCreateRequestV1::new(
+            world_id,
+            intent.display_name.clone(),
+            memory_session_store_id(),
+            metadata,
+        ))?;
+        Ok(())
     }
 }
 
@@ -277,12 +434,68 @@ pub enum ProductionMemoryStartError {
     /// Continue was requested without an exact-ready in-memory world.
     #[error("no exact-ready in-memory world is available for Continue")]
     NoContinueWorld,
+    /// Shared world storage rejected provisioning or metadata construction.
+    #[error(transparent)]
+    WorldDb(#[from] WorldDbError),
+    /// Sealed writer activation, commit, or close failed.
+    #[error(transparent)]
+    Writer(#[from] SealedWriterHostError),
+    /// Reopen was requested without a shared [`DeterministicWorldStorage`].
+    #[error("shared world storage is required to reopen from world-db")]
+    StorageRequired,
+    /// Attached storage preflight did not yield ready activation evidence.
+    #[error("world storage preflight did not yield activation evidence for {world}")]
+    StorageActivationUnavailable {
+        /// World whose preflight lacked a ready permit.
+        world: WorldId,
+    },
 }
 
 impl From<WorldShellError> for ProductionMemoryStartError {
     fn from(error: WorldShellError) -> Self {
         Self::Start(error.into())
     }
+}
+
+fn writable_open_plan(world_id: WorldId, permit: &ActivationPermitV1) -> WorldOpenPlan {
+    let action = WorldOpenAction::UseFrozenLock;
+    WorldOpenPlan {
+        world_id,
+        status: WorldOpenStatus::ReadyExact,
+        risk: WorldOpenRisk::None,
+        reconciliation: ReconciliationState::InSync {
+            metadata_epoch: permit.metadata_epoch().get(),
+        },
+        next_safe_step: Some(action.clone()),
+        actions: vec![action],
+        diagnostics: Vec::new(),
+        activation_binding: Some(sealed_activation_binding(permit)),
+    }
+}
+
+fn memory_session_authoritative_metadata(
+    images: &LockVerifiedComposeImages,
+) -> Result<AuthoritativeMetadataInputV1, ProductionMemoryStartError> {
+    let lock_hash = DigestV1::from_bytes(*images.product_lock_hash().as_bytes());
+    let lock = FrozenLockReceiptV1::new(
+        images.product_lock_hash().to_string().into_bytes(),
+        BTreeMap::new(),
+        lock_hash,
+        lock_hash,
+        lock_hash,
+        lock_hash,
+        lock_hash,
+    )?;
+    let closure = WorldRequirementClosureV1::new(
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeSet::new(),
+        BTreeMap::new(),
+        lock_hash,
+        lock_hash,
+        BTreeMap::new(),
+    )?;
+    Ok(AuthoritativeMetadataInputV1::new(lock, closure))
 }
 
 fn shell_graph_from_lock(

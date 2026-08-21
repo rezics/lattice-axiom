@@ -48,6 +48,9 @@ latticeaxiom-start-ui = { path = "../latticeaxiom-start-ui" }
 latticeaxiom-storage = { path = "../latticeaxiom-storage" }
 latticeaxiom-voxel-mesh = { path = "../latticeaxiom-voxel-mesh" }
 latticeaxiom-voxel-runtime = { path = "../latticeaxiom-voxel-runtime" }
+latticeaxiom-world-catalog = { path = "../latticeaxiom-world-catalog" }
+latticeaxiom-world-db = { path = "../latticeaxiom-world-db" }
+latticeaxiom-world-wire = { path = "../latticeaxiom-world-wire" }
 latticeaxiom-worldgen = { path = "../latticeaxiom-worldgen" }
 serde.workspace = true
 serde_json.workspace = true

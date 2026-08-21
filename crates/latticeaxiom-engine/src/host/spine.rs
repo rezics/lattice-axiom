@@ -29,7 +29,7 @@ use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
     ChunkMutation, ChunkRevision, ChunkRevisionExpectation, ContinuationId, DimensionId,
     MemoryTransactionKernel, PayloadSchemaVersion, PersistentEntityId, StoredChunk, TransactionId,
-    VersionedPayload, WorldTransaction,
+    VersionedPayload, WorldRevision, WorldTransaction,
 };
 use latticeaxiom_voxel_mesh::{
     Face, FaceDescriptor, FaceOcclusion, MeshGroup, MeshReceipt, MeshSource, PaddedChunk, Voxel,
@@ -43,12 +43,17 @@ use latticeaxiom_voxel_runtime::{
     MeshSemanticFingerprint, RetainedBytes, RuntimeDiagnostics, RuntimeGeneration, RuntimeLimits,
     VoxelCoordinate, VoxelRuntime, WorkingSetScope, WorldEpoch,
 };
+use latticeaxiom_world_db::{
+    AuthoritativeMetadataInputV1, CommitDurabilityV1, DeterministicWorldStorage, PersistedChunkV1,
+    WorldCommitRequestV1, WorldStorage,
+};
 use latticeaxiom_worldgen::{
     BoundedGeneratedRegionV1, GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS,
 };
 
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
+    SealedWorldWriterHost,
     catalog::{authored_content_catalog, authored_gameplay_catalog, host_worldgen_catalog},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
@@ -251,6 +256,7 @@ pub(super) struct ProductionSpineInner {
     player_pose: ProductionPlayerPose,
     last_stream_error: Option<String>,
     gameplay: Option<ProductionGameplay>,
+    world_store: Option<DeterministicWorldStorage>,
 }
 
 /// Collider upserts and evictions consumed by the production presentation system.
@@ -344,6 +350,53 @@ impl ProductionSpine {
         world: WorldId,
         catalog: GameplayCatalog,
     ) -> Result<Self, ProductionHostError> {
+        Self::materialize_world_with_catalog_and_store(images, world, catalog, None)
+    }
+
+    /// Materializes one world, hydrating the memory kernel from world-db first.
+    ///
+    /// [`MemoryTransactionKernel`] remains the working-set cache. Chunks already
+    /// committed to [`DeterministicWorldStorage`] are loaded before D4 generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when lock-bound generation, storage
+    /// publication, world-db hydration, voxel projection, derived meshing, or
+    /// gameplay binding fails.
+    pub fn materialize_world_from_storage(
+        images: &LockVerifiedComposeImages,
+        world: WorldId,
+        storage: DeterministicWorldStorage,
+    ) -> Result<Self, ProductionHostError> {
+        Self::materialize_world_with_catalog_from_storage(
+            images,
+            world,
+            authored_gameplay_catalog()?,
+            storage,
+        )
+    }
+
+    /// Materializes one world from world-db with a caller-supplied catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when materialization or catalog binding fails.
+    pub fn materialize_world_with_catalog_from_storage(
+        images: &LockVerifiedComposeImages,
+        world: WorldId,
+        catalog: GameplayCatalog,
+        storage: DeterministicWorldStorage,
+    ) -> Result<Self, ProductionHostError> {
+        Self::materialize_world_with_catalog_and_store(images, world, catalog, Some(storage))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn materialize_world_with_catalog_and_store(
+        images: &LockVerifiedComposeImages,
+        world: WorldId,
+        catalog: GameplayCatalog,
+        world_store: Option<DeterministicWorldStorage>,
+    ) -> Result<Self, ProductionHostError> {
         let config = spine_config();
         let chunk_edge = config.chunk_edge_voxels;
         let worldgen = host_worldgen_catalog(images)?;
@@ -404,6 +457,7 @@ impl ProductionSpine {
             player_pose: ProductionPlayerPose::default(),
             last_stream_error: None,
             gameplay: None,
+            world_store,
         };
         fill_working_set(
             &mut inner,
@@ -412,7 +466,9 @@ impl ProductionSpine {
             [0, 0],
             FixedTick::new(0),
         )?;
-        place_exposed_probe(&mut inner, &kernel, &probe_content)?;
+        if !probe_already_occupied(&inner) {
+            place_exposed_probe(&mut inner, &kernel, &probe_content)?;
+        }
         inner.last_success = None;
         inner.spawn_center = find_spawn(&inner)?;
         inner.player_pose.translation = inner.spawn_center;
@@ -448,6 +504,65 @@ impl ProductionSpine {
     #[must_use]
     pub fn kernel(&self) -> &MemoryTransactionKernel {
         self.storage.kernel()
+    }
+
+    /// Commits edited working-set chunks through an already activated host writer.
+    ///
+    /// [`MemoryTransactionKernel`] stays the session cache. This publishes the
+    /// current edited chunk bytes as
+    /// [`latticeaxiom_world_db::CommitDurabilityV1::Written`]. Durable flushes
+    /// remain [`latticeaxiom_world_db::WorldDbError::PhysicalDurabilityUnsupported`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when the spine lock is poisoned, the
+    /// memory kernel cannot snapshot, world-db cannot be read, or the writer
+    /// rejects the commit.
+    pub fn flush_dirty_chunks(
+        &self,
+        writer: &mut SealedWorldWriterHost,
+        metadata: &AuthoritativeMetadataInputV1,
+    ) -> Result<(), ProductionHostError> {
+        let inner = self.lock_inner()?;
+        let world = inner.world;
+        let dimension = inner.dimension.clone();
+        let edited = inner.edited.clone();
+        drop(inner);
+        let snapshot = self.storage.kernel().reference_snapshot(world)?;
+        let view = writer.begin_read(world)?;
+        let mut mutations = Vec::new();
+        for coordinate in edited {
+            let key = ChunkKey::new(world, dimension.clone(), coordinate);
+            let Some(stored) = snapshot.chunk(&key) else {
+                continue;
+            };
+            let persisted = view.load_chunk(&key)?;
+            let changed = chunk_changed_domains(
+                persisted.as_ref().map(PersistedChunkV1::data),
+                stored.data(),
+            );
+            if changed.is_empty() {
+                continue;
+            }
+            let expectation = match persisted.as_ref() {
+                Some(current) => ChunkRevisionExpectation::Exact(current.chunk_revision()),
+                None => ChunkRevisionExpectation::Absent,
+            };
+            mutations.push(ChunkMutation::new(
+                key,
+                expectation,
+                changed,
+                stored.data().clone(),
+            ));
+        }
+        mutations.sort_by(|left, right| left.key().cmp(right.key()));
+        commit_written_mutations(
+            writer,
+            world,
+            view.frontier().current(),
+            metadata,
+            &mutations,
+        )
     }
 
     /// Returns the local player spawn center in meters.
@@ -1766,8 +1881,14 @@ fn admit_desired(
     admit_limit: usize,
 ) -> Result<(), ProductionHostError> {
     let mut generate = Vec::new();
+    let mut hydrate = Vec::new();
     let mut admitted = 0_usize;
     let snapshot = kernel.reference_snapshot(inner.world)?;
+    let world_view = inner
+        .world_store
+        .as_ref()
+        .map(|storage| storage.begin_read(inner.world))
+        .transpose()?;
     let admit_limit = admit_limit.max(1);
     for coordinate in ordered {
         if inner.runtime.is_resident(*coordinate) {
@@ -1777,7 +1898,8 @@ fn admit_desired(
             .runtime
             .diagnostics()
             .resident_chunks()
-            .saturating_add(generate.len());
+            .saturating_add(generate.len())
+            .saturating_add(hydrate.len());
         if upcoming >= inner.clamps.max_resident() || admitted >= admit_limit {
             break;
         }
@@ -1791,6 +1913,17 @@ fn admit_desired(
             admitted = admitted.saturating_add(1);
             continue;
         }
+        if let Some(persisted) = world_view
+            .as_ref()
+            .map(|view| view.load_chunk(&key))
+            .transpose()?
+            .flatten()
+        {
+            inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
+            hydrate.push((*coordinate, persisted));
+            admitted = admitted.saturating_add(1);
+            continue;
+        }
         if generate.len() >= MAX_BOUNDED_REGION_CHUNKS {
             break;
         }
@@ -1800,10 +1933,70 @@ fn admit_desired(
         generate.push(*coordinate);
         admitted = admitted.saturating_add(1);
     }
+    if !hydrate.is_empty() {
+        publish_hydrated(inner, kernel, &hydrate, tick)?;
+    }
     if generate.is_empty() {
         return Ok(());
     }
     publish_generated(inner, kernel, &generate, tick)
+}
+
+fn publish_hydrated(
+    inner: &mut ProductionSpineInner,
+    kernel: &MemoryTransactionKernel,
+    chunks: &[(ChunkCoordinate, PersistedChunkV1)],
+    tick: FixedTick,
+) -> Result<(), ProductionHostError> {
+    let mut remaining = chunks.iter().collect::<Vec<_>>();
+    remaining.sort_by_key(|(coordinate, _)| *coordinate);
+    let max_chunks = usize::try_from(kernel.limits().max_chunks_per_transaction())
+        .unwrap_or(1)
+        .max(1);
+    while !remaining.is_empty() {
+        let snapshot = kernel.reference_snapshot(inner.world)?;
+        let mut mutations = Vec::new();
+        let mut take = 0_usize;
+        for (coordinate, persisted) in remaining.iter().take(max_chunks) {
+            take = take.saturating_add(1);
+            let key = ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate);
+            if snapshot.chunk(&key).is_some() {
+                continue;
+            }
+            mutations.push(ChunkMutation::new(
+                key,
+                ChunkRevisionExpectation::Absent,
+                ChangedDomains::ALL,
+                persisted.data().clone(),
+            ));
+        }
+        remaining.drain(..take);
+        if mutations.is_empty() {
+            continue;
+        }
+        kernel.commit(WorldTransaction::new(
+            next_transaction_id(inner),
+            inner.world,
+            snapshot.revision(),
+            mutations,
+        ))?;
+    }
+    let published = kernel.reference_snapshot(inner.world)?;
+    for (coordinate, _) in chunks {
+        let key = ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate);
+        let stored = published
+            .chunk(&key)
+            .ok_or(ProductionHostError::MissingStoredChunk {
+                coordinate: *coordinate,
+            })?;
+        inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
+        project_stored(&mut inner.runtime, stored, inner.chunk_edge, tick)?;
+        inner
+            .lifecycle
+            .insert(*coordinate, ChunkLifecycle::Resident);
+        inner.edited.insert(*coordinate);
+    }
+    Ok(())
 }
 
 fn publish_generated(
@@ -2265,6 +2458,65 @@ fn derived_requests() -> DerivedRequestSet {
         DerivedMemoryBudget::new(64 * 1024, 64 * 1024),
     );
     DerivedRequestSet::new(request, request)
+}
+
+fn probe_already_occupied(inner: &ProductionSpineInner) -> bool {
+    inner
+        .runtime
+        .cell(VoxelCoordinate::new(-1, 30, -1))
+        .ok()
+        .is_some_and(|cell| *cell != inner.empty)
+}
+
+fn chunk_changed_domains(current: Option<&ChunkData>, replacement: &ChunkData) -> ChangedDomains {
+    let Some(current) = current else {
+        return ChangedDomains::ALL;
+    };
+    let mut changed = ChangedDomains::NONE;
+    if current.voxels() != replacement.voxels() {
+        changed = changed.union(ChangedDomains::VOXELS);
+    }
+    if current.persistent_entities() != replacement.persistent_entities() {
+        changed = changed.union(ChangedDomains::PERSISTENT_ENTITIES);
+    }
+    if current.continuations() != replacement.continuations() {
+        changed = changed.union(ChangedDomains::CONTINUATIONS);
+    }
+    if current.provenance() != replacement.provenance() {
+        changed = changed.union(ChangedDomains::PROVENANCE);
+    }
+    changed
+}
+
+fn commit_written_mutations(
+    writer: &mut SealedWorldWriterHost,
+    world: WorldId,
+    mut base: WorldRevision,
+    metadata: &AuthoritativeMetadataInputV1,
+    mutations: &[ChunkMutation],
+) -> Result<(), ProductionHostError> {
+    if mutations.is_empty() {
+        return Ok(());
+    }
+    let max_chunks = usize::try_from(writer.storage().limits().max_chunks_per_commit())
+        .unwrap_or(1)
+        .max(1);
+    let mut transaction = base.get().saturating_add(1);
+    for batch in mutations.chunks(max_chunks) {
+        let outcome = writer.commit(WorldCommitRequestV1::new(
+            WorldTransaction::new(
+                TransactionId::from_u128(u128::from(transaction)),
+                world,
+                base,
+                batch.to_vec(),
+            ),
+            metadata.clone(),
+            CommitDurabilityV1::Written,
+        ))?;
+        base = outcome.receipt().frontier().current();
+        transaction = transaction.saturating_add(1);
+    }
+    Ok(())
 }
 
 #[allow(clippy::cast_precision_loss)] // Spawn stays inside the finite near-origin V2 region.

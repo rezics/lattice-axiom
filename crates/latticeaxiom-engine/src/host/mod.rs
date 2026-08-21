@@ -17,6 +17,7 @@ mod spine;
 mod start;
 mod stream;
 mod worldgen;
+mod writer;
 
 use std::fmt;
 
@@ -50,6 +51,7 @@ use latticeaxiom_registration::CompiledRegistration;
 use latticeaxiom_storage::{ChunkCoordinate, ChunkRevision, StorageError};
 use latticeaxiom_voxel_mesh::{MeshError, MeshReceipt};
 use latticeaxiom_voxel_runtime::RuntimeError;
+use latticeaxiom_world_db::WorldDbError;
 use latticeaxiom_worldgen::WorldgenError;
 use thiserror::Error;
 
@@ -60,6 +62,7 @@ pub use spine::{
 };
 pub use start::{ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList};
 pub use stream::ChunkLifecycle;
+pub use writer::{SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding};
 
 #[cfg(feature = "client")]
 use crate::EngineProfile;
@@ -574,6 +577,12 @@ pub enum ProductionHostError {
     /// The production memory kernel rejected a transaction.
     #[error(transparent)]
     Storage(#[from] StorageError),
+    /// Authoritative world-db rejected a read, hydration, or commit.
+    #[error(transparent)]
+    WorldDb(#[from] WorldDbError),
+    /// Sealed writer activation, commit, or close failed.
+    #[error(transparent)]
+    Writer(#[from] SealedWriterHostError),
     /// Voxel projection or derived dispatch failed.
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
