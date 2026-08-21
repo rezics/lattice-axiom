@@ -27,6 +27,7 @@ mod provider;
 mod region;
 mod roles;
 mod seed;
+mod spawn;
 mod territory;
 
 pub use cave::{
@@ -58,6 +59,11 @@ pub use roles::{
     D4MaterialRoleV1, D4RoleVocabularyV1, FrozenRoleBindingsV1,
 };
 pub use seed::WorldSeedV1;
+pub use spawn::{
+    AuthoredWorldgenBindingsV1, SpawnCellInspectionV1, SpawnCellOverrideV1, SpawnLocationV1,
+    SpawnOccupancyViewV1, SpawnRejectV1, SpawnSearchBoundsV1, evaluate_spawn_column,
+    inspect_spawn_cell, required_spawn_chunks, select_safe_spawn,
+};
 pub use territory::{TerrainStyleV1, TerritoryQueryV1, TransitionMetadataV1};
 
 pub use latticeaxiom_storage::{

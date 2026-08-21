@@ -14,6 +14,9 @@ It provides:
   supplied 18-block-or-larger catalog closure;
 - scaffold-local Predicate evaluation receipts tied to permitted placement
   Roles; their package-facing registration schema is not frozen here;
+- deterministic surface spawn selection that reuses D4/D7 territory and cave
+  queries plus package-authored Role/Predicate bindings, with fail-closed
+  clearance, footing, hazard, fluid, cave, and active-chunk readiness checks;
 - allocation-free hot-path territory samples for two deterministic fixture
   algorithms (temperate woodland and arid badlands), height/density, resources,
   and chunk+halo vegetation rasterization; package-owned style identities remain

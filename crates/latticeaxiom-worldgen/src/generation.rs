@@ -597,6 +597,23 @@ impl GenerationPlanV1 {
         self.world_seed
     }
 
+    /// Returns the closed integer configuration compiled into this plan.
+    #[must_use]
+    pub const fn config(&self) -> &WorldgenConfigV1 {
+        &self.config
+    }
+
+    /// Returns the concrete block bound to a compiled D4 material purpose.
+    ///
+    /// Compiled plans contain every required purpose. This accessor is for
+    /// spawn classification and diagnostics, not a second materializer.
+    #[must_use]
+    pub fn role_target(&self, purpose: D4MaterialRoleV1) -> &StableId {
+        self.role_targets
+            .get(&purpose)
+            .unwrap_or_else(|| missing_role_target(purpose))
+    }
+
     /// Returns the canonical config hash.
     #[must_use]
     pub const fn config_hash(&self) -> WorldgenConfigHashV1 {
@@ -1319,12 +1336,6 @@ impl GenerationPlanV1 {
             ],
         ) % 1_024
             < u64::from(threshold)
-    }
-
-    fn role_target(&self, purpose: D4MaterialRoleV1) -> &StableId {
-        self.role_targets
-            .get(&purpose)
-            .unwrap_or_else(|| missing_role_target(purpose))
     }
 }
 

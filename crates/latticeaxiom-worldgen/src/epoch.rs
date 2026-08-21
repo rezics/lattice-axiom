@@ -28,6 +28,20 @@ impl PlanningCellCoordinateV1 {
     pub const fn new(x: i64, z: i64) -> Self {
         Self { x, z }
     }
+
+    /// Maps a chunk onto its planning cell using the D4 planning-cell edge.
+    ///
+    /// `planning_cell_edge_chunks` is the closed [`crate::WorldgenConfigV1`]
+    /// field of the same name. A zero edge is treated as one chunk so the
+    /// mapping remains total.
+    #[must_use]
+    pub fn from_chunk(coordinate: ChunkCoordinate, planning_cell_edge_chunks: u16) -> Self {
+        let edge = i64::from(planning_cell_edge_chunks.max(1));
+        Self {
+            x: i64::from(coordinate.x).div_euclid(edge),
+            z: i64::from(coordinate.z).div_euclid(edge),
+        }
+    }
 }
 
 /// Epoch state already assigned to the target planning cell.
@@ -514,5 +528,28 @@ fn preflight_count(kind: &'static str, actual: usize, limit: usize) -> WorldgenR
             actual,
             limit,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlanningCellCoordinateV1;
+    use latticeaxiom_storage::ChunkCoordinate;
+
+    #[test]
+    fn chunk_mapping_uses_planning_cell_edge_and_ignores_y() {
+        let edge = 8_u16;
+        assert_eq!(
+            PlanningCellCoordinateV1::from_chunk(ChunkCoordinate::new(-1, 12, 7), edge),
+            PlanningCellCoordinateV1::new(-1, 0)
+        );
+        assert_eq!(
+            PlanningCellCoordinateV1::from_chunk(ChunkCoordinate::new(8, -4, -9), edge),
+            PlanningCellCoordinateV1::new(1, -2)
+        );
+        assert_eq!(
+            PlanningCellCoordinateV1::from_chunk(ChunkCoordinate::new(0, 0, 0), 0),
+            PlanningCellCoordinateV1::new(0, 0)
+        );
     }
 }

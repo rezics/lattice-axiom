@@ -314,4 +314,33 @@ pub enum WorldgenError {
         /// Validation reason.
         reason: String,
     },
+    /// Package-authored worldgen Role/Predicate JSON failed closed validation.
+    #[error("invalid authored worldgen bindings field `{field}`: {reason}")]
+    InvalidAuthoredBindings {
+        /// Stable JSON field name.
+        field: &'static str,
+        /// Actionable reason.
+        reason: String,
+    },
+    /// Bounded spawn search found no column that passed every safety check.
+    #[error("no safe spawn exists in the bounded search")]
+    NoSafeSpawn,
+    /// A spawn check required a chunk that has no generation receipt.
+    #[error("spawn chunk {coordinate:?} is not ready")]
+    UnreadySpawnChunk {
+        /// Chunk missing a generation receipt or active-set membership.
+        coordinate: ChunkCoordinate,
+    },
+    /// A candidate cell failed clearance, footing, hazard, fluid, or cave checks.
+    #[error("spawn cell ({x}, {y}, {z}) rejected as {reason}")]
+    UnsafeSpawnCell {
+        /// Stable reject kind.
+        reason: &'static str,
+        /// World voxel X.
+        x: i64,
+        /// World voxel Y.
+        y: i64,
+        /// World voxel Z.
+        z: i64,
+    },
 }
