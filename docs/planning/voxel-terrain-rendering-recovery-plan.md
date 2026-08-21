@@ -1,8 +1,8 @@
 ---
 title: 體素地形渲染與區塊流送修復計畫
-status: proposed
+status: active
 type: plan
-updated: 2026-08-21
+updated: 2026-08-22
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0015-bevy-native-y-up-world-coordinates.md
@@ -15,15 +15,26 @@ decision:
 
 ## 範圍與成熟度
 
-本頁針對 `lattice-axiom-demo` production host 目前出現的破面、視角改變後地形消失、移動時卸載／重建抖動，以及由此暴露的 mesh presentation、streaming、task、collider 與 terrain material 缺口，給出可依序落地的修復計畫。
+本頁針對 `lattice-axiom-demo` production host 在診斷基線上出現的破面、視角改變後地形消失、移動時卸載／重建抖動，以及由此暴露的 mesh presentation、streaming、task、collider 與 terrain material 缺口，給出可依序落地的修復計畫。
 
 診斷基線是 implementation commit `9e1fc9ddb67eba0646c47bbdf86ba65b99c10113`。外部對照是 Riverbed commit [`00005a3a6b8f181ca2641f046434a4397a7c4dca`](https://github.com/Inspirateur/riverbed/tree/00005a3a6b8f181ca2641f046434a4397a7c4dca)。Riverbed 是 MIT 專案；本計畫只吸收可驗證的設計思路，不把它的實作或 README 性能主張提升為 Lattice Axiom 的承諾。
 
-本頁是 `proposed` implementation plan，不新增 render provider、改寫 accepted performance profile，或授權自研 Bevy 以外的 renderer／scheduler／task runtime。若後續證據要求改變 accepted 邊界，必須另建 ADR。
+本頁是 `active` implementation plan：P0–P2 已在 production host 落地，剩餘從 P3 起。它不新增 render provider、改寫 accepted performance profile，或授權自研 Bevy 以外的 renderer／scheduler／task runtime。若後續證據要求改變 accepted 邊界，必須另建 ADR。開始頁／`LaunchIntentV1` 進程切換不在本頁範圍，見[開始頁與安全生命週期](../architecture/world-lifecycle-and-start-ui.md)。
+
+## 落地（P0–P2）
+
+下列是 `lattice-axiom-demo` 已合併的 correctness blockers，不是 ADR 0026 量測，也不是 D2／D4 路線圖出場。
+
+| 階段 | 實作 | 證據 |
+| --- | --- | --- |
+| P0 | `f2457b1` `test(voxel-mesh): lock outward winding and halo culling` | `geometry` indexed winding；六向 halo 同時覆蓋 `visible_faces` 與 `greedy_quads` |
+| P1／P2 | `b686d3f` `fix(engine): present halo meshes and reconcile interest once` | adapter 只做 `MeshBuffer → Mesh`；`mesh_from_occupied`／`FACES` 已刪；`FixedUpdate` 只做 collider safety；`FixedPostUpdate` 以最終 pose reconcile 一次；headless：yaw／pitch 不變、每 tick 一次 reconcile、chunk 內移動不 distance-evict、折返 retain、sticky look-ahead |
+
+診斷基線 `9e1fc9d` 的三個畫面缺陷因此在 production host 上關閉。下面「結論／證據與根因」保留該基線的定位，供回歸對照。下一步按原順序：P3 bounded Bevy task-pool → P5 collider 合併 → P6 deterministic terrain materials。P7 仍禁止提前。
 
 ## 結論
 
-目前畫面不是單一 shader 或設定問題，而是三個已定位的實作缺陷和數個後續規模問題疊加：
+診斷基線 `9e1fc9d` 的畫面不是單一 shader 或設定問題，而是三個已定位的實作缺陷和數個後續規模問題疊加：
 
 1. client 臨時 mesh adapter 的六個面都使用與 outward normal 相反的 triangle winding；Bevy 預設 back-face culling 因而剔除真正外表面。這直接解釋破面、巨大斜三角與轉動視角後幾何消失。
 2. production derived path 已從 chunk＋一圈 halo 產生正確 renderer-independent geometry，卻只保留 receipt／source／face set；client 又從 `OccupiedCell` 建造第二份不含 halo 的 mesh。正確、已測試的 mesh 成果因此沒有進入 presentation。

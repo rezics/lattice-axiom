@@ -28,13 +28,13 @@ production player journey does not exist.
 
 | Area | Present now | Missing for v1 |
 | --- | --- | --- |
-| Client interaction | A finite `-8..8` development fixture supports movement, mouse look, jump, break, and place | Package-driven world boot, chunk streaming, durable authority, real voxel projection, inventory, tools, crafting, and world lifecycle |
-| Composition | Resolver, registration, SDK, launcher, profiles, and controlled Nickel foundations exist | Final product lock, local package acquisition through immutable CAS, production Nickel import path, and one launcher-driven client/headless pipeline |
-| World data | Storage, world-wire, catalog, and world-db contracts exist | Authorized catalog-to-writer activation receipt and production integration |
-| World generation | Deterministic D4 chunk generation, cave fields, epochs, territory, and hydrology contracts exist | A production coordinator, streaming integration, complete Terrenia plan, cave-domain realization, spawn selection, and persistence-first materialization |
-| Voxel runtime | Mesh, working-set, derived-job, DDA, and projection contracts exist | Bevy client systems that load/generate/mesh/collide/evict real chunks instead of spawning one entity per fixture block |
-| Sandbox gameplay | Generic inventory, drop, mining, tool, recipe, and transaction contracts have conformance fixtures | Runtime integration and package-authored tool items, recipes, hotbar, crafting, drops, and durable player state |
-| Terrenia content | Authored 72-block, water/lava, gameplay, worldgen, and presentation data exists | Registration through the final package graph, complete reference validation, runtime consumers, and release-quality assets/behavior |
+| Client interaction | Production host from a reopened `latticeaxiom.lock`: walk, look, jump, inspect, break/place, pause/save/exit | Package-driven **shell process** (`ClientShellGraph` → `LaunchIntentV1` → replacement game process), not a same-App title screen |
+| Composition | Resolver, registration, SDK, launcher contracts, profiles, CAS, and frozen product lock exist | One supervisor-driven shell→world pipeline using those already-sealed launcher contracts |
+| World data | Storage, world-wire, catalog, world-db, and sealed writer activation exist | Crash-recovery / checkpoint / trash UI on the shell catalog, and writer authority remaining receipt-gated |
+| World generation | Production V5 coordinator streams D4/V5 chunks around the player with retain/prefetch | Complete Terrenia territory/cave/hydrology plan at D7 scale; P4 chunk-edge profile evidence |
+| Voxel runtime | Halo-aware `MeshBuffer` presentation, once-per-tick interest, chunk colliders | P3 Bevy task-pool derived work; P5 merged colliders; P6 deterministic terrain materials; ADR 0026 reference-host evidence |
+| Sandbox gameplay | Inventory, tools, recipes, workbench/furnace/chest, and hotbar are bound from packages on the production host | Full D8/D10 automatic journey plus durable player state across the shell replacement-process loop |
+| Terrenia content | Authored 72-block, water/lava, gameplay, worldgen, and presentation **catalogs** exist and compile into the lock | Runtime texture-layer consumers (P6); presentation package still has explicit placeholders, not release-quality GPU assets |
 
 The current `playable` engine module is useful as an interaction smoke test, but
 it explicitly bypasses the frozen package lock and durable writer, hard-codes
