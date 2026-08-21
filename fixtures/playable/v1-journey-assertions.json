@@ -47,7 +47,7 @@
         "Portal position, tangent, clearance, and fluid state at the cave entrance satisfy the frozen cave plan.",
         "No entrance opens into an unready collider void, unsafe spawn, or unexplained fluid discontinuity."
       ],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "gather",
