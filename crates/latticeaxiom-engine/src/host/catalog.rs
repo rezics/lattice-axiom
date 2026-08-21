@@ -6,19 +6,19 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    num::{NonZeroU8, NonZeroU32},
+    num::{NonZeroU8, NonZeroU16, NonZeroU32},
 };
 
 use latticeaxiom_content::{
     ContentCatalogInputV1, ContentCatalogLimitsV1, ContentCatalogV1, FluidDefinitionV1,
 };
-use latticeaxiom_core::StableId;
+use latticeaxiom_core::{SchemaId, StableId};
 use latticeaxiom_gameplay::{
-    BlockDefinitionV1, BlockId, CatalogLimits, FrozenItemRoleBindingV1, GameplayCatalog,
-    GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemId, ItemPredicateV1,
-    ItemRoleDefinitionV1, ItemRoleId, MiningRuleV1, RecipeDefinitionV1, RecipeId, RecipePatternV1,
-    RoleOutputV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1, WorkstationDefinitionV1,
-    WorkstationId,
+    BlockDefinitionV1, BlockId, BlockSchemaBindingV1, CatalogLimits, FrozenItemRoleBindingV1,
+    GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemId,
+    ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, MiningRuleV1, RecipeDefinitionV1, RecipeId,
+    RecipePatternV1, RoleOutputV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1,
+    WorkstationDefinitionV1, WorkstationId,
 };
 use latticeaxiom_storage::DimensionId;
 use latticeaxiom_worldgen::{
@@ -442,6 +442,10 @@ fn authored_gameplay_source() -> Result<GameplayCatalogSourceV1, ProductionHostE
         &mut workstations,
         true,
     )?;
+    let block_schema_bindings = ingest_block_schema_bindings(
+        json_array(&rules, "block_schema_bindings")?,
+        &mut workstations,
+    )?;
     let drop_tables = drop_table_map(json_array(&rules, "drop_tables")?)?;
     let tool_requirements = tool_requirement_map(json_array(&rules, "tool_requirements")?)?;
     Ok(GameplayCatalogSourceV1 {
@@ -456,6 +460,7 @@ fn authored_gameplay_source() -> Result<GameplayCatalogSourceV1, ProductionHostE
         bindings,
         recipes,
         workstations: workstations.into_values().collect(),
+        block_schema_bindings,
         ..GameplayCatalogSourceV1::default()
     })
 }
@@ -577,6 +582,59 @@ fn ingest_recipes(
         });
     }
     Ok(())
+}
+
+fn ingest_block_schema_bindings(
+    rows: &[Value],
+    workstations: &mut BTreeMap<String, WorkstationDefinitionV1>,
+) -> Result<Vec<BlockSchemaBindingV1>, ProductionHostError> {
+    let mut bindings = Vec::new();
+    for row in rows {
+        let block = BlockId::parse(json_text(row, "block")?)?;
+        let mut schemas = Vec::new();
+        for schema in json_array(row, "schemas")? {
+            let text = schema
+                .as_str()
+                .ok_or(ProductionHostError::InvalidCatalogField { field: "schemas" })?;
+            schemas.push(text.parse::<SchemaId>()?);
+        }
+        let workstation = match row.get("workstation") {
+            Some(Value::String(value)) => {
+                let workstation = WorkstationId::parse(value)?;
+                workstations.insert(
+                    value.clone(),
+                    WorkstationDefinitionV1 {
+                        id: workstation.clone(),
+                    },
+                );
+                Some(workstation)
+            }
+            Some(_) => {
+                return Err(ProductionHostError::InvalidCatalogField {
+                    field: "workstation",
+                });
+            }
+            None => None,
+        };
+        let container_slots = match row.get("container_slots") {
+            Some(value) => {
+                let slots = value.as_u64().and_then(|slots| u16::try_from(slots).ok());
+                Some(slots.and_then(NonZeroU16::new).ok_or(
+                    ProductionHostError::InvalidCatalogField {
+                        field: "container_slots",
+                    },
+                )?)
+            }
+            None => None,
+        };
+        bindings.push(BlockSchemaBindingV1 {
+            block,
+            schemas: schemas.into_boxed_slice(),
+            workstation,
+            container_slots,
+        });
+    }
+    Ok(bindings)
 }
 
 fn recipe_pattern(
@@ -841,7 +899,10 @@ mod tests {
         AUTHORED_BLOCKS_JSON, authored_catalog_block_ids, authored_content_catalog,
         authored_gameplay_catalog, d9_golden_block_ids, parse_json_object,
     };
-    use latticeaxiom_gameplay::BlockId;
+    use latticeaxiom_gameplay::{
+        BlockId, ContainerOwnerComponentV1, ContainerStateV1, FurnaceContinuationV1,
+        GameplayMutationIntentV1, ItemStackV1, SchemaId, WorkstationId,
+    };
 
     #[test]
     fn d9_golden_block_ids_are_present_in_authored_catalog() {
@@ -884,6 +945,66 @@ mod tests {
             "compiled GameplayCatalog is missing golden IDs: {missing:?}"
         );
         assert_eq!(catalog.blocks().len(), golden.len() - missing.len());
+    }
+
+    #[test]
+    fn d9_workbench_furnace_chest_and_torch_bind_reserved_gameplay_schemas() {
+        let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+        let parse_schema = |id: &str| {
+            id.parse::<SchemaId>()
+                .unwrap_or_else(|error| panic!("{id} is a reserved schema: {error}"))
+        };
+        let item_stack = parse_schema(ItemStackV1::SCHEMA_ID);
+        let staged_edit = parse_schema(GameplayMutationIntentV1::SCHEMA_ID);
+        let container = parse_schema(ContainerStateV1::SCHEMA_ID);
+        let owner = parse_schema(ContainerOwnerComponentV1::SCHEMA_ID);
+        let furnace_continuation = parse_schema(FurnaceContinuationV1::SCHEMA_ID);
+        let crafting = WorkstationId::parse("latticeaxiom:workstation/crafting@1")
+            .expect("crafting workstation is a platform contract");
+        let furnace = WorkstationId::parse("latticeaxiom:workstation/furnace@1")
+            .expect("furnace workstation is a platform contract");
+
+        let torch = BlockId::parse("terrenia:block/torch").expect("D9 torch is canonical");
+        let workbench =
+            BlockId::parse("terrenia:block/workbench").expect("D9 workbench is canonical");
+        let furnace_block =
+            BlockId::parse("terrenia:block/furnace").expect("D9 furnace is canonical");
+        let chest = BlockId::parse("terrenia:block/chest").expect("D9 chest is canonical");
+
+        let torch_binding = catalog
+            .block_schema_binding(&torch)
+            .expect("torch binding is compiled");
+        assert!(torch_binding.realizes(&item_stack));
+        assert!(torch_binding.realizes(&staged_edit));
+        assert!(!torch_binding.realizes_container());
+        assert!(torch_binding.workstation.is_none());
+
+        let workbench_binding = catalog
+            .block_schema_binding(&workbench)
+            .expect("workbench binding is compiled");
+        assert!(workbench_binding.realizes(&container));
+        assert!(workbench_binding.realizes(&owner));
+        assert_eq!(workbench_binding.workstation.as_ref(), Some(&crafting));
+        assert_eq!(workbench_binding.container_slot_count(), Some(9));
+        assert_eq!(catalog.workstation_container_slots(&crafting), Some(9));
+
+        let furnace_binding = catalog
+            .block_schema_binding(&furnace_block)
+            .expect("furnace binding is compiled");
+        assert!(furnace_binding.realizes(&container));
+        assert!(furnace_binding.realizes(&furnace_continuation));
+        assert_eq!(furnace_binding.workstation.as_ref(), Some(&furnace));
+        assert_eq!(furnace_binding.container_slot_count(), Some(3));
+
+        let chest_binding = catalog
+            .block_schema_binding(&chest)
+            .expect("chest binding is compiled");
+        assert!(chest_binding.realizes(&container));
+        assert!(chest_binding.realizes(&owner));
+        assert!(chest_binding.workstation.is_none());
+        assert_eq!(chest_binding.container_slot_count(), Some(27));
+        assert!(catalog.workstations().contains(&crafting));
+        assert!(catalog.workstations().contains(&furnace));
     }
 
     #[test]

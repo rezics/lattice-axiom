@@ -461,6 +461,7 @@ fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     let boot = lock_boot_fixture();
     let images = boot.prepared();
@@ -486,6 +487,14 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     assert!(
         inspect_surface.uses_headless_dto(),
         "the V2 lock-boot fixture does not select inspect/observability packages"
+    );
+    assert!(
+        !boot
+            .graph
+            .packages
+            .keys()
+            .any(|package| package.as_str() == "@terrenia/presentation"),
+        "headless inspect must work when the presentation package is omitted"
     );
 
     instance
@@ -530,6 +539,9 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
         )
     );
 
+    let hash_before_inspect = spine
+        .materialized_chunk_state_hash()
+        .expect("omitted-presentation host exposes a world hash");
     instance
         .enqueue_headless_actions([inspect_frame(3)])
         .expect("inspect frame enqueues");
@@ -546,6 +558,13 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     assert_eq!(inspected.block_display_name, current.block_display_name);
     assert_eq!(inspected.chunk, current.chunk);
     assert_inspect_dto_overlay_fields(&inspected, &spine);
+    assert_eq!(
+        spine
+            .materialized_chunk_state_hash()
+            .expect("inspect still exposes a world hash"),
+        hash_before_inspect,
+        "headless inspect with omitted presentation must not change the world hash"
+    );
 
     instance
         .enqueue_headless_actions([break_frame(4)])
@@ -562,6 +581,72 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     });
     assert_eq!(success.position, inspected.observation.position);
     assert_eq!(success.old_content.as_ref(), Some(&inspected.block_id));
+}
+
+#[test]
+fn headless_omitting_presentation_does_not_change_world_hash() {
+    let boot = lock_boot_fixture();
+    assert!(
+        !boot
+            .graph
+            .packages
+            .keys()
+            .any(|package| package.as_str() == "@terrenia/presentation"),
+        "the V2 lock-boot fixture omits the presentation package"
+    );
+
+    let mut omitted = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        empty_gameplay_catalog().expect("empty gameplay catalog compiles"),
+    )
+    .expect("omitted-presentation host starts");
+    omitted
+        .advance_fixed_ticks(1)
+        .expect("omitted-presentation host advances");
+    let omitted_spine = omitted
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let omitted_hash = omitted_spine
+        .materialized_chunk_state_hash()
+        .expect("omitted-presentation host exposes a world hash");
+    let label = omitted_spine.content_display("terrenia:block/oak-log");
+    assert_eq!(label.name, "Oak Log");
+    assert!(!label.icon.is_empty());
+    assert_ne!(label.icon, "terrenia:block/oak-log");
+    assert_eq!(
+        omitted_spine
+            .materialized_chunk_state_hash()
+            .expect("display lookup still exposes a world hash"),
+        omitted_hash,
+        "HUD display lookup must not change the materialized-chunk world hash"
+    );
+
+    let mut second = EngineInstance::new_headless_host_from_lock_with_catalog(
+        lock_boot_fixture().prepared(),
+        SPINE_TIMESTEP,
+        empty_gameplay_catalog().expect("empty gameplay catalog compiles"),
+    )
+    .expect("second omitted-presentation host starts");
+    second
+        .advance_fixed_ticks(1)
+        .expect("second omitted-presentation host advances");
+    let second_spine = second
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("second production spine is installed")
+        .clone();
+    assert_eq!(
+        second_spine
+            .materialized_chunk_state_hash()
+            .expect("second host exposes a world hash"),
+        omitted_hash,
+        "independent headless hosts that omit presentation must hash-equal"
+    );
 }
 
 #[test]
@@ -1277,11 +1362,19 @@ fn semantic_id(value: &str) -> SemanticNodeId {
 }
 
 fn assert_inspect_dto_overlay_fields(inspect: &HeadlessTargetInspectV1, spine: &ProductionSpine) {
+    let expected = spine.content_display(inspect.block_id.as_str());
     assert!(
         !inspect.block_display_name.is_empty(),
         "inspect DTO must carry a targeted block display name"
     );
     assert_ne!(inspect.block_display_name, inspect.block_id.as_str());
+    assert_eq!(inspect.block_display_name, expected.name);
+    assert_eq!(inspect.block_display_icon, expected.icon);
+    assert!(
+        !inspect.block_display_icon.is_empty(),
+        "inspect DTO must carry a targeted block icon"
+    );
+    assert_ne!(inspect.block_display_icon, inspect.block_id.as_str());
     assert_eq!(
         inspect.chunk,
         spine
@@ -2587,6 +2680,91 @@ fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
     assert!(
         spine.dropped_items().len() >= before_drops,
         "full-inventory gathering must keep the source drop"
+    );
+}
+
+#[test]
+fn production_host_places_torch_and_opens_chest_container_schema() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let torch_block = parse_block("terrenia:block/torch");
+    let chest_block = parse_block("terrenia:block/chest");
+    let workbench_block = parse_block("terrenia:block/workbench");
+    let furnace_block = parse_block("terrenia:block/furnace");
+    for block in [&torch_block, &workbench_block, &furnace_block, &chest_block] {
+        assert!(
+            catalog.block_schema_binding(block).is_some(),
+            "{block} must close out a reserved gameplay schema binding"
+        );
+    }
+    let chest_binding = catalog
+        .block_schema_binding(&chest_block)
+        .expect("chest must close out a reserved gameplay schema binding");
+    assert!(
+        chest_binding.realizes_container(),
+        "chest must realize the generic container schema"
+    );
+
+    let boot = lock_boot_fixture();
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    spine
+        .bind_block_container(&chest_block, ContainerId::new(3))
+        .expect("chest container schema opens from the catalog binding");
+    spine
+        .bind_workstation(
+            WorkstationId::parse("latticeaxiom:workstation/crafting@1")
+                .expect("crafting workstation is a platform contract"),
+            ContainerId::new(2),
+        )
+        .expect("workbench container schema binds from the catalog slot count");
+
+    let torch_item = parse_item("terrenia:item/torch");
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(0),
+            Some(ItemStackV1::plain(torch_item.clone(), 4).expect("torch stacks are valid")),
+        )
+        .expect("torch is seeded into the hotbar");
+    spine
+        .select_hotbar_slot(0)
+        .expect("torch hotbar slot is selected");
+
+    let dirt = parse_block("terrenia:block/dirt");
+    let place_target = spine
+        .first_resident_block(&dirt)
+        .expect("generated soil exists in the streamed set");
+    mine_until_broken(&spine, place_target);
+    pickup_remaining(&spine);
+    let place_anchor = latticeaxiom_gameplay::BlockPosition {
+        x: place_target.x,
+        y: place_target.y.saturating_add(1),
+        z: place_target.z,
+    };
+    let placed = spine
+        .place_from_hotbar(place_anchor, BlockFaceV1::NegativeY)
+        .expect("torch placement consumes the catalog placement item");
+    let occupancy = spine
+        .inspect_occupancy(placed.position)
+        .expect("placed torch cell is inspectable");
+    assert_eq!(occupancy.solid.as_ref(), Some(&torch_block));
+    assert!(
+        spine
+            .inventory_view()
+            .expect("inventory is bound")
+            .count_item(&torch_item)
+            < 4,
+        "placing a torch must consume the placement stack"
     );
 }
 

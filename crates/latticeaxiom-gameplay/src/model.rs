@@ -1715,6 +1715,14 @@ pub enum GameplayReject {
         /// Stable, non-localized reason.
         reason: &'static str,
     },
+    /// A block-to-schema binding is malformed or incomplete.
+    #[error("invalid block schema binding `{block}`: {reason}")]
+    InvalidSchemaBinding {
+        /// Exact catalog block.
+        block: BlockId,
+        /// Stable, non-localized reason.
+        reason: &'static str,
+    },
     /// A frozen output role is missing or incompatible.
     #[error("frozen role binding rejected for `{role}`")]
     FrozenRoleRejected {
@@ -1984,6 +1992,7 @@ impl GameplayReject {
             Self::UnknownReference { .. } => "gameplay.unknown_reference",
             Self::InvalidPredicate { .. } => "gameplay.invalid_predicate",
             Self::InvalidRecipe { .. } => "gameplay.invalid_recipe",
+            Self::InvalidSchemaBinding { .. } => "gameplay.invalid_schema_binding",
             Self::FrozenRoleRejected { .. } => "gameplay.frozen_role_rejected",
             Self::RevisionOverflow { .. } => "gameplay.revision_overflow",
             Self::StaleWorldRevision { .. } => "gameplay.stale_world_revision",

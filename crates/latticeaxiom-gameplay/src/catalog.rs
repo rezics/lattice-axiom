@@ -1,11 +1,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    num::{NonZeroU8, NonZeroU32},
+    num::{NonZeroU8, NonZeroU16, NonZeroU32},
 };
 
+use latticeaxiom_core::SchemaId;
+
 use crate::{
-    BlockId, GameplayReject, ItemId, ItemRoleId, ItemStackV1, ItemTagId, ProcessId, RecipeId,
-    ToolClassId, WorkstationId,
+    BlockId, ContainerOwnerComponentV1, ContainerStateV1, FurnaceContinuationV1,
+    GameplayMutationIntentV1, GameplayReject, InventoryStateV1, ItemId, ItemRoleId, ItemStackV1,
+    ItemTagId, ProcessId, RecipeId, ToolClassId, WorkstationId,
+    model::ABSOLUTE_MAX_CONTAINER_SLOTS,
 };
 
 /// Hard limits for one compiled gameplay catalog.
@@ -31,6 +35,8 @@ pub struct CatalogLimits {
     pub processes: usize,
     /// Explicit fuel rules.
     pub fuel_rules: usize,
+    /// Block-to-schema bindings.
+    pub block_schema_bindings: usize,
     /// Predicate nodes in one predicate.
     pub predicate_nodes: usize,
     /// Predicate nesting in one predicate.
@@ -54,6 +60,7 @@ impl Default for CatalogLimits {
             workstations: 128,
             processes: 1_024,
             fuel_rules: 512,
+            block_schema_bindings: 128,
             predicate_nodes: 256,
             predicate_depth: 32,
             shapeless_ingredients: 16,
@@ -75,6 +82,7 @@ impl CatalogLimits {
             ("catalog_workstations", self.workstations),
             ("catalog_processes", self.processes),
             ("catalog_fuel_rules", self.fuel_rules),
+            ("catalog_block_schema_bindings", self.block_schema_bindings),
             ("predicate_nodes", self.predicate_nodes),
             ("predicate_depth", self.predicate_depth),
             ("shapeless_ingredients", self.shapeless_ingredients),
@@ -249,6 +257,55 @@ pub struct WorkstationDefinitionV1 {
     pub id: WorkstationId,
 }
 
+/// Package-authored binding of one exact block onto reserved gameplay schemas.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlockSchemaBindingV1 {
+    /// Exact catalog block.
+    pub block: BlockId,
+    /// Distinct reserved gameplay schemas realized by the block, identity order.
+    pub schemas: Box<[SchemaId]>,
+    /// Optional generic workstation contract realized by the same block.
+    pub workstation: Option<WorkstationId>,
+    /// Persistent container slot count when a container schema is bound.
+    pub container_slots: Option<NonZeroU16>,
+}
+
+impl BlockSchemaBindingV1 {
+    /// Returns whether `schema` is one of this block's reserved gameplay schemas.
+    #[must_use]
+    pub fn realizes(&self, schema: &SchemaId) -> bool {
+        self.schemas.iter().any(|bound| bound == schema)
+    }
+
+    /// Returns whether this binding realizes the generic container schema.
+    #[must_use]
+    pub fn realizes_container(&self) -> bool {
+        self.schemas
+            .iter()
+            .any(|schema| schema.as_str() == ContainerStateV1::SCHEMA_ID)
+    }
+
+    /// Returns the container slot count as `usize` when bound.
+    #[must_use]
+    pub fn container_slot_count(&self) -> Option<usize> {
+        self.container_slots.map(|slots| usize::from(slots.get()))
+    }
+}
+
+/// Returns whether `schema` is a reserved gameplay schema identity.
+#[must_use]
+pub fn is_reserved_gameplay_schema(schema: &SchemaId) -> bool {
+    matches!(
+        schema.as_str(),
+        ItemStackV1::SCHEMA_ID
+            | InventoryStateV1::SCHEMA_ID
+            | ContainerOwnerComponentV1::SCHEMA_ID
+            | ContainerStateV1::SCHEMA_ID
+            | FurnaceContinuationV1::SCHEMA_ID
+            | GameplayMutationIntentV1::SCHEMA_ID
+    )
+}
+
 /// Explicit fuel qualification rule.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FuelRuleV1 {
@@ -297,6 +354,8 @@ pub struct GameplayCatalogSourceV1 {
     pub processes: Vec<ProcessDefinitionV1>,
     /// Explicit fuel qualification rules.
     pub fuel_rules: Vec<FuelRuleV1>,
+    /// Block-to-schema bindings.
+    pub block_schema_bindings: Vec<BlockSchemaBindingV1>,
 }
 
 /// Validated deterministic gameplay catalog.
@@ -316,6 +375,7 @@ pub struct GameplayCatalog {
     pub(crate) workstations: BTreeSet<WorkstationId>,
     pub(crate) processes: BTreeMap<ProcessId, ProcessDefinitionV1>,
     pub(crate) fuel_rules: Box<[FuelRuleV1]>,
+    pub(crate) block_schema_bindings: BTreeMap<BlockId, BlockSchemaBindingV1>,
     pub(crate) limits: CatalogLimits,
 }
 
@@ -343,7 +403,9 @@ impl GameplayCatalog {
         let bindings = collect_bindings(source.bindings)?;
         let recipes = collect_unique(source.recipes, "recipe", |value| &value.id)?;
         let processes = collect_unique(source.processes, "process", |value| &value.id)?;
-        let workstations = collect_workstations(source.workstations)?;
+        let mut workstations = collect_workstations(source.workstations)?;
+        let block_schema_bindings =
+            collect_block_schema_bindings(source.block_schema_bindings, &mut workstations)?;
         let tags = collect_tags(source.tags)?;
 
         let catalog = Self {
@@ -357,6 +419,7 @@ impl GameplayCatalog {
             workstations,
             processes,
             fuel_rules: source.fuel_rules.into_boxed_slice(),
+            block_schema_bindings,
             limits,
         };
         catalog.validate_references()?;
@@ -421,6 +484,27 @@ impl GameplayCatalog {
     #[must_use]
     pub fn workstations(&self) -> &BTreeSet<WorkstationId> {
         &self.workstations
+    }
+
+    /// Returns compiled block-to-schema bindings in identity order.
+    #[must_use]
+    pub fn block_schema_bindings(&self) -> &BTreeMap<BlockId, BlockSchemaBindingV1> {
+        &self.block_schema_bindings
+    }
+
+    /// Returns the schema binding for one exact block.
+    #[must_use]
+    pub fn block_schema_binding(&self, block: &BlockId) -> Option<&BlockSchemaBindingV1> {
+        self.block_schema_bindings.get(block)
+    }
+
+    /// Returns container slots for a workstation contract realized by a binding.
+    #[must_use]
+    pub fn workstation_container_slots(&self, workstation: &WorkstationId) -> Option<usize> {
+        self.block_schema_bindings
+            .values()
+            .filter(|binding| binding.workstation.as_ref() == Some(workstation))
+            .find_map(BlockSchemaBindingV1::container_slot_count)
     }
 
     /// Tests a closed item predicate against a concrete item.
@@ -608,6 +692,9 @@ impl GameplayCatalog {
             validate_predicate(&process.input.accepts, self, self.limits)?;
             let _resolved = self.resolve_output(&process.output)?;
         }
+        for binding in self.block_schema_bindings.values() {
+            validate_block_schema_binding(binding, self)?;
+        }
         Ok(())
     }
 }
@@ -638,6 +725,11 @@ fn preflight_source(
             "catalog_fuel_rules",
             source.fuel_rules.len(),
             limits.fuel_rules,
+        ),
+        (
+            "catalog_block_schema_bindings",
+            source.block_schema_bindings.len(),
+            limits.block_schema_bindings,
         ),
     ];
     for (resource, actual, limit) in top {
@@ -730,6 +822,150 @@ fn collect_workstations(
         }
     }
     Ok(result)
+}
+
+fn collect_block_schema_bindings(
+    values: Vec<BlockSchemaBindingV1>,
+    workstations: &mut BTreeSet<WorkstationId>,
+) -> Result<BTreeMap<BlockId, BlockSchemaBindingV1>, GameplayReject> {
+    let mut result = BTreeMap::new();
+    let mut workstation_owners = BTreeMap::<WorkstationId, BlockId>::new();
+    for mut value in values {
+        value.schemas = unique_sorted_schemas(&value.block, value.schemas)?;
+        if let Some(workstation) = &value.workstation {
+            workstations.insert(workstation.clone());
+            if let Some(existing) =
+                workstation_owners.insert(workstation.clone(), value.block.clone())
+            {
+                return Err(GameplayReject::DuplicateRegistration {
+                    kind: "workstation_block_binding",
+                    id: format!(
+                        "{} -> {} and {}",
+                        workstation.as_str(),
+                        existing,
+                        value.block
+                    ),
+                });
+            }
+        }
+        let block = value.block.clone();
+        if result.insert(block.clone(), value).is_some() {
+            return Err(GameplayReject::DuplicateRegistration {
+                kind: "block_schema_binding",
+                id: block.as_str().to_owned(),
+            });
+        }
+    }
+    Ok(result)
+}
+
+fn unique_sorted_schemas(
+    block: &BlockId,
+    schemas: Box<[SchemaId]>,
+) -> Result<Box<[SchemaId]>, GameplayReject> {
+    let mut unique = BTreeSet::new();
+    for schema in schemas {
+        if !unique.insert(schema.clone()) {
+            return Err(GameplayReject::DuplicateRegistration {
+                kind: "block_schema",
+                id: format!("{} -> {}", block.as_str(), schema.as_str()),
+            });
+        }
+    }
+    Ok(unique.into_iter().collect())
+}
+
+fn validate_block_schema_binding(
+    binding: &BlockSchemaBindingV1,
+    catalog: &GameplayCatalog,
+) -> Result<(), GameplayReject> {
+    require_key(&catalog.blocks, &binding.block, "block")?;
+    if binding.schemas.is_empty() {
+        return Err(GameplayReject::InvalidSchemaBinding {
+            block: binding.block.clone(),
+            reason: "at least one reserved gameplay schema is required",
+        });
+    }
+    let mut container = false;
+    let mut container_owner = false;
+    let mut furnace = false;
+    let mut placement = false;
+    for schema in &binding.schemas {
+        if !is_reserved_gameplay_schema(schema) {
+            return Err(GameplayReject::UnknownReference {
+                kind: "gameplay_schema",
+                id: schema.as_str().to_owned(),
+            });
+        }
+        match schema.as_str() {
+            ContainerStateV1::SCHEMA_ID => container = true,
+            ContainerOwnerComponentV1::SCHEMA_ID => container_owner = true,
+            FurnaceContinuationV1::SCHEMA_ID => furnace = true,
+            ItemStackV1::SCHEMA_ID | GameplayMutationIntentV1::SCHEMA_ID => placement = true,
+            _ => {}
+        }
+    }
+    if container_owner && !container {
+        return Err(GameplayReject::InvalidSchemaBinding {
+            block: binding.block.clone(),
+            reason: "container-owner requires the container schema",
+        });
+    }
+    match (container, binding.container_slots) {
+        (true, Some(slots)) if usize::from(slots.get()) <= ABSOLUTE_MAX_CONTAINER_SLOTS => {}
+        (true, Some(slots)) => {
+            return Err(GameplayReject::LimitExceeded {
+                resource: "container_slots",
+                limit: ABSOLUTE_MAX_CONTAINER_SLOTS,
+                actual: usize::from(slots.get()),
+            });
+        }
+        (true, None) => {
+            return Err(GameplayReject::InvalidSchemaBinding {
+                block: binding.block.clone(),
+                reason: "container schema requires a non-zero slot count",
+            });
+        }
+        (false, Some(_)) => {
+            return Err(GameplayReject::InvalidSchemaBinding {
+                block: binding.block.clone(),
+                reason: "container slots require the container schema",
+            });
+        }
+        (false, None) => {}
+    }
+    if let Some(workstation) = &binding.workstation {
+        if !container {
+            return Err(GameplayReject::InvalidSchemaBinding {
+                block: binding.block.clone(),
+                reason: "workstation bindings require the container schema",
+            });
+        }
+        if !catalog.workstations.contains(workstation) {
+            return Err(GameplayReject::UnknownReference {
+                kind: "workstation",
+                id: workstation.as_str().to_owned(),
+            });
+        }
+    }
+    if furnace && !(container && binding.workstation.is_some()) {
+        return Err(GameplayReject::InvalidSchemaBinding {
+            block: binding.block.clone(),
+            reason: "furnace-continuation requires a container workstation",
+        });
+    }
+    if placement
+        && !catalog
+            .items
+            .values()
+            .any(|item| item.placement_block.as_ref() == Some(&binding.block))
+    {
+        return Err(GameplayReject::InvalidSchemaBinding {
+            block: binding.block.clone(),
+            reason: "placement schemas require a catalog item that places the block",
+        });
+    }
+    Ok(())
 }
 
 fn collect_tags(
@@ -866,11 +1102,100 @@ fn validate_recipe(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{
+        num::{NonZeroU16, NonZeroU32},
+        str::FromStr,
+    };
 
     use crate::{
-        GameplayCatalog, GameplayCatalogSourceV1, GameplayReject, ItemDefinitionV1, ItemId,
+        BlockDefinitionV1, BlockId, BlockSchemaBindingV1, ContainerOwnerComponentV1,
+        ContainerStateV1, GameplayCatalog, GameplayCatalogSourceV1, GameplayReject,
+        ItemDefinitionV1, ItemId, ItemStackV1, MiningRuleV1, SchemaId, WorkstationDefinitionV1,
+        WorkstationId,
     };
+
+    #[test]
+    fn reserved_schema_binding_compiles_and_rejects_unknown_schema() {
+        let block = BlockId::parse("example:block/workstation").expect("fixture ID is canonical");
+        let item = ItemId::parse("example:item/workstation").expect("fixture ID is canonical");
+        let schema = SchemaId::from_str(ContainerStateV1::SCHEMA_ID)
+            .expect("container schema is a reserved identity");
+        let owner = SchemaId::from_str(ContainerOwnerComponentV1::SCHEMA_ID)
+            .expect("container-owner schema is a reserved identity");
+        let workstation =
+            WorkstationId::parse("latticeaxiom:workstation/crafting@1").expect("platform contract");
+        let drop = ItemStackV1::plain(item.clone(), 1).expect("fixture drop is valid");
+        let source = GameplayCatalogSourceV1 {
+            items: vec![ItemDefinitionV1 {
+                id: item,
+                stack_limit: NonZeroU32::new(64).expect("fixture limit is non-zero"),
+                placement_block: Some(block.clone()),
+                durability: None,
+            }],
+            blocks: vec![BlockDefinitionV1 {
+                id: block.clone(),
+                mining: MiningRuleV1 {
+                    hardness: NonZeroU32::new(1).expect("fixture hardness is non-zero"),
+                    tool: None,
+                },
+                drop,
+            }],
+            workstations: vec![WorkstationDefinitionV1 {
+                id: workstation.clone(),
+            }],
+            block_schema_bindings: vec![BlockSchemaBindingV1 {
+                block: block.clone(),
+                schemas: vec![schema.clone(), owner].into_boxed_slice(),
+                workstation: Some(workstation.clone()),
+                container_slots: NonZeroU16::new(9),
+            }],
+            ..GameplayCatalogSourceV1::default()
+        };
+        let catalog = GameplayCatalog::compile(source, super::CatalogLimits::default())
+            .expect("reserved schema binding compiles");
+        let binding = catalog
+            .block_schema_binding(&block)
+            .expect("binding is retained");
+        assert!(binding.realizes(&schema));
+        assert_eq!(catalog.workstation_container_slots(&workstation), Some(9));
+
+        let unknown = SchemaId::from_str("latticeaxiom:schema/not-a-gameplay-schema@1")
+            .expect("schema identity is well-formed");
+        let rejected = GameplayCatalogSourceV1 {
+            items: vec![ItemDefinitionV1 {
+                id: ItemId::parse("example:item/workstation").expect("fixture ID is canonical"),
+                stack_limit: NonZeroU32::new(64).expect("fixture limit is non-zero"),
+                placement_block: Some(block.clone()),
+                durability: None,
+            }],
+            blocks: vec![BlockDefinitionV1 {
+                id: block.clone(),
+                mining: MiningRuleV1 {
+                    hardness: NonZeroU32::new(1).expect("fixture hardness is non-zero"),
+                    tool: None,
+                },
+                drop: ItemStackV1::plain(
+                    ItemId::parse("example:item/workstation").expect("fixture ID is canonical"),
+                    1,
+                )
+                .expect("fixture drop is valid"),
+            }],
+            block_schema_bindings: vec![BlockSchemaBindingV1 {
+                block,
+                schemas: vec![unknown].into_boxed_slice(),
+                workstation: None,
+                container_slots: None,
+            }],
+            ..GameplayCatalogSourceV1::default()
+        };
+        assert!(matches!(
+            GameplayCatalog::compile(rejected, super::CatalogLimits::default()),
+            Err(GameplayReject::UnknownReference {
+                kind: "gameplay_schema",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn catalog_limit_is_checked_before_collection() {

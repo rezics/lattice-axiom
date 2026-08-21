@@ -320,6 +320,51 @@ impl ProductionGameplay {
                 id: workstation.as_str().to_owned(),
             });
         }
+        let slots = self
+            .catalog()
+            .workstation_container_slots(&workstation)
+            .ok_or_else(|| GameplayReject::UnknownReference {
+                kind: "workstation_schema_binding",
+                id: workstation.as_str().to_owned(),
+            })?;
+        self.seed_container(owner_chunk, entity, Some(workstation), slots)
+    }
+
+    pub(super) fn bind_block_container(
+        &mut self,
+        block: &BlockId,
+        owner_chunk: &DimensionChunkKey,
+        entity: ContainerId,
+    ) -> Result<(), GameplayReject> {
+        let binding = self.catalog().block_schema_binding(block).ok_or_else(|| {
+            GameplayReject::UnknownReference {
+                kind: "block_schema_binding",
+                id: block.as_str().to_owned(),
+            }
+        })?;
+        if !binding.realizes_container() {
+            return Err(GameplayReject::InvalidSchemaBinding {
+                block: block.clone(),
+                reason: "block does not realize the container schema",
+            });
+        }
+        let slots =
+            binding
+                .container_slot_count()
+                .ok_or_else(|| GameplayReject::InvalidSchemaBinding {
+                    block: block.clone(),
+                    reason: "container schema requires a non-zero slot count",
+                })?;
+        self.seed_container(owner_chunk, entity, binding.workstation.clone(), slots)
+    }
+
+    fn seed_container(
+        &mut self,
+        owner_chunk: &DimensionChunkKey,
+        entity: ContainerId,
+        workstation: Option<WorkstationId>,
+        slots: usize,
+    ) -> Result<(), GameplayReject> {
         if self.applier.state().container(entity).is_some() {
             return Ok(());
         }
@@ -329,8 +374,8 @@ impl ProductionGameplay {
                 chunk: owner_chunk.coordinate,
                 entity: entity.into_persistent_entity_id(),
             },
-            Some(workstation),
-            9,
+            workstation,
+            slots,
         )?;
         self.applier.state_mut().seed_container(entity, container)
     }

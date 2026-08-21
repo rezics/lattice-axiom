@@ -35,11 +35,12 @@ pub use client::{
 };
 pub use host::{
     CaveOccupancyArbitrationV1, CellOccupancyV1, ChunkFaceV1, ChunkLifecycle, ChunkMeshCursor,
-    ChunkPresentation, HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionHostError, ProductionHostPlugin,
-    ProductionInspectSurface, ProductionInventoryView, ProductionMemoryStart,
-    ProductionMemoryStartError, ProductionPlayerPose, ProductionSessionPause, ProductionSpine,
-    ProductionWorldList, ProductionWorldStorage, RequiredCaveEntranceV1, SealedWorldWriterHost,
-    SealedWriterHostError, WorkingSetDiagnosticsV1, authored_content_catalog,
+    ChunkPresentation, ContentDisplayCatalogV1, ContentDisplayLabelV1, HOTBAR_SLOTS,
+    INVENTORY_SLOTS, ProductionHostError, ProductionHostPlugin, ProductionInspectSurface,
+    ProductionInventoryView, ProductionMemoryStart, ProductionMemoryStartError,
+    ProductionPlayerPose, ProductionSessionPause, ProductionSpine, ProductionWorldList,
+    ProductionWorldStorage, RequiredCaveEntranceV1, SealedWorldWriterHost, SealedWriterHostError,
+    WorkingSetDiagnosticsV1, authored_content_catalog, authored_content_display_catalog,
     authored_gameplay_catalog, empty_gameplay_catalog, sealed_activation_binding,
 };
 pub use instance::{

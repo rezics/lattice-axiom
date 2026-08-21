@@ -320,6 +320,7 @@ fn catalog_source() -> GameplayCatalogSourceV1 {
             accepts: ItemPredicateV1::Exact(charcoal),
             burn_ticks: nz32(10),
         }],
+        block_schema_bindings: Vec::new(),
     }
 }
 

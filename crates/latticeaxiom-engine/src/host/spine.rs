@@ -55,6 +55,10 @@ use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
     SealedWorldWriterHost,
     catalog::{authored_content_catalog, authored_gameplay_catalog, host_worldgen_catalog},
+    display::{
+        ContentDisplayCatalogV1, ContentDisplayLabelV1, authored_content_display_catalog,
+        presentation_package_selected,
+    },
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
     worldgen::{
@@ -260,6 +264,7 @@ pub(super) struct ProductionSpineInner {
     last_stream_error: Option<String>,
     gameplay: Option<ProductionGameplay>,
     world_store: Option<DeterministicWorldStorage>,
+    display: ContentDisplayCatalogV1,
 }
 
 /// Collider upserts and evictions consumed by the production presentation system.
@@ -413,6 +418,7 @@ impl ProductionSpine {
         let dimension = worldgen.dimension.clone();
         let kernel = Arc::new(MemoryTransactionKernel::new());
         let content = authored_content_catalog()?;
+        let display = authored_content_display_catalog(presentation_package_selected(images))?;
         let palette = worldgen.palette.clone();
         let solid_palette = compile_host_solid_palette(&content, &palette)?;
         let fluid_palette = compile_host_fluid_palette(&content)?;
@@ -463,6 +469,7 @@ impl ProductionSpine {
             last_stream_error: None,
             gameplay: None,
             world_store,
+            display,
         };
         let spawn = validated_spawn(&inner.plan, &worldgen.bindings)?;
         inner.spawn_center = player_spawn_center(spawn)?;
@@ -834,6 +841,18 @@ impl ProductionSpine {
         })
     }
 
+    /// Resolves a HUD display name and icon for locked content.
+    ///
+    /// Omitting the presentation package still returns the deterministic
+    /// missing-presentation fallback.
+    #[must_use]
+    pub fn content_display(&self, content_id: &str) -> ContentDisplayLabelV1 {
+        self.lock_inner().map_or_else(
+            |_| ContentDisplayLabelV1::missing_presentation(content_id),
+            |inner| inner.display.lookup(content_id),
+        )
+    }
+
     /// Returns the local inventory and selected hotbar slot.
     #[must_use]
     pub fn inventory_view(&self) -> Option<ProductionInventoryView> {
@@ -1008,6 +1027,40 @@ impl ProductionSpine {
                 player: local_player_id().as_bytes(),
             })?
             .bind_workstation(workstation, &chunk, container)
+    }
+
+    /// Binds a persistent container from a catalog block schema binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the block has no container schema or the
+    /// container cannot be seeded.
+    pub fn bind_block_container(
+        &self,
+        block: &BlockId,
+        container: ContainerId,
+    ) -> Result<(), GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        let spawn = translation_chunk(inner.spawn_center, inner.chunk_edge).ok_or(
+            GameplayReject::ChunkNotLoaded {
+                dimension: inner.dimension.as_str().to_owned(),
+                x: 0,
+                y: 0,
+                z: 0,
+            },
+        )?;
+        let chunk = DimensionChunkKey::new(inner.dimension.clone(), spawn);
+        inner
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .bind_block_container(block, &chunk, container)
     }
 
     /// Seeds one local inventory slot for fixture setup.
@@ -1779,7 +1832,8 @@ impl ProductionSpineInner {
             .block_id(hit.voxel)
             .ok_or(TargetInspectRejectV1::ContentUnavailable)?;
         let occupancy = WorkingSetDiagnosticsV1::from_runtime(self.runtime.diagnostics());
-        Ok(HeadlessTargetInspectV1::new(
+        let label = self.display.lookup(block_id.as_str());
+        let mut inspect = HeadlessTargetInspectV1::new(
             ClientTargetObservationV1 {
                 position: hit.position,
                 face: hit.face,
@@ -1792,7 +1846,10 @@ impl ProductionSpineInner {
             occupancy.active(),
             occupancy.in_flight(),
             occupancy.dirty(),
-        ))
+        );
+        inspect.block_display_name = label.name;
+        inspect.block_display_icon = label.icon;
+        Ok(inspect)
     }
 
     fn selectable_hit(

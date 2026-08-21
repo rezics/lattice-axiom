@@ -421,6 +421,79 @@ fn every_authored_cross_package_reference_is_closed() {
         }
         assert!(items.contains(text(&recipe["output"], "item")));
     }
+
+    let reserved_schemas = [
+        "latticeaxiom:schema/item-stack@1",
+        "latticeaxiom:schema/inventory@1",
+        "latticeaxiom:schema/container-owner@1",
+        "latticeaxiom:schema/container@1",
+        "latticeaxiom:schema/furnace-continuation@1",
+        "latticeaxiom:schema/gameplay-staged-edit@1",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let mut bound_blocks = BTreeSet::new();
+    for binding in array(&gameplay, "block_schema_bindings") {
+        let block = text(binding, "block");
+        assert!(block_ids.contains(block), "{block}");
+        assert!(bound_blocks.insert(block.to_owned()), "{block}");
+        let schemas = array(binding, "schemas")
+            .iter()
+            .map(|schema| {
+                schema
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{block} schema is not text"))
+                    .to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(!schemas.is_empty(), "{block}");
+        for schema in &schemas {
+            assert!(
+                reserved_schemas.contains(schema),
+                "{block} binds unknown gameplay schema {schema}"
+            );
+        }
+        if let Some(workstation) = binding["workstation"].as_str() {
+            assert!(
+                workstation.starts_with("latticeaxiom:workstation/"),
+                "{block} workstation {workstation} is not a platform contract"
+            );
+            assert!(
+                schemas.contains("latticeaxiom:schema/container@1"),
+                "{block}"
+            );
+        }
+        if schemas.contains("latticeaxiom:schema/container@1") {
+            assert!(
+                binding["container_slots"]
+                    .as_u64()
+                    .is_some_and(|slots| slots > 0),
+                "{block}"
+            );
+        }
+        if schemas.contains("latticeaxiom:schema/item-stack@1")
+            || schemas.contains("latticeaxiom:schema/gameplay-staged-edit@1")
+        {
+            assert!(
+                array(&gameplay, "items")
+                    .iter()
+                    .any(|item| text(item, "placement_block") == block),
+                "{block} placement schema has no placement item"
+            );
+        }
+    }
+    for required in [
+        "terrenia:block/workbench",
+        "terrenia:block/furnace",
+        "terrenia:block/chest",
+        "terrenia:block/torch",
+    ] {
+        assert!(
+            bound_blocks.contains(required),
+            "D9 catalog block {required} is missing a gameplay schema binding"
+        );
+    }
 }
 
 #[test]

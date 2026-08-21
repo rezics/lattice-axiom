@@ -1518,5 +1518,47 @@
       "id": "terrenia:item-role/recipe-output-chest@1",
       "concrete_item": "terrenia:item/chest"
     }
+  ],
+  "block_schema_bindings": [
+    {
+      "block": "terrenia:block/torch",
+      "schemas": [
+        "latticeaxiom:schema/item-stack@1",
+        "latticeaxiom:schema/gameplay-staged-edit@1"
+      ]
+    },
+    {
+      "block": "terrenia:block/workbench",
+      "schemas": [
+        "latticeaxiom:schema/item-stack@1",
+        "latticeaxiom:schema/gameplay-staged-edit@1",
+        "latticeaxiom:schema/container@1",
+        "latticeaxiom:schema/container-owner@1"
+      ],
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "container_slots": 9
+    },
+    {
+      "block": "terrenia:block/furnace",
+      "schemas": [
+        "latticeaxiom:schema/item-stack@1",
+        "latticeaxiom:schema/gameplay-staged-edit@1",
+        "latticeaxiom:schema/container@1",
+        "latticeaxiom:schema/container-owner@1",
+        "latticeaxiom:schema/furnace-continuation@1"
+      ],
+      "workstation": "latticeaxiom:workstation/furnace@1",
+      "container_slots": 3
+    },
+    {
+      "block": "terrenia:block/chest",
+      "schemas": [
+        "latticeaxiom:schema/item-stack@1",
+        "latticeaxiom:schema/gameplay-staged-edit@1",
+        "latticeaxiom:schema/container@1",
+        "latticeaxiom:schema/container-owner@1"
+      ],
+      "container_slots": 27
+    }
   ]
 }
