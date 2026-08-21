@@ -770,6 +770,40 @@ fn production_host_exposes_working_set_diagnostics() {
 }
 
 #[test]
+fn requested_view_distance_is_clamped_by_host_limits() {
+    let instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let cap = spine
+        .hard_limits()
+        .expect("playable host clamps exist")
+        .view_distance_chunks;
+    assert!(cap >= 1);
+    let effective_one = spine
+        .set_requested_view_distance(1)
+        .expect("view distance 1 is admitted");
+    assert_eq!(spine.requested_view_distance(), 1);
+    assert_eq!(effective_one, spine.effective_view_distance());
+    assert!(effective_one <= 1);
+    let effective_cap = spine
+        .set_requested_view_distance(cap)
+        .expect("hard-cap view distance is admitted");
+    assert_eq!(spine.requested_view_distance(), cap);
+    assert_eq!(effective_cap, spine.effective_view_distance());
+    assert!(effective_cap <= cap);
+    let _ = spine
+        .set_requested_view_distance(cap.saturating_add(8))
+        .expect("oversize requests clamp");
+    assert_eq!(spine.requested_view_distance(), cap);
+}
+
+#[test]
 fn camera_yaw_pitch_only_does_not_change_presentation_state() {
     const TICKS: u32 = 6;
     let mut idle =

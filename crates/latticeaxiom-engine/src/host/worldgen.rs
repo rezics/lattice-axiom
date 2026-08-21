@@ -68,7 +68,7 @@ pub(super) fn spine_config() -> WorldgenConfigV1 {
 ///
 /// Returns [`ProductionHostError::InvalidHostLimits`] when a clamp is zero.
 pub(super) fn host_hard_limits() -> Result<PlayableWorldHardLimitsV1, ProductionHostError> {
-    PlayableWorldHardLimitsV1::new(2, 2, 64, 4, 2)
+    PlayableWorldHardLimitsV1::new(4, 4, 128, 8, 4)
         .map_err(|_| ProductionHostError::InvalidHostLimits)
 }
 

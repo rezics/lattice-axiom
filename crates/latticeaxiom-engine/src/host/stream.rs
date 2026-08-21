@@ -42,9 +42,12 @@ pub enum ChunkLifecycle {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct StreamClamps {
     pub(super) hard_limits: PlayableWorldHardLimitsV1,
+    /// Player-requested view radius, already clamped to the hard cap.
+    pub(super) requested_view_distance: u32,
     pub(super) interest_radius: u32,
     pub(super) vertical_min_chunk: i32,
     pub(super) vertical_max_chunk: i32,
+    vertical_layers: u32,
 }
 
 impl StreamClamps {
@@ -63,13 +66,28 @@ impl StreamClamps {
             .map_err(|_| ProductionHostError::InvalidHostLimits)?;
         let (vertical_min_chunk, vertical_max_chunk) = vertical_chunk_bounds(config);
         let vertical_layers = vertical_layer_count(vertical_min_chunk, vertical_max_chunk)?;
-        let interest_radius = clamped_interest_radius(hard_limits, vertical_layers);
+        let requested_view_distance = hard_limits.view_distance_chunks.max(1);
+        let interest_radius =
+            clamped_interest_radius_for(hard_limits, requested_view_distance, vertical_layers);
         Ok(Self {
             hard_limits,
+            requested_view_distance,
             interest_radius,
             vertical_min_chunk,
             vertical_max_chunk,
+            vertical_layers,
         })
+    }
+
+    /// Sets the player-requested view radius and recomputes interest against the resident budget.
+    pub(super) fn set_requested_view_distance(&mut self, requested: u32) {
+        let cap = self.hard_limits.view_distance_chunks.max(1);
+        self.requested_view_distance = requested.clamp(1, cap);
+        self.interest_radius = clamped_interest_radius_for(
+            self.hard_limits,
+            self.requested_view_distance,
+            self.vertical_layers,
+        );
     }
 
     pub(super) fn max_resident(self) -> usize {
@@ -248,9 +266,13 @@ pub(super) fn prioritize_chunks(
     ordered
 }
 
-fn clamped_interest_radius(limits: PlayableWorldHardLimitsV1, vertical_layers: u32) -> u32 {
-    let requested = limits
-        .view_distance_chunks
+fn clamped_interest_radius_for(
+    limits: PlayableWorldHardLimitsV1,
+    requested_view: u32,
+    vertical_layers: u32,
+) -> u32 {
+    let requested = requested_view
+        .min(limits.view_distance_chunks)
         .min(limits.generation_radius_chunks);
     let mut radius = requested.max(1);
     while radius > 1 {
@@ -406,6 +428,7 @@ mod tests {
     fn interest_radius_fits_resident_budget() {
         let clamps = clamps();
         assert_eq!(clamps.interest_radius, 1);
+        assert_eq!(clamps.requested_view_distance, 2);
         assert_eq!(clamps.vertical_min_chunk, 0);
         assert_eq!(clamps.vertical_max_chunk, 3);
         assert!(clamps.max_in_flight() <= 16);
@@ -413,6 +436,32 @@ mod tests {
             PlanningCellCoordinateV1::from_chunk(ChunkCoordinate::new(17, 2, -9), 8),
             PlanningCellCoordinateV1::new(2, -2)
         );
+    }
+
+    #[test]
+    fn requested_view_distance_is_clamped_and_budgeted() {
+        let limits = PlayableWorldHardLimitsV1::new(4, 4, 128, 8, 4).expect("nonzero clamps");
+        let mut clamps = StreamClamps::new(
+            limits,
+            &WorldgenConfigV1 {
+                chunk_edge_voxels: 8,
+                world_floor_y: 0,
+                world_ceiling_y: 31,
+                ..WorldgenConfigV1::default()
+            },
+        )
+        .expect("clamps are valid");
+        clamps.set_requested_view_distance(1);
+        assert_eq!(clamps.requested_view_distance, 1);
+        assert_eq!(clamps.interest_radius, 1);
+        clamps.set_requested_view_distance(4);
+        assert_eq!(clamps.requested_view_distance, 4);
+        assert!(clamps.interest_radius >= 1);
+        assert!(clamps.interest_radius <= 4);
+        clamps.set_requested_view_distance(0);
+        assert_eq!(clamps.requested_view_distance, 1);
+        clamps.set_requested_view_distance(99);
+        assert_eq!(clamps.requested_view_distance, 4);
     }
 
     #[test]

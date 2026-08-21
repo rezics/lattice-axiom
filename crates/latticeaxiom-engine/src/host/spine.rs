@@ -815,6 +815,34 @@ impl ProductionSpine {
         self.lock_inner().ok().map(|inner| inner.clamps.hard_limits)
     }
 
+    /// Returns the player-requested view radius in chunks.
+    #[must_use]
+    pub fn requested_view_distance(&self) -> u32 {
+        self.lock_inner()
+            .map_or(1, |inner| inner.clamps.requested_view_distance)
+    }
+
+    /// Returns the interest radius actually admitted after resident-budget clamping.
+    #[must_use]
+    pub fn effective_view_distance(&self) -> u32 {
+        self.lock_inner()
+            .map_or(1, |inner| inner.clamps.interest_radius)
+    }
+
+    /// Requests a view radius in `1..=hard_limits.view_distance_chunks`.
+    ///
+    /// The admitted interest radius may be lower than `chunks` when the
+    /// resident budget cannot cover that Chebyshev ring.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError::Poisoned`] when the spine lock is poisoned.
+    pub fn set_requested_view_distance(&self, chunks: u32) -> Result<u32, ProductionHostError> {
+        let mut inner = self.lock_inner()?;
+        inner.clamps.set_requested_view_distance(chunks);
+        Ok(inner.clamps.interest_radius)
+    }
+
     /// Returns occupancy copied from [`VoxelRuntime`] diagnostics.
     #[must_use]
     pub fn working_set_diagnostics(&self) -> WorkingSetDiagnosticsV1 {

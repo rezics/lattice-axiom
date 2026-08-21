@@ -266,6 +266,16 @@ impl Plugin for ProductionHostPlugin {
                 pause::sync_pause_overlay,
                 pause::sync_cursor_capture,
                 pause::pause_menu_buttons,
+                pause::sync_pause_menu_page,
+            )
+                .run_if(is_interactive_client),
+        )
+        .add_systems(
+            Update,
+            (
+                hud::toggle_inventory,
+                hud::select_hotbar_from_keys,
+                hud::sync_inventory_overlay,
             )
                 .run_if(is_interactive_client),
         )
@@ -286,7 +296,9 @@ impl Plugin for ProductionHostPlugin {
                     .after(refresh_crosshair_target)
                     .after(sync_working_set_diagnostics),
                 hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
+                hud::sync_production_status_hud.after(refresh_crosshair_target),
                 hud::sync_production_hotbar_hud.after(refresh_crosshair_target),
+                hud::sync_production_inventory_hud.after(refresh_crosshair_target),
             ),
         );
     }
@@ -415,6 +427,11 @@ fn install_production_host(
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(ProductionHostPlugin);
+    #[cfg(feature = "client")]
+    {
+        app.insert_resource(hud::ProductionHudSurfaces::default())
+            .insert_resource(pause::PauseMenuPage::default());
+    }
     #[cfg(feature = "client")]
     if let Some(terrain_palette) = terrain_palette {
         app.insert_resource(ClearColor(Color::srgb(0.48, 0.70, 0.91)))

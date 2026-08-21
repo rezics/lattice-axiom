@@ -7,7 +7,8 @@ use bevy::{
     prelude::{
         AlignItems, BackgroundColor, Button, Changed, Color, Commands, Component, Display,
         FlexDirection, GlobalZIndex, Interaction, JustifyContent, MessageWriter, Name, Node,
-        Pickable, PositionType, Query, Res, ResMut, Text, TextColor, TextFont, UiRect, Val, With,
+        Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, TextFont, UiRect,
+        Val, With,
     },
     ui::FocusPolicy,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
@@ -16,8 +17,28 @@ use latticeaxiom_player::{
     ActionFrameInbox, ActionState, D2Player, LeafwingPlayerAction, LocalPlayerInput,
 };
 
-use super::ProductionSessionPause;
+use super::{ProductionSessionPause, ProductionSpine, hud::ProductionHudSurfaces};
 use crate::EngineProfile;
+
+/// Marker on the pause hint / settings readout.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct PauseSettingsHint;
+
+/// Which pause-menu page is visible.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
+pub(super) struct PauseMenuPage {
+    settings: bool,
+}
+
+impl PauseMenuPage {
+    const fn showing_settings(self) -> bool {
+        self.settings
+    }
+
+    const fn set_settings(&mut self, settings: bool) {
+        self.settings = settings;
+    }
+}
 
 /// Marker on the full-screen pause overlay.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
@@ -27,6 +48,10 @@ pub(super) struct PauseOverlay;
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 pub(super) enum PauseMenuAction {
     Resume,
+    Settings,
+    ViewMinus,
+    ViewPlus,
+    Back,
     Quit,
 }
 
@@ -75,10 +100,15 @@ fn spawn_pause_overlay(commands: &mut Commands<'_, '_>) {
                 },
             ));
             spawn_pause_button(overlay, PauseMenuAction::Resume, "Resume");
+            spawn_pause_button(overlay, PauseMenuAction::Settings, "Settings");
+            spawn_pause_button(overlay, PauseMenuAction::ViewMinus, "View −");
+            spawn_pause_button(overlay, PauseMenuAction::ViewPlus, "View +");
+            spawn_pause_button(overlay, PauseMenuAction::Back, "Back");
             spawn_pause_button(overlay, PauseMenuAction::Quit, "Quit Game");
             overlay.spawn((
+                PauseSettingsHint,
                 Name::new("Pause hint"),
-                Text::new("Esc resumes"),
+                Text::new("Esc resumes · Settings: render distance"),
                 TextFont::from_font_size(16.0),
                 TextColor(Color::srgb(0.72, 0.74, 0.68)),
                 Node {
@@ -94,6 +124,10 @@ fn spawn_pause_button(
     action: PauseMenuAction,
     label: &'static str,
 ) {
+    let hidden = matches!(
+        action,
+        PauseMenuAction::ViewMinus | PauseMenuAction::ViewPlus | PauseMenuAction::Back
+    );
     parent
         .spawn((
             Button,
@@ -102,6 +136,7 @@ fn spawn_pause_button(
             Node {
                 width: Val::Px(240.0),
                 height: Val::Px(44.0),
+                display: if hidden { Display::None } else { Display::Flex },
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 ..Node::default()
@@ -123,14 +158,28 @@ pub(super) fn toggle_pause(
     action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
     keyboard: Res<'_, ButtonInput<KeyCode>>,
     mut pause: ResMut<'_, ProductionSessionPause>,
+    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+    mut page: ResMut<'_, PauseMenuPage>,
 ) {
     let from_action = action_states
         .iter()
         .any(|state| state.just_pressed(&LeafwingPlayerAction::Pause));
     let from_keyboard = action_states.is_empty() && keyboard.just_pressed(KeyCode::Escape);
-    if from_action || from_keyboard {
-        let paused = !pause.is_paused();
-        pause.set(paused);
+    if !(from_action || from_keyboard) {
+        return;
+    }
+    if surfaces.inventory_open() {
+        surfaces.set_inventory_open(false);
+        return;
+    }
+    if pause.is_paused() && page.showing_settings() {
+        page.set_settings(false);
+        return;
+    }
+    let paused = !pause.is_paused();
+    pause.set(paused);
+    if !paused {
+        page.set_settings(false);
     }
 }
 
@@ -156,6 +205,7 @@ pub(super) fn sync_pause_overlay(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_cursor_capture(
     pause: Res<'_, ProductionSessionPause>,
+    surfaces: Option<Res<'_, ProductionHudSurfaces>>,
     windows: Query<'_, '_, &Window, With<PrimaryWindow>>,
     mut cursors: Query<'_, '_, &mut CursorOptions, With<PrimaryWindow>>,
 ) {
@@ -165,7 +215,8 @@ pub(super) fn sync_cursor_capture(
     let Ok(mut cursor) = cursors.single_mut() else {
         return;
     };
-    let capture = window.focused && !pause.is_paused();
+    let blocked = pause.is_paused() || surfaces.is_some_and(|surfaces| surfaces.inventory_open());
+    let capture = window.focused && !blocked;
     cursor.grab_mode = if capture {
         CursorGrabMode::Locked
     } else {
@@ -178,9 +229,10 @@ pub(super) fn sync_cursor_capture(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn suppress_gameplay_while_paused(
     pause: Res<'_, ProductionSessionPause>,
+    surfaces: Option<Res<'_, ProductionHudSurfaces>>,
     mut inbox: ResMut<'_, ActionFrameInbox>,
 ) {
-    if pause.is_paused() {
+    if pause.is_paused() || surfaces.is_some_and(|surfaces| surfaces.inventory_open()) {
         inbox.suppress_live_gameplay();
     }
 }
@@ -189,9 +241,10 @@ pub(super) fn suppress_gameplay_while_paused(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn freeze_player_while_paused(
     pause: Res<'_, ProductionSessionPause>,
+    surfaces: Option<Res<'_, ProductionHudSurfaces>>,
     mut players: Query<'_, '_, &mut LinearVelocity, With<D2Player>>,
 ) {
-    if !pause.is_paused() {
+    if !pause.is_paused() && !surfaces.is_some_and(|surfaces| surfaces.inventory_open()) {
         return;
     }
     for mut velocity in &mut players {
@@ -210,6 +263,8 @@ pub(super) fn pause_menu_buttons(
         (Changed<Interaction>, With<Button>),
     >,
     mut pause: ResMut<'_, ProductionSessionPause>,
+    mut page: ResMut<'_, PauseMenuPage>,
+    spine: Option<Res<'_, ProductionSpine>>,
     mut exits: MessageWriter<'_, AppExit>,
 ) {
     for (interaction, action, mut background) in &mut interactions {
@@ -218,10 +273,76 @@ pub(super) fn pause_menu_buttons(
             continue;
         }
         match action {
-            PauseMenuAction::Resume => pause.set(false),
+            PauseMenuAction::Resume => {
+                pause.set(false);
+                page.set_settings(false);
+            }
+            PauseMenuAction::Settings => page.set_settings(true),
+            PauseMenuAction::Back => page.set_settings(false),
+            PauseMenuAction::ViewMinus => {
+                if let Some(spine) = spine.as_ref() {
+                    let next = spine.requested_view_distance().saturating_sub(1).max(1);
+                    let _ = spine.set_requested_view_distance(next);
+                }
+            }
+            PauseMenuAction::ViewPlus => {
+                if let Some(spine) = spine.as_ref() {
+                    let next = spine.requested_view_distance().saturating_add(1);
+                    let _ = spine.set_requested_view_distance(next);
+                }
+            }
             PauseMenuAction::Quit => {
                 exits.write(AppExit::Success);
             }
+        }
+    }
+}
+
+/// Shows home or settings controls on the pause overlay.
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn sync_pause_menu_page(
+    page: Res<'_, PauseMenuPage>,
+    pause: Res<'_, ProductionSessionPause>,
+    spine: Option<Res<'_, ProductionSpine>>,
+    mut buttons: Query<'_, '_, (&PauseMenuAction, &mut Node)>,
+    mut hint: Query<'_, '_, &mut Text, With<PauseSettingsHint>>,
+) {
+    if !pause.is_paused() {
+        return;
+    }
+    let settings = page.showing_settings();
+    for (action, mut node) in &mut buttons {
+        let visible = match action {
+            PauseMenuAction::Resume | PauseMenuAction::Settings | PauseMenuAction::Quit => {
+                !settings
+            }
+            PauseMenuAction::ViewMinus | PauseMenuAction::ViewPlus | PauseMenuAction::Back => {
+                settings
+            }
+        };
+        node.display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    if let Ok(mut text) = hint.single_mut() {
+        let label = if settings {
+            spine.map_or_else(
+                || "Render distance unavailable".to_owned(),
+                |spine| {
+                    format!(
+                        "Render distance {} chunks (effective {})",
+                        spine.requested_view_distance(),
+                        spine.effective_view_distance()
+                    )
+                },
+            )
+        } else {
+            "Esc resumes · Settings: render distance".to_owned()
+        };
+        if text.0 != label {
+            *text = Text::new(label);
         }
     }
 }

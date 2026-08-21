@@ -76,7 +76,7 @@ pub fn default_leafwing_input_map() -> InputMap<LeafwingPlayerAction> {
         .insert(LeafwingPlayerAction::BreakBlock, GamepadButton::West)
         .insert(LeafwingPlayerAction::PlaceBlock, MouseButton::Right)
         .insert(LeafwingPlayerAction::PlaceBlock, GamepadButton::East)
-        .insert(LeafwingPlayerAction::Inspect, KeyCode::KeyE)
+        .insert(LeafwingPlayerAction::Inspect, KeyCode::KeyF)
         .insert(LeafwingPlayerAction::Inspect, GamepadButton::North)
         .insert(LeafwingPlayerAction::Pause, KeyCode::Escape)
         .insert(LeafwingPlayerAction::Pause, GamepadButton::Start)
