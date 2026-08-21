@@ -1,13 +1,15 @@
 //! Package-driven playable spine: storage, projection, meshing, and edits.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     mem,
     sync::{Arc, Mutex},
 };
 
 use avian3d::prelude::Collider;
 use bevy::prelude::{Quat, Resource, Vec3};
+use bevy::tasks::AsyncComputeTaskPool;
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
 use latticeaxiom_content::{
     CompiledFluidPaletteV1, CompiledSolidPaletteEntryV1, CompiledSolidPaletteV1, ContentCatalogV1,
@@ -42,6 +44,7 @@ use latticeaxiom_voxel_runtime::{
     DerivedQueueLimits, DerivedRequest, DerivedRequestSet, DispatchOutcome,
     EvictionLeaseGeneration, FixedTick, MeshSemanticFingerprint, RetainedBytes, RuntimeDiagnostics,
     RuntimeGeneration, RuntimeLimits, VoxelCoordinate, VoxelRuntime, WorkingSetScope, WorldEpoch,
+    cpu_heavy_concurrency, host_parallelism,
 };
 use latticeaxiom_world_db::{
     AuthoritativeMetadataInputV1, CommitDurabilityV1, DeterministicWorldStorage, PersistedChunkV1,
@@ -254,7 +257,7 @@ pub(super) struct ProductionSpineInner {
     mesh_dirty: BTreeSet<ChunkCoordinate>,
     collider_dirty: BTreeSet<ChunkCoordinate>,
     removed: BTreeSet<ChunkCoordinate>,
-    mesher: GreedyMesher<u16>,
+    waiting_derived: VecDeque<ComputedDerived>,
     edited: BTreeSet<ChunkCoordinate>,
     lifecycle: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
     eviction_lease: u64,
@@ -357,6 +360,35 @@ struct HostDerivedMesh {
 #[derive(Clone, Debug)]
 struct HostDerivedCollider {
     occupied: Vec<OccupiedCell>,
+}
+
+#[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing mesh geometry adds a hot-path allocation"
+)]
+enum DerivedPayload {
+    Mesh(HostDerivedMesh),
+    Collider(HostDerivedCollider),
+}
+
+impl RetainedBytes for DerivedPayload {
+    fn retained_bytes(&self) -> u64 {
+        match self {
+            Self::Mesh(value) => value.retained_bytes(),
+            Self::Collider(value) => value.retained_bytes(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ComputedDerived {
+    input: DerivedInput<HostVoxel>,
+    payload: Result<DerivedPayload, ProductionHostError>,
+}
+
+thread_local! {
+    static MESH_LANE: RefCell<GreedyMesher<u16>> = const { RefCell::new(GreedyMesher::new()) };
 }
 
 impl ProductionSpine {
@@ -511,7 +543,7 @@ impl ProductionSpine {
             mesh_dirty: BTreeSet::new(),
             collider_dirty: BTreeSet::new(),
             removed: BTreeSet::new(),
-            mesher: GreedyMesher::new(),
+            waiting_derived: VecDeque::new(),
             edited: BTreeSet::new(),
             lifecycle: BTreeMap::new(),
             eviction_lease: 0,
@@ -549,10 +581,12 @@ impl ProductionSpine {
         inner.last_success = None;
         bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk)?;
 
-        Ok(Self {
+        let spine = Self {
             inner: Arc::new(Mutex::new(inner)),
             storage: ProductionWorldStorage { kernel },
-        })
+        };
+        drain_derived(&spine, FixedTick::new(0))?;
+        Ok(spine)
     }
 
     pub(super) fn storage(&self) -> ProductionWorldStorage {
@@ -947,29 +981,35 @@ impl ProductionSpine {
         inner.look_ahead_tick = look_ahead_tick;
         inner.stream_anchor_xz = [translation.x, translation.z];
         let admit_limit = inner.clamps.max_in_flight();
+        let tick = FixedTick::new(fixed_tick);
         sync_working_set(
             &mut inner,
             self.storage.kernel(),
             chunk,
             look_ahead,
-            FixedTick::new(fixed_tick),
+            tick,
             admit_limit,
-        )
+        )?;
+        drop(inner);
+        drain_derived(self, tick)
     }
 
     fn ensure_collider_safety_inner(
         &self,
         fixed_tick: u64,
     ) -> Result<Vec<ColliderPresentation>, ProductionHostError> {
-        let mut inner = self.lock_inner()?;
         let tick = FixedTick::new(fixed_tick);
-        let translation = inner.player_pose.translation;
-        let mut occupied = player_occupied_chunks(translation, inner.chunk_edge)?;
-        if let Some(chunk) = translation_chunk(translation, inner.chunk_edge) {
-            occupied.insert(chunk);
-        }
-        drain_player_colliders(&mut inner, &occupied, tick)?;
-        let edge = f32::from(inner.chunk_edge);
+        let (occupied, edge) = {
+            let inner = self.lock_inner()?;
+            let translation = inner.player_pose.translation;
+            let mut occupied = player_occupied_chunks(translation, inner.chunk_edge)?;
+            if let Some(chunk) = translation_chunk(translation, inner.chunk_edge) {
+                occupied.insert(chunk);
+            }
+            (occupied, f32::from(inner.chunk_edge))
+        };
+        drain_player_colliders(self, &occupied, tick)?;
+        let mut inner = self.lock_inner()?;
         let mut updates = Vec::new();
         for coordinate in occupied {
             if !inner.runtime.is_resident(coordinate) {
@@ -1145,12 +1185,17 @@ impl ProductionSpine {
         &self,
         position: BlockPosition,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
-        let mut inner = self
-            .inner
-            .lock()
+        let result = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+            let result = inner.mine_cell(self.storage.kernel(), position, 0);
+            record_edit_result(&mut inner, &result);
+            result
+        };
+        drain_derived(self, FixedTick::new(0))
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        let result = inner.mine_cell(self.storage.kernel(), position, 0);
-        record_edit_result(&mut inner, &result);
         result
     }
 
@@ -1164,15 +1209,21 @@ impl ProductionSpine {
         anchor: BlockPosition,
         face: BlockFaceV1,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
-        let mut inner = self
-            .inner
-            .lock()
+        let result = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+            let adjacent = face
+                .adjacent(anchor)
+                .ok_or(BlockEditRejectV1::PermissionDenied)?;
+            let result =
+                inner.place_cell(self.storage.kernel(), adjacent, None, [0.0, 0.0, 0.0], 0);
+            record_edit_result(&mut inner, &result);
+            result
+        };
+        drain_derived(self, FixedTick::new(0))
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        let adjacent = face
-            .adjacent(anchor)
-            .ok_or(BlockEditRejectV1::PermissionDenied)?;
-        let result = inner.place_cell(self.storage.kernel(), adjacent, None, [0.0, 0.0, 0.0], 0);
-        record_edit_result(&mut inner, &result);
         result
     }
 
@@ -1405,11 +1456,16 @@ impl ProductionSpine {
         fluid: &StableId,
         state: FluidStateV1,
     ) -> Result<CellOccupancyV1, BlockEditRejectV1> {
-        let mut inner = self
-            .inner
-            .lock()
+        let result = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+            inner.place_fluid_occupancy(self.storage.kernel(), position, fluid, state)
+        };
+        drain_derived(self, FixedTick::new(0))
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        inner.place_fluid_occupancy(self.storage.kernel(), position, fluid, state)
+        result
     }
 
     /// Inspects versioned solid and fluid occupancy at an exact cell.
@@ -1541,18 +1597,23 @@ impl BlockEditAuthority for ProductionSpine {
         &mut self,
         request: AuthoritativeBlockEditRequestV1,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        let result = inner.apply(request, self.storage.kernel());
-        match &result {
-            Ok(success) => {
-                inner.last_success = Some(success.clone());
-                inner.last_reject = None;
+        let tick = FixedTick::new(request.fixed_tick);
+        let result = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+            let result = inner.apply(request, self.storage.kernel());
+            match &result {
+                Ok(success) => {
+                    inner.last_success = Some(success.clone());
+                    inner.last_reject = None;
+                }
+                Err(reject) => inner.last_reject = Some(reject.clone()),
             }
-            Err(reject) => inner.last_reject = Some(reject.clone()),
-        }
+            result
+        };
+        drain_derived(self, tick).map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         result
     }
 }
@@ -1925,9 +1986,6 @@ impl ProductionSpineInner {
                 }
             })
             .or_insert(ChunkLifecycle::Resident);
-        drain_derived(self, FixedTick::new(fixed_tick))
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        refresh_lifecycle(self);
         Ok(BlockEditSuccessV1 {
             position,
             old_content: self.block_id(old_voxel),
@@ -2266,8 +2324,6 @@ fn sync_working_set(
         )?;
         inner.last_desired.clone_from(&desired);
     }
-    drain_derived(inner, tick)?;
-    refresh_lifecycle(inner);
     Ok(())
 }
 
@@ -2624,105 +2680,194 @@ fn project_stored(
     Ok(())
 }
 
-fn drain_derived(
-    inner: &mut ProductionSpineInner,
+/// Dispatches owned [`DerivedInput`] values under a short spine lock, executes
+/// them on Bevy [`AsyncComputeTaskPool`] without world/ECS/GPU handles, then
+/// receipt-checks and applies completions on the main world.
+fn drain_derived(spine: &ProductionSpine, tick: FixedTick) -> Result<(), ProductionHostError> {
+    loop {
+        let inputs = {
+            let mut inner = spine.lock_inner()?;
+            apply_waiting_derived(&mut inner, tick)?;
+            dispatch_derived_batch(&mut inner, DerivedKind::ALL)?
+        };
+        if inputs.is_empty() {
+            let mut inner = spine.lock_inner()?;
+            refresh_lifecycle(&mut inner);
+            return Ok(());
+        }
+        let completed = execute_derived_jobs(inputs);
+        let mut inner = spine.lock_inner()?;
+        enqueue_waiting_derived(&mut inner, completed);
+        apply_waiting_derived(&mut inner, tick)?;
+    }
+}
+
+fn drain_player_colliders(
+    spine: &ProductionSpine,
+    occupied: &BTreeSet<ChunkCoordinate>,
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
-    for kind in DerivedKind::ALL {
+    loop {
+        let inputs = {
+            let mut inner = spine.lock_inner()?;
+            apply_waiting_derived(&mut inner, tick)?;
+            let pending = occupied.iter().any(|coordinate| {
+                inner.runtime.is_resident(*coordinate)
+                    && !matches!(
+                        inner.runtime.collider_safety(*coordinate),
+                        Some(ColliderSafetyState::Ready { .. })
+                    )
+            });
+            if pending {
+                dispatch_derived_batch(&mut inner, [DerivedKind::Collider])?
+            } else {
+                Vec::new()
+            }
+        };
+        if inputs.is_empty() {
+            return Ok(());
+        }
+        let completed = execute_derived_jobs(inputs);
+        let mut inner = spine.lock_inner()?;
+        enqueue_waiting_derived(&mut inner, completed);
+        apply_waiting_derived(&mut inner, tick)?;
+    }
+}
+
+fn dispatch_derived_batch(
+    inner: &mut ProductionSpineInner,
+    kinds: impl IntoIterator<Item = DerivedKind>,
+) -> Result<Vec<DerivedInput<HostVoxel>>, ProductionHostError> {
+    let mut inputs = Vec::new();
+    for kind in kinds {
         loop {
             match inner.runtime.dispatch_next(kind)? {
+                DispatchOutcome::Started(input) => inputs.push(input),
                 DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
-                DispatchOutcome::Started(input) => complete_derived(inner, kind, input, tick)?,
                 DispatchOutcome::MemoryContractViolation { .. } => {
                     return Err(ProductionHostError::DerivedMemory);
                 }
             }
         }
     }
-    Ok(())
+    Ok(inputs)
 }
 
-fn drain_player_colliders(
+fn enqueue_waiting_derived(inner: &mut ProductionSpineInner, completed: Vec<ComputedDerived>) {
+    for job in completed {
+        let bytes = job
+            .payload
+            .as_ref()
+            .map_or(0, RetainedBytes::retained_bytes);
+        inner.runtime.record_waiting_to_apply(bytes);
+        inner.waiting_derived.push_back(job);
+    }
+}
+
+fn apply_waiting_derived(
     inner: &mut ProductionSpineInner,
-    occupied: &BTreeSet<ChunkCoordinate>,
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
-    loop {
-        let pending = occupied.iter().any(|coordinate| {
-            inner.runtime.is_resident(*coordinate)
-                && !matches!(
-                    inner.runtime.collider_safety(*coordinate),
-                    Some(ColliderSafetyState::Ready { .. })
-                )
-        });
-        if !pending {
-            break;
-        }
-        match inner.runtime.dispatch_next(DerivedKind::Collider)? {
-            DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
-            DispatchOutcome::Started(input) => {
-                complete_derived(inner, DerivedKind::Collider, input, tick)?;
-            }
-            DispatchOutcome::MemoryContractViolation { .. } => {
-                return Err(ProductionHostError::DerivedMemory);
-            }
-        }
+    while let Some(job) = inner.waiting_derived.pop_front() {
+        let bytes = job
+            .payload
+            .as_ref()
+            .map_or(0, RetainedBytes::retained_bytes);
+        inner.runtime.consume_waiting_to_apply(bytes);
+        apply_computed_derived(inner, job, tick)?;
     }
     Ok(())
 }
 
-fn complete_derived(
-    inner: &mut ProductionSpineInner,
-    kind: DerivedKind,
-    input: DerivedInput<HostVoxel>,
-    tick: FixedTick,
-) -> Result<(), ProductionHostError> {
-    match kind {
-        DerivedKind::Mesh => complete_mesh_derived(inner, input, tick),
-        DerivedKind::Collider => complete_collider_derived(inner, input, tick),
+fn execute_derived_jobs(inputs: Vec<DerivedInput<HostVoxel>>) -> Vec<ComputedDerived> {
+    match AsyncComputeTaskPool::try_get() {
+        Some(pool) if pool.thread_num() > 1 && inputs.len() > 1 => pool.scope(|scope| {
+            for input in inputs {
+                scope.spawn(async move { compute_derived(input) });
+            }
+        }),
+        _ => inputs.into_iter().map(compute_derived).collect(),
     }
 }
 
-fn complete_mesh_derived(
-    inner: &mut ProductionSpineInner,
-    input: DerivedInput<HostVoxel>,
-    tick: FixedTick,
-) -> Result<(), ProductionHostError> {
+fn compute_derived(input: DerivedInput<HostVoxel>) -> ComputedDerived {
+    let payload = match input.ticket().key().kind() {
+        DerivedKind::Mesh => compute_mesh_payload(&input),
+        DerivedKind::Collider => compute_collider_payload(&input),
+    };
+    ComputedDerived { input, payload }
+}
+
+fn compute_mesh_payload(
+    input: &DerivedInput<HostVoxel>,
+) -> Result<DerivedPayload, ProductionHostError> {
     let coordinate = input.ticket().key().coordinate();
-    let revision = input.ticket().key().revision();
     let source = input
         .ticket()
         .key()
         .mesh_source()
         .ok_or(ProductionHostError::MissingMeshSource { coordinate })?;
-    let mut geometry = MeshBuffer::default();
-    let receipt =
-        inner
-            .mesher
-            .mesh_into(input.samples(), input.dimensions(), source, &mut geometry)?;
-    let derived = HostDerivedMesh {
-        receipt,
-        source,
-        geometry,
-    };
-    finish_derived(inner, input, derived, tick, |inner, value| {
-        apply_mesh_derived(inner, coordinate, revision, value);
+    MESH_LANE.with(|lane| {
+        let mut geometry = MeshBuffer::default();
+        let receipt = lane.borrow_mut().mesh_into(
+            input.samples(),
+            input.dimensions(),
+            source,
+            &mut geometry,
+        )?;
+        Ok(DerivedPayload::Mesh(HostDerivedMesh {
+            receipt,
+            source,
+            geometry,
+        }))
     })
 }
 
-fn complete_collider_derived(
+fn compute_collider_payload(
+    input: &DerivedInput<HostVoxel>,
+) -> Result<DerivedPayload, ProductionHostError> {
+    Ok(DerivedPayload::Collider(HostDerivedCollider {
+        occupied: occupied_voxels(input.samples(), input.dimensions())?,
+    }))
+}
+
+fn apply_computed_derived(
     inner: &mut ProductionSpineInner,
-    input: DerivedInput<HostVoxel>,
+    job: ComputedDerived,
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
-    let coordinate = input.ticket().key().coordinate();
-    let revision = input.ticket().key().revision();
-    let derived = HostDerivedCollider {
-        occupied: occupied_voxels(input.samples(), input.dimensions())?,
-    };
-    finish_derived(inner, input, derived, tick, |inner, value| {
-        apply_collider_derived(inner, coordinate, revision, value);
-    })
+    match job.payload {
+        Ok(DerivedPayload::Mesh(derived)) => {
+            let coordinate = job.input.ticket().key().coordinate();
+            let revision = job.input.ticket().key().revision();
+            finish_derived(inner, job.input, derived, tick, |inner, value| {
+                apply_mesh_derived(inner, coordinate, revision, value);
+            })
+        }
+        Ok(DerivedPayload::Collider(derived)) => {
+            let coordinate = job.input.ticket().key().coordinate();
+            let revision = job.input.ticket().key().revision();
+            finish_derived(inner, job.input, derived, tick, |inner, value| {
+                apply_collider_derived(inner, coordinate, revision, value);
+            })
+        }
+        Err(error) => match inner.runtime.complete_derived(
+            job.input,
+            0_u8,
+            ApplyByteDeclaration::new(0),
+            tick,
+            |_| Err::<(), ProductionHostError>(error),
+        ) {
+            CompletionOutcome::ApplyFailed { error, .. } => Err(error),
+            CompletionOutcome::StaleRejected { .. } | CompletionOutcome::Cancelled { .. } => Ok(()),
+            CompletionOutcome::ApplyPanicked { .. } => {
+                Err(ProductionHostError::DerivedApplyPanicked)
+            }
+            CompletionOutcome::Applied { .. }
+            | CompletionOutcome::MemoryContractViolation { .. }
+            | CompletionOutcome::UnknownJob { .. } => Err(ProductionHostError::DerivedRejected),
+        },
+    }
 }
 
 fn finish_derived<R: RetainedBytes>(
@@ -3118,20 +3263,17 @@ fn runtime_limits(
     hard_limits: PlayableWorldHardLimitsV1,
 ) -> Result<RuntimeLimits, ProductionHostError> {
     let max_resident = usize::try_from(hard_limits.max_resident_chunks).unwrap_or(64);
-    let max_in_flight = usize::try_from(hard_limits.max_in_flight_chunks).unwrap_or(4);
-    let queue =
-        DerivedQueueLimits::new(max_resident.max(1), max_in_flight.max(1), 4 * 1024 * 1024)?;
-    Ok(RuntimeLimits::new(
-        max_resident.max(1),
-        32 * 1024 * 1024,
-        queue,
-        queue,
-    )?)
+    let mesh = DerivedQueueLimits::mesh_desktop_reference_v1()?;
+    let collider = DerivedQueueLimits::collider_desktop_reference_v1()?;
+    Ok(
+        RuntimeLimits::new(max_resident.max(1), 32 * 1024 * 1024, mesh, collider)?
+            .with_cpu_heavy_concurrency(cpu_heavy_concurrency(host_parallelism()))?,
+    )
 }
 
 fn derived_requests() -> DerivedRequestSet {
     let request = DerivedRequest::new(
-        DerivedPriority::new(0),
+        DerivedPriority::CORE,
         DerivedOwner::new(1),
         DerivedMemoryBudget::new(64 * 1024, 64 * 1024),
     );
@@ -3665,11 +3807,6 @@ fn commit_gameplay_storage(
             })
             .or_insert(ChunkLifecycle::Resident);
     }
-    drain_derived(inner, FixedTick::new(fixed_tick)).map_err(|error| {
-        inner.last_stream_error = Some(error.to_string());
-        BlockEditRejectV1::StorageUnavailable
-    })?;
-    refresh_lifecycle(inner);
     Ok(())
 }
 
