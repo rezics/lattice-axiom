@@ -31,7 +31,7 @@ use latticeaxiom_core::{
     TargetTriple, canonical_json_bytes,
 };
 use latticeaxiom_engine::{
-    ActionAxis2V1, AuthoritativeTransactionKernel, CellOccupancyV1, ChunkCoordinate,
+    ActionAxis2V1, AuthoritativeTransactionKernel, CellOccupancyV1, ChunkCoordinate, ChunkFaceV1,
     ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ContainerId, DropEntityId, EngineInstance,
     EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayReject,
     HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1, LockVerifiedComposeImages,
@@ -1985,6 +1985,171 @@ fn manifest_object_bytes(manifest: &RegistrationManifest) -> Vec<u8> {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
+)]
+fn production_host_enters_required_cave_and_gathers_natural_resource() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    let entrance = spine
+        .required_cave_entrance()
+        .expect("compiled CaveTopology field portals must include a required entrance");
+    assert!(entrance.clearance_radius_voxels() > 0);
+    assert!(matches!(
+        entrance.tangent_face(),
+        ChunkFaceV1::NegativeX
+            | ChunkFaceV1::PositiveX
+            | ChunkFaceV1::NegativeY
+            | ChunkFaceV1::PositiveY
+            | ChunkFaceV1::NegativeZ
+            | ChunkFaceV1::PositiveZ
+    ));
+    let aperture = entrance.aperture();
+    let destination = entrance.destination();
+    let surface = entrance.surface_footing();
+    assert!(
+        spine
+            .cave_occupancy_arbitration(
+                i64::from(aperture[0]),
+                i64::from(aperture[1]),
+                i64::from(aperture[2])
+            )
+            .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
+    );
+    assert!(
+        spine
+            .cave_occupancy_arbitration(
+                i64::from(destination[0]),
+                i64::from(destination[1]),
+                i64::from(destination[2])
+            )
+            .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
+    );
+
+    seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
+    seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
+
+    let mut generation = 1_u64;
+    generation = walk_toward_column(
+        &mut instance,
+        &spine,
+        generation,
+        surface[0],
+        surface[2],
+        1_200,
+    );
+    assert!(
+        !spine.occupies_unready_cave_void(),
+        "surface travel must not enter an unready cave void"
+    );
+    let pose = spine.player_pose();
+    #[allow(clippy::cast_precision_loss)]
+    let approach_offset = bevy::prelude::Vec2::new(
+        pose.translation.x - (surface[0] as f32 + 0.5),
+        pose.translation.z - (surface[2] as f32 + 0.5),
+    );
+    assert!(
+        approach_offset.length() < 2.5,
+        "fixed inputs must reach the required entrance column, pose {:?}, target {surface:?}",
+        pose.translation
+    );
+
+    let column = latticeaxiom_gameplay::BlockPosition {
+        x: surface[0],
+        y: surface[1],
+        z: surface[2],
+    };
+    let aperture_pos = latticeaxiom_gameplay::BlockPosition {
+        x: aperture[0],
+        y: aperture[1],
+        z: aperture[2],
+    };
+    generation = wait_for_resident(&mut instance, &spine, generation, aperture_pos, 180);
+    open_required_entrance_shaft(&spine, column, aperture_pos);
+    generation = idle_at_hole(&mut instance, &spine, generation, 90);
+
+    let occupancy = spine.inspect_occupancy(aperture_pos).unwrap_or_else(|error| {
+        panic!(
+            "required entrance aperture occupancy is inspectable, got {error:?}, pose {:?}, lifecycle {:?}",
+            spine.player_pose().translation,
+            spine.chunk_of(aperture_pos).map(|chunk| spine.chunk_lifecycle(chunk))
+        )
+    });
+    assert!(
+        occupancy.fluid.is_none(),
+        "hydrology cannot own the cave entrance; aperture fluid must stay empty"
+    );
+
+    generation = walk_toward_column(
+        &mut instance,
+        &spine,
+        generation,
+        aperture[0],
+        aperture[2],
+        240,
+    );
+    generation = idle_at_hole(&mut instance, &spine, generation, 120);
+    let pose = spine.player_pose();
+    let underground = player_in_cave(&spine, pose.translation, aperture[1]);
+    assert!(
+        underground,
+        "player must enter underground cave space through the required entrance (pose {:?}, aperture {aperture:?}, dest {destination:?})",
+        pose.translation
+    );
+    assert!(
+        !spine.occupies_unready_cave_void(),
+        "mesh and collider readiness must prevent entry into an unready cave void"
+    );
+    let dest_chunk = spine
+        .chunk_of(latticeaxiom_gameplay::BlockPosition {
+            x: destination[0],
+            y: destination[1],
+            z: destination[2],
+        })
+        .expect("destination maps to a chunk");
+    assert!(
+        spine.cave_entry_ready(dest_chunk)
+            || spine.chunk_lifecycle(dest_chunk) == ChunkLifecycle::Active,
+        "entered cave chunk must be mesh/collider ready, got {:?}",
+        spine.chunk_lifecycle(dest_chunk)
+    );
+    let _ = generation;
+
+    let copper = parse_block("terrenia:block/copper-ore");
+    let copper_item = parse_item("terrenia:item/copper-ore");
+    let ore = spine
+        .first_cave_adjacent_block(&copper)
+        .or_else(|| spine.first_resident_block(&copper))
+        .expect("natural copper resource exists in the streamed underground set");
+    spine
+        .select_hotbar_slot(0)
+        .expect("wooden pickaxe is selected for ore");
+    gather_until_inventory_has(&spine, ore, &copper_item, 1);
+    assert!(
+        spine
+            .inventory_view()
+            .expect("inventory is bound")
+            .count_item(&copper_item)
+            >= 1
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
     let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
@@ -2343,6 +2508,222 @@ fn top_up_item(spine: &ProductionSpine, item: &ItemId, minimum: u32) {
             Some(ItemStackV1::plain(item.clone(), needed).expect("top-up stack")),
         )
         .expect("fixture top-up of an already gathered item");
+}
+
+fn seed_tool(spine: &ProductionSpine, slot: u16, item: &str, durability: u32) {
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(slot),
+            Some(ItemStackV1::tool(parse_item(item), durability).expect("tool stack is valid")),
+        )
+        .expect("fixture tool is seeded into the hotbar");
+    if slot == 0 {
+        spine
+            .select_hotbar_slot(0)
+            .expect("first tool slot is selected");
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn walk_toward_column(
+    instance: &mut EngineInstance,
+    spine: &ProductionSpine,
+    mut generation: u64,
+    target_x: i32,
+    target_z: i32,
+    ticks: u64,
+) -> u64 {
+    let mut remaining = ticks;
+    while remaining > 0 {
+        let pose = spine.player_pose();
+        let dx = (target_x as f32 + 0.5) - pose.translation.x;
+        let dz = (target_z as f32 + 0.5) - pose.translation.z;
+        if dx.hypot(dz) < 0.35 {
+            break;
+        }
+        let look = wrap_pi(pose.yaw_radians - f32::atan2(-dx, -dz));
+        let step = remaining.min(24);
+        let before = generation;
+        generation = enqueue_look_then_walk(instance, generation, look, 0.0, 1.0, step);
+        let consumed = generation.saturating_sub(before);
+        instance
+            .advance_fixed_ticks(u32::try_from(consumed).expect("step fits u32"))
+            .expect("walk ticks toward the required entrance");
+        remaining = remaining.saturating_sub(step);
+        assert!(
+            !spine.occupies_unready_cave_void(),
+            "travel must not enter an unready cave void at {:?}",
+            spine.player_pose().translation
+        );
+    }
+    generation
+}
+
+fn wait_for_resident(
+    instance: &mut EngineInstance,
+    spine: &ProductionSpine,
+    mut generation: u64,
+    position: latticeaxiom_gameplay::BlockPosition,
+    ticks: u64,
+) -> u64 {
+    let mut remaining = ticks;
+    while remaining > 0 {
+        if spine
+            .chunk_of(position)
+            .is_some_and(|chunk| spine.chunk_lifecycle(chunk) != ChunkLifecycle::Absent)
+        {
+            break;
+        }
+        let step = remaining.min(16);
+        instance
+            .enqueue_headless_actions((0..step).map(|offset| idle_frame(generation + offset)))
+            .expect("wait frames enqueue");
+        instance
+            .advance_fixed_ticks(u32::try_from(step).expect("wait step fits"))
+            .expect("wait ticks stream the entrance column");
+        generation = generation.saturating_add(step);
+        remaining = remaining.saturating_sub(step);
+    }
+    generation
+}
+
+fn wrap_pi(value: f32) -> f32 {
+    let pi = std::f32::consts::PI;
+    let tau = 2.0 * pi;
+    let mut wrapped = (value + pi) % tau;
+    if wrapped < 0.0 {
+        wrapped += tau;
+    }
+    wrapped - pi
+}
+
+fn idle_at_hole(
+    instance: &mut EngineInstance,
+    spine: &ProductionSpine,
+    generation: u64,
+    ticks: u64,
+) -> u64 {
+    let frames: Vec<_> = (0..ticks)
+        .map(|offset| idle_frame(generation + offset))
+        .collect();
+    instance
+        .enqueue_headless_actions(frames)
+        .expect("idle frames enqueue");
+    instance
+        .advance_fixed_ticks(u32::try_from(ticks).expect("idle ticks fit"))
+        .expect("idle ticks at the cave hole");
+    assert!(
+        !spine.occupies_unready_cave_void(),
+        "idle at the hole must not enter an unready cave void"
+    );
+    generation + ticks
+}
+
+fn open_required_entrance_shaft(
+    spine: &ProductionSpine,
+    surface: latticeaxiom_gameplay::BlockPosition,
+    aperture: latticeaxiom_gameplay::BlockPosition,
+) {
+    let mut opened = 0_u32;
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let mut y = surface.y;
+            while y >= aperture.y {
+                let position = latticeaxiom_gameplay::BlockPosition {
+                    x: surface.x.saturating_add(dx),
+                    y,
+                    z: surface.z.saturating_add(dz),
+                };
+                if spine
+                    .cave_occupancy_arbitration(
+                        i64::from(position.x),
+                        i64::from(position.y),
+                        i64::from(position.z),
+                    )
+                    .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
+                {
+                    y -= 1;
+                    continue;
+                }
+                if mine_cover_cell(spine, position) {
+                    opened = opened.saturating_add(1);
+                    y -= 1;
+                    continue;
+                }
+                panic!(
+                    "required entrance cover {position:?} did not break, reject={:?}, gameplay={:?}",
+                    spine.last_reject(),
+                    spine.last_gameplay_reject()
+                );
+            }
+        }
+    }
+    assert!(
+        opened > 0,
+        "required entrance column {surface:?} -> {aperture:?} must open at least one cover voxel"
+    );
+}
+
+fn mine_cover_cell(
+    spine: &ProductionSpine,
+    position: latticeaxiom_gameplay::BlockPosition,
+) -> bool {
+    for slot in [1_u16, 0_u16] {
+        spine
+            .select_hotbar_slot(slot)
+            .expect("cover-mining tool is selected");
+        for _ in 0..64 {
+            match spine.mine_cell(position) {
+                Ok(_) => {
+                    pickup_remaining(spine);
+                    return true;
+                }
+                Err(BlockEditRejectV1::RequiresProgress { .. }) => {}
+                Err(BlockEditRejectV1::RequiresTool { .. } | BlockEditRejectV1::NotBreakable) => {
+                    break;
+                }
+                Err(BlockEditRejectV1::PermissionDenied | BlockEditRejectV1::NoTarget) => {
+                    return false;
+                }
+                Err(error) => panic!("cover mining {position:?} failed: {error:?}"),
+            }
+        }
+    }
+    false
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn player_in_cave(
+    spine: &ProductionSpine,
+    translation: bevy::prelude::Vec3,
+    aperture_y: i32,
+) -> bool {
+    let feet_y = translation.y - 0.9;
+    if feet_y <= aperture_y as f32 + 0.75 {
+        return true;
+    }
+    player_sample_void(spine, translation)
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn player_sample_void(spine: &ProductionSpine, translation: bevy::prelude::Vec3) -> bool {
+    let cells = [
+        [
+            translation.x.floor() as i64,
+            (translation.y - 0.9).floor() as i64,
+            translation.z.floor() as i64,
+        ],
+        [
+            translation.x.floor() as i64,
+            translation.y.floor() as i64,
+            translation.z.floor() as i64,
+        ],
+    ];
+    cells.iter().any(|&[x, y, z]| {
+        spine
+            .cave_occupancy_arbitration(x, y, z)
+            .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
+    })
 }
 
 fn parse_block(id: &str) -> BlockId {

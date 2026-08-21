@@ -13,10 +13,11 @@ use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_player::PlayerMovementProfileV1;
 use latticeaxiom_storage::ChunkCoordinate;
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, GenerationPlanInputV1, GenerationPlanV1,
-    MAX_BOUNDED_REGION_CHUNKS, PlanActivationIdV1, ProviderGenerationIdentityV1, ProviderOfferV1,
-    ProviderSlotV1, SpawnLocationV1, SpawnOccupancyViewV1, SpawnSearchBoundsV1, WorldSeedV1,
-    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, required_spawn_chunks, select_safe_spawn,
+    AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkFaceV1,
+    GenerationPlanInputV1, GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS, PlanActivationIdV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, SpawnLocationV1,
+    SpawnOccupancyViewV1, SpawnSearchBoundsV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
+    WorldgenLimitsV1, required_spawn_chunks, select_safe_spawn,
 };
 
 use super::{ProductionHostError, catalog::HostWorldgenCatalog};
@@ -186,11 +187,249 @@ fn stable_id(value: &str) -> Result<StableId, ProductionHostError> {
     Ok(value.parse()?)
 }
 
+/// Required cave entrance selected from the `CaveTopology` field-portal plan.
+///
+/// Position, tangent, and clearance reuse the worldgen portal assertion. Fluid
+/// occupancy is inspected at the aperture; hydrology cannot own this entrance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RequiredCaveEntranceV1 {
+    aperture: [i32; 3],
+    surface_footing: [i32; 3],
+    destination: [i32; 3],
+    face: ChunkFaceV1,
+    position_u_voxel: u16,
+    position_v_voxel: u16,
+    clearance_radius_voxels: u16,
+}
+
+impl RequiredCaveEntranceV1 {
+    /// Returns the finally-void portal aperture in world voxels.
+    #[must_use]
+    pub const fn aperture(self) -> [i32; 3] {
+        self.aperture
+    }
+
+    /// Returns the surface footing voxel used to approach the entrance.
+    #[must_use]
+    pub const fn surface_footing(self) -> [i32; 3] {
+        self.surface_footing
+    }
+
+    /// Returns one inward underground voxel the aperture must connect.
+    #[must_use]
+    pub const fn destination(self) -> [i32; 3] {
+        self.destination
+    }
+
+    /// Returns the portal-plane normal (worldgen tangent face).
+    #[must_use]
+    pub const fn tangent_face(self) -> ChunkFaceV1 {
+        self.face
+    }
+
+    /// Returns the first tangential portal coordinate.
+    #[must_use]
+    pub const fn position_u_voxel(self) -> u16 {
+        self.position_u_voxel
+    }
+
+    /// Returns the second tangential portal coordinate.
+    #[must_use]
+    pub const fn position_v_voxel(self) -> u16 {
+        self.position_v_voxel
+    }
+
+    /// Returns the requested raw-field L-infinity clearance radius.
+    #[must_use]
+    pub const fn clearance_radius_voxels(self) -> u16 {
+        self.clearance_radius_voxels
+    }
+}
+
+/// Selects the shallowest required field portal near `origin`.
+///
+/// Chunk order cannot change the winner: candidates are compared by aperture Y
+/// then by stable chunk/face keys. This does not compile a Territory Atlas.
+#[must_use]
+pub(super) fn required_cave_entrance(
+    plan: &GenerationPlanV1,
+    origin: ChunkCoordinate,
+) -> Option<RequiredCaveEntranceV1> {
+    let edge = i64::from(plan.config().chunk_edge_voxels);
+    let chunk_edge = i32::from(plan.config().chunk_edge_voxels);
+    let min_chunk_y = plan.config().world_floor_y.div_euclid(chunk_edge);
+    let max_chunk_y = plan.config().world_ceiling_y.div_euclid(chunk_edge);
+    let mut best: Option<RequiredCaveEntranceV1> = None;
+    for chunk_z in origin.z.saturating_sub(6)..=origin.z.saturating_add(6) {
+        for chunk_y in min_chunk_y..=max_chunk_y {
+            for chunk_x in origin.x.saturating_sub(6)..=origin.x.saturating_add(6) {
+                let chunk = ChunkCoordinate::new(chunk_x, chunk_y, chunk_z);
+                let Ok(requests) = plan.cave_face_field_requests(chunk) else {
+                    continue;
+                };
+                for request in requests {
+                    let Some(assertion) = request.assertion() else {
+                        continue;
+                    };
+                    let Some(candidate) = entrance_from_assertion(plan, chunk, assertion, edge)
+                    else {
+                        continue;
+                    };
+                    if entrance_is_better(best.as_ref(), &candidate, origin, edge) {
+                        best = Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn entrance_from_assertion(
+    plan: &GenerationPlanV1,
+    chunk: ChunkCoordinate,
+    assertion: CaveFieldPortalAssertionV1,
+    edge: i64,
+) -> Option<RequiredCaveEntranceV1> {
+    let aperture = portal_aperture_voxel(chunk, assertion, edge)?;
+    let occupancy = plan.cave_occupancy_arbitration(
+        i64::from(aperture[0]),
+        i64::from(aperture[1]),
+        i64::from(aperture[2]),
+    );
+    if !occupancy.is_finally_void() {
+        return None;
+    }
+    let surface = plan.terrain_height(i64::from(aperture[0]), i64::from(aperture[2]));
+    if i64::from(aperture[1]) > i64::from(surface) {
+        return None;
+    }
+    let inward = step_inward(aperture, assertion.tangent_face());
+    let destination = if plan
+        .cave_occupancy_arbitration(
+            i64::from(inward[0]),
+            i64::from(inward[1]),
+            i64::from(inward[2]),
+        )
+        .is_finally_void()
+    {
+        inward
+    } else {
+        aperture
+    };
+    Some(RequiredCaveEntranceV1 {
+        aperture,
+        surface_footing: [aperture[0], surface, aperture[2]],
+        destination,
+        face: assertion.tangent_face(),
+        position_u_voxel: assertion.position_u_voxel(),
+        position_v_voxel: assertion.position_v_voxel(),
+        clearance_radius_voxels: assertion.clearance_radius_voxels(),
+    })
+}
+
+fn entrance_is_better(
+    current: Option<&RequiredCaveEntranceV1>,
+    candidate: &RequiredCaveEntranceV1,
+    origin: ChunkCoordinate,
+    edge: i64,
+) -> bool {
+    let Some(current) = current else {
+        return true;
+    };
+    let candidate_key = entrance_sort_key(candidate, origin, edge);
+    let current_key = entrance_sort_key(current, origin, edge);
+    candidate_key > current_key
+}
+
+fn entrance_sort_key(
+    entrance: &RequiredCaveEntranceV1,
+    origin: ChunkCoordinate,
+    edge: i64,
+) -> (i32, std::cmp::Reverse<u32>, i32, i32, i32, ChunkFaceV1) {
+    let dx = i64::from(entrance.aperture[0]).div_euclid(edge) - i64::from(origin.x);
+    let dz = i64::from(entrance.aperture[2]).div_euclid(edge) - i64::from(origin.z);
+    let distance = u32::try_from(dx.abs().max(dz.abs())).unwrap_or(u32::MAX);
+    (
+        entrance.aperture[1],
+        std::cmp::Reverse(distance),
+        entrance.aperture[0],
+        entrance.aperture[2],
+        entrance.aperture[1],
+        entrance.face,
+    )
+}
+
+#[allow(
+    clippy::many_single_char_names,
+    reason = "portal U/V and world X/Y/Z are the explicit aperture terms"
+)]
+fn portal_aperture_voxel(
+    chunk: ChunkCoordinate,
+    assertion: CaveFieldPortalAssertionV1,
+    edge: i64,
+) -> Option<[i32; 3]> {
+    let origin_x = i64::from(chunk.x).saturating_mul(edge);
+    let origin_y = i64::from(chunk.y).saturating_mul(edge);
+    let origin_z = i64::from(chunk.z).saturating_mul(edge);
+    let u = i64::from(assertion.position_u_voxel());
+    let v = i64::from(assertion.position_v_voxel());
+    let (x, y, z) = match assertion.tangent_face() {
+        ChunkFaceV1::NegativeX => (
+            origin_x,
+            origin_y.saturating_add(u),
+            origin_z.saturating_add(v),
+        ),
+        ChunkFaceV1::PositiveX => (
+            origin_x.saturating_add(edge).saturating_sub(1),
+            origin_y.saturating_add(u),
+            origin_z.saturating_add(v),
+        ),
+        ChunkFaceV1::NegativeY => (
+            origin_x.saturating_add(u),
+            origin_y,
+            origin_z.saturating_add(v),
+        ),
+        ChunkFaceV1::PositiveY => (
+            origin_x.saturating_add(u),
+            origin_y.saturating_add(edge).saturating_sub(1),
+            origin_z.saturating_add(v),
+        ),
+        ChunkFaceV1::NegativeZ => (
+            origin_x.saturating_add(u),
+            origin_y.saturating_add(v),
+            origin_z,
+        ),
+        ChunkFaceV1::PositiveZ => (
+            origin_x.saturating_add(u),
+            origin_y.saturating_add(v),
+            origin_z.saturating_add(edge).saturating_sub(1),
+        ),
+    };
+    Some([
+        i32::try_from(x).ok()?,
+        i32::try_from(y).ok()?,
+        i32::try_from(z).ok()?,
+    ])
+}
+
+const fn step_inward(aperture: [i32; 3], face: ChunkFaceV1) -> [i32; 3] {
+    match face {
+        ChunkFaceV1::NegativeX => [aperture[0].saturating_add(1), aperture[1], aperture[2]],
+        ChunkFaceV1::PositiveX => [aperture[0].saturating_sub(1), aperture[1], aperture[2]],
+        ChunkFaceV1::NegativeY => [aperture[0], aperture[1].saturating_add(1), aperture[2]],
+        ChunkFaceV1::PositiveY => [aperture[0], aperture[1].saturating_sub(1), aperture[2]],
+        ChunkFaceV1::NegativeZ => [aperture[0], aperture[1], aperture[2].saturating_add(1)],
+        ChunkFaceV1::PositiveZ => [aperture[0], aperture[1], aperture[2].saturating_sub(1)],
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        generate_plan_chunks, provider_offers, spawn_center, spine_config, validated_spawn,
+        generate_plan_chunks, provider_offers, required_cave_entrance, spawn_center, spine_config,
+        validated_spawn,
     };
     use latticeaxiom_core::CanonicalHash;
     use latticeaxiom_storage::ChunkCoordinate;
@@ -230,6 +469,29 @@ mod tests {
         assert!((center.x - (f32::from(x) + 0.5)).abs() < f32::EPSILON);
         assert!((center.z - (f32::from(z) + 0.5)).abs() < f32::EPSILON);
         assert!(center.y > f32::from(footing_y));
+    }
+
+    #[test]
+    fn required_cave_entrance_reuses_worldgen_field_portals() {
+        let plan = fixture_plan(42);
+        let bindings = authored_bindings();
+        let spawn = validated_spawn(&plan, &bindings).expect("seed 42 has a spawn");
+        let entrance = required_cave_entrance(&plan, spawn.chunk())
+            .expect("host plan must expose a required cave field portal");
+        let [x, y, z] = entrance.aperture();
+        assert!(
+            plan.cave_occupancy_arbitration(i64::from(x), i64::from(y), i64::from(z))
+                .is_finally_void()
+        );
+        let [dx, dy, dz] = entrance.destination();
+        assert!(
+            plan.cave_occupancy_arbitration(i64::from(dx), i64::from(dy), i64::from(dz))
+                .is_finally_void()
+        );
+        assert!(entrance.clearance_radius_voxels() > 0);
+        assert!(entrance.surface_footing()[1] >= entrance.aperture()[1]);
+        let shuffled = required_cave_entrance(&plan, spawn.chunk());
+        assert_eq!(shuffled, Some(entrance));
     }
 
     fn authored_bindings() -> AuthoredWorldgenBindingsV1 {

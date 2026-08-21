@@ -26,8 +26,8 @@ use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
     prelude::{
-        Commands, Component, Entity, FixedPostUpdate, MessageWriter, Query, Res, ResMut, Resource,
-        Transform, With, Without,
+        Commands, Component, Entity, FixedPostUpdate, FixedUpdate, MessageWriter, Query, Res,
+        ResMut, Resource, Transform, With, Without,
     },
     transform::TransformPlugin,
 };
@@ -57,11 +57,13 @@ use thiserror::Error;
 
 pub use catalog::{authored_content_catalog, authored_gameplay_catalog, empty_gameplay_catalog};
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
+pub use latticeaxiom_worldgen::{CaveOccupancyArbitrationV1, ChunkFaceV1};
 pub use spine::{
     CellOccupancyV1, ProductionSpine, ProductionWorldStorage, WorkingSetDiagnosticsV1,
 };
 pub use start::{ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList};
 pub use stream::ChunkLifecycle;
+pub use worldgen::RequiredCaveEntranceV1;
 pub use writer::{SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding};
 
 #[cfg(feature = "client")]
@@ -183,19 +185,29 @@ pub struct ProductionHostPlugin;
 
 impl Plugin for ProductionHostPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<TargetInspectReceiptV1>().add_systems(
-            FixedPostUpdate,
-            (
-                evaluate_target_inspect.after(PlayerSystemSet::EvaluateEdit),
-                sync_player_pose.after(PlayerSystemSet::EvaluateEdit),
-                sync_chunk_stream.after(sync_player_pose),
-                sync_chunk_colliders.after(sync_chunk_stream),
-                sync_working_set_diagnostics.after(sync_chunk_stream),
-                refresh_crosshair_target
-                    .after(sync_player_pose)
-                    .after(evaluate_target_inspect),
-            ),
-        );
+        app.add_message::<TargetInspectReceiptV1>()
+            .add_systems(
+                FixedUpdate,
+                (
+                    sync_player_pose,
+                    sync_chunk_stream.after(sync_player_pose),
+                    sync_chunk_colliders.after(sync_chunk_stream),
+                )
+                    .before(PlayerSystemSet::ProbeGround),
+            )
+            .add_systems(
+                FixedPostUpdate,
+                (
+                    evaluate_target_inspect.after(PlayerSystemSet::EvaluateEdit),
+                    sync_player_pose.after(PlayerSystemSet::EvaluateEdit),
+                    sync_chunk_stream.after(sync_player_pose),
+                    sync_chunk_colliders.after(sync_chunk_stream),
+                    sync_working_set_diagnostics.after(sync_chunk_stream),
+                    refresh_crosshair_target
+                        .after(sync_player_pose)
+                        .after(evaluate_target_inspect),
+                ),
+            );
         #[cfg(feature = "client")]
         app.add_systems(
             Startup,

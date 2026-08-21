@@ -22,8 +22,8 @@ use latticeaxiom_gameplay::{
 use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
     BlockEditAuthority, BlockEditRejectV1, BlockEditSuccessV1, BlockFaceV1,
-    ClientTargetObservationV1, HeadlessTargetInspectV1, MAX_BLOCK_EDIT_REACH_M, TargetEyePoseV1,
-    TargetInspectRejectV1, occupancy_line,
+    ClientTargetObservationV1, HeadlessTargetInspectV1, MAX_BLOCK_EDIT_REACH_M,
+    PlayerMovementProfileV1, TargetEyePoseV1, TargetInspectRejectV1, occupancy_line,
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
@@ -36,18 +36,20 @@ use latticeaxiom_voxel_mesh::{
     visible_faces,
 };
 use latticeaxiom_voxel_runtime::{
-    ApplyByteDeclaration, CellSelection, ColliderSemanticFingerprint, CollisionSemantics,
-    CommittedChunkProjection, CompletionOutcome, DdaOrigin, DdaOutcome, DdaQuery, DerivedInput,
-    DerivedKind, DerivedMemoryBudget, DerivedOwner, DerivedPriority, DerivedQueueLimits,
-    DerivedRequest, DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, FixedTick,
-    MeshSemanticFingerprint, RetainedBytes, RuntimeDiagnostics, RuntimeGeneration, RuntimeLimits,
-    VoxelCoordinate, VoxelRuntime, WorkingSetScope, WorldEpoch,
+    ApplyByteDeclaration, CellSelection, ColliderSafetyState, ColliderSemanticFingerprint,
+    CollisionSemantics, CommittedChunkProjection, CompletionOutcome, DdaOrigin, DdaOutcome,
+    DdaQuery, DerivedInput, DerivedKind, DerivedMemoryBudget, DerivedOwner, DerivedPriority,
+    DerivedQueueLimits, DerivedRequest, DerivedRequestSet, DispatchOutcome,
+    EvictionLeaseGeneration, FixedTick, MeshSemanticFingerprint, RetainedBytes, RuntimeDiagnostics,
+    RuntimeGeneration, RuntimeLimits, VoxelCoordinate, VoxelRuntime, WorkingSetScope, WorldEpoch,
 };
 use latticeaxiom_world_db::{
     AuthoritativeMetadataInputV1, CommitDurabilityV1, DeterministicWorldStorage, PersistedChunkV1,
     WorldCommitRequestV1, WorldStorage,
 };
-use latticeaxiom_worldgen::{GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS};
+use latticeaxiom_worldgen::{
+    CaveOccupancyArbitrationV1, GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS,
+};
 
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
@@ -56,8 +58,8 @@ use super::{
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     stream::{StreamClamps, desired_chunks, look_ahead_axis, prioritize_chunks},
     worldgen::{
-        compile_plan, generate_plan_chunks, host_hard_limits, spawn_center as player_spawn_center,
-        spine_config, validated_spawn,
+        RequiredCaveEntranceV1, compile_plan, generate_plan_chunks, host_hard_limits,
+        required_cave_entrance, spawn_center as player_spawn_center, spine_config, validated_spawn,
     },
 };
 use crate::LockVerifiedComposeImages;
@@ -647,6 +649,51 @@ impl ProductionSpine {
         })
     }
 
+    /// Returns whether mesh and collider derivation allow entry into cave voids.
+    #[must_use]
+    pub fn cave_entry_ready(&self, coordinate: ChunkCoordinate) -> bool {
+        self.lock_inner()
+            .is_ok_and(|inner| cave_entry_ready_inner(&inner, coordinate))
+    }
+
+    /// Returns the required `CaveTopology` field portal nearest the spawn column.
+    #[must_use]
+    pub fn required_cave_entrance(&self) -> Option<RequiredCaveEntranceV1> {
+        let inner = self.lock_inner().ok()?;
+        let origin = translation_chunk(inner.spawn_center, inner.chunk_edge)?;
+        required_cave_entrance(&inner.plan, origin)
+    }
+
+    /// Returns local/branch/portal occupancy from the compiled `CaveTopology` owner.
+    #[must_use]
+    pub fn cave_occupancy_arbitration(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+    ) -> Option<CaveOccupancyArbitrationV1> {
+        self.lock_inner()
+            .ok()
+            .map(|inner| inner.plan.cave_occupancy_arbitration(x, y, z))
+    }
+
+    /// Returns whether the local player currently occupies an unready cave void.
+    #[must_use]
+    pub fn occupies_unready_cave_void(&self) -> bool {
+        let Ok(inner) = self.lock_inner() else {
+            return false;
+        };
+        player_sample_cells(inner.player_pose.translation)
+            .iter()
+            .any(|&[x, y, z]| {
+                inner
+                    .plan
+                    .cave_occupancy_arbitration(x, y, z)
+                    .is_finally_void()
+                    && !cave_entry_ready_inner(&inner, world_chunk(x, y, z, inner.chunk_edge))
+            })
+    }
+
     /// Returns the structural host clamps for this session.
     #[must_use]
     pub fn hard_limits(&self) -> Option<PlayableWorldHardLimitsV1> {
@@ -1002,6 +1049,44 @@ impl ProductionSpine {
         None
     }
 
+    /// Returns the first resident `block` that shares a face with a cave void.
+    #[must_use]
+    pub fn first_cave_adjacent_block(&self, block: &BlockId) -> Option<BlockPosition> {
+        let inner = self.lock_inner().ok()?;
+        let wanted = palette_index(&inner.palette, block)?;
+        let edge = i32::from(inner.chunk_edge);
+        for coordinate in inner.resident_coordinates() {
+            for ly in 0..edge {
+                for lz in 0..edge {
+                    for lx in 0..edge {
+                        let position = BlockPosition {
+                            x: coordinate.x.checked_mul(edge)?.checked_add(lx)?,
+                            y: coordinate.y.checked_mul(edge)?.checked_add(ly)?,
+                            z: coordinate.z.checked_mul(edge)?.checked_add(lz)?,
+                        };
+                        let voxel = VoxelCoordinate::new(
+                            i64::from(position.x),
+                            i64::from(position.y),
+                            i64::from(position.z),
+                        );
+                        if inner
+                            .runtime
+                            .cell(voxel)
+                            .ok()
+                            .is_none_or(|cell| cell.palette_index != wanted)
+                        {
+                            continue;
+                        }
+                        if cell_faces_cave_void(&inner, position) {
+                            return Some(position);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Returns the latest crosshair DDA target.
     #[must_use]
     pub fn current_target(&self) -> Option<HeadlessTargetInspectV1> {
@@ -1107,17 +1192,23 @@ impl ProductionSpine {
     pub(super) fn take_presentation(&self) -> Result<PresentationDelta, ProductionHostError> {
         let mut inner = self.lock_inner()?;
         let dirty = mem::take(&mut inner.dirty);
-        let removals = mem::take(&mut inner.removed).into_iter().collect();
+        let mut removals: Vec<ChunkCoordinate> =
+            mem::take(&mut inner.removed).into_iter().collect();
         let edge = f32::from(inner.chunk_edge);
         let mut upserts = Vec::new();
         for coordinate in dirty {
             let Some(derived) = inner.derived.get(&coordinate) else {
                 continue;
             };
-            let Some(collider) = derived.collider.clone() else {
-                continue;
-            };
-            upserts.push((coordinate, collider, chunk_origin(coordinate, edge)));
+            match derived.collider.clone() {
+                Some(collider) => {
+                    upserts.push((coordinate, collider, chunk_origin(coordinate, edge)));
+                }
+                None if cave_entry_ready_inner(&inner, coordinate) => {
+                    removals.push(coordinate);
+                }
+                None => {}
+            }
         }
         Ok(PresentationDelta { upserts, removals })
     }
@@ -1515,6 +1606,7 @@ impl ProductionSpineInner {
             FixedTick::new(fixed_tick),
         )
         .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        seal_unready_cave_voids(self, coordinate);
         self.lifecycle
             .entry(coordinate)
             .and_modify(|state| {
@@ -1907,6 +1999,7 @@ fn admit_desired(
             inner
                 .lifecycle
                 .insert(*coordinate, ChunkLifecycle::Resident);
+            seal_unready_cave_voids(inner, *coordinate);
             admitted = admitted.saturating_add(1);
             continue;
         }
@@ -1991,6 +2084,7 @@ fn publish_hydrated(
         inner
             .lifecycle
             .insert(*coordinate, ChunkLifecycle::Resident);
+        seal_unready_cave_voids(inner, *coordinate);
         inner.edited.insert(*coordinate);
     }
     Ok(())
@@ -2051,6 +2145,7 @@ fn publish_generated(
         inner
             .lifecycle
             .insert(*coordinate, ChunkLifecycle::Resident);
+        seal_unready_cave_voids(inner, *coordinate);
     }
     Ok(())
 }
@@ -2065,23 +2160,21 @@ fn forget_chunk(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
 fn refresh_lifecycle(inner: &mut ProductionSpineInner) {
     let coordinates = inner.lifecycle.keys().copied().collect::<Vec<_>>();
     for coordinate in coordinates {
-        let Some(state) = inner.lifecycle.get_mut(&coordinate) else {
-            continue;
-        };
         if !matches!(
-            state,
-            ChunkLifecycle::Resident | ChunkLifecycle::MeshCollider | ChunkLifecycle::Active
+            inner.lifecycle.get(&coordinate),
+            Some(ChunkLifecycle::Resident | ChunkLifecycle::MeshCollider | ChunkLifecycle::Active)
         ) {
             continue;
         }
-        let Some(derived) = inner.derived.get(&coordinate) else {
-            *state = ChunkLifecycle::Resident;
-            continue;
-        };
-        if derived.mesh_receipt.is_some() {
-            *state = ChunkLifecycle::Active;
+        let next = if !inner.derived.contains_key(&coordinate) {
+            ChunkLifecycle::Resident
+        } else if cave_entry_ready_inner(inner, coordinate) {
+            ChunkLifecycle::Active
         } else {
-            *state = ChunkLifecycle::MeshCollider;
+            ChunkLifecycle::MeshCollider
+        };
+        if let Some(state) = inner.lifecycle.get_mut(&coordinate) {
+            *state = next;
         }
     }
 }
@@ -2194,7 +2287,7 @@ fn apply_derived(
         entry.mesh_source = Some(source);
         entry.faces = faces;
     }
-    if kind == DerivedKind::Collider || entry.collider.is_none() {
+    if kind == DerivedKind::Collider && entry.mesh_receipt.is_some() {
         entry.collider = compound_collider(&value.occupied);
     }
     inner.dirty.insert(coordinate);
@@ -2567,6 +2660,124 @@ fn block_position(coordinate: VoxelCoordinate) -> Option<BlockPosition> {
 
 fn translation_chunk(translation: Vec3, edge: u16) -> Option<ChunkCoordinate> {
     dda_origin(translation.to_array(), edge).map(DdaOrigin::chunk)
+}
+
+fn cave_entry_ready_inner(inner: &ProductionSpineInner, coordinate: ChunkCoordinate) -> bool {
+    inner
+        .derived
+        .get(&coordinate)
+        .is_some_and(|derived| derived.mesh_receipt.is_some())
+        && matches!(
+            inner.runtime.collider_safety(coordinate),
+            Some(ColliderSafetyState::Ready { .. })
+        )
+}
+
+fn seal_unready_cave_voids(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
+    if cave_entry_ready_inner(inner, coordinate) {
+        return;
+    }
+    let Some((_, revision, _)) = inner.runtime.chunk_revisions(coordinate) else {
+        return;
+    };
+    let occupied = conservative_occupied_voxels(inner, coordinate);
+    let entry = inner
+        .derived
+        .entry(coordinate)
+        .or_insert_with(|| ChunkDerived {
+            mesh_receipt: None,
+            mesh_source: None,
+            faces: BTreeSet::new(),
+            collider: None,
+            revision,
+        });
+    entry.revision = revision;
+    if entry.mesh_receipt.is_none() {
+        entry.collider = compound_collider(&occupied);
+        inner.dirty.insert(coordinate);
+    }
+}
+
+fn conservative_occupied_voxels(
+    inner: &ProductionSpineInner,
+    coordinate: ChunkCoordinate,
+) -> Vec<[u16; 3]> {
+    let edge = inner.chunk_edge;
+    let mut occupied = BTreeSet::new();
+    for z in 0..edge {
+        for y in 0..edge {
+            for x in 0..edge {
+                let world_x = i64::from(coordinate.x) * i64::from(edge) + i64::from(x);
+                let world_y = i64::from(coordinate.y) * i64::from(edge) + i64::from(y);
+                let world_z = i64::from(coordinate.z) * i64::from(edge) + i64::from(z);
+                let voxel = VoxelCoordinate::new(world_x, world_y, world_z);
+                let solid = inner
+                    .runtime
+                    .cell(voxel)
+                    .is_ok_and(CollisionSemantics::collision_occupied);
+                let cave_void = inner
+                    .plan
+                    .cave_occupancy_arbitration(world_x, world_y, world_z)
+                    .is_finally_void();
+                if solid || cave_void {
+                    occupied.insert([x, y, z]);
+                }
+            }
+        }
+    }
+    occupied.into_iter().collect()
+}
+
+fn cell_faces_cave_void(inner: &ProductionSpineInner, position: BlockPosition) -> bool {
+    let neighbors = [
+        [position.x.saturating_sub(1), position.y, position.z],
+        [position.x.saturating_add(1), position.y, position.z],
+        [position.x, position.y.saturating_sub(1), position.z],
+        [position.x, position.y.saturating_add(1), position.z],
+        [position.x, position.y, position.z.saturating_sub(1)],
+        [position.x, position.y, position.z.saturating_add(1)],
+    ];
+    neighbors.iter().any(|&[x, y, z]| {
+        inner
+            .plan
+            .cave_occupancy_arbitration(i64::from(x), i64::from(y), i64::from(z))
+            .is_finally_void()
+    })
+}
+
+fn player_sample_cells(translation: Vec3) -> [[i64; 3]; 2] {
+    let profile = PlayerMovementProfileV1::default();
+    let feet_y = translation.y - profile.capsule_total_height_m() * 0.5;
+    [
+        [
+            f32_floor_i64(translation.x),
+            f32_floor_i64(feet_y),
+            f32_floor_i64(translation.z),
+        ],
+        [
+            f32_floor_i64(translation.x),
+            f32_floor_i64(translation.y),
+            f32_floor_i64(translation.z),
+        ],
+    ]
+}
+
+fn world_chunk(x: i64, y: i64, z: i64, edge: u16) -> ChunkCoordinate {
+    let edge = i64::from(edge).max(1);
+    ChunkCoordinate::new(
+        i32::try_from(x.div_euclid(edge)).unwrap_or(0),
+        i32::try_from(y.div_euclid(edge)).unwrap_or(0),
+        i32::try_from(z.div_euclid(edge)).unwrap_or(0),
+    )
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn f32_floor_i64(value: f32) -> i64 {
+    if value.is_finite() {
+        value.floor() as i64
+    } else {
+        0
+    }
 }
 
 fn chunk_of(position: BlockPosition, edge: u16) -> ChunkCoordinate {
