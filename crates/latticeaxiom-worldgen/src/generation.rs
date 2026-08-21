@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AdjacentEpochSnapshotV1, BoundaryAdapterDeclarationV1, CaveFaceFieldRequestV1,
-    CaveFaceOccupancyValidationV1, CellEpochStateV1, D4BlockCatalogClosureV1, D4MaterialRoleV1,
-    D4RoleVocabularyV1, ExistingSnapshotEvidenceV1, FrozenRoleBindingsV1, GenerationEpochIdV1,
-    GenerationInputHashV1, GenerationProvenanceHashV1, GeneratorFingerprintV1,
-    LockedClosureFingerprintV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, SnapshotChecksumV1,
-    TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1, WorldgenConfigV1,
-    WorldgenError, WorldgenLimitsV1, WorldgenResult,
-    cave::{CaveSamplerV1, snapshot_checksum},
+    CaveFaceOccupancyValidationV1, CaveOccupancyArbitrationV1, CellEpochStateV1,
+    D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, ExistingSnapshotEvidenceV1,
+    FrozenRoleBindingsV1, GenerationEpochIdV1, GenerationInputHashV1, GenerationProvenanceHashV1,
+    GeneratorFingerprintV1, LockedClosureFingerprintV1, PlanActivationIdV1,
+    PlanningCellCoordinateV1, ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1,
+    SnapshotChecksumV1, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1,
+    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult,
+    cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
     hashes::{concatenated_hash, domain_hash, hash_u64},
     provider::ResolvedProvidersV1,
@@ -684,6 +684,15 @@ impl GenerationPlanV1 {
         self.cave.signed_distance_fixed(x, y, z)
     }
 
+    /// Returns local, branch, and portal field samples plus final occupancy.
+    ///
+    /// Material, ore, and fluid placement must use the final occupancy flag.
+    /// The raw field may be void under minimum cover without becoming empty.
+    #[must_use]
+    pub fn cave_occupancy_arbitration(&self, x: i64, y: i64, z: i64) -> CaveOccupancyArbitrationV1 {
+        self.cave.occupancy(x, y, z, self.terrain_height(x, z))
+    }
+
     /// Returns direction-independent raw cave-field requests for one chunk.
     ///
     /// # Errors
@@ -694,6 +703,21 @@ impl GenerationPlanV1 {
         coordinate: ChunkCoordinate,
     ) -> WorldgenResult<Vec<CaveFaceFieldRequestV1>> {
         self.cave.face_requests(coordinate)
+    }
+
+    /// Collects unique raw-field portal requests for `chunks`.
+    ///
+    /// Chunk order cannot change the compiled plan. Opposite faces of one
+    /// shared boundary collapse to a single request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an arithmetic error at the persistent chunk-coordinate boundary.
+    pub fn cave_field_portal_plan(
+        &self,
+        chunks: impl IntoIterator<Item = ChunkCoordinate>,
+    ) -> WorldgenResult<CaveFieldPortalPlanV1> {
+        self.cave.field_portal_plan(chunks)
     }
 
     /// Returns a direction-independent cave key for one chunk face.
@@ -1105,7 +1129,8 @@ impl GenerationPlanV1 {
             return vegetation.unwrap_or(D4MaterialRoleV1::Empty);
         }
         counters.cave_samples = counters.cave_samples.saturating_add(1);
-        if self.cave.is_void(x, y, z, column.height) {
+        let occupancy = self.cave.occupancy(x, y, z, column.height);
+        if occupancy.is_finally_void() {
             counters.cave_void_accepts = counters.cave_void_accepts.saturating_add(1);
             return D4MaterialRoleV1::Empty;
         }

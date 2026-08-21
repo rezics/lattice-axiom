@@ -524,6 +524,38 @@ fn shared_cave_portal_key_contract_and_field_match_from_both_sides() {
 }
 
 #[test]
+fn cave_field_portal_plan_is_identical_under_shuffled_chunk_order() {
+    let plan = fixture_plan(false, &[b"lock-a"]);
+    let mut chunks = Vec::new();
+    for z in -4..=4 {
+        for y in -3..=-1 {
+            for x in -4..=4 {
+                chunks.push(ChunkCoordinate::new(x, y, z));
+            }
+        }
+    }
+    let forward = plan
+        .cave_field_portal_plan(chunks.clone())
+        .expect("forward field portal plan is representable");
+    let reversed = plan
+        .cave_field_portal_plan(chunks.iter().copied().rev())
+        .expect("reversed field portal plan is representable");
+    let mut rotated = chunks;
+    let rotate_by = rotated.len() / 3;
+    rotated.rotate_left(rotate_by);
+    let rotated = plan
+        .cave_field_portal_plan(rotated)
+        .expect("rotated field portal plan is representable");
+    assert_eq!(forward, reversed);
+    assert_eq!(forward, rotated);
+    let assertions = forward.assertions();
+    assert!(!assertions.is_empty());
+    for assertion in assertions {
+        assert!(assertion.clearance_radius_voxels() > 0);
+    }
+}
+
+#[test]
 fn all_six_face_field_requests_validate_both_sides_against_final_occupancy() {
     let plan = fixture_plan(false, &[b"lock-a"]);
     for face in ChunkFaceV1::ALL {
@@ -585,9 +617,82 @@ fn all_six_face_field_requests_validate_both_sides_against_final_occupancy() {
                 validation.final_empty_samples(),
                 validation.aperture_samples()
             );
+            assert!(validation.portal_clearance_intact());
             assert!(validation.is_finally_open());
         }
     }
+}
+
+#[test]
+fn material_ore_and_fluid_placement_use_final_cave_occupancy() {
+    let plan = fixture_plan(false, &[b"lock-a"]);
+    let empty = plan.role_target(D4MaterialRoleV1::Empty);
+    let copper = plan.role_target(D4MaterialRoleV1::CopperResource);
+    let mut inspected_voids = 0_u32;
+    let mut inspected_solids = 0_u32;
+    let (portal_chunk, _) = (-16..=16)
+        .flat_map(|z| (-16..=16).map(move |x| ChunkCoordinate::new(x, -4, z)))
+        .find_map(|chunk| {
+            plan.cave_face_field_requests(chunk)
+                .ok()?
+                .into_iter()
+                .find(|request| request.portal_requested())
+                .map(|request| (chunk, request))
+        })
+        .expect("deep corpus contains a requested portal");
+    let chunks = [
+        portal_chunk,
+        ChunkCoordinate::new(portal_chunk.x + 1, portal_chunk.y, portal_chunk.z),
+        ChunkCoordinate::new(portal_chunk.x, portal_chunk.y - 1, portal_chunk.z),
+    ];
+    for chunk in chunks {
+        let outcome = plan
+            .generate(vacant_request(chunk))
+            .expect("deep occupancy chunk generates");
+        let candidate = prepared(&outcome);
+        let edge = i64::from(candidate.draft().edge_voxels());
+        let origin_x = i64::from(chunk.x).saturating_mul(edge);
+        let origin_y = i64::from(chunk.y).saturating_mul(edge);
+        let origin_z = i64::from(chunk.z).saturating_mul(edge);
+        for local_y in 0..edge {
+            for local_z in 0..edge {
+                for local_x in 0..edge {
+                    let world_x = origin_x.saturating_add(local_x);
+                    let world_y = origin_y.saturating_add(local_y);
+                    let world_z = origin_z.saturating_add(local_z);
+                    let occupancy = plan.cave_occupancy_arbitration(world_x, world_y, world_z);
+                    let local_x = u16::try_from(local_x).expect("local X fits the draft");
+                    let local_y = u16::try_from(local_y).expect("local Y fits the draft");
+                    let local_z = u16::try_from(local_z).expect("local Z fits the draft");
+                    let block = candidate
+                        .draft()
+                        .block_at(local_x, local_y, local_z)
+                        .expect("draft contains the occupancy sample");
+                    assert_eq!(
+                        occupancy.allows_fluid_occupancy(),
+                        occupancy.is_finally_void()
+                    );
+                    if occupancy.is_finally_void() {
+                        inspected_voids = inspected_voids.saturating_add(1);
+                        assert_eq!(block, empty);
+                        assert!(!occupancy.allows_solid_placement());
+                        assert_ne!(block, copper);
+                    } else {
+                        inspected_solids = inspected_solids.saturating_add(1);
+                        assert!(occupancy.allows_solid_placement());
+                        assert!(!occupancy.allows_fluid_occupancy());
+                    }
+                }
+            }
+        }
+        for validation in candidate.receipt().cave_occupancy_validations() {
+            if validation.request().portal_requested() {
+                assert!(validation.portal_clearance_intact());
+            }
+        }
+    }
+    assert!(inspected_voids > 0);
+    assert!(inspected_solids > 0);
 }
 
 #[test]

@@ -31,7 +31,8 @@ mod spawn;
 mod territory;
 
 pub use cave::{
-    CaveFaceFieldRequestV1, CaveFaceOccupancyValidationV1, ChunkFaceV1, SharedFaceKeyV1,
+    CaveFaceFieldRequestV1, CaveFaceOccupancyValidationV1, CaveFieldPortalAssertionV1,
+    CaveFieldPortalPlanV1, CaveOccupancyArbitrationV1, ChunkFaceV1, SharedFaceKeyV1,
 };
 pub use config::{WorldgenConfigV1, WorldgenLimitsV1};
 pub use epoch::{

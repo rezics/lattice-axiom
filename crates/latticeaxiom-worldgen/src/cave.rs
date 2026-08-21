@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use latticeaxiom_core::CanonicalHash;
 use latticeaxiom_storage::ChunkCoordinate;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ use crate::{
 
 const SHARED_FACE_DOMAIN: &[u8] = b"latticeaxiom.cave-shared-face.v1\0";
 const CAVE_VOID_DOMAIN: &[u8] = b"latticeaxiom.d4-cave-void.v2\0";
+const CAVE_BRANCH_DOMAIN: &[u8] = b"latticeaxiom.d4-cave-branch.v1\0";
 
 /// Canonical outward face of a cubic chunk in Y-up coordinates.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -130,6 +133,118 @@ impl CaveFaceFieldRequestV1 {
     pub const fn clearance_radius_voxels(self) -> u16 {
         self.clearance_radius_voxels
     }
+
+    /// Returns machine-readable raw-field portal evidence when a portal is requested.
+    ///
+    /// Position is the tangential `(u, v)` aperture. The face is the portal-plane
+    /// normal; `u`/`v` are the tangent coordinates in that plane. Clearance is the
+    /// L-infinity radius. Fluid compatibility is a territory hydrology constraint
+    /// and is not owned by the cave field.
+    #[must_use]
+    pub const fn assertion(self) -> Option<CaveFieldPortalAssertionV1> {
+        if !self.portal_requested {
+            return None;
+        }
+        Some(CaveFieldPortalAssertionV1 {
+            key: self.key,
+            face: self.face,
+            position_u_voxel: self.portal_u_voxel,
+            position_v_voxel: self.portal_v_voxel,
+            clearance_radius_voxels: self.clearance_radius_voxels,
+        })
+    }
+}
+
+/// Machine-readable raw-field portal assertion for one shared chunk face.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveFieldPortalAssertionV1 {
+    key: SharedFaceKeyV1,
+    face: ChunkFaceV1,
+    position_u_voxel: u16,
+    position_v_voxel: u16,
+    clearance_radius_voxels: u16,
+}
+
+impl CaveFieldPortalAssertionV1 {
+    /// Returns the direction-independent shared-face key.
+    #[must_use]
+    pub const fn key(self) -> SharedFaceKeyV1 {
+        self.key
+    }
+
+    /// Returns the local outward face, which is the portal-plane normal.
+    #[must_use]
+    pub const fn tangent_face(self) -> ChunkFaceV1 {
+        self.face
+    }
+
+    /// Returns the first tangential portal coordinate.
+    #[must_use]
+    pub const fn position_u_voxel(self) -> u16 {
+        self.position_u_voxel
+    }
+
+    /// Returns the second tangential portal coordinate.
+    #[must_use]
+    pub const fn position_v_voxel(self) -> u16 {
+        self.position_v_voxel
+    }
+
+    /// Returns the requested raw-field L-infinity clearance radius.
+    #[must_use]
+    pub const fn clearance_radius_voxels(self) -> u16 {
+        self.clearance_radius_voxels
+    }
+}
+
+/// Canonical raw-field portal requests collected independently of chunk order.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveFieldPortalPlanV1 {
+    requests: Vec<CaveFaceFieldRequestV1>,
+}
+
+impl CaveFieldPortalPlanV1 {
+    /// Keeps unique requested portals, sorted by shared-face key.
+    ///
+    /// Opposite faces of the same boundary collapse to one request. The stored
+    /// face is the lexicographically smaller local face so shuffled chunk order
+    /// cannot change the plan.
+    #[must_use]
+    pub fn from_face_requests(requests: impl IntoIterator<Item = CaveFaceFieldRequestV1>) -> Self {
+        let mut by_key = BTreeMap::<SharedFaceKeyV1, CaveFaceFieldRequestV1>::new();
+        for request in requests {
+            if !request.portal_requested {
+                continue;
+            }
+            match by_key.get(&request.key) {
+                Some(existing) if existing.face <= request.face => {}
+                _ => {
+                    by_key.insert(request.key, request);
+                }
+            }
+        }
+        Self {
+            requests: by_key.into_values().collect(),
+        }
+    }
+
+    /// Returns requested portals in shared-face-key order.
+    #[must_use]
+    pub fn requests(&self) -> &[CaveFaceFieldRequestV1] {
+        &self.requests
+    }
+
+    /// Returns machine-readable position, tangent, and clearance assertions.
+    #[must_use]
+    pub fn assertions(&self) -> Vec<CaveFieldPortalAssertionV1> {
+        self.requests
+            .iter()
+            .copied()
+            .filter_map(CaveFaceFieldRequestV1::assertion)
+            .collect()
+    }
 }
 
 /// Validation of a raw field request against the materialized face aperture.
@@ -193,6 +308,90 @@ impl CaveFaceOccupancyValidationV1 {
             && self.field_void_samples == self.aperture_samples
             && self.final_empty_samples == self.aperture_samples
     }
+
+    /// Returns whether the raw field still contains the required portal aperture.
+    ///
+    /// A bounded branch contributor may add extra face holes, but it cannot fill
+    /// a requested clearance. Minimum cover may still suppress final occupancy.
+    #[must_use]
+    pub const fn portal_clearance_intact(self) -> bool {
+        !self.request.portal_requested
+            || (self.aperture_samples > 0 && self.field_void_samples == self.aperture_samples)
+    }
+}
+
+/// Local, branch, and portal field samples plus the final occupancy decision.
+///
+/// Contributors union voids with a minimum signed-distance compositor. Branch
+/// passages therefore cannot fill required portal clearance. Minimum cover and
+/// the world floor are applied after that union; material, ore, and fluid
+/// placement must use [`Self::is_finally_void`] rather than the raw field.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveOccupancyArbitrationV1 {
+    local_signed_distance: i32,
+    branch_signed_distance: i32,
+    portal_signed_distance: i32,
+    raw_signed_distance: i32,
+    finally_void: bool,
+}
+
+impl CaveOccupancyArbitrationV1 {
+    /// Returns the primary local cave-cell field.
+    #[must_use]
+    pub const fn local_signed_distance(self) -> i32 {
+        self.local_signed_distance
+    }
+
+    /// Returns the bounded branch-contributor field.
+    #[must_use]
+    pub const fn branch_signed_distance(self) -> i32 {
+        self.branch_signed_distance
+    }
+
+    /// Returns the tightest requested portal field, or `i32::MAX` when none.
+    #[must_use]
+    pub const fn portal_signed_distance(self) -> i32 {
+        self.portal_signed_distance
+    }
+
+    /// Returns the unioned raw cave field; non-positive samples are void.
+    #[must_use]
+    pub const fn raw_signed_distance(self) -> i32 {
+        self.raw_signed_distance
+    }
+
+    /// Returns whether the raw union is a cave void before cover and floor.
+    #[must_use]
+    pub const fn is_raw_void(self) -> bool {
+        self.raw_signed_distance <= 0
+    }
+
+    /// Returns whether final occupancy is a cave void after cover and floor.
+    #[must_use]
+    pub const fn is_finally_void(self) -> bool {
+        self.finally_void
+    }
+
+    /// Returns whether a branch spur opened a voxel the local field left solid.
+    #[must_use]
+    pub const fn branch_added_side_passage(self) -> bool {
+        self.branch_signed_distance <= 0 && self.local_signed_distance > 0
+    }
+
+    /// Returns whether solid material or ore may occupy this cell.
+    #[must_use]
+    pub const fn allows_solid_placement(self) -> bool {
+        !self.finally_void
+    }
+
+    /// Returns whether hydrology/fluid occupancy may fill this final cave void.
+    ///
+    /// Fluid cannot carve a new void or own cave topology.
+    #[must_use]
+    pub const fn allows_fluid_occupancy(self) -> bool {
+        self.finally_void
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -227,32 +426,59 @@ impl CaveSamplerV1 {
     }
 
     pub(crate) fn is_void(&self, x: i64, y: i64, z: i64, surface_y: i32) -> bool {
-        let minimum_cover = i64::from(self.config.cave_minimum_cover);
-        if y > i64::from(surface_y).saturating_sub(minimum_cover)
-            || y <= i64::from(self.config.world_floor_y)
-        {
-            return false;
-        }
-        self.signed_distance_fixed(x, y, z) <= 0
+        self.occupancy(x, y, z, surface_y).is_finally_void()
     }
 
     /// Returns the bounded integer cave field; non-positive samples are void.
     pub(crate) fn signed_distance_fixed(&self, x: i64, y: i64, z: i64) -> i32 {
-        let base = self.coarse_cell_distance(x, y, z);
-        let Some(chunk) = self.chunk_at_world(x, y, z) else {
-            return base;
-        };
-        let mut distance = base;
-        for face in ChunkFaceV1::ALL {
-            let Ok(key) = self.shared_face_key(chunk, face) else {
-                continue;
-            };
-            let portal = self.portal_contract(key);
-            if portal.requested {
-                distance = distance.min(self.portal_distance(x, y, z, chunk, face, portal));
-            }
+        self.occupancy_uncapped(x, y, z).raw_signed_distance
+    }
+
+    /// Unions the local field, optional branch, and required portal clearance.
+    ///
+    /// The resolved cave-topology provider remains the only cave owner. Branch
+    /// and portal samples are bounded contributors, not a second topology.
+    /// Hydrology is not a field contributor.
+    pub(crate) fn occupancy(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+        surface_y: i32,
+    ) -> CaveOccupancyArbitrationV1 {
+        let mut decision = self.occupancy_uncapped(x, y, z);
+        let minimum_cover = i64::from(self.config.cave_minimum_cover);
+        let protected = y > i64::from(surface_y).saturating_sub(minimum_cover)
+            || y <= i64::from(self.config.world_floor_y);
+        decision.finally_void = !protected && decision.raw_signed_distance <= 0;
+        decision
+    }
+
+    fn occupancy_uncapped(&self, x: i64, y: i64, z: i64) -> CaveOccupancyArbitrationV1 {
+        let local_signed_distance = self.coarse_cell_distance(x, y, z);
+        let branch_signed_distance = self.branch_signed_distance(x, y, z);
+        let portal_signed_distance = self.portal_signed_distance(x, y, z);
+        let raw_signed_distance = local_signed_distance
+            .min(branch_signed_distance)
+            .min(portal_signed_distance);
+        CaveOccupancyArbitrationV1 {
+            local_signed_distance,
+            branch_signed_distance,
+            portal_signed_distance,
+            raw_signed_distance,
+            finally_void: raw_signed_distance <= 0,
         }
-        distance
+    }
+
+    pub(crate) fn field_portal_plan(
+        &self,
+        chunks: impl IntoIterator<Item = ChunkCoordinate>,
+    ) -> WorldgenResult<CaveFieldPortalPlanV1> {
+        let mut requests = Vec::new();
+        for chunk in chunks {
+            requests.extend(self.face_requests(chunk)?);
+        }
+        Ok(CaveFieldPortalPlanV1::from_face_requests(requests))
     }
 
     pub(crate) fn face_requests(
@@ -310,23 +536,11 @@ impl CaveSamplerV1 {
         let cell_x = x.div_euclid(edge);
         let cell_y = y.div_euclid(edge);
         let cell_z = z.div_euclid(edge);
-        let roll = hash_u64(
-            CAVE_VOID_DOMAIN,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.provider.provider_stable_id().as_str().as_bytes(),
-                self.provider.implementation_fingerprint().as_bytes(),
-                &cell_x.to_be_bytes(),
-                &cell_y.to_be_bytes(),
-                &cell_z.to_be_bytes(),
-            ],
-        ) % 1_024;
         let edge_i32 = i32::from(self.config.cave_cell_edge_voxels);
         if self.config.cave_threshold_per_1024 == 1_024 {
             return edge_i32.saturating_mul(-2);
         }
-        if roll >= u64::from(self.config.cave_threshold_per_1024) {
+        if !self.coarse_cell_accepted(cell_x, cell_y, cell_z) {
             return edge_i32.saturating_mul(2);
         }
         let center = edge.saturating_sub(1);
@@ -340,6 +554,94 @@ impl CaveSamplerV1 {
             .max(local_z.saturating_sub(center).abs());
         let radius = edge.saturating_sub(2).max(1);
         i32::try_from(maximum_axis.saturating_sub(radius)).unwrap_or(i32::MAX)
+    }
+
+    fn branch_signed_distance(&self, x: i64, y: i64, z: i64) -> i32 {
+        let edge = i64::from(self.config.cave_cell_edge_voxels);
+        let edge_i32 = i32::from(self.config.cave_cell_edge_voxels);
+        let inactive = edge_i32.saturating_mul(2);
+        let cell_x = x.div_euclid(edge);
+        let cell_y = y.div_euclid(edge);
+        let cell_z = z.div_euclid(edge);
+        if self.config.cave_threshold_per_1024 == 0 {
+            return inactive;
+        }
+        if self.config.cave_threshold_per_1024 != 1_024
+            && !self.coarse_cell_accepted(cell_x, cell_y, cell_z)
+        {
+            return inactive;
+        }
+        let branch_bits = hash_u64(
+            CAVE_BRANCH_DOMAIN,
+            &[
+                self.seed.as_bytes(),
+                self.input_hash.as_bytes(),
+                self.provider.provider_stable_id().as_str().as_bytes(),
+                self.provider.implementation_fingerprint().as_bytes(),
+                &cell_x.to_be_bytes(),
+                &cell_y.to_be_bytes(),
+                &cell_z.to_be_bytes(),
+            ],
+        );
+        if self.config.cave_threshold_per_1024 != 1_024
+            && branch_bits % 1_024 >= u64::from(self.config.cave_threshold_per_1024)
+        {
+            return inactive;
+        }
+        let axis = (branch_bits >> 10) & 0b11;
+        let local_x = x.rem_euclid(edge);
+        let local_y = y.rem_euclid(edge);
+        let local_z = z.rem_euclid(edge);
+        let center = edge.saturating_sub(1).saturating_div(2);
+        let (cross_a, cross_b) = match axis {
+            0 => (local_y, local_z),
+            1 => (local_x, local_z),
+            _ => (local_x, local_y),
+        };
+        let maximum = cross_a
+            .saturating_sub(center)
+            .abs()
+            .max(cross_b.saturating_sub(center).abs());
+        i32::try_from(maximum.saturating_sub(1)).unwrap_or(i32::MAX)
+    }
+
+    fn portal_signed_distance(&self, x: i64, y: i64, z: i64) -> i32 {
+        let Some(chunk) = self.chunk_at_world(x, y, z) else {
+            return i32::MAX;
+        };
+        let mut distance = i32::MAX;
+        for face in ChunkFaceV1::ALL {
+            let Ok(key) = self.shared_face_key(chunk, face) else {
+                continue;
+            };
+            let portal = self.portal_contract(key);
+            if portal.requested {
+                distance = distance.min(self.portal_distance(x, y, z, chunk, face, portal));
+            }
+        }
+        distance
+    }
+
+    fn coarse_cell_accepted(&self, cell_x: i64, cell_y: i64, cell_z: i64) -> bool {
+        if self.config.cave_threshold_per_1024 == 1_024 {
+            return true;
+        }
+        if self.config.cave_threshold_per_1024 == 0 {
+            return false;
+        }
+        let roll = hash_u64(
+            CAVE_VOID_DOMAIN,
+            &[
+                self.seed.as_bytes(),
+                self.input_hash.as_bytes(),
+                self.provider.provider_stable_id().as_str().as_bytes(),
+                self.provider.implementation_fingerprint().as_bytes(),
+                &cell_x.to_be_bytes(),
+                &cell_y.to_be_bytes(),
+                &cell_z.to_be_bytes(),
+            ],
+        ) % 1_024;
+        roll < u64::from(self.config.cave_threshold_per_1024)
     }
 
     fn chunk_at_world(&self, x: i64, y: i64, z: i64) -> Option<ChunkCoordinate> {
@@ -512,4 +814,223 @@ fn coordinate_bytes(coordinate: ChunkCoordinate) -> [u8; 12] {
 
 pub(crate) fn snapshot_checksum(bytes: &[u8]) -> crate::SnapshotChecksumV1 {
     crate::SnapshotChecksumV1::from_hash(CanonicalHash::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use latticeaxiom_core::{CanonicalHash, StableId};
+    use latticeaxiom_storage::ChunkCoordinate;
+
+    use super::{CaveFieldPortalPlanV1, CaveSamplerV1, ChunkFaceV1};
+    use crate::{
+        GenerationInputHashV1, ProviderGenerationIdentityV1, WorldSeedV1, WorldgenConfigV1,
+        WorldgenError,
+    };
+
+    #[test]
+    fn shared_face_requests_are_direction_independent_from_both_sides() {
+        let sampler = test_sampler(132);
+        for face in ChunkFaceV1::ALL {
+            let chunk = ChunkCoordinate::new(3, -2, 4);
+            let neighbor = match face {
+                ChunkFaceV1::NegativeX => ChunkCoordinate::new(2, -2, 4),
+                ChunkFaceV1::PositiveX => ChunkCoordinate::new(4, -2, 4),
+                ChunkFaceV1::NegativeY => ChunkCoordinate::new(3, -3, 4),
+                ChunkFaceV1::PositiveY => ChunkCoordinate::new(3, -1, 4),
+                ChunkFaceV1::NegativeZ => ChunkCoordinate::new(3, -2, 3),
+                ChunkFaceV1::PositiveZ => ChunkCoordinate::new(3, -2, 5),
+            };
+            let key = sampler
+                .shared_face_key(chunk, face)
+                .expect("interior shared face is representable");
+            let opposite_key = sampler
+                .shared_face_key(neighbor, face.opposite())
+                .expect("neighbor shared face is representable");
+            assert_eq!(key, opposite_key);
+
+            let request = sampler
+                .face_requests(chunk)
+                .expect("interior face requests are representable")
+                .into_iter()
+                .find(|candidate| candidate.face() == face)
+                .expect("all six face requests exist");
+            let opposite = sampler
+                .face_requests(neighbor)
+                .expect("neighbor face requests are representable")
+                .into_iter()
+                .find(|candidate| candidate.face() == face.opposite())
+                .expect("neighbor has all six face requests");
+            assert_eq!(request.key(), opposite.key());
+            assert_eq!(request.portal_requested(), opposite.portal_requested());
+            assert_eq!(request.portal_u_voxel(), opposite.portal_u_voxel());
+            assert_eq!(request.portal_v_voxel(), opposite.portal_v_voxel());
+            assert_eq!(
+                request.clearance_radius_voxels(),
+                opposite.clearance_radius_voxels()
+            );
+        }
+        assert!(matches!(
+            sampler.shared_face_key(ChunkCoordinate::new(i32::MAX, 0, 0), ChunkFaceV1::PositiveX),
+            Err(WorldgenError::ArithmeticOverflow { .. })
+        ));
+    }
+
+    #[test]
+    fn branch_union_adds_side_passages_without_filling_required_portal_clearance() {
+        let sampler = test_sampler(512);
+        let mut found_side_passage = false;
+        let mut found_portal_clearance = false;
+        for world_y in [-32, -24, -16, -8] {
+            for world_x in -48..=48 {
+                for world_z in -48..=48 {
+                    let occupancy = sampler.occupancy(world_x, world_y, world_z, 24);
+                    assert!(
+                        occupancy.raw_signed_distance()
+                            <= occupancy
+                                .local_signed_distance()
+                                .min(occupancy.portal_signed_distance()),
+                        "branch union may add voids but cannot fill local or portal voids"
+                    );
+                    if occupancy.portal_signed_distance() <= 0 {
+                        found_portal_clearance = true;
+                        assert!(occupancy.is_raw_void());
+                        assert!(
+                            occupancy.raw_signed_distance() <= occupancy.portal_signed_distance()
+                        );
+                    }
+                    if occupancy.branch_added_side_passage() && occupancy.is_finally_void() {
+                        found_side_passage = true;
+                        assert!(occupancy.is_raw_void());
+                        assert!(occupancy.allows_fluid_occupancy());
+                        assert!(!occupancy.allows_solid_placement());
+                        assert!(occupancy.local_signed_distance() > 0);
+                    }
+                    if found_side_passage && found_portal_clearance {
+                        return;
+                    }
+                }
+            }
+        }
+        assert!(found_side_passage, "bounded branch opens a side passage");
+        assert!(
+            found_portal_clearance,
+            "required portal clearance stays void"
+        );
+    }
+
+    #[test]
+    fn field_portal_plan_is_identical_under_shuffled_chunk_order() {
+        let sampler = test_sampler(132);
+        let mut chunks = Vec::new();
+        for z in -4..=4 {
+            for y in -2..=0 {
+                for x in -4..=4 {
+                    chunks.push(ChunkCoordinate::new(x, y, z));
+                }
+            }
+        }
+        let forward = sampler
+            .field_portal_plan(chunks.clone())
+            .expect("forward field portal plan is representable");
+        let reversed = sampler
+            .field_portal_plan(chunks.iter().copied().rev())
+            .expect("reversed field portal plan is representable");
+        let mut rotated = chunks;
+        let rotate_by = rotated.len() / 3;
+        rotated.rotate_left(rotate_by);
+        let rotated = sampler
+            .field_portal_plan(rotated)
+            .expect("rotated field portal plan is representable");
+        assert_eq!(forward, reversed);
+        assert_eq!(forward, rotated);
+        assert!(!forward.requests().is_empty());
+        let collapsed = CaveFieldPortalPlanV1::from_face_requests(
+            forward
+                .requests()
+                .iter()
+                .copied()
+                .chain(forward.requests().iter().copied()),
+        );
+        assert_eq!(forward, collapsed);
+    }
+
+    #[test]
+    fn field_portal_assertions_expose_position_tangent_and_clearance() {
+        let sampler = test_sampler(132);
+        let chunks = (-4..=4)
+            .flat_map(|z| {
+                (-2..=0).flat_map(move |y| (-4..=4).map(move |x| ChunkCoordinate::new(x, y, z)))
+            })
+            .collect::<Vec<_>>();
+        let plan = sampler
+            .field_portal_plan(chunks)
+            .expect("field portal plan is representable");
+        let assertions = plan.assertions();
+        assert_eq!(assertions.len(), plan.requests().len());
+        assert!(!assertions.is_empty());
+        for (request, assertion) in plan.requests().iter().copied().zip(assertions) {
+            assert!(request.portal_requested());
+            assert_eq!(assertion.key(), request.key());
+            assert_eq!(assertion.tangent_face(), request.face());
+            assert_eq!(assertion.position_u_voxel(), request.portal_u_voxel());
+            assert_eq!(assertion.position_v_voxel(), request.portal_v_voxel());
+            assert_eq!(
+                assertion.clearance_radius_voxels(),
+                request.clearance_radius_voxels()
+            );
+            assert!(assertion.clearance_radius_voxels() > 0);
+        }
+    }
+
+    #[test]
+    fn occupancy_arbitration_keeps_cover_and_floor_solid_for_placement() {
+        let sampler = test_sampler(1_024);
+        let surface_y = 24;
+        let protected = sampler.occupancy(3, 20, -5, surface_y);
+        assert!(protected.is_raw_void());
+        assert!(!protected.is_finally_void());
+        assert!(protected.allows_solid_placement());
+        assert!(!protected.allows_fluid_occupancy());
+
+        let carvable = sampler.occupancy(3, 18, -5, surface_y);
+        assert!(carvable.is_raw_void());
+        assert!(carvable.is_finally_void());
+        assert!(!carvable.allows_solid_placement());
+        assert!(carvable.allows_fluid_occupancy());
+
+        let floor = sampler.occupancy(3, -64, -5, surface_y);
+        assert!(floor.is_raw_void());
+        assert!(!floor.is_finally_void());
+        assert!(floor.allows_solid_placement());
+        assert!(!floor.allows_fluid_occupancy());
+    }
+
+    fn test_sampler(threshold: u16) -> CaveSamplerV1 {
+        let config = WorldgenConfigV1 {
+            chunk_edge_voxels: 8,
+            planning_cell_edge_chunks: 8,
+            transition_width_voxels: 8,
+            cave_cell_edge_voxels: 8,
+            cave_threshold_per_1024: threshold,
+            cave_minimum_cover: 6,
+            world_floor_y: -64,
+            world_ceiling_y: 127,
+            ..WorldgenConfigV1::default()
+        };
+        CaveSamplerV1::new(
+            WorldSeedV1::from_integer(42),
+            GenerationInputHashV1::from_hash(CanonicalHash::digest(b"cave-occupancy-test")),
+            config,
+            ProviderGenerationIdentityV1::new(
+                "fixture:worldgen-provider/cave@1"
+                    .parse::<StableId>()
+                    .expect("fixture cave provider identity is valid"),
+                NonZeroU32::MIN,
+                8,
+                CanonicalHash::digest(b"cave-implementation-v8"),
+            ),
+        )
+    }
 }
