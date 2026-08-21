@@ -968,7 +968,7 @@ pub struct ActivationPermitV1 {
 /// Catalog acceptance and storage evidence consumed together at activation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WriterActivationV1 {
-    _accepted_plan: AcceptedWorldOpenPlan,
+    accepted_plan: AcceptedWorldOpenPlan,
     permit: ActivationPermitV1,
 }
 
@@ -989,13 +989,17 @@ impl WriterActivationV1 {
             });
         }
         Ok(Self {
-            _accepted_plan: accepted_plan,
+            accepted_plan,
             permit,
         })
     }
 
     pub(crate) const fn permit(&self) -> &ActivationPermitV1 {
         &self.permit
+    }
+
+    pub(crate) const fn accepted_plan(&self) -> &AcceptedWorldOpenPlan {
+        &self.accepted_plan
     }
 }
 

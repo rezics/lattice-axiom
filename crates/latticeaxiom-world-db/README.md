@@ -14,13 +14,13 @@ creation, or physical checkpoint verification fail before publication with
 `PhysicalDurabilityUnsupported`; their receipts and frontiers are never forged
 by the memory implementation.
 
-Writer activation also currently fails closed with
-`ActivationEvidenceUnavailable`. Storage preflight still returns DB-derived
-evidence, and `WriterActivationV1` consumes a catalog-accepted writable plan,
-but the current `latticeaxiom-world-catalog::AcceptedWorldOpenPlan` does not
-expose a first-party, non-forgeable receipt binding world ID, store ID, metadata
-epoch/hash, projection hash, and plan generation. The storage permit alone is
-not accepted as authority to bypass that missing catalog boundary.
+Writer activation fails closed with `ActivationEvidenceUnavailable` when the
+accepted catalog plan has no sealed receipt. A writer opens only when
+`AcceptedWorldOpenPlan` carries a non-forgeable receipt binding world ID, store
+ID, metadata epoch/hash, projection hash, and plan generation, and that receipt
+matches `ActivationPermitV1`. The storage permit alone is not authority.
+`flush_durable` and physical checkpoints remain `PhysicalDurabilityUnsupported`
+on this volatile reference.
 
 The internal test-only writer fixture exists solely to exercise atomic
 reference transitions. It is compiled only for this crate's unit tests and is

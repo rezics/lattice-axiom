@@ -18,8 +18,8 @@ use latticeaxiom_storage::{
 use latticeaxiom_world_catalog::{
     AuthoritativeMetadataV1 as CatalogAuthoritativeMetadataV1, CheckpointId as CatalogCheckpointId,
     CheckpointSummary, HeaderObservation, HeaderProjectionV1, LiveWorldLocation, ReadOperation,
-    ReconciliationState, SourceReadError, WORLD_HEADER_SCHEMA_VERSION, WorldFingerprints,
-    WorldHeaderV1, WorldRootId, reconcile_header,
+    ReconciliationState, SealedWorldActivationReceiptV1, SourceReadError,
+    WORLD_HEADER_SCHEMA_VERSION, WorldFingerprints, WorldHeaderV1, WorldRootId, reconcile_header,
 };
 use latticeaxiom_world_wire::{
     ChunkRecordKey, PersistedChunkDomainRevisionsV1, PersistedChunkSnapshotV1, RecordKind,
@@ -142,7 +142,6 @@ struct FakeDatabase {
     worlds: BTreeMap<WorldId, StoredWorld>,
     checkpoints: BTreeMap<(WorldId, CheckpointId), RetainedCheckpoint>,
     active_writers: BTreeMap<WorldId, u128>,
-    #[cfg(test)]
     next_lease: u128,
     fault: Option<DatabaseFaultPointV1>,
 }
@@ -239,8 +238,7 @@ impl DeterministicWorldStorage {
             .map_err(|_| WorldDbError::LockPoisoned { operation })
     }
 
-    #[cfg(test)]
-    fn activate_reference_fixture(
+    fn activate_validated_writer(
         &self,
         permit: &ActivationPermitV1,
     ) -> WorldDbResult<Box<DeterministicWriter>> {
@@ -286,6 +284,53 @@ impl DeterministicWorldStorage {
             lease,
             closed: false,
         }))
+    }
+
+    #[cfg(test)]
+    fn activate_reference_fixture(
+        &self,
+        permit: &ActivationPermitV1,
+    ) -> WorldDbResult<Box<DeterministicWriter>> {
+        self.activate_validated_writer(permit)
+    }
+
+    fn receipt_matches_permit(
+        receipt: &SealedWorldActivationReceiptV1,
+        permit: &ActivationPermitV1,
+    ) -> WorldDbResult<()> {
+        receipt
+            .verify()
+            .map_err(|_| WorldDbError::ActivationEvidenceUnavailable {
+                world: permit.world,
+            })?;
+        if receipt.world_id != permit.world || receipt.store_id != permit.store_id {
+            return Err(WorldDbError::ActivationEvidenceUnavailable {
+                world: permit.world,
+            });
+        }
+        if receipt.metadata_epoch != permit.metadata_epoch.get() {
+            return Err(WorldDbError::ActivationPermitInvalid {
+                world: permit.world,
+                reason: "metadata epoch mismatch",
+            });
+        }
+        if receipt.metadata_hash != canonical_hash(permit.metadata_hash) {
+            return Err(WorldDbError::ActivationPermitHashMismatch {
+                world: permit.world,
+                field: "metadata_hash",
+                permit: permit.metadata_hash,
+                actual: DigestV1::from_bytes(*receipt.metadata_hash.as_bytes()),
+            });
+        }
+        if receipt.projection_hash != canonical_hash(permit.projection_hash) {
+            return Err(WorldDbError::ActivationPermitHashMismatch {
+                world: permit.world,
+                field: "projection_hash",
+                permit: permit.projection_hash,
+                actual: DigestV1::from_bytes(*receipt.projection_hash.as_bytes()),
+            });
+        }
+        Ok(())
     }
 
     fn prepare_header(&self, world: &StoredWorld) -> WorldDbResult<PreparedWorldHeaderV1> {
@@ -380,7 +425,6 @@ impl DeterministicWorldStorage {
         }
     }
 
-    #[cfg(test)]
     fn validate_activation(world: &StoredWorld, permit: &ActivationPermitV1) -> WorldDbResult<()> {
         if permit.world != world.world {
             return Err(WorldDbError::ActivationPermitInvalid {
@@ -624,9 +668,14 @@ impl WorldStorage for DeterministicWorldStorage {
         &self,
         activation: WriterActivationV1,
     ) -> WorldDbResult<Box<dyn WorldWriter>> {
-        Err(WorldDbError::ActivationEvidenceUnavailable {
-            world: activation.permit().world,
-        })
+        let permit = activation.permit();
+        let Some(receipt) = activation.accepted_plan().activation_receipt() else {
+            return Err(WorldDbError::ActivationEvidenceUnavailable {
+                world: permit.world,
+            });
+        };
+        Self::receipt_matches_permit(receipt, permit)?;
+        Ok(self.activate_validated_writer(permit)?)
     }
     fn verify_checkpoint(
         &self,
@@ -1671,7 +1720,6 @@ fn header_error_stage(error: &HeaderPublishErrorV1) -> HeaderPublishStageV1 {
     }
 }
 
-#[cfg(test)]
 fn validate_activation_hashes(
     world: &StoredWorld,
     permit: &ActivationPermitV1,
@@ -1716,7 +1764,8 @@ mod tests {
         PersistentEntityId, TransactionId, VersionedPayload, WorldRevision, WorldTransaction,
     };
     use latticeaxiom_world_catalog::{
-        ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
+        ReconciliationState, SealedActivationBindingV1, WorldOpenAction, WorldOpenPlan,
+        WorldOpenRisk, WorldOpenStatus,
     };
     use latticeaxiom_world_wire::WorldWireLimits;
 
@@ -1877,6 +1926,25 @@ mod tests {
     }
 
     fn fixture_activation(world: WorldId, permit: ActivationPermitV1) -> WriterActivationV1 {
+        fixture_activation_with_binding(world, permit, None)
+    }
+
+    fn fixture_sealed_activation(world: WorldId, permit: ActivationPermitV1) -> WriterActivationV1 {
+        let binding = SealedActivationBindingV1 {
+            store_id: permit.store_id.clone(),
+            metadata_epoch: permit.metadata_epoch.get(),
+            metadata_hash: CanonicalHash::from_bytes(*permit.metadata_hash.as_bytes()),
+            projection_hash: CanonicalHash::from_bytes(*permit.projection_hash.as_bytes()),
+            plan_generation: permit.metadata_epoch.get(),
+        };
+        fixture_activation_with_binding(world, permit, Some(binding))
+    }
+
+    fn fixture_activation_with_binding(
+        world: WorldId,
+        permit: ActivationPermitV1,
+        activation_binding: Option<SealedActivationBindingV1>,
+    ) -> WriterActivationV1 {
         let action = WorldOpenAction::UseFrozenLock;
         let plan = WorldOpenPlan {
             world_id: world,
@@ -1886,6 +1954,7 @@ mod tests {
             next_safe_step: Some(action.clone()),
             actions: vec![action.clone()],
             diagnostics: Vec::new(),
+            activation_binding,
         };
         let accepted = plan
             .accept(action)
@@ -1940,8 +2009,8 @@ mod tests {
             Err(WorldDbError::ActivationEvidenceUnavailable { world: found }) if found == world
         ));
         let writer = storage
-            .activate_reference_fixture(&permit)
-            .expect("first validated writer activation succeeds");
+            .activate_writer(fixture_sealed_activation(world, permit.clone()))
+            .expect("first sealed writer activation succeeds");
         assert!(matches!(
             storage.activate_reference_fixture(&permit),
             Err(WorldDbError::WriterAlreadyActive { world: found }) if found == world
@@ -1961,6 +2030,30 @@ mod tests {
             .expect("a closed writer lease can be replaced")
             .close()
             .expect("replacement writer closes cleanly");
+    }
+
+    #[test]
+    fn sealed_activation_rejects_a_mismatched_metadata_hash() {
+        let (storage, _, world) = fixture_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let mut binding = SealedActivationBindingV1 {
+            store_id: permit.store_id.clone(),
+            metadata_epoch: permit.metadata_epoch.get(),
+            metadata_hash: CanonicalHash::from_bytes(*permit.metadata_hash.as_bytes()),
+            projection_hash: CanonicalHash::from_bytes(*permit.projection_hash.as_bytes()),
+            plan_generation: permit.metadata_epoch.get(),
+        };
+        binding.metadata_hash = CanonicalHash::digest(b"forged-metadata");
+        let activation = fixture_activation_with_binding(world, permit.clone(), Some(binding));
+        assert!(matches!(
+            storage.activate_writer(activation),
+            Err(WorldDbError::ActivationPermitHashMismatch {
+                world: found,
+                field: "metadata_hash",
+                ..
+            }) if found == world
+        ));
     }
 
     #[test]
