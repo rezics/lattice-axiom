@@ -595,6 +595,18 @@ impl TerritoryPlanV1 {
         &self.underground_territories
     }
 
+    /// Returns canonically ordered cave portals.
+    #[must_use]
+    pub fn cave_portals(&self) -> &[CavePortalV1] {
+        &self.cave_portals
+    }
+
+    /// Returns canonically ordered cave adjacency evidence.
+    #[must_use]
+    pub fn cave_adjacencies(&self) -> &[CaveAdjacencyV1] {
+        &self.cave_adjacencies
+    }
+
     /// Runs a pure deterministic surface query.
     #[must_use]
     pub fn query(&self, cell: PlanningCellCoordinateV1) -> TerritoryQueryV1 {

@@ -10,10 +10,11 @@ use latticeaxiom_territory::{
     HydrologyBasinV1, HydrologyConnectionV1, HydrologyPlanV1, LockedClosureFingerprintV1,
     PlanningCellBoundsV1, PlanningCellCoordinateV1, PlanningCellEpochLedgerV1,
     PlanningCellTransitionAdapterV1, PlanningCellTransitionReceiptV1, PortalHydrologyContractV1,
-    PrimaryProviderOfferV1, ProviderGenerationIdentityV1, SpatialContributionV1,
-    SurfaceTerritoryCandidateV1, TerritoryDomainIdV1, TerritoryLimitsV1, TerritoryPlanInputV1,
-    TerritoryPlanV1, TerritoryQueryCoverageV1, UndergroundTerritoryV1, VerticalRangeV1,
-    WorldSeedV1, WorldgenConfigV1,
+    PrimaryChannelV1, PrimaryOwnershipDomainV1, PrimaryProviderOfferV1,
+    ProviderGenerationIdentityV1, SpatialContributionV1, SurfaceTerritoryCandidateV1,
+    TerritoryDomainIdV1, TerritoryLimitsV1, TerritoryPlanInputV1, TerritoryPlanV1,
+    TerritoryQueryCoverageV1, UndergroundTerritoryV1, VerticalRangeV1, WorldSeedV1,
+    WorldgenConfigV1,
 };
 use proptest::prelude::*;
 
@@ -728,6 +729,171 @@ fn production_plan_bytes_ignore_registration_and_chunk_order() {
     assert_eq!(
         canonical_json_bytes(&first).ok(),
         canonical_json_bytes(&second).ok()
+    );
+}
+
+fn cave_plan_chunks() -> Vec<ChunkCoordinate> {
+    let mut chunks = production_chunks();
+    for cell_x in -2_i32..=10 {
+        chunks.push(ChunkCoordinate::new(cell_x.saturating_mul(8), -2, 0));
+        chunks.push(ChunkCoordinate::new(cell_x.saturating_mul(8), -2, 8));
+    }
+    chunks
+}
+
+#[test]
+fn v6_cave_plan_has_default_domain_two_subdomains_entrance_portal_and_destination() {
+    let plan = production_plan();
+    let config = WorldgenConfigV1::default();
+    let cave_plan = plan
+        .cave_topology_plan(&config)
+        .unwrap_or_else(|error| panic!("V6 cave topology plan failed: {error}"));
+    assert_eq!(cave_plan.default_cave_domain(), plan.default_cave_domain());
+    assert_eq!(cave_plan.underground_domains().len(), 2);
+    assert!(
+        cave_plan
+            .underground_domains()
+            .contains(&cave_domain("limestone"))
+    );
+    assert!(
+        cave_plan
+            .underground_domains()
+            .contains(&cave_domain("crystal"))
+    );
+    assert!(!cave_plan.surface_entrances().is_empty());
+    assert!(!cave_plan.portals().is_empty());
+    assert!(!cave_plan.must_connect().is_empty());
+    assert!(
+        cave_plan.portals().iter().any(|portal| {
+            let (first, second) = portal.domains();
+            first != second
+        }),
+        "V6 cave plan must include a cross-domain portal"
+    );
+
+    let owners = plan
+        .primary_owners()
+        .iter()
+        .filter(|owner| owner.domain().channel() == PrimaryChannelV1::CaveTopology)
+        .map(|owner| owner.domain().clone())
+        .collect::<BTreeSet<_>>();
+    assert!(owners.contains(&PrimaryOwnershipDomainV1::Cave(
+        plan.default_cave_domain().clone()
+    )));
+    assert!(
+        !plan
+            .primary_owners()
+            .iter()
+            .any(
+                |owner| owner.domain().channel() != PrimaryChannelV1::CaveTopology
+                    && matches!(owner.domain(), PrimaryOwnershipDomainV1::Cave(_))
+            ),
+        "hydrology cannot own cave topology domains"
+    );
+}
+
+#[test]
+fn v6_surface_entrance_crosses_four_cells_and_two_topology_domains() {
+    let plan = production_plan();
+    let cave_plan = plan
+        .cave_topology_plan(&WorldgenConfigV1::default())
+        .unwrap_or_else(|error| panic!("V6 cave topology plan failed: {error}"));
+    let entrance = cave_plan
+        .surface_entrances()
+        .iter()
+        .find(|entrance| entrance.cells().len() >= 4 && entrance.domains().len() >= 2)
+        .unwrap_or_else(|| panic!("V6 cave plan lacks a four-cell two-domain entrance"));
+    let cells = entrance.cells();
+    for window in cells.windows(2) {
+        assert!(
+            (window[0].x - window[1].x).abs() + (window[0].z - window[1].z).abs() == 1,
+            "entrance cells must be cardinal neighbors"
+        );
+    }
+    assert_eq!(entrance.surface_cell(), cells[0]);
+    assert_eq!(entrance.destination().cell(), cells[cells.len() - 1]);
+    assert_eq!(
+        entrance.destination().domain(),
+        entrance.domains().last().unwrap_or_else(|| panic!(
+            "entrance domain list is non-empty after the four-cell check"
+        ))
+    );
+    assert_ne!(
+        entrance.domains()[0],
+        *entrance.destination().domain(),
+        "surface opening and must-connect destination must be distinct domains"
+    );
+    assert!(!entrance.portals().is_empty());
+}
+
+#[test]
+fn v6_portal_assertions_expose_position_tangent_clearance_and_fluid() {
+    let plan = production_plan();
+    let cave_plan = plan
+        .cave_topology_plan(&WorldgenConfigV1::default())
+        .unwrap_or_else(|error| panic!("V6 cave topology plan failed: {error}"));
+    assert!(!cave_plan.assertions().is_empty());
+    for (portal, assertion) in cave_plan.portals().iter().zip(cave_plan.assertions()) {
+        assert_eq!(assertion.portal_id(), portal.portal_id());
+        assert_eq!(
+            assertion.position_millimeters(),
+            portal.anchor_millimeters()
+        );
+        assert_eq!(assertion.tangent_axis(), portal.tangent_axis());
+        assert_eq!(assertion.tangent_axis(), AxisV1::Y);
+        assert!(assertion.clearance_width_millimeters() > 0);
+        assert!(assertion.clearance_height_millimeters() > 0);
+        assert_eq!(assertion.fluid(), portal.hydrology());
+        assert!(matches!(
+            assertion.fluid(),
+            PortalHydrologyContractV1::Dry | PortalHydrologyContractV1::Sealed
+        ));
+        let encoded = serde_json::to_value(assertion)
+            .unwrap_or_else(|error| panic!("portal assertion encoding failed: {error}"));
+        assert!(encoded.get("position_millimeters").is_some());
+        assert!(encoded.get("tangent_axis").is_some());
+        assert!(encoded.get("clearance_width_millimeters").is_some());
+        assert!(encoded.get("clearance_height_millimeters").is_some());
+        assert!(encoded.get("fluid").is_some());
+    }
+}
+
+#[test]
+fn v6_cave_portal_plan_is_identical_under_shuffled_chunk_order() {
+    let plan = production_plan();
+    let config = WorldgenConfigV1::default();
+    let chunks = cave_plan_chunks();
+    let forward = plan
+        .cave_topology_plan_from_chunks(&config, chunks.clone())
+        .unwrap_or_else(|error| panic!("forward V6 cave plan failed: {error}"));
+    let reversed = plan
+        .cave_topology_plan_from_chunks(&config, chunks.iter().copied().rev())
+        .unwrap_or_else(|error| panic!("reversed V6 cave plan failed: {error}"));
+    let rotated = {
+        let mut rotated = chunks;
+        let rotation = rotated.len() / 3;
+        rotated.rotate_left(rotation);
+        plan.cave_topology_plan_from_chunks(&config, rotated)
+            .unwrap_or_else(|error| panic!("rotated V6 cave plan failed: {error}"))
+    };
+    let forward_bytes = canonical_json_bytes(&forward)
+        .unwrap_or_else(|error| panic!("forward cave plan encoding failed: {error}"));
+    assert_eq!(
+        forward_bytes,
+        canonical_json_bytes(&reversed)
+            .unwrap_or_else(|error| panic!("reversed cave plan encoding failed: {error}"))
+    );
+    assert_eq!(
+        forward_bytes,
+        canonical_json_bytes(&rotated)
+            .unwrap_or_else(|error| panic!("rotated cave plan encoding failed: {error}"))
+    );
+    assert_eq!(forward.world_seed(), plan.world_seed());
+    assert!(
+        forward
+            .surface_entrances()
+            .iter()
+            .any(|entrance| entrance.cells().len() >= 4 && entrance.domains().len() >= 2)
     );
 }
 

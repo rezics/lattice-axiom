@@ -22,7 +22,8 @@ pub use atlas::{
 };
 pub use bounds::{PlanningCellBoundsV1, VerticalRangeV1};
 pub use cave::{
-    AxisV1, CaveAdjacencyV1, CavePortalV1, CaveTopologyDomainIdV1, CaveTopologyParentV1,
+    AxisV1, CaveAdjacencyV1, CaveMustConnectDestinationV1, CavePortalV1, CaveSurfaceEntranceV1,
+    CaveTopologyDomainIdV1, CaveTopologyParentV1, CaveTopologyPlanV1, PortalAssertionV1,
     PortalHydrologyContractV1, UndergroundTerritoryV1,
 };
 pub use epoch::{
@@ -31,7 +32,7 @@ pub use epoch::{
 };
 pub use error::{TerritoryError, TerritoryResult};
 pub use hashes::{
-    AtlasPlanHashV1, CavePortalIdV1, HydrologyPlanHashV1, TerritoryDomainIdV1,
+    AtlasPlanHashV1, CaveEntranceIdV1, CavePortalIdV1, HydrologyPlanHashV1, TerritoryDomainIdV1,
     TransitionReceiptHashV1,
 };
 pub use hydrology::{

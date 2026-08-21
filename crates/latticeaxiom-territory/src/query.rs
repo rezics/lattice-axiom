@@ -10,10 +10,10 @@ use latticeaxiom_worldgen::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasPlanHashV1, CaveTopologyDomainIdV1, CaveTopologyParentV1, PlanningCellBoundsV1,
-    PlanningCellCoordinateV1, PrimaryOwnershipDomainV1, ResolvedPrimaryOwnerV1,
-    TerritoryDomainIdV1, TerritoryError, TerritoryPlanV1, TerritoryQueryV1, TerritoryResult,
-    UndergroundTerritoryV1,
+    AtlasPlanHashV1, CaveTopologyDomainIdV1, CaveTopologyParentV1, CaveTopologyPlanV1,
+    PlanningCellBoundsV1, PlanningCellCoordinateV1, PrimaryOwnershipDomainV1,
+    ResolvedPrimaryOwnerV1, TerritoryDomainIdV1, TerritoryError, TerritoryPlanV1, TerritoryQueryV1,
+    TerritoryResult, UndergroundTerritoryV1,
 };
 
 /// Production surface ownership at one planning cell.
@@ -341,6 +341,51 @@ impl TerritoryPlanV1 {
             boundary_distance_cells,
             in_transition_band,
         })
+    }
+
+    /// Compiles the V6 cave topology plan from this Atlas skeleton.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the compiled skeleton has two underground
+    /// subdomains and a surface entrance that crosses four cells and two
+    /// topology domains.
+    pub fn cave_topology_plan(
+        &self,
+        config: &WorldgenConfigV1,
+    ) -> TerritoryResult<CaveTopologyPlanV1> {
+        CaveTopologyPlanV1::compile(
+            self.world_seed(),
+            self.plan_hash(),
+            self.default_cave_domain(),
+            self.underground_territories(),
+            self.cave_portals(),
+            config,
+        )
+    }
+
+    /// Collects the seed-stable V6 cave topology plan for unique chunk cells.
+    ///
+    /// Chunk order cannot change the compiled plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no chunk is supplied or the V6 skeleton cannot be
+    /// compiled.
+    pub fn cave_topology_plan_from_chunks(
+        &self,
+        config: &WorldgenConfigV1,
+        chunks: impl IntoIterator<Item = ChunkCoordinate>,
+    ) -> TerritoryResult<CaveTopologyPlanV1> {
+        CaveTopologyPlanV1::from_chunks(
+            self.world_seed(),
+            self.plan_hash(),
+            self.default_cave_domain(),
+            self.underground_territories(),
+            self.cave_portals(),
+            config,
+            chunks,
+        )
     }
 }
 

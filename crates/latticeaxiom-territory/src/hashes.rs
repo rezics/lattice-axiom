@@ -55,6 +55,10 @@ typed_hash!(
     "Direction-independent identity of a validated cave portal."
 );
 typed_hash!(
+    CaveEntranceIdV1,
+    "Direction-independent identity of a planned cave surface entrance."
+);
+typed_hash!(
     HydrologyPlanHashV1,
     "Canonical identity of an abstract bounded hydrology plan."
 );

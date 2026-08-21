@@ -7,12 +7,14 @@ use std::{
 };
 
 use latticeaxiom_core::{StableId, canonical_json_hash};
-use latticeaxiom_worldgen::PlanningCellCoordinateV1;
+use latticeaxiom_worldgen::{
+    ChunkCoordinate, PlanningCellCoordinateV1, WorldSeedV1, WorldgenConfigV1,
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    CavePortalIdV1, HydrologyPlanV1, PlanningCellBoundsV1, TerritoryError, TerritoryLimitsV1,
-    TerritoryResult, VerticalRangeV1,
+    AtlasPlanHashV1, CaveEntranceIdV1, CavePortalIdV1, HydrologyPlanV1, PlanningCellBoundsV1,
+    TerritoryError, TerritoryLimitsV1, TerritoryResult, VerticalRangeV1,
 };
 
 /// Stable cave-topology ownership domain identity.
@@ -304,6 +306,408 @@ impl CavePortalV1 {
     pub const fn hydrology(&self) -> &PortalHydrologyContractV1 {
         &self.hydrology
     }
+
+    /// Returns the portal aperture position in world millimeters.
+    #[must_use]
+    pub const fn anchor_millimeters(&self) -> [i64; 3] {
+        self.anchor_millimeters
+    }
+
+    /// Returns the portal tangent lying in the shared planning-cell plane.
+    #[must_use]
+    pub const fn tangent_axis(&self) -> AxisV1 {
+        self.tangent_axis
+    }
+
+    /// Returns the non-zero portal clearance width in millimeters.
+    #[must_use]
+    pub const fn clearance_width_millimeters(&self) -> u32 {
+        self.clearance_width_millimeters
+    }
+
+    /// Returns the non-zero portal clearance height in millimeters.
+    #[must_use]
+    pub const fn clearance_height_millimeters(&self) -> u32 {
+        self.clearance_height_millimeters
+    }
+
+    /// Returns machine-readable position, tangent, clearance, and fluid evidence.
+    #[must_use]
+    pub fn assertion(&self) -> PortalAssertionV1 {
+        PortalAssertionV1 {
+            portal_id: self.portal_id,
+            position_millimeters: self.anchor_millimeters,
+            tangent_axis: self.tangent_axis,
+            clearance_width_millimeters: self.clearance_width_millimeters,
+            clearance_height_millimeters: self.clearance_height_millimeters,
+            fluid: self.hydrology.clone(),
+        }
+    }
+}
+
+/// Machine-readable cave portal evidence reused by V6 topology planning.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortalAssertionV1 {
+    portal_id: CavePortalIdV1,
+    position_millimeters: [i64; 3],
+    tangent_axis: AxisV1,
+    clearance_width_millimeters: u32,
+    clearance_height_millimeters: u32,
+    fluid: PortalHydrologyContractV1,
+}
+
+impl PortalAssertionV1 {
+    /// Returns the direction-independent portal identity.
+    #[must_use]
+    pub const fn portal_id(&self) -> CavePortalIdV1 {
+        self.portal_id
+    }
+
+    /// Returns the portal aperture position in world millimeters.
+    #[must_use]
+    pub const fn position_millimeters(&self) -> [i64; 3] {
+        self.position_millimeters
+    }
+
+    /// Returns the portal tangent lying in the shared planning-cell plane.
+    #[must_use]
+    pub const fn tangent_axis(&self) -> AxisV1 {
+        self.tangent_axis
+    }
+
+    /// Returns the non-zero portal clearance width in millimeters.
+    #[must_use]
+    pub const fn clearance_width_millimeters(&self) -> u32 {
+        self.clearance_width_millimeters
+    }
+
+    /// Returns the non-zero portal clearance height in millimeters.
+    #[must_use]
+    pub const fn clearance_height_millimeters(&self) -> u32 {
+        self.clearance_height_millimeters
+    }
+
+    /// Returns abstract fluid compatibility. Hydrology constrains drainage only.
+    #[must_use]
+    pub const fn fluid(&self) -> &PortalHydrologyContractV1 {
+        &self.fluid
+    }
+}
+
+/// Required underground destination that a surface entrance must reach.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveMustConnectDestinationV1 {
+    domain: CaveTopologyDomainIdV1,
+    cell: PlanningCellCoordinateV1,
+    anchor_millimeters: [i64; 3],
+}
+
+impl CaveMustConnectDestinationV1 {
+    /// Returns the underground topology domain that must remain connected.
+    #[must_use]
+    pub const fn domain(&self) -> &CaveTopologyDomainIdV1 {
+        &self.domain
+    }
+
+    /// Returns the destination planning cell.
+    #[must_use]
+    pub const fn cell(&self) -> PlanningCellCoordinateV1 {
+        self.cell
+    }
+
+    /// Returns the destination position in world millimeters.
+    #[must_use]
+    pub const fn anchor_millimeters(&self) -> [i64; 3] {
+        self.anchor_millimeters
+    }
+}
+
+/// A seed-stable cave opening from the dimension-default domain into a child.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveSurfaceEntranceV1 {
+    entrance_id: CaveEntranceIdV1,
+    surface_cell: PlanningCellCoordinateV1,
+    surface_anchor_millimeters: [i64; 3],
+    cells: Vec<PlanningCellCoordinateV1>,
+    domains: Vec<CaveTopologyDomainIdV1>,
+    portals: Vec<CavePortalIdV1>,
+    destination: CaveMustConnectDestinationV1,
+}
+
+impl CaveSurfaceEntranceV1 {
+    /// Returns the direction-independent entrance identity.
+    #[must_use]
+    pub const fn entrance_id(&self) -> CaveEntranceIdV1 {
+        self.entrance_id
+    }
+
+    /// Returns the default-domain planning cell where the cave meets the surface skeleton.
+    #[must_use]
+    pub const fn surface_cell(&self) -> PlanningCellCoordinateV1 {
+        self.surface_cell
+    }
+
+    /// Returns the surface opening position in world millimeters.
+    #[must_use]
+    pub const fn surface_anchor_millimeters(&self) -> [i64; 3] {
+        self.surface_anchor_millimeters
+    }
+
+    /// Returns the ordered planning-cell path from the surface opening to the destination.
+    #[must_use]
+    pub fn cells(&self) -> &[PlanningCellCoordinateV1] {
+        &self.cells
+    }
+
+    /// Returns distinct topology domains visited by the path, in first-seen order.
+    #[must_use]
+    pub fn domains(&self) -> &[CaveTopologyDomainIdV1] {
+        &self.domains
+    }
+
+    /// Returns sorted cross-domain portals used by this entrance.
+    #[must_use]
+    pub fn portals(&self) -> &[CavePortalIdV1] {
+        &self.portals
+    }
+
+    /// Returns the underground destination this entrance must connect.
+    #[must_use]
+    pub const fn destination(&self) -> &CaveMustConnectDestinationV1 {
+        &self.destination
+    }
+}
+
+#[derive(Serialize)]
+struct EntranceHashPayloadV1<'a> {
+    world_seed: WorldSeedV1,
+    surface_cell: PlanningCellCoordinateV1,
+    cells: &'a [PlanningCellCoordinateV1],
+    domains: &'a [CaveTopologyDomainIdV1],
+    portals: &'a [CavePortalIdV1],
+    destination_domain: &'a CaveTopologyDomainIdV1,
+    destination_cell: PlanningCellCoordinateV1,
+}
+
+/// Compiled V6 cave topology plan. Hydrology may constrain drainage portals but
+/// never owns cave topology.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveTopologyPlanV1 {
+    world_seed: WorldSeedV1,
+    plan_hash: AtlasPlanHashV1,
+    default_cave_domain: CaveTopologyDomainIdV1,
+    underground_domains: Vec<CaveTopologyDomainIdV1>,
+    surface_entrances: Vec<CaveSurfaceEntranceV1>,
+    portals: Vec<CavePortalV1>,
+    assertions: Vec<PortalAssertionV1>,
+    must_connect: Vec<CaveMustConnectDestinationV1>,
+}
+
+impl CaveTopologyPlanV1 {
+    /// Compiles the default cave domain, underground children, surface
+    /// entrances, and must-connect destinations from a validated skeleton.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless two underground children exist, at least one
+    /// surface entrance crosses four planning cells and two topology domains,
+    /// and every entrance portal is a compiled cross-domain portal.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "compile inputs are explicit hash and ownership boundaries"
+    )]
+    pub fn compile(
+        world_seed: WorldSeedV1,
+        plan_hash: AtlasPlanHashV1,
+        default_cave_domain: &CaveTopologyDomainIdV1,
+        underground: &[UndergroundTerritoryV1],
+        portals: &[CavePortalV1],
+        config: &WorldgenConfigV1,
+    ) -> TerritoryResult<Self> {
+        if underground.len() < 2 {
+            return Err(TerritoryError::InvalidUndergroundTerritory {
+                territory: default_cave_domain.to_string(),
+                reason: "V6 cave plan requires two underground-owned subdomains".to_owned(),
+            });
+        }
+        let underground_domains = underground
+            .iter()
+            .map(|territory| territory.domain().clone())
+            .collect::<Vec<_>>();
+        let mut surface_entrances = Vec::new();
+        for territory in underground {
+            if let Some(entrance) = plan_surface_entrance(
+                world_seed,
+                default_cave_domain,
+                underground,
+                portals,
+                territory,
+                config,
+            )? {
+                surface_entrances.push(entrance);
+            }
+        }
+        surface_entrances.sort_by_key(CaveSurfaceEntranceV1::entrance_id);
+        if !surface_entrances.iter().any(|entrance| {
+            entrance.cells.len() >= 4 && entrance.domains.len() >= 2 && !entrance.portals.is_empty()
+        }) {
+            return Err(TerritoryError::InvalidCaveAdjacency {
+                reason:
+                    "V6 cave plan requires a surface entrance across four cells and two domains"
+                        .to_owned(),
+            });
+        }
+        assemble_cave_topology_plan(
+            world_seed,
+            plan_hash,
+            default_cave_domain.clone(),
+            underground_domains,
+            surface_entrances,
+            portals,
+        )
+    }
+
+    /// Collects the seed-stable cave plan for unique planning cells of `chunks`.
+    ///
+    /// Chunk order cannot change the compiled bytes. Duplicate chunk coordinates
+    /// collapse to one planning cell.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no chunk is supplied or the full V6 skeleton cannot
+    /// be compiled.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "chunk coverage is an explicit extra input over compile"
+    )]
+    pub fn from_chunks(
+        world_seed: WorldSeedV1,
+        plan_hash: AtlasPlanHashV1,
+        default_cave_domain: &CaveTopologyDomainIdV1,
+        underground: &[UndergroundTerritoryV1],
+        portals: &[CavePortalV1],
+        config: &WorldgenConfigV1,
+        chunks: impl IntoIterator<Item = ChunkCoordinate>,
+    ) -> TerritoryResult<Self> {
+        let mut cells = BTreeSet::new();
+        for chunk in chunks {
+            cells.insert(PlanningCellCoordinateV1::from_chunk(
+                chunk,
+                config.planning_cell_edge_chunks,
+            ));
+        }
+        if cells.is_empty() {
+            return Err(TerritoryError::InvalidBounds {
+                kind: "cave topology plan range",
+                minimum: 0,
+                maximum: 0,
+            });
+        }
+        let compiled = Self::compile(
+            world_seed,
+            plan_hash,
+            default_cave_domain,
+            underground,
+            portals,
+            config,
+        )?;
+        Ok(compiled.restrict_to_cells(&cells))
+    }
+
+    /// Returns the world seed frozen into this plan.
+    #[must_use]
+    pub const fn world_seed(&self) -> WorldSeedV1 {
+        self.world_seed
+    }
+
+    /// Returns the Atlas plan hash this cave plan was compiled from.
+    #[must_use]
+    pub const fn plan_hash(&self) -> AtlasPlanHashV1 {
+        self.plan_hash
+    }
+
+    /// Returns the dimension-default cave topology domain.
+    #[must_use]
+    pub const fn default_cave_domain(&self) -> &CaveTopologyDomainIdV1 {
+        &self.default_cave_domain
+    }
+
+    /// Returns canonically ordered underground-owned subdomains.
+    #[must_use]
+    pub fn underground_domains(&self) -> &[CaveTopologyDomainIdV1] {
+        &self.underground_domains
+    }
+
+    /// Returns seed-stable surface entrances.
+    #[must_use]
+    pub fn surface_entrances(&self) -> &[CaveSurfaceEntranceV1] {
+        &self.surface_entrances
+    }
+
+    /// Returns the cross-domain portals used by the planned entrances.
+    #[must_use]
+    pub fn portals(&self) -> &[CavePortalV1] {
+        &self.portals
+    }
+
+    /// Returns machine-readable portal assertions.
+    #[must_use]
+    pub fn assertions(&self) -> &[PortalAssertionV1] {
+        &self.assertions
+    }
+
+    /// Returns must-connect underground destinations.
+    #[must_use]
+    pub fn must_connect(&self) -> &[CaveMustConnectDestinationV1] {
+        &self.must_connect
+    }
+
+    fn restrict_to_cells(&self, cells: &BTreeSet<PlanningCellCoordinateV1>) -> Self {
+        let surface_entrances = self
+            .surface_entrances
+            .iter()
+            .filter(|entrance| entrance.cells.iter().any(|cell| cells.contains(cell)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut portal_ids = surface_entrances
+            .iter()
+            .flat_map(|entrance| entrance.portals.iter().copied())
+            .collect::<BTreeSet<_>>();
+        portal_ids.extend(self.portals.iter().filter_map(|portal| {
+            let (first, second) = portal.cells();
+            (cells.contains(&first) || cells.contains(&second)).then_some(portal.portal_id())
+        }));
+        let portals = self
+            .portals
+            .iter()
+            .filter(|portal| portal_ids.contains(&portal.portal_id()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let assertions = portals
+            .iter()
+            .map(CavePortalV1::assertion)
+            .collect::<Vec<_>>();
+        let must_connect = surface_entrances
+            .iter()
+            .map(|entrance| entrance.destination.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Self {
+            world_seed: self.world_seed,
+            plan_hash: self.plan_hash,
+            default_cave_domain: self.default_cave_domain.clone(),
+            underground_domains: self.underground_domains.clone(),
+            surface_entrances,
+            portals,
+            assertions,
+            must_connect,
+        }
+    }
 }
 
 /// Canonical portal evidence between two adjacent planning cells.
@@ -346,6 +750,242 @@ impl CaveAdjacencyV1 {
         }
         Ok(())
     }
+}
+
+fn assemble_cave_topology_plan(
+    world_seed: WorldSeedV1,
+    plan_hash: AtlasPlanHashV1,
+    default_cave_domain: CaveTopologyDomainIdV1,
+    underground_domains: Vec<CaveTopologyDomainIdV1>,
+    surface_entrances: Vec<CaveSurfaceEntranceV1>,
+    portals: &[CavePortalV1],
+) -> TerritoryResult<CaveTopologyPlanV1> {
+    let portal_ids = surface_entrances
+        .iter()
+        .flat_map(|entrance| entrance.portals.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if portal_ids.is_empty() {
+        return Err(TerritoryError::InvalidCaveAdjacency {
+            reason: "V6 cave plan requires a cross-domain portal".to_owned(),
+        });
+    }
+    let planned_portals = portals
+        .iter()
+        .filter(|portal| portal_ids.contains(&portal.portal_id()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if planned_portals.len() != portal_ids.len() {
+        return Err(TerritoryError::InvalidCaveAdjacency {
+            reason: "entrance portal is missing from the compiled cave skeleton".to_owned(),
+        });
+    }
+    let assertions = planned_portals
+        .iter()
+        .map(CavePortalV1::assertion)
+        .collect::<Vec<_>>();
+    let must_connect = surface_entrances
+        .iter()
+        .map(|entrance| entrance.destination.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if must_connect.is_empty() {
+        return Err(TerritoryError::InvalidCaveAdjacency {
+            reason: "V6 cave plan requires a must-connect destination".to_owned(),
+        });
+    }
+    Ok(CaveTopologyPlanV1 {
+        world_seed,
+        plan_hash,
+        default_cave_domain,
+        underground_domains,
+        surface_entrances,
+        portals: planned_portals,
+        assertions,
+        must_connect,
+    })
+}
+
+fn plan_surface_entrance(
+    world_seed: WorldSeedV1,
+    default_domain: &CaveTopologyDomainIdV1,
+    underground: &[UndergroundTerritoryV1],
+    portals: &[CavePortalV1],
+    territory: &UndergroundTerritoryV1,
+    config: &WorldgenConfigV1,
+) -> TerritoryResult<Option<CaveSurfaceEntranceV1>> {
+    for portal in portals {
+        let Some((surface_cell, underground_cell)) =
+            default_child_portal_cells(portal, default_domain, territory)
+        else {
+            continue;
+        };
+        let Some(cells) = inward_entrance_path(surface_cell, underground_cell, territory.bounds())
+        else {
+            continue;
+        };
+        let portal_y = portal_anchor_y(portal)?;
+        let mut domains = Vec::new();
+        let mut valid = true;
+        for (index, cell) in cells.iter().enumerate() {
+            let domain = topology_domain_at(default_domain, underground, *cell, portal_y);
+            if index == 0 {
+                if domain != default_domain {
+                    valid = false;
+                    break;
+                }
+            } else if domain != territory.domain() {
+                valid = false;
+                break;
+            }
+            if !domains.iter().any(|seen| seen == domain) {
+                domains.push(domain.clone());
+            }
+        }
+        if !valid || cells.len() < 4 || domains.len() < 2 {
+            continue;
+        }
+        let destination_cell = cells[cells.len() - 1];
+        let destination = CaveMustConnectDestinationV1 {
+            domain: territory.domain().clone(),
+            cell: destination_cell,
+            anchor_millimeters: cell_anchor_millimeters(
+                destination_cell,
+                portal.anchor_millimeters[1],
+                config,
+            ),
+        };
+        let mut portal_ids = vec![portal.portal_id()];
+        portal_ids.sort();
+        let payload = EntranceHashPayloadV1 {
+            world_seed,
+            surface_cell,
+            cells: &cells,
+            domains: &domains,
+            portals: &portal_ids,
+            destination_domain: destination.domain(),
+            destination_cell: destination.cell(),
+        };
+        let hash =
+            canonical_json_hash(&payload).map_err(|error| TerritoryError::CanonicalEncoding {
+                kind: "cave surface entrance",
+                reason: error.to_string(),
+            })?;
+        return Ok(Some(CaveSurfaceEntranceV1 {
+            entrance_id: CaveEntranceIdV1::from_hash(hash),
+            surface_cell,
+            surface_anchor_millimeters: cell_anchor_millimeters(
+                surface_cell,
+                portal.anchor_millimeters[1],
+                config,
+            ),
+            cells,
+            domains,
+            portals: portal_ids,
+            destination,
+        }));
+    }
+    Ok(None)
+}
+
+fn default_child_portal_cells(
+    portal: &CavePortalV1,
+    default_domain: &CaveTopologyDomainIdV1,
+    territory: &UndergroundTerritoryV1,
+) -> Option<(PlanningCellCoordinateV1, PlanningCellCoordinateV1)> {
+    let (first_domain, second_domain) = portal.domains();
+    let (first_cell, second_cell) = portal.cells();
+    if first_domain == default_domain
+        && second_domain == territory.domain()
+        && territory.bounds().contains(second_cell)
+    {
+        Some((first_cell, second_cell))
+    } else if second_domain == default_domain
+        && first_domain == territory.domain()
+        && territory.bounds().contains(first_cell)
+    {
+        Some((second_cell, first_cell))
+    } else {
+        None
+    }
+}
+
+fn inward_entrance_path(
+    surface: PlanningCellCoordinateV1,
+    underground: PlanningCellCoordinateV1,
+    bounds: PlanningCellBoundsV1,
+) -> Option<Vec<PlanningCellCoordinateV1>> {
+    let step_x = underground.x.saturating_sub(surface.x);
+    let step_z = underground.z.saturating_sub(surface.z);
+    if step_x.saturating_abs() + step_z.saturating_abs() != 1 {
+        return None;
+    }
+    let mut cells = vec![surface, underground];
+    let mut cursor = underground;
+    for _ in 0..2 {
+        cursor = PlanningCellCoordinateV1::new(
+            cursor.x.saturating_add(step_x),
+            cursor.z.saturating_add(step_z),
+        );
+        if !bounds.contains(cursor) {
+            return None;
+        }
+        cells.push(cursor);
+    }
+    Some(cells)
+}
+
+fn topology_domain_at<'a>(
+    default_domain: &'a CaveTopologyDomainIdV1,
+    underground: &'a [UndergroundTerritoryV1],
+    cell: PlanningCellCoordinateV1,
+    y: i32,
+) -> &'a CaveTopologyDomainIdV1 {
+    let mut current = default_domain;
+    loop {
+        let child = underground.iter().find(|territory| {
+            let parent_matches = match territory.parent() {
+                CaveTopologyParentV1::DimensionDefault => current == default_domain,
+                CaveTopologyParentV1::Territory(parent) => parent == current,
+            };
+            parent_matches
+                && territory.bounds().contains(cell)
+                && territory.vertical_range().contains(y)
+        });
+        match child {
+            Some(territory) => current = territory.domain(),
+            None => return current,
+        }
+    }
+}
+
+fn portal_anchor_y(portal: &CavePortalV1) -> TerritoryResult<i32> {
+    i32::try_from(portal.anchor_millimeters[1].div_euclid(1_000)).map_err(|_| {
+        TerritoryError::InvalidCaveAdjacency {
+            reason: "portal anchor y does not fit the world-coordinate contract".to_owned(),
+        }
+    })
+}
+
+fn cell_anchor_millimeters(
+    cell: PlanningCellCoordinateV1,
+    y_millimeters: i64,
+    config: &WorldgenConfigV1,
+) -> [i64; 3] {
+    let edge = i64::from(config.chunk_edge_voxels)
+        .saturating_mul(i64::from(config.planning_cell_edge_chunks.max(1)));
+    let half = edge.saturating_div(2);
+    [
+        cell.x
+            .saturating_mul(edge)
+            .saturating_add(half)
+            .saturating_mul(1_000),
+        y_millimeters,
+        cell.z
+            .saturating_mul(edge)
+            .saturating_add(half)
+            .saturating_mul(1_000),
+    ]
 }
 
 pub(crate) fn validate_underground(
