@@ -1,95 +1,181 @@
 ---
-title: 文件組織方式
-status: active
-type: meta
-updated: 2026-08-19
+title: 文档组织与追踪契约
+document_id: meta.documentation-organization
+document_status: active
+document_type: meta
+tracks_implementation: false
+updated: 2026-08-22
 ---
 
-# 文件組織方式
+# 文档组织与追踪契约
 
-## 採用方式
+## 目的
 
-目前採用「讀者需求導向、主題式、文件即程式碼、決策另行留痕」的輕量結構：
+Lattice Axiom 采用 package-first、docs-as-code 的文档模型。规范必须能回答“哪个
+package 拥有这项行为、它依赖什么、怎样验证”，实现状态必须来自可复现证据，不能由
+roadmap 文案、Markdown checkbox 或文件成熟度推断。
 
-1. 以一頁一個主要問題的方式整理概念，避免照對話時間線切成難以重用的片段。
-2. 使用 Markdown 與 Git，讓文件和未來實作共享版本、審查與變更歷史。
-3. 每頁標記成熟度、文件類型與更新日期。
-4. 討論與草稿是暫時輸入；主題頁與決策紀錄才是倉庫內維護的知識，同一項規格只維護一份。
-5. 只有真正形成選擇時才建立決策紀錄，保留背景、選項、結果與後果。
-6. 先建立有內容的分類，不為了看起來完整而建立空目錄。
-7. 不保存對話索引或聊天副本；完成主題化與決策記錄後直接刪除暫時材料，由 Git 歷史保留文件演進。
+本页规定 active 文档树的目录、身份、frontmatter 与维护流程。需求和实现证据的详细
+格式见[需求与实现证据](traceability.md)。
 
-## 為何適合現在的 Lattice Axiom
+## 三种身份不得混淆
 
-現有材料是架構探索，不是操作流程或 API。依 Diátaxis 的分類，它主要屬於「解釋」，另有少量「調查」與「規劃」。因此現在按領域建立解釋頁；等有可執行原型後，再增加教學、操作指南與參考文件。
+| 身份 | 示例 | 文档位置 | 身份来源 |
+| --- | --- | --- | --- |
+| logical package | `@latticeaxiom/settings`、`@terrenia/blocks` | `docs/packages/<scope>/<name>/` | package manifest；路径只用于导航 |
+| platform system | package kernel、runtime host、native ABI | `docs/platform/<system>/` | accepted system contract |
+| Rust crate | `latticeaxiom-engine`、`latticeaxiom-world-db` | 不建立平行产品规范树 | implementation workspace manifest |
 
-Diátaxis 本身也提醒：四種類型是判斷文件目的的地圖，不應在一開始硬建四個空區。這與「文件仍要演進」的需求一致。
+一个 logical package 可以由多个 crates 实现，一个 crate 也可以服务多个 packages。
+package 文档必须显式列出 implementation mapping，但不得根据 crate 名称创造第二套产品身份。
 
-## 目錄契約
+## Active 目录契约
 
 ```text
 docs/
-├── foundations/   專案願景、原則與共同詞彙
-├── architecture/  可驗證的架構假說與邊界
-├── decisions/     已明確採納的重大選擇、理由與後果
-├── research/      外部調查與候選方案
-├── planning/      待決問題與下一步
-└── meta/          文件維護方式
+├── README.md                  总入口与生成状态摘要
+├── project/                   愿景、策略、技术基线与共同词汇
+├── packages/                  按 logical package 组织的产品规范
+│   ├── latticeaxiom/
+│   └── terrenia/
+├── platform/                  跨 package 的 host／kernel／wire／storage 契约
+├── delivery/
+│   ├── roadmaps/              依赖顺序与 release gates
+│   ├── plans/                 有限期 implementation plans
+│   ├── evidence/              固定到实现 commit 的机器可读证据
+│   └── status.md              由证据生成的只读看板
+├── decisions/                 ADR 与兼容性理由
+├── research/                  外部调查；不自动成为产品承诺
+└── meta/                      本契约、schema、模板与维护工具说明
 ```
 
-`decisions/` 已在第一項明確採納的世界生成方向出現後建立；每份紀錄只處理一項決策。主題依領域分目錄，不另建 `docs/zh-hant/` 或 `docs/en/` 等語系平行樹。同一頁可混合使用中英文，不在 frontmatter 記錄語系。
+`docs/packages/` 是产品规范的主要入口，但不是所有文件的容器。跨越多个 logical
+packages 且由 host 强制执行的机制属于 `platform/`；决策理由、外部研究和 delivery
+sequencing 分别保留独立目录，避免复制到每个 package。
 
-## 文件生命週期
+根目录不得再建立第二个 `plan/` 文档树。
+
+## Package 目录最低结构
 
 ```text
-討論或調查
-    ↓
-主題頁（exploration）
-    ↓ 原型、量測、評審
-具體提案（proposed）
-    ↓ 明確採納
-決策紀錄（accepted）
-    ↓ 日後改變
-新決策取代舊決策（superseded）
+docs/packages/latticeaxiom/settings/
+├── README.md          package 身份、职责、依赖、capability 与 implementation mapping
+├── registry.md        单一主要问题的规范页
+└── requirements.json  本目录规范的机器可读 MUST／SHOULD 验收清单
 ```
 
-對已進入實作或仍有相容性責任的決策做重大改變時，不覆寫歷史理由；建立新紀錄並互相連結。若專案尚無程式／存檔，維護者明確進行整體架構重置，且舊方案留在主文件樹會形成兩套互斥真相，則直接從 active 文件樹刪除舊方案，由 Git 歷史保存討論；新 ADR 必須完整記錄新基線與理由。普通文字修正與補充直接更新主題頁。
+只有已有内容时才新增子页。提议中的 package 可以建立目录，但 `README.md` 必须明确
+标为 `proposed`，requirements 的实现状态保持 `not-started`，不得让目录存在本身成为
+package 已被接受或已被实现的证据。
 
-## 每頁最低要求
+## Frontmatter 契约
 
-- 標題能直接說明頁面回答的問題。
-- 開頭說明範圍與成熟度。
-- 區分「目前假說」「已知限制」「待驗證項目」。
-- 相關內容用連結引用，不複製整段規格。
-- 外部事實附原始或官方來源；未驗證的主張明確標記。
-- 不完整頁面在開頭直接說明缺口，避免讀者誤以為完整。
+每份 Markdown 至少包含：
 
-## 決策紀錄最低欄位
+```yaml
+---
+title: 设置注册与解析
+document_id: package.latticeaxiom.settings.registry
+document_status: accepted
+document_type: package-spec
+owners:
+  - "@latticeaxiom/settings"
+tracks_implementation: true
+requirements:
+  - SETTINGS-REGISTRY-001
+updated: 2026-08-22
+---
+```
 
-真正需要建立決策紀錄時，至少包含：
+字段规则：
 
-- 狀態
-- 背景與問題
-- 決策驅動因素
-- 考慮過的選項
-- 決策結果與理由
-- 正面與負面後果
-- 如何驗證決策有效
+- `document_id`：仓库内永久稳定、全局唯一；移动文件不改变。
+- `document_status`：`exploration | proposed | accepted | active | superseded`，只描述
+  文档或规范成熟度。
+- `document_type`：`index | overview | package-spec | platform-spec | decision | research |
+  roadmap | plan | reference | meta`。
+- `owners`：规范责任主体；package 使用完整 `PackageName`，platform 文档使用
+  `platform:<system>`。index／research／meta 可以省略。
+- `tracks_implementation`：只有具有可验证产品要求的规范、roadmap 或 plan 才为 `true`。
+- `requirements`：由本文档定义或汇总的稳定 requirement IDs；不追踪实现时省略。
+- `updated`：规范内容最后变更日期，不是实现最后验证日期。
 
-檔名採 `NNNN-short-title.md`；狀態至少支援 `proposed`、`accepted`、`rejected`、`deprecated` 與 `superseded`。
+禁止继续使用含义模糊的裸 `status` 与 `type` 字段。
 
-## 目前不做的事
+## 文档成熟度与实现状态
 
-- 不把所有對話逐句複製到主題頁。
-- 不因技術偏好出現在對話中就提升為已接受決策；需要維護者確認與 ADR。
-- 沒有選擇靜態網站產生器；目前 Markdown 已足夠。
-- 沒有建立尚無讀者任務可支撐的空教學或 API 目錄。
+`document_status: accepted` 只表示规范已被采用。它不表示：
 
-## 調查依據
+- 对应 crate 已存在；
+- package manifest 已进入产品 lock；
+- fixture 或 DTO 已接入 production path；
+- roadmap milestone 已完成。
 
-- [Diátaxis：依讀者需求區分教學、操作指南、參考與解釋](https://diataxis.fr/)
-- [Diátaxis：把框架當指南，並以小步迭代改善文件](https://www.diataxis.fr/how-to-use-diataxis/)
-- [Write the Docs：Docs as Code](https://www.writethedocs.org/guide/docs-as-code/)
-- [Write the Docs：文件應可掃讀、就近、單一來源且可定位](https://www.writethedocs.org/guide/writing/docs-principles/)
-- [The Good Docs Project：先從讀者、任務與維護能力設計資訊架構](https://www.thegooddocsproject.dev/tactic/ia-guide)
-- [MADR：以精簡 Markdown 紀錄單一重要決策及其理由](https://adr.github.io/madr/)
+实现状态只允许由 requirement evidence 聚合产生：
+
+| 状态 | 含义 |
+| --- | --- |
+| `not-started` | 没有符合要求的实现证据 |
+| `scaffolded` | 只有 manifest、DTO、trait、fixture、generated skeleton 或测试空壳 |
+| `in-progress` | 已有 production code，但仍有 MUST requirement 未验证，或产品入口尚未消费 |
+| `implemented` | 全部 MUST requirements 在固定 commit 上通过，且真实产品入口消费该实现 |
+| `not-applicable` | 该文档不描述可实施产品要求 |
+
+人不得直接在规范 Markdown 中填写或修改实现状态。`docs/delivery/status.md` 及 package
+README 中的状态摘要必须由 requirements 与 evidence 生成。
+
+## 单一事实来源
+
+- 规范和验收条件：本仓库的 normative Markdown 与 `requirements.json`。
+- package 身份、版本、依赖和 source：实现仓 package manifest。
+- crate graph：实现仓 Cargo workspace manifest。
+- 实现结果：绑定实现仓 commit 的 evidence snapshot。
+- 排期和依赖顺序：roadmap；它不覆盖前四项。
+
+同一条规范只能有一个 primary owner 页面。其他页面用链接和 requirement ID 引用，不能
+复制整段 MUST 规则。
+
+## 变更流程
+
+```text
+package／platform 规范与 requirement
+  → 必要时新增 ADR
+  → 实现 PR 引用 requirement ID
+  → production code、test 与 product-entry evidence
+  → 固定 implementation commit
+  → 更新 evidence snapshot
+  → 自动生成 package 与全局状态
+```
+
+如果修改 writer authority、持久化相容性、trust policy、ABI、world coordinate 或冻结性能
+budget，仍须遵守现有 ADR stop conditions；文件重组不能被用来绕开决策流程。
+
+## 文档生命周期
+
+```text
+调查／讨论
+  → exploration
+  → proposed（已有具体可验收方案）
+  → accepted（明确采用）
+  → superseded（由新规范或 ADR 取代）
+```
+
+研究文件可以长期保持 `exploration`。roadmap 和 index 使用 `active`，但 active 仍不表示
+其列出的交付已经实现。
+
+## 禁止事项
+
+- 不以目录、crate、类型或 fixture 的存在宣称 package 已实现。
+- 不以 `[x]`、章节名“完成”或 prose 百分比作为实现事实。
+- 不手填“90%”；显示已验证 MUST 数量，例如 `7/11`。
+- 不把 implementation commit 的代码快照复制进本仓库。
+- 不让同一规范在 architecture、planning 与 package 页面维护三份。
+- 不保留旧路径下的平行 active 页面；迁移后由 Git history 追溯。
+
+## 文档质量最低要求
+
+- 标题直接说明页面回答的问题。
+- 开头说明 scope、owner 与非目标。
+- 每个 normative MUST 都有稳定 requirement ID 和可复现 acceptance。
+- 外部事实链接原始或官方来源；推断明确标记。
+- 大改使用可审查的独立 commit；移动与语义改写尽量分轮完成。
