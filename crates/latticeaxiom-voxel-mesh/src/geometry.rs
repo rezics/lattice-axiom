@@ -255,6 +255,22 @@ impl<K> Quad<K> {
             with_offset(0, self.height),
         ]
     }
+
+    /// Quad texture coordinates covering `0..width` / `0..height`.
+    ///
+    /// Corners match [`Self::positions`] for `face`: `u` follows the face
+    /// width and `v` follows the face height, so a unit face occupies `0..1`
+    /// and a greedy rectangle covers that many unit tiles. A renderer maps
+    /// these coordinates into atlas space.
+    #[must_use]
+    pub fn uvs(&self, _face: Face) -> [[f32; 2]; 4] {
+        [
+            [0.0, 0.0],
+            [coordinate_f32(self.width), 0.0],
+            [coordinate_f32(self.width), coordinate_f32(self.height)],
+            [0.0, coordinate_f32(self.height)],
+        ]
+    }
 }
 
 /// Axis-aligned bounds in interior-local meters.
@@ -444,6 +460,9 @@ mod tests {
             for normal in face.quad_normals() {
                 assert_vector_eq(normal, face.normal());
             }
+            let uvs = quad.uvs(face);
+            assert_eq!(uvs.len(), corners.len());
+            assert_eq!(uvs, [[0.0, 0.0], [2.0, 0.0], [2.0, 3.0], [0.0, 3.0]]);
         }
     }
 
