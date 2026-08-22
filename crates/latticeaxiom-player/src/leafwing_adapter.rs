@@ -46,6 +46,8 @@ pub enum LeafwingPlayerAction {
     Pause,
     /// Runtime focused-control activation button.
     SurfaceActivate,
+    /// Runtime pick-block button.
+    PickBlock,
 }
 
 /// Returns the provisional keyboard/mouse and standard-gamepad binding map.
@@ -76,6 +78,7 @@ pub fn default_leafwing_input_map() -> InputMap<LeafwingPlayerAction> {
         .insert(LeafwingPlayerAction::BreakBlock, GamepadButton::West)
         .insert(LeafwingPlayerAction::PlaceBlock, MouseButton::Right)
         .insert(LeafwingPlayerAction::PlaceBlock, GamepadButton::East)
+        .insert(LeafwingPlayerAction::PickBlock, MouseButton::Middle)
         .insert(LeafwingPlayerAction::Inspect, KeyCode::KeyF)
         .insert(LeafwingPlayerAction::Inspect, GamepadButton::North)
         .insert(LeafwingPlayerAction::Pause, KeyCode::Escape)
@@ -143,6 +146,7 @@ fn sample_leafwing_state(
         (LeafwingPlayerAction::Jump, PlayerActionV1::Jump),
         (LeafwingPlayerAction::BreakBlock, PlayerActionV1::BreakBlock),
         (LeafwingPlayerAction::PlaceBlock, PlayerActionV1::PlaceBlock),
+        (LeafwingPlayerAction::PickBlock, PlayerActionV1::PickBlock),
         (LeafwingPlayerAction::Inspect, PlayerActionV1::Inspect),
         (LeafwingPlayerAction::Pause, PlayerActionV1::Pause),
         (

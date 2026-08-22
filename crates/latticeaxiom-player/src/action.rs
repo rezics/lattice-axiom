@@ -32,6 +32,8 @@ pub enum PlayerActionV1 {
     Pause = 7,
     /// Activate the focused surface control.
     SurfaceActivate = 8,
+    /// Select or swap the inventory stack that places the aimed block.
+    PickBlock = 9,
 }
 
 /// Portable finite two-axis action value.
@@ -91,6 +93,7 @@ impl PlayerActionButtonsV1 {
     const INSPECT: u16 = 1 << 3;
     const PAUSE: u16 = 1 << 4;
     const SURFACE_ACTIVATE: u16 = 1 << 5;
+    const PICK_BLOCK: u16 = 1 << 6;
 
     /// Returns an empty button set.
     #[must_use]
@@ -108,6 +111,7 @@ impl PlayerActionButtonsV1 {
             PlayerActionV1::Inspect => Self::INSPECT,
             PlayerActionV1::Pause => Self::PAUSE,
             PlayerActionV1::SurfaceActivate => Self::SURFACE_ACTIVATE,
+            PlayerActionV1::PickBlock => Self::PICK_BLOCK,
             PlayerActionV1::Move | PlayerActionV1::Look => return false,
         };
         self.0 & bit != 0
@@ -122,6 +126,7 @@ impl PlayerActionButtonsV1 {
             PlayerActionV1::Inspect => Self::INSPECT,
             PlayerActionV1::Pause => Self::PAUSE,
             PlayerActionV1::SurfaceActivate => Self::SURFACE_ACTIVATE,
+            PlayerActionV1::PickBlock => Self::PICK_BLOCK,
             PlayerActionV1::Move | PlayerActionV1::Look => return,
         };
         self.0 |= bit;
@@ -356,6 +361,7 @@ mod tests {
         assert_eq!(PlayerActionV1::Inspect as u8, 6);
         assert_eq!(PlayerActionV1::Pause as u8, 7);
         assert_eq!(PlayerActionV1::SurfaceActivate as u8, 8);
+        assert_eq!(PlayerActionV1::PickBlock as u8, 9);
     }
 
     #[test]

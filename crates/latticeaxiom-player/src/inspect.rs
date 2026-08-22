@@ -29,6 +29,14 @@ pub struct HeadlessTargetInspectV1 {
     pub in_flight: u32,
     /// Resident projections pinned because they were edited.
     pub dirty: u32,
+    /// Package namespace of the targeted block (`terrenia` from `terrenia:block/oak-log`).
+    pub declared_by: String,
+    /// Required tool class as canonical tool-class identifier text, when a tool is required.
+    pub harvest_tool: Option<String>,
+    /// Inclusive minimum tool tier, when a tool is required.
+    pub harvest_tier: Option<u8>,
+    /// Deterministic mining hardness in ticks.
+    pub hardness_ticks: u32,
 }
 
 impl HeadlessTargetInspectV1 {
@@ -43,16 +51,50 @@ impl HeadlessTargetInspectV1 {
         in_flight: u32,
         dirty: u32,
     ) -> Self {
+        let block_display_name = missing_presentation_display_name(block_id.as_str());
+        let block_display_icon = missing_presentation_icon(block_id.as_str());
+        let declared_by = declared_by_namespace(block_id.as_str());
         Self {
-            block_display_name: missing_presentation_display_name(block_id.as_str()),
-            block_display_icon: missing_presentation_icon(block_id.as_str()),
             observation,
             block_id,
+            block_display_name,
+            block_display_icon,
             chunk,
             resident,
             active,
             in_flight,
             dirty,
+            declared_by,
+            harvest_tool: None,
+            harvest_tier: None,
+            hardness_ticks: 0,
+        }
+    }
+
+    /// Player overlay: name, harvest, declared-by, and stable id.
+    ///
+    /// Occupancy and chunk coordinates stay on the F3 path.
+    #[must_use]
+    pub fn overlay_lines(&self) -> String {
+        format!(
+            "{}\n{}\ndeclared-by {}\n{}",
+            self.block_display_name,
+            self.harvest_line(),
+            self.declared_by,
+            self.block_id.as_str()
+        )
+    }
+
+    fn harvest_line(&self) -> String {
+        match self.harvest_tool.as_deref() {
+            None => "Hand".to_owned(),
+            Some(tool) => {
+                let hardness = self.hardness_ticks;
+                match self.harvest_tier {
+                    Some(tier) => format!("{tool} {tier} {hardness}"),
+                    None => format!("{tool} {hardness}"),
+                }
+            }
         }
     }
 
@@ -79,6 +121,13 @@ pub fn occupancy_line(resident: u32, active: u32, in_flight: u32, dirty: u32) ->
 #[must_use]
 pub fn chunk_line(chunk: ChunkCoordinate) -> String {
     format!("chunk {},{},{}", chunk.x, chunk.y, chunk.z)
+}
+
+fn declared_by_namespace(content_id: &str) -> String {
+    content_id
+        .split_once(':')
+        .map_or(content_id, |(namespace, _)| namespace)
+        .to_owned()
 }
 
 fn missing_presentation_display_name(content_id: &str) -> String {
@@ -198,6 +247,7 @@ mod tests {
 
         assert_eq!(inspect.block_id, block_id);
         assert_eq!(inspect.block_display_name, "Oak Log");
+        assert_eq!(inspect.declared_by, "terrenia");
         assert_eq!(
             inspect.block_display_icon,
             "terrenia:asset/icon-block-oak-log"
@@ -211,5 +261,10 @@ mod tests {
         assert_eq!(inspect.dirty, 2);
         assert_eq!(inspect.chunk_line(), "chunk -1,3,-1");
         assert_eq!(inspect.occupancy_line(), "r12 a8 i1 d2");
+        let overlay = inspect.overlay_lines();
+        assert!(overlay.contains("Oak Log"), "{overlay}");
+        assert!(overlay.contains("terrenia:block/oak-log"), "{overlay}");
+        assert!(!overlay.contains(&inspect.occupancy_line()), "{overlay}");
+        assert!(!overlay.contains(&inspect.chunk_line()), "{overlay}");
     }
 }
