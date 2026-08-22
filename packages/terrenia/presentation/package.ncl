@@ -1,4 +1,5 @@
-# Client-only Terrenia presentation: placeholder materials, icons, and HUD display.
+# Client-only Terrenia presentation: package-authored materials, icons, HUD
+# display, and deterministic fallbacks. Headless graphs omit this package.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in

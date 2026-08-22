@@ -895,3 +895,62 @@ fn crash_lease_and_low_disk_cues_are_actionable_and_block_continue() {
     );
     assert_eq!(WriterLeaseState::Absent, WriterLeaseState::default());
 }
+
+#[test]
+fn home_uses_shared_route_vocabulary_and_client_ui_projection() {
+    let record = projected_record(
+        world("123e4567-e89b-42d3-a456-426614174000"),
+        "Exact",
+        10,
+        WorldOpenStatus::ReadyExact,
+    );
+    let mut shell = StartShellModel::new(
+        shell_graph(),
+        WorldListModel::new(vec![record], WorldSort::LastPlayed),
+    );
+    assert_eq!(
+        shell.typed_shell_route(),
+        Some(latticeaxiom_client_ui::ShellRouteV1::Home)
+    );
+    let snapshot = shell
+        .typed_home_snapshot()
+        .unwrap_or_else(|error| panic!("typed home: {error}"));
+    latticeaxiom_client_ui::check_accesskit_tree(snapshot.root())
+        .unwrap_or_else(|error| panic!("a11y: {error}"));
+    assert!(
+        snapshot
+            .root()
+            .find(
+                &latticeaxiom_client_ui::SemanticKey::new("home/packages-profiles")
+                    .unwrap_or_else(|error| panic!("{error}"))
+            )
+            .is_some()
+    );
+
+    let effect = shell
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("home/quit")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::Activate,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("quit: {error}"));
+    assert_eq!(effect, ShellEffect::Navigate(ShellScreen::QuitConfirm));
+    assert_eq!(
+        shell.typed_shell_route(),
+        Some(latticeaxiom_client_ui::ShellRouteV1::QuitConfirm)
+    );
+    let quit = shell
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("modal/quit/confirm")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::Activate,
+            source: InputSource::Keyboard,
+        })
+        .unwrap_or_else(|error| panic!("confirm quit: {error}"));
+    assert_eq!(quit, ShellEffect::RequestQuitProduct);
+    let snapshot = shell
+        .typed_snapshot()
+        .unwrap_or_else(|error| panic!("typed snapshot: {error}"));
+    assert!(snapshot.is_some());
+}

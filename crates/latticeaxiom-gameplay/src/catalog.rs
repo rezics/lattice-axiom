@@ -486,6 +486,42 @@ impl GameplayCatalog {
         &self.workstations
     }
 
+    /// Returns compiled scheduled processes in identity order.
+    #[must_use]
+    pub fn processes(&self) -> &BTreeMap<ProcessId, ProcessDefinitionV1> {
+        &self.processes
+    }
+
+    /// Returns compiled item tags in identity order.
+    #[must_use]
+    pub fn tags(&self) -> &BTreeMap<ItemTagId, BTreeSet<ItemId>> {
+        &self.tags
+    }
+
+    /// Returns compiled item roles in identity order.
+    #[must_use]
+    pub fn roles(&self) -> &BTreeMap<ItemRoleId, ItemRoleDefinitionV1> {
+        &self.roles
+    }
+
+    /// Returns frozen role bindings in identity order.
+    #[must_use]
+    pub fn bindings(&self) -> &BTreeMap<ItemRoleId, ItemId> {
+        &self.bindings
+    }
+
+    /// Returns explicit fuel qualification rules in catalog order.
+    #[must_use]
+    pub fn fuel_rules(&self) -> &[FuelRuleV1] {
+        &self.fuel_rules
+    }
+
+    /// Returns the best explicit fuel burn ticks for `item`, if any.
+    #[must_use]
+    pub fn fuel_ticks(&self, item: &ItemId) -> Option<u32> {
+        self.best_fuel_ticks(item)
+    }
+
     /// Returns compiled block-to-schema bindings in identity order.
     #[must_use]
     pub fn block_schema_bindings(&self) -> &BTreeMap<BlockId, BlockSchemaBindingV1> {

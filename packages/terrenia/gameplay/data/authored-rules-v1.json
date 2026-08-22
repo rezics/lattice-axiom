@@ -5,73 +5,221 @@
   "mining_rules": [
     {
       "id": "terrenia:mining-rule/fixture@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "pickaxe",
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      },
+      "drop_predicate": {
+        "tool_class": "pickaxe",
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      }
     },
     {
       "id": "terrenia:mining-rule/fragile@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:mining-rule/instant@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "none",
+        "class": null,
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "none",
+        "class": null,
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:mining-rule/leaves@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "shears",
+        "class": "latticeaxiom:tool-class/shears@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:mining-rule/soil@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "shovel",
+        "class": "latticeaxiom:tool-class/shovel@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:mining-rule/stone@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "pickaxe",
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      },
+      "drop_predicate": {
+        "tool_class": "pickaxe",
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      }
     },
     {
       "id": "terrenia:mining-rule/vegetation@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:mining-rule/wood@1",
-      "progress_model": "fixed-authoritative-ticks"
+      "progress_model": "fixed-authoritative-ticks",
+      "mining_speed_predicate": {
+        "tool_class": "axe",
+        "class": "latticeaxiom:tool-class/axe@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     }
   ],
   "tool_requirements": [
     {
       "id": "terrenia:tool-requirement/axe@1",
       "tool_class": "axe",
-      "minimum_tier": 0
+      "minimum_tier": 0,
+      "class": "latticeaxiom:tool-class/axe@1",
+      "mining_speed_predicate": {
+        "tool_class": "axe",
+        "class": "latticeaxiom:tool-class/axe@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:tool-requirement/hand@1",
       "tool_class": "hand",
-      "minimum_tier": 0
+      "minimum_tier": 0,
+      "class": "latticeaxiom:tool-class/hand@1",
+      "mining_speed_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:tool-requirement/none@1",
       "tool_class": "none",
-      "minimum_tier": 0
+      "minimum_tier": 0,
+      "class": null,
+      "mining_speed_predicate": {
+        "tool_class": "none",
+        "class": null,
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "none",
+        "class": null,
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:tool-requirement/pickaxe@1",
       "tool_class": "pickaxe",
-      "minimum_tier": 1
+      "minimum_tier": 1,
+      "class": "latticeaxiom:tool-class/pickaxe@1",
+      "mining_speed_predicate": {
+        "tool_class": "pickaxe",
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      },
+      "drop_predicate": {
+        "tool_class": "pickaxe",
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      }
     },
     {
       "id": "terrenia:tool-requirement/shears@1",
       "tool_class": "shears",
-      "minimum_tier": 0
+      "minimum_tier": 0,
+      "class": "latticeaxiom:tool-class/shears@1",
+      "mining_speed_predicate": {
+        "tool_class": "shears",
+        "class": "latticeaxiom:tool-class/shears@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     },
     {
       "id": "terrenia:tool-requirement/shovel@1",
       "tool_class": "shovel",
-      "minimum_tier": 0
+      "minimum_tier": 0,
+      "class": "latticeaxiom:tool-class/shovel@1",
+      "mining_speed_predicate": {
+        "tool_class": "shovel",
+        "class": "latticeaxiom:tool-class/shovel@1",
+        "minimum_tier": 0
+      },
+      "drop_predicate": {
+        "tool_class": "hand",
+        "class": "latticeaxiom:tool-class/hand@1",
+        "minimum_tier": 0
+      }
     }
   ],
   "drop_tables": [
     {
       "id": "terrenia:drop-table/none@1",
-      "outputs": []
+      "outputs": [],
+      "mining_speed_predicate": "terrenia:tool-requirement/none@1",
+      "drop_predicate": "terrenia:tool-requirement/none@1"
     },
     {
       "id": "terrenia:drop-table/grass@1",
@@ -80,7 +228,9 @@
           "item": "terrenia:item/grass",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/dirt@1",
@@ -89,16 +239,20 @@
           "item": "terrenia:item/dirt",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/stone@1",
       "outputs": [
         {
-          "item": "terrenia:item/stone",
+          "item": "terrenia:item/cobblestone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/copper-block@1",
@@ -107,7 +261,9 @@
           "item": "terrenia:item/copper-block",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/obsidian@1",
@@ -116,7 +272,9 @@
           "item": "terrenia:item/obsidian",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/clay@1",
@@ -125,7 +283,9 @@
           "item": "terrenia:item/clay",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/sand@1",
@@ -134,7 +294,9 @@
           "item": "terrenia:item/sand",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/red-sand@1",
@@ -143,7 +305,9 @@
           "item": "terrenia:item/red-sand",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/gravel@1",
@@ -152,7 +316,9 @@
           "item": "terrenia:item/gravel",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/limestone@1",
@@ -161,7 +327,9 @@
           "item": "terrenia:item/limestone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/basalt@1",
@@ -170,7 +338,9 @@
           "item": "terrenia:item/basalt",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/sandstone@1",
@@ -179,7 +349,9 @@
           "item": "terrenia:item/sandstone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/red-sandstone@1",
@@ -188,7 +360,9 @@
           "item": "terrenia:item/red-sandstone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/copper-ore@1",
@@ -197,7 +371,9 @@
           "item": "terrenia:item/copper-ore",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/oak-log@1",
@@ -206,7 +382,9 @@
           "item": "terrenia:item/oak-log",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/oak-leaves@1",
@@ -215,7 +393,9 @@
           "item": "terrenia:item/oak-leaves",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shears@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/tall-grass@1",
@@ -224,7 +404,9 @@
           "item": "terrenia:item/tall-grass",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/coarse-dirt@1",
@@ -233,7 +415,9 @@
           "item": "terrenia:item/coarse-dirt",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/rooted-dirt@1",
@@ -242,7 +426,9 @@
           "item": "terrenia:item/rooted-dirt",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/mud@1",
@@ -251,7 +437,9 @@
           "item": "terrenia:item/mud",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/silt@1",
@@ -260,7 +448,9 @@
           "item": "terrenia:item/silt",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/peat@1",
@@ -269,7 +459,9 @@
           "item": "terrenia:item/peat",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/snow@1",
@@ -278,7 +470,9 @@
           "item": "terrenia:item/snow",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/ice@1",
@@ -287,7 +481,9 @@
           "item": "terrenia:item/ice",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/moss@1",
@@ -296,7 +492,9 @@
           "item": "terrenia:item/moss",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shovel@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/deepstone@1",
@@ -305,7 +503,9 @@
           "item": "terrenia:item/deepstone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/granite@1",
@@ -314,7 +514,9 @@
           "item": "terrenia:item/granite",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/slate@1",
@@ -323,7 +525,9 @@
           "item": "terrenia:item/slate",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/tuff@1",
@@ -332,7 +536,9 @@
           "item": "terrenia:item/tuff",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/calcite@1",
@@ -341,7 +547,9 @@
           "item": "terrenia:item/calcite",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/dripstone@1",
@@ -350,7 +558,9 @@
           "item": "terrenia:item/dripstone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/coal-ore@1",
@@ -359,7 +569,9 @@
           "item": "terrenia:item/coal-ore",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/iron-ore@1",
@@ -368,7 +580,9 @@
           "item": "terrenia:item/iron-ore",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/tin-ore@1",
@@ -377,7 +591,9 @@
           "item": "terrenia:item/tin-ore",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/gold-ore@1",
@@ -386,7 +602,9 @@
           "item": "terrenia:item/gold-ore",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/sulfur-ore@1",
@@ -395,7 +613,9 @@
           "item": "terrenia:item/sulfur-ore",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/crystal-cluster@1",
@@ -404,7 +624,9 @@
           "item": "terrenia:item/crystal-cluster",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/pine-log@1",
@@ -413,7 +635,9 @@
           "item": "terrenia:item/pine-log",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/pine-leaves@1",
@@ -422,7 +646,9 @@
           "item": "terrenia:item/pine-leaves",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/shears@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/cobblestone@1",
@@ -431,7 +657,9 @@
           "item": "terrenia:item/cobblestone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/marble@1",
@@ -440,7 +668,9 @@
           "item": "terrenia:item/marble",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/coal-block@1",
@@ -449,7 +679,9 @@
           "item": "terrenia:item/coal-block",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/iron-block@1",
@@ -458,7 +690,9 @@
           "item": "terrenia:item/iron-block",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/tin-block@1",
@@ -467,7 +701,9 @@
           "item": "terrenia:item/tin-block",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/gold-block@1",
@@ -476,7 +712,9 @@
           "item": "terrenia:item/gold-block",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/stripped-oak-log@1",
@@ -485,7 +723,9 @@
           "item": "terrenia:item/stripped-oak-log",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/stripped-pine-log@1",
@@ -494,7 +734,9 @@
           "item": "terrenia:item/stripped-pine-log",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/fern@1",
@@ -503,7 +745,9 @@
           "item": "terrenia:item/fern",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/reed@1",
@@ -512,7 +756,9 @@
           "item": "terrenia:item/reed",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/cactus@1",
@@ -521,7 +767,9 @@
           "item": "terrenia:item/cactus",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/vine@1",
@@ -530,7 +778,9 @@
           "item": "terrenia:item/vine",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/red-mushroom@1",
@@ -539,7 +789,9 @@
           "item": "terrenia:item/red-mushroom",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/brown-mushroom@1",
@@ -548,7 +800,9 @@
           "item": "terrenia:item/brown-mushroom",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/glow-moss@1",
@@ -557,7 +811,9 @@
           "item": "terrenia:item/glow-moss",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/wildflowers@1",
@@ -566,7 +822,9 @@
           "item": "terrenia:item/wildflowers",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/oak-planks@1",
@@ -575,7 +833,9 @@
           "item": "terrenia:item/oak-planks",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/pine-planks@1",
@@ -584,7 +844,9 @@
           "item": "terrenia:item/pine-planks",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/stone-bricks@1",
@@ -593,7 +855,9 @@
           "item": "terrenia:item/stone-bricks",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/mossy-stone-bricks@1",
@@ -602,7 +866,9 @@
           "item": "terrenia:item/mossy-stone-bricks",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/bricks@1",
@@ -611,7 +877,9 @@
           "item": "terrenia:item/bricks",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/polished-stone@1",
@@ -620,7 +888,9 @@
           "item": "terrenia:item/polished-stone",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/polished-granite@1",
@@ -629,7 +899,9 @@
           "item": "terrenia:item/polished-granite",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/polished-slate@1",
@@ -638,7 +910,9 @@
           "item": "terrenia:item/polished-slate",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/basalt-tiles@1",
@@ -647,7 +921,9 @@
           "item": "terrenia:item/basalt-tiles",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/glass@1",
@@ -656,7 +932,9 @@
           "item": "terrenia:item/glass",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/copper-grating@1",
@@ -665,7 +943,9 @@
           "item": "terrenia:item/copper-grating",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/roof-tiles@1",
@@ -674,7 +954,9 @@
           "item": "terrenia:item/roof-tiles",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/torch@1",
@@ -683,7 +965,9 @@
           "item": "terrenia:item/torch",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/hand@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/workbench@1",
@@ -692,7 +976,9 @@
           "item": "terrenia:item/workbench",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     },
     {
       "id": "terrenia:drop-table/furnace@1",
@@ -701,7 +987,9 @@
           "item": "terrenia:item/furnace",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/pickaxe@1",
+      "drop_predicate": "terrenia:tool-requirement/pickaxe@1"
     },
     {
       "id": "terrenia:drop-table/chest@1",
@@ -710,7 +998,9 @@
           "item": "terrenia:item/chest",
           "quantity": 1
         }
-      ]
+      ],
+      "mining_speed_predicate": "terrenia:tool-requirement/axe@1",
+      "drop_predicate": "terrenia:tool-requirement/hand@1"
     }
   ],
   "items": [
@@ -1219,7 +1509,19 @@
         "item": "terrenia:item/stone-bricks",
         "quantity": 4
       },
-      "output_role": "terrenia:item-role/recipe-output-stone-bricks@1"
+      "output_role": "terrenia:item-role/recipe-output-stone-bricks@1",
+      "width": 2,
+      "height": 2,
+      "pattern": [
+        [
+          "terrenia:item/stone",
+          "terrenia:item/stone"
+        ],
+        [
+          "terrenia:item/stone",
+          "terrenia:item/stone"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/mossy-stone-bricks@1",
@@ -1268,7 +1570,19 @@
         "item": "terrenia:item/polished-stone",
         "quantity": 4
       },
-      "output_role": "terrenia:item-role/recipe-output-polished-stone@1"
+      "output_role": "terrenia:item-role/recipe-output-polished-stone@1",
+      "width": 2,
+      "height": 2,
+      "pattern": [
+        [
+          "terrenia:item/stone",
+          "terrenia:item/stone"
+        ],
+        [
+          "terrenia:item/stone",
+          "terrenia:item/stone"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/polished-granite@1",
@@ -1283,7 +1597,19 @@
         "item": "terrenia:item/polished-granite",
         "quantity": 4
       },
-      "output_role": "terrenia:item-role/recipe-output-polished-granite@1"
+      "output_role": "terrenia:item-role/recipe-output-polished-granite@1",
+      "width": 2,
+      "height": 2,
+      "pattern": [
+        [
+          "terrenia:item/granite",
+          "terrenia:item/granite"
+        ],
+        [
+          "terrenia:item/granite",
+          "terrenia:item/granite"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/polished-slate@1",
@@ -1298,7 +1624,19 @@
         "item": "terrenia:item/polished-slate",
         "quantity": 4
       },
-      "output_role": "terrenia:item-role/recipe-output-polished-slate@1"
+      "output_role": "terrenia:item-role/recipe-output-polished-slate@1",
+      "width": 2,
+      "height": 2,
+      "pattern": [
+        [
+          "terrenia:item/slate",
+          "terrenia:item/slate"
+        ],
+        [
+          "terrenia:item/slate",
+          "terrenia:item/slate"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/basalt-tiles@1",
@@ -1313,7 +1651,19 @@
         "item": "terrenia:item/basalt-tiles",
         "quantity": 4
       },
-      "output_role": "terrenia:item-role/recipe-output-basalt-tiles@1"
+      "output_role": "terrenia:item-role/recipe-output-basalt-tiles@1",
+      "width": 2,
+      "height": 2,
+      "pattern": [
+        [
+          "terrenia:item/basalt",
+          "terrenia:item/basalt"
+        ],
+        [
+          "terrenia:item/basalt",
+          "terrenia:item/basalt"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/glass@1",
@@ -1343,7 +1693,14 @@
         "item": "terrenia:item/copper-grating",
         "quantity": 8
       },
-      "output_role": "terrenia:item-role/recipe-output-copper-grating@1"
+      "output_role": "terrenia:item-role/recipe-output-copper-grating@1",
+      "width": 1,
+      "height": 1,
+      "pattern": [
+        [
+          "terrenia:item/copper-block"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/roof-tiles@1",
@@ -1392,7 +1749,19 @@
         "item": "terrenia:item/workbench",
         "quantity": 1
       },
-      "output_role": "terrenia:item-role/recipe-output-workbench@1"
+      "output_role": "terrenia:item-role/recipe-output-workbench@1",
+      "width": 2,
+      "height": 2,
+      "pattern": [
+        [
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks"
+        ],
+        [
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/furnace@1",
@@ -1407,7 +1776,26 @@
         "item": "terrenia:item/furnace",
         "quantity": 1
       },
-      "output_role": "terrenia:item-role/recipe-output-furnace@1"
+      "output_role": "terrenia:item-role/recipe-output-furnace@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        [
+          "terrenia:item/cobblestone",
+          "terrenia:item/cobblestone",
+          "terrenia:item/cobblestone"
+        ],
+        [
+          "terrenia:item/cobblestone",
+          null,
+          "terrenia:item/cobblestone"
+        ],
+        [
+          "terrenia:item/cobblestone",
+          "terrenia:item/cobblestone",
+          "terrenia:item/cobblestone"
+        ]
+      ]
     },
     {
       "id": "terrenia:recipe/chest@1",
@@ -1422,7 +1810,41 @@
         "item": "terrenia:item/chest",
         "quantity": 1
       },
-      "output_role": "terrenia:item-role/recipe-output-chest@1"
+      "output_role": "terrenia:item-role/recipe-output-chest@1",
+      "width": 3,
+      "height": 3,
+      "pattern": [
+        [
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks"
+        ],
+        [
+          "terrenia:item/oak-planks",
+          null,
+          "terrenia:item/oak-planks"
+        ],
+        [
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks",
+          "terrenia:item/oak-planks"
+        ]
+      ]
+    },
+    {
+      "id": "terrenia:recipe/smelt-stone@1",
+      "kind": "smelting",
+      "inputs": [
+        {
+          "item": "terrenia:item/cobblestone",
+          "quantity": 1
+        }
+      ],
+      "output": {
+        "item": "terrenia:item/stone",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-smelt-stone@1"
     }
   ],
   "recipe_output_roles": [
@@ -1517,6 +1939,10 @@
     {
       "id": "terrenia:item-role/recipe-output-chest@1",
       "concrete_item": "terrenia:item/chest"
+    },
+    {
+      "id": "terrenia:item-role/recipe-output-smelt-stone@1",
+      "concrete_item": "terrenia:item/stone"
     }
   ],
   "block_schema_bindings": [
@@ -1559,6 +1985,150 @@
         "latticeaxiom:schema/container-owner@1"
       ],
       "container_slots": 27
+    }
+  ],
+  "item_tags": [
+    {
+      "id": "terrenia:item-tag/planks@1",
+      "members": [
+        "terrenia:item/oak-planks",
+        "terrenia:item/pine-planks"
+      ]
+    },
+    {
+      "id": "terrenia:item-tag/logs@1",
+      "members": [
+        "terrenia:item/oak-log",
+        "terrenia:item/pine-log",
+        "terrenia:item/stripped-oak-log",
+        "terrenia:item/stripped-pine-log"
+      ]
+    },
+    {
+      "id": "terrenia:item-tag/cobblestones@1",
+      "members": [
+        "terrenia:item/cobblestone"
+      ]
+    }
+  ],
+  "fuel_rules": [
+    {
+      "accepts": {
+        "item": "terrenia:item/coal-block"
+      },
+      "burn_ticks": 16000
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/coal-ore"
+      },
+      "burn_ticks": 1600
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/oak-log"
+      },
+      "burn_ticks": 300
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/oak-planks"
+      },
+      "burn_ticks": 300
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/peat"
+      },
+      "burn_ticks": 800
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/pine-log"
+      },
+      "burn_ticks": 300
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/pine-planks"
+      },
+      "burn_ticks": 300
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/stick"
+      },
+      "burn_ticks": 100
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/stripped-oak-log"
+      },
+      "burn_ticks": 300
+    },
+    {
+      "accepts": {
+        "item": "terrenia:item/stripped-pine-log"
+      },
+      "burn_ticks": 300
+    }
+  ],
+  "processes": [
+    {
+      "id": "terrenia:process/smelt-bricks@1",
+      "workstation": "latticeaxiom:workstation/furnace@1",
+      "input": {
+        "item": "terrenia:item/clay",
+        "quantity": 4
+      },
+      "output": {
+        "item": "terrenia:item/bricks",
+        "quantity": 4
+      },
+      "output_role": "terrenia:item-role/recipe-output-bricks@1",
+      "duration_ticks": 200
+    },
+    {
+      "id": "terrenia:process/smelt-glass@1",
+      "workstation": "latticeaxiom:workstation/furnace@1",
+      "input": {
+        "item": "terrenia:item/sand",
+        "quantity": 1
+      },
+      "output": {
+        "item": "terrenia:item/glass",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-glass@1",
+      "duration_ticks": 200
+    },
+    {
+      "id": "terrenia:process/smelt-roof-tiles@1",
+      "workstation": "latticeaxiom:workstation/furnace@1",
+      "input": {
+        "item": "terrenia:item/clay",
+        "quantity": 2
+      },
+      "output": {
+        "item": "terrenia:item/roof-tiles",
+        "quantity": 2
+      },
+      "output_role": "terrenia:item-role/recipe-output-roof-tiles@1",
+      "duration_ticks": 200
+    },
+    {
+      "id": "terrenia:process/smelt-stone@1",
+      "workstation": "latticeaxiom:workstation/furnace@1",
+      "input": {
+        "item": "terrenia:item/cobblestone",
+        "quantity": 1
+      },
+      "output": {
+        "item": "terrenia:item/stone",
+        "quantity": 1
+      },
+      "output_role": "terrenia:item-role/recipe-output-smelt-stone@1",
+      "duration_ticks": 200
     }
   ]
 }

@@ -40,6 +40,15 @@ pub use catalog::{
     CONTENT_CATALOG_SCHEMA_MAJOR, ContentCatalogInputV1, ContentCatalogLimitsV1, ContentCatalogV1,
 };
 pub use error::{ContentError, ContentResult, FluidLevelError};
+pub use fluid::fluid_semantics::{
+    CellInspectKindV1, FluidCollisionKindV1, FluidInspectFragmentV1, FluidSelectionKindV1,
+    cell_inspect_kind, classify_fluid_collision, classify_fluid_selection,
+    fluid_cell_blocks_collision, fluid_cell_is_selectable, inspect_fluid_cell,
+};
+pub use fluid::solid_fluid_volume::{
+    CHUNK_EDGE_V1, SOLID_FLUID_VOLUME_SCHEMA_V1, SolidFluidVolumeCellV1, SolidFluidVolumeV1,
+    VolumeChunkCoordinateV1, volume_linear_index,
+};
 pub use fluid::{
     BoundedFluidUpdatePolicyV1, FluidCollisionPolicyV1, FluidDefinitionV1, FluidFlowV1,
     FluidLevelV1, FluidSelectionPolicyV1, FluidStateV1,

@@ -82,17 +82,13 @@ pub(super) fn apply_surface_actions(
         };
         if let Ok(receipt) = router.apply(&command) {
             if receipt.route.overlay() == GameOverlayV1::Workbench {
-                let _ = spine.bind_workstation(
-                    match latticeaxiom_gameplay::WorkstationId::parse(
-                        "latticeaxiom:workstation/crafting@1",
-                    ) {
-                        Ok(id) => id,
-                        Err(error) => {
-                            panic!("crafting workstation is a platform contract: {error}")
-                        }
-                    },
-                    latticeaxiom_gameplay::ContainerId::new(1),
-                );
+                let Ok(workstation) = latticeaxiom_gameplay::WorkstationId::parse(
+                    "latticeaxiom:workstation/crafting@1",
+                ) else {
+                    continue;
+                };
+                let _ =
+                    spine.bind_workstation(workstation, latticeaxiom_gameplay::ContainerId::new(1));
             }
             sync_derived_state(&receipt, &mut pause, &mut surfaces, &mut suppressed);
             frame.clear();

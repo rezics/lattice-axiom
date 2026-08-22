@@ -32,6 +32,12 @@ pub enum ShellScreen {
     Loading,
     /// Managed-trash recovery list.
     Trash,
+    /// Packages and profiles. Composition edits are not live settings.
+    PackagesProfiles,
+    /// Diagnostics and about.
+    DiagnosticsAbout,
+    /// Quit confirmation without a launch intent.
+    QuitConfirm,
     /// Live world session; the start library is not the front surface.
     Playing,
     /// In-session pause overlay. Save and Exit are explicit; this is not a checkpoint.
@@ -88,6 +94,9 @@ impl StartShellModel {
             ShellScreen::Settings => self.settings_nodes(),
             ShellScreen::Loading => self.loading_nodes(),
             ShellScreen::Trash => self.trash_nodes(),
+            ShellScreen::PackagesProfiles => Self::packages_profiles_nodes(),
+            ShellScreen::DiagnosticsAbout => Self::diagnostics_about_nodes(),
+            ShellScreen::QuitConfirm => Self::quit_confirm_nodes(),
             ShellScreen::Playing => Self::playing_nodes(),
             ShellScreen::Pause => Self::pause_nodes(),
         };
@@ -151,6 +160,17 @@ impl StartShellModel {
         } else if target == "home/settings" || action == SemanticActionId::OpenSettings {
             self.screen = ShellScreen::Settings;
             ShellEffect::Navigate(ShellScreen::Settings)
+        } else if target == "home/packages-profiles" {
+            self.screen = ShellScreen::PackagesProfiles;
+            ShellEffect::Navigate(ShellScreen::PackagesProfiles)
+        } else if target == "home/diagnostics-about" {
+            self.screen = ShellScreen::DiagnosticsAbout;
+            ShellEffect::Navigate(ShellScreen::DiagnosticsAbout)
+        } else if target == "home/quit" {
+            self.screen = ShellScreen::QuitConfirm;
+            ShellEffect::Navigate(ShellScreen::QuitConfirm)
+        } else if target == "modal/quit/confirm" {
+            ShellEffect::RequestQuitProduct
         } else if action == SemanticActionId::Back {
             self.screen = ShellScreen::Home;
             ShellEffect::Navigate(ShellScreen::Home)
@@ -277,10 +297,12 @@ impl StartShellModel {
     fn home_nodes(&self) -> Vec<SemanticNode> {
         let mut nodes = Vec::new();
         match self.worlds.home_primary_action() {
-            HomePrimaryAction::Continue { label, .. } => nodes.push(button(
+            HomePrimaryAction::Continue { label, world_id } => nodes.push(button(
                 "home/continue",
                 format!("Continue — {label}"),
-                "Only available because the recent world is ReadyExact",
+                format!(
+                    "ReadyExact; world {world_id}; health/lock/durability summaries come from the catalog"
+                ),
                 [SemanticActionId::Activate, SemanticActionId::ContinueWorld],
             )),
             HomePrimaryAction::Review { label, health, .. } => nodes.push(button(
@@ -305,10 +327,28 @@ impl StartShellModel {
                 [SemanticActionId::Activate, SemanticActionId::QuickCreate],
             ),
             button(
+                "home/packages-profiles",
+                "Packages and Profiles",
+                "Inspect the frozen lock and profile drafts",
+                [SemanticActionId::Activate],
+            ),
+            button(
                 "home/settings",
                 "Settings and Accessibility",
                 "Accessibility remains reachable before and during errors",
                 [SemanticActionId::Activate, SemanticActionId::OpenSettings],
+            ),
+            button(
+                "home/diagnostics-about",
+                "Diagnostics and About",
+                "Lock, health, and product identity",
+                [SemanticActionId::Activate],
+            ),
+            button(
+                "home/quit",
+                "Quit",
+                "Confirm leaving the product",
+                [SemanticActionId::Activate],
             ),
         ]);
         nodes
@@ -558,6 +598,41 @@ impl StartShellModel {
             ),
         ]
     }
+
+    fn packages_profiles_nodes() -> Vec<SemanticNode> {
+        vec![button(
+            "packages-profiles/back",
+            "Back",
+            "Return to home. Composition edits require a candidate lock.",
+            [SemanticActionId::Back],
+        )]
+    }
+
+    fn diagnostics_about_nodes() -> Vec<SemanticNode> {
+        vec![button(
+            "diagnostics-about/back",
+            "Back",
+            "Return to home",
+            [SemanticActionId::Back],
+        )]
+    }
+
+    fn quit_confirm_nodes() -> Vec<SemanticNode> {
+        vec![
+            button(
+                "modal/quit/confirm",
+                "Quit",
+                "End the product without a world handoff",
+                [SemanticActionId::Activate],
+            ),
+            button(
+                "modal/quit/cancel",
+                "Cancel",
+                "Return to home",
+                [SemanticActionId::Activate, SemanticActionId::Back],
+            ),
+        ]
+    }
 }
 
 fn button<const N: usize>(
@@ -721,6 +796,8 @@ pub enum ShellEffect {
     RequestRestoreTrashAsClone(WorldId),
     /// Plan stale exclusive-lease recovery without opening a writer.
     RequestRecoverStaleLease(WorldId),
+    /// Confirm product quit without publishing a launch intent.
+    RequestQuitProduct,
 }
 
 /// Invalid shell command injection.

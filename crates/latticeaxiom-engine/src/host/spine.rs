@@ -20,7 +20,8 @@ use latticeaxiom_content::{
 use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
     BlockId, BlockPosition, CommandOutcomeV1, ContainerId, DimensionChunkKey, DropEntityId,
-    GameplayCatalog, GameplayReject, ItemStackV1, PlayerId, RecipeId, SlotIndex, WorkstationId,
+    GameplayCatalog, GameplayReject, InventoryInspectV1, ItemStackV1, PlayerId, RecipeId,
+    RecipeInspectV1, SlotIndex, WorkstationId,
 };
 use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
@@ -63,11 +64,12 @@ use latticeaxiom_worldgen::{
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
     SealedWorldWriterHost,
-    catalog::{authored_content_catalog, authored_gameplay_catalog, host_worldgen_catalog},
+    catalog::{authored_content_catalog, host_worldgen_catalog, lock_selected_gameplay_catalog},
     display::{
         ContentDisplayCatalogV1, ContentDisplayLabelV1, authored_content_display_catalog,
         presentation_package_selected,
     },
+    fluid::{HostFluidTickV1, tick_resident as tick_resident_fluids},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     layers::{HostFaceStyle, HostPresentationIndex},
     profile::StreamingProfileEvidenceV1,
@@ -93,6 +95,10 @@ const CELL_OCCUPANCY_BYTES: usize = 4;
 const WORLD_ID: &str = "00000000-0000-4000-8000-0000000000b1";
 const REACH_MM: u16 = 5_000;
 const FLUID_OCCUPANCY_REJECT: &str = "terrenia:fluid-occupancy/reject@1";
+/// Portal SDF is doubled-voxel Chebyshev minus radius and is biased one unit
+/// outside the aperture voxel. Hydrology must not occupy that entrance
+/// neighborhood; cave-interior aquifers farther from portals remain.
+const HYDROLOGY_PORTAL_EXCLUSION_SDF: i32 = 8;
 
 /// Production [`MemoryTransactionKernel`] installed behind the storage trait.
 #[derive(Clone, Debug, Resource)]
@@ -276,17 +282,17 @@ pub struct CellOccupancyV1 {
 }
 
 pub(super) struct ProductionSpineInner {
-    runtime: VoxelRuntime<HostVoxel>,
+    pub(super) runtime: VoxelRuntime<HostVoxel>,
     plan: GenerationPlanV1,
     worldgen_bindings: AuthoredWorldgenBindingsV1,
     spawn: SpawnLocationV1,
     clamps: StreamClamps,
-    content: ContentCatalogV1,
-    palette: Vec<BlockId>,
+    pub(super) content: ContentCatalogV1,
+    pub(super) palette: Vec<BlockId>,
     solid_palette: CompiledSolidPaletteV1,
-    fluid_palette: CompiledFluidPaletteV1,
+    pub(super) fluid_palette: CompiledFluidPaletteV1,
     empty: HostVoxel,
-    chunk_edge: u16,
+    pub(super) chunk_edge: u16,
     world: WorldId,
     dimension: DimensionId,
     next_transaction: u128,
@@ -298,7 +304,7 @@ pub(super) struct ProductionSpineInner {
     removed: BTreeSet<ChunkCoordinate>,
     waiting_derived: VecDeque<ComputedDerived>,
     in_flight_tasks: Vec<Task<ComputedDerived>>,
-    presentation: HostPresentationIndex,
+    pub(super) presentation: HostPresentationIndex,
     edited: BTreeSet<ChunkCoordinate>,
     lifecycle: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
     eviction_lease: u64,
@@ -377,15 +383,15 @@ struct ChunkDerived {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct HostVoxel {
-    palette_index: u16,
-    fluid_palette_index: u16,
+pub(super) struct HostVoxel {
+    pub(super) palette_index: u16,
+    pub(super) fluid_palette_index: u16,
     solid_style: Option<HostFaceStyle>,
     fluid_style: Option<HostFaceStyle>,
 }
 
 impl HostVoxel {
-    fn occupancy(
+    pub(super) fn occupancy(
         palette_index: u16,
         fluid_palette_index: u16,
         presentation: &HostPresentationIndex,
@@ -490,7 +496,7 @@ impl ProductionSpine {
         images: &LockVerifiedComposeImages,
         world: WorldId,
     ) -> Result<Self, ProductionHostError> {
-        Self::materialize_world_with_catalog(images, world, authored_gameplay_catalog()?)
+        Self::materialize_world_with_catalog(images, world, lock_selected_gameplay_catalog(images)?)
     }
 
     /// Materializes one process-local world with a caller-supplied catalog.
@@ -526,7 +532,7 @@ impl ProductionSpine {
         Self::materialize_world_with_catalog_from_storage(
             images,
             world,
-            authored_gameplay_catalog()?,
+            lock_selected_gameplay_catalog(images)?,
             storage,
         )
     }
@@ -725,8 +731,9 @@ impl ProductionSpine {
     /// Commits edited working-set chunks through an already activated host writer.
     ///
     /// [`MemoryTransactionKernel`] stays the session cache. Player pose,
-    /// inventory, selected slot, tool durability, containers, and scheduled
-    /// work are captured onto the spawn chunk before the world-db commit.
+    /// inventory, selected slot, tool durability, dropped items, containers,
+    /// and scheduled work are captured onto the spawn chunk before the
+    /// world-db commit.
     /// Durable oracles publish [`CommitDurabilityV1::Durable`]; volatile
     /// references stay [`CommitDurabilityV1::Written`]. After a durable
     /// commit, previously dirty chunks may be evicted and later hydrated from
@@ -823,6 +830,11 @@ impl ProductionSpine {
                 .iter()
                 .map(|(id, continuation)| (*id, continuation))
                 .collect::<Vec<_>>();
+            let drops = gameplay
+                .dropped_items()
+                .iter()
+                .map(|(id, drop)| (*id, drop))
+                .collect::<Vec<_>>();
             DurablePlayerSessionV1::capture(
                 pose,
                 inventory
@@ -833,6 +845,8 @@ impl ProductionSpine {
                     .map_or(&[], ProductionInventoryView::slots),
                 &containers,
                 &scheduled,
+                &drops,
+                gameplay.next_drop(),
             )
         };
         let payload = session.encode_payload()?;
@@ -1641,6 +1655,32 @@ impl ProductionSpine {
         inner.pick_aimed_block(self.storage.kernel())
     }
 
+    /// Typed inventory inspect fragment. UI must not invent a second inventory.
+    #[must_use]
+    pub fn inventory_inspect(&self) -> Option<InventoryInspectV1> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .gameplay
+                .as_ref()
+                .and_then(|session| session.inventory_inspect().ok())
+        })
+    }
+
+    /// Typed recipe inspect fragments in catalog identity order.
+    #[must_use]
+    pub fn recipe_inspect(&self, workstation: Option<&WorkstationId>) -> Vec<RecipeInspectV1> {
+        self.lock_inner().map_or_else(
+            |_| Vec::new(),
+            |inner| {
+                inner
+                    .gameplay
+                    .as_ref()
+                    .and_then(|session| session.recipe_inspect(workstation).ok())
+                    .unwrap_or_default()
+            },
+        )
+    }
+
     /// Recipe identities currently craftable at `workstation`.
     ///
     /// `None` is hand crafting. Workstation recipes stay empty until that
@@ -1898,6 +1938,36 @@ impl ProductionSpine {
         inner.occupancy_at(position)
     }
 
+    /// Plans and applies one bounded water/lava tick on every resident chunk.
+    ///
+    /// Completions that no longer match the captured chunk revision are
+    /// rejected and never applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlockEditRejectV1`] when a plan exceeds its hard bound, mixing
+    /// is detected, storage is unavailable, or a completion is stale.
+    pub fn tick_bounded_fluids(&self) -> Result<Vec<HostFluidTickV1>, BlockEditRejectV1> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        tick_resident_fluids(&mut inner, self.storage.kernel())
+    }
+
+    /// Returns the captured fluid revision stamp for a resident chunk.
+    #[must_use]
+    pub fn fluid_revision_stamp(
+        &self,
+        coordinate: ChunkCoordinate,
+    ) -> Option<latticeaxiom_voxel_runtime::FluidRevisionStamp> {
+        let inner = self.lock_inner().ok()?;
+        let (world, chunk, voxel) = inner.runtime.chunk_revisions(coordinate)?;
+        Some(latticeaxiom_voxel_runtime::FluidRevisionStamp::new(
+            world, chunk, voxel,
+        ))
+    }
+
     /// Reruns authoritative Y-up DDA and records the inspect result.
     ///
     /// Client observations are ignored as hits. The selected voxel identity
@@ -2114,7 +2184,7 @@ impl ProductionSpineInner {
                 i64::from(position.z),
             ))
             .map_err(|_| BlockEditRejectV1::PermissionDenied)?;
-        if voxel == self.empty {
+        if voxel.palette_index == self.empty.palette_index {
             return Err(BlockEditRejectV1::NotBreakable);
         }
         let Some(block) = self.block_id(voxel) else {
@@ -2400,7 +2470,7 @@ impl ProductionSpineInner {
         Ok(())
     }
 
-    fn commit_cell(
+    pub(super) fn commit_cell(
         &mut self,
         kernel: &MemoryTransactionKernel,
         fixed_tick: u64,
@@ -2473,6 +2543,61 @@ impl ProductionSpineInner {
             new_content: self.block_id(new_voxel),
             committed_chunk_revision: stored.revision(),
         })
+    }
+
+    pub(super) fn commit_chunk_voxels(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        coordinate: ChunkCoordinate,
+        cells: &[HostVoxel],
+    ) -> Result<(), BlockEditRejectV1> {
+        let key = ChunkKey::new(self.world, self.dimension.clone(), coordinate);
+        let snapshot = kernel
+            .reference_snapshot(self.world)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let stored = snapshot
+            .chunk(&key)
+            .ok_or(BlockEditRejectV1::PermissionDenied)?;
+        let transaction = WorldTransaction::new(
+            TransactionId::from_u128(self.next_transaction),
+            self.world,
+            snapshot.revision(),
+            vec![ChunkMutation::new(
+                key.clone(),
+                ChunkRevisionExpectation::Exact(stored.revision()),
+                ChangedDomains::VOXELS,
+                chunk_data(&self.voxel_schema, self.voxel_schema_version, cells),
+            )],
+        );
+        kernel
+            .commit(transaction)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        self.next_transaction = self.next_transaction.saturating_add(1);
+        let published = kernel
+            .reference_snapshot(self.world)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let stored = published
+            .chunk(&key)
+            .ok_or(BlockEditRejectV1::StorageUnavailable)?;
+        self.edited.insert(coordinate);
+        project_stored(
+            &mut self.runtime,
+            stored,
+            self.chunk_edge,
+            FixedTick::new(0),
+            &self.presentation,
+        )
+        .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        seal_unready_cave_voids(self, coordinate);
+        self.lifecycle
+            .entry(coordinate)
+            .and_modify(|state| {
+                if *state == ChunkLifecycle::Active {
+                    *state = ChunkLifecycle::MeshCollider;
+                }
+            })
+            .or_insert(ChunkLifecycle::Resident);
+        Ok(())
     }
 
     fn block_id(&self, voxel: HostVoxel) -> Option<BlockId> {
@@ -2581,7 +2706,7 @@ impl ProductionSpineInner {
         })
     }
 
-    fn block_semantics(
+    pub(super) fn block_semantics(
         &self,
         block: &StableId,
     ) -> Option<&latticeaxiom_content::BlockStateSemanticsV1> {
@@ -2628,13 +2753,9 @@ impl ProductionSpineInner {
         inspect.block_display_icon = label.icon;
         inspect.declared_by = inspect.block_id.namespace().to_owned();
         if let Some(gameplay) = &self.gameplay
-            && let Some(definition) = gameplay.catalog().block(&inspect.block_id)
+            && let Some(harvest) = gameplay.catalog().mining_inspect(&inspect.block_id)
         {
-            inspect.hardness_ticks = definition.mining.hardness.get();
-            if let Some(tool) = &definition.mining.tool {
-                inspect.harvest_tool = Some(tool.class.as_str().to_owned());
-                inspect.harvest_tier = Some(tool.minimum_tier);
-            }
+            inspect.apply_mining_inspect(&harvest);
         }
         Ok(inspect)
     }
@@ -2705,6 +2826,7 @@ fn map_inspect_reject(reject: &BlockEditRejectV1) -> TargetInspectRejectV1 {
         | BlockEditRejectV1::NotReplaceable
         | BlockEditRejectV1::WouldIntersectActor
         | BlockEditRejectV1::RequiresTool { .. }
+        | BlockEditRejectV1::ToolBroken
         | BlockEditRejectV1::RequiresProgress { .. }
         | BlockEditRejectV1::NoPlacementContent
         | BlockEditRejectV1::PermissionDenied
@@ -3879,6 +4001,10 @@ fn apply_hydrology_occupancy(
     )?;
     let edge = inner.chunk_edge;
     let stride = usize::from(edge).saturating_mul(usize::from(edge));
+    let entrance = player_spawn_center(inner.spawn)
+        .ok()
+        .and_then(|center| translation_chunk(center, inner.chunk_edge))
+        .and_then(|chunk| required_cave_entrance(&inner.plan, chunk));
     for occupied in candidate.cells() {
         let index = usize::from(occupied.y())
             .saturating_mul(stride)
@@ -3899,11 +4025,10 @@ fn apply_hydrology_occupancy(
         let world_z = i64::from(coordinate.z)
             .saturating_mul(i64::from(edge))
             .saturating_add(i64::from(occupied.z()));
-        if inner
-            .plan
-            .cave_occupancy_arbitration(world_x, world_y, world_z)
-            .portal_signed_distance()
-            <= 0
+        // Initial occupancy is standing source water. Directional flow is a
+        // drainage hint for the bounded runtime planner, not a D9 snapshot.
+        if occupied.flow() != HydrologyFlowV1::Still
+            || hydrology_occupancy_forbidden(inner, entrance.as_ref(), world_x, world_y, world_z)
         {
             continue;
         }
@@ -3944,6 +4069,62 @@ fn apply_hydrology_occupancy(
     Ok(())
 }
 
+fn hydrology_occupancy_forbidden(
+    inner: &ProductionSpineInner,
+    entrance: Option<&RequiredCaveEntranceV1>,
+    world_x: i64,
+    world_y: i64,
+    world_z: i64,
+) -> bool {
+    let occupancy = inner
+        .plan
+        .cave_occupancy_arbitration(world_x, world_y, world_z);
+    if occupancy.portal_signed_distance() <= 0 {
+        return true;
+    }
+    if occupancy.is_finally_void()
+        && occupancy.portal_signed_distance() <= HYDROLOGY_PORTAL_EXCLUSION_SDF
+    {
+        return true;
+    }
+    entrance.is_some_and(|entrance| {
+        hydrology_forbidden_for_entrance(*entrance, world_x, world_y, world_z)
+    })
+}
+
+fn hydrology_forbidden_for_entrance(
+    entrance: RequiredCaveEntranceV1,
+    world_x: i64,
+    world_y: i64,
+    world_z: i64,
+) -> bool {
+    let [aperture_x, aperture_y, aperture_z] = entrance.aperture();
+    let aperture = [
+        i64::from(aperture_x),
+        i64::from(aperture_y),
+        i64::from(aperture_z),
+    ];
+    let radius = i64::from(entrance.clearance_radius_voxels()).max(1);
+    let dx = (world_x - aperture[0]).abs();
+    let dy = (world_y - aperture[1]).abs();
+    let dz = (world_z - aperture[2]).abs();
+    if dx.max(dy).max(dz) <= radius {
+        return true;
+    }
+    let [destination_x, destination_y, destination_z] = entrance.destination();
+    if world_x == i64::from(destination_x)
+        && world_y == i64::from(destination_y)
+        && world_z == i64::from(destination_z)
+    {
+        return true;
+    }
+    let [_, surface_y, _] = entrance.surface_footing();
+    world_x == aperture[0]
+        && world_z == aperture[2]
+        && world_y >= aperture[1]
+        && world_y <= i64::from(surface_y)
+}
+
 const fn hydrology_flow(flow: HydrologyFlowV1) -> FluidFlowV1 {
     match flow {
         HydrologyFlowV1::Still => FluidFlowV1::Still,
@@ -3968,7 +4149,7 @@ fn chunk_data(
     )
 }
 
-fn runtime_chunk_cells(
+pub(super) fn runtime_chunk_cells(
     inner: &ProductionSpineInner,
     coordinate: ChunkCoordinate,
 ) -> Vec<HostVoxel> {
@@ -4085,18 +4266,20 @@ fn compile_host_fluid_palette(
             id: "terrenia:fluid/water+lava".to_owned(),
         });
     }
-    let source = FluidStateV1 {
-        level: FluidLevelV1::SOURCE,
-        flow: FluidFlowV1::Still,
-    };
-    let entries = catalog
-        .fluids()
-        .iter()
-        .map(|definition| FluidPaletteEntryV1::Fluid {
-            fluid: definition.header.stable_id.clone(),
-            state: source,
-        })
-        .collect();
+    let mut entries = Vec::new();
+    for definition in catalog.fluids() {
+        for raw_level in 0..=FluidLevelV1::MAX {
+            let Ok(level) = FluidLevelV1::new(raw_level) else {
+                continue;
+            };
+            for flow in FluidFlowV1::ALL {
+                entries.push(FluidPaletteEntryV1::Fluid {
+                    fluid: definition.header.stable_id.clone(),
+                    state: FluidStateV1 { level, flow },
+                });
+            }
+        }
+    }
     CompiledFluidPaletteV1::compile(catalog, entries, PaletteLimitsV1::default())
         .map_err(ProductionHostError::from)
 }
@@ -4245,6 +4428,10 @@ fn restore_player_session(
     for (id, continuation) in session.scheduled_states()? {
         gameplay.restore_continuation(id, continuation)?;
     }
+    for (id, drop) in session.dropped_states()? {
+        gameplay.restore_drop(id, drop)?;
+    }
+    gameplay.set_next_drop(session.next_drop());
     Ok(())
 }
 
@@ -4456,7 +4643,7 @@ fn local_index(position: BlockPosition, edge: u16) -> [usize; 3] {
     ]
 }
 
-const fn canonical_index(edge: usize, x: usize, y: usize, z: usize) -> usize {
+pub(super) const fn canonical_index(edge: usize, x: usize, y: usize, z: usize) -> usize {
     x + edge * (z + edge * y)
 }
 

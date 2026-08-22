@@ -8,6 +8,11 @@ use crate::{
     header::{validate_contract_id, validate_header, validate_optional_exact_reference},
 };
 
+#[path = "fluid_semantics.rs"]
+pub mod fluid_semantics;
+#[path = "solid_fluid_volume.rs"]
+pub mod solid_fluid_volume;
+
 /// Frozen v1 fluid level in the inclusive range `0..=7`.
 ///
 /// Level zero is a full/source cell. Increasing values represent decreasing
@@ -90,6 +95,18 @@ pub enum FluidFlowV1 {
     South,
     /// Negative Z flow.
     North,
+}
+
+impl FluidFlowV1 {
+    /// Closed v1 flow set in canonical order.
+    pub const ALL: [Self; 6] = [
+        Self::Still,
+        Self::Down,
+        Self::East,
+        Self::West,
+        Self::South,
+        Self::North,
+    ];
 }
 
 /// Complete authoritative v1 per-cell fluid state.

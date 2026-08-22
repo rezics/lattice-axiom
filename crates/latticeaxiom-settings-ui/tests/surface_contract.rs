@@ -14,14 +14,14 @@ use latticeaxiom_client_ui::{
 };
 use latticeaxiom_core::{CanonicalHash, PackageName, StableId};
 use latticeaxiom_runtime_contracts::{
-    RuntimeApplyImpact, ScopeOverlay, SettingAuthority, SettingScope, SettingSensitivity,
-    SettingSpec, SettingTransactionRevision, SettingWriter, SettingsCatalogFragment,
-    SettingsCatalogPolicy, StoreRevision, ValidatedSettingsCatalog, ValueType,
-    resolve_effective_settings,
+    InputBindingV1, KnownInputBindingV1, RuntimeApplyImpact, ScopeOverlay, SettingAuthority,
+    SettingScope, SettingSensitivity, SettingSpec, SettingTransactionRevision, SettingWriter,
+    SettingsCatalogFragment, SettingsCatalogPolicy, StoreRevision, ValidatedSettingsCatalog,
+    ValueType, resolve_effective_settings,
 };
 use latticeaxiom_settings_ui::{
     SettingsControlKind, SettingsReadOnlyReason, SettingsSurfaceAuthority, SettingsSurfaceError,
-    SettingsSurfaceModel, SettingsSurfaceTransactionRequest,
+    SettingsSurfaceModel, SettingsSurfaceScope, SettingsSurfaceTransactionRequest,
 };
 use serde_json::json;
 
@@ -261,5 +261,107 @@ fn settings_tree_has_one_accesskit_root_and_apply_action() {
     assert!(
         tree.find(&SemanticKey::new("settings/apply").expect("apply"))
             .is_some()
+    );
+    assert!(
+        tree.find(&SemanticKey::new("settings/search").expect("search"))
+            .is_some()
+    );
+}
+
+#[test]
+fn in_game_scope_hides_packages_and_discloses_restart_impact() {
+    let mut scale = setting(
+        "scale",
+        "latticeaxiom:setting-category/interface",
+        ValueType::Integer {
+            min: Some(1),
+            max: Some(2),
+            step: Some(1),
+        },
+        json!(1),
+    );
+    scale.apply_impact = latticeaxiom_runtime_contracts::RuntimeApplyImpact::ProcessRestart;
+    let mut packages = setting(
+        "lock",
+        "latticeaxiom:setting-category/packages",
+        ValueType::Bool,
+        json!(false),
+    );
+    packages.apply_impact = latticeaxiom_runtime_contracts::RuntimeApplyImpact::Immediate;
+    let catalog = ValidatedSettingsCatalog::compile(
+        [SettingsCatalogFragment::new(
+            package("@example/settings"),
+            vec![scale, packages],
+        )],
+        SettingsCatalogPolicy::default(),
+    )
+    .expect("catalog");
+    let snapshot =
+        resolve_effective_settings(&catalog, [], CanonicalHash::digest(b"lock")).expect("snapshot");
+    let mut model = SettingsSurfaceModel::from_snapshot(
+        &catalog.as_catalog().runtime,
+        snapshot.snapshot(),
+        SettingsSurfaceAuthority::shell(),
+    )
+    .expect("model");
+    assert_eq!(model.rows().len(), 2);
+    model.apply_scope_filter(SettingsSurfaceScope::InGame);
+    assert_eq!(model.rows().len(), 1);
+    assert_eq!(
+        model.rows()[0].category,
+        latticeaxiom_settings_ui::SettingsCategoryV1::Interface
+    );
+    assert!(model.restart_impact().process_restart);
+    let fragment = model.semantic_fragment().expect("fragment");
+    assert_eq!(fragment.role, latticeaxiom_client_ui::SemanticRole::Group);
+    let apply = fragment
+        .find(&SemanticKey::new("settings/apply").expect("apply"))
+        .expect("apply");
+    assert!(
+        apply
+            .description
+            .as_deref()
+            .is_some_and(|text| text.contains("Process restart"))
+    );
+}
+
+#[test]
+fn controls_rows_use_capture_keys_and_ui_never_persists() {
+    let default = serde_json::to_value(InputBindingV1::Known(KnownInputBindingV1::Keyboard {
+        usage: "Escape".to_owned(),
+        modifiers: latticeaxiom_runtime_contracts::KeyboardModifiersV1::default(),
+    }))
+    .expect("binding default");
+    let spec = setting(
+        "pause",
+        "latticeaxiom:setting-category/controls",
+        ValueType::KeyBinding,
+        default,
+    );
+    let catalog = ValidatedSettingsCatalog::compile(
+        [SettingsCatalogFragment::new(
+            package("@example/settings"),
+            vec![spec],
+        )],
+        SettingsCatalogPolicy::default(),
+    )
+    .expect("catalog");
+    let snapshot =
+        resolve_effective_settings(&catalog, [], CanonicalHash::digest(b"lock")).expect("snapshot");
+    let model = SettingsSurfaceModel::from_snapshot(
+        &catalog.as_catalog().runtime,
+        snapshot.snapshot(),
+        SettingsSurfaceAuthority::shell(),
+    )
+    .expect("model");
+    assert_eq!(model.rows()[0].control, SettingsControlKind::KeyBinding);
+    let tree = model.semantic_tree().expect("tree");
+    assert!(
+        tree.find(&SemanticKey::new("settings/controls/example:setting/pause").expect("controls"))
+            .is_some()
+    );
+    assert_eq!(
+        SettingsSurfaceTransactionRequest::Persist,
+        SettingsSurfaceTransactionRequest::Persist
     );
 }

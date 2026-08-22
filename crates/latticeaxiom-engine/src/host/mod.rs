@@ -14,6 +14,7 @@ mod chunk_mesh;
 #[cfg(feature = "client")]
 mod client;
 mod display;
+mod fluid;
 mod gameplay;
 #[cfg(feature = "client")]
 mod hud;
@@ -71,10 +72,14 @@ use latticeaxiom_world_db::WorldDbError;
 use latticeaxiom_worldgen::WorldgenError;
 use thiserror::Error;
 
-pub use catalog::{authored_content_catalog, authored_gameplay_catalog, empty_gameplay_catalog};
+pub use catalog::{
+    authored_content_catalog, authored_gameplay_catalog, empty_gameplay_catalog,
+    lock_selected_gameplay_catalog,
+};
 pub use display::{
     ContentDisplayCatalogV1, ContentDisplayLabelV1, authored_content_display_catalog,
 };
+pub use fluid::HostFluidTickV1;
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
 pub use latticeaxiom_runtime_contracts::WorldgenInspectReportV1;
 pub use latticeaxiom_worldgen::{CaveOccupancyArbitrationV1, ChunkFaceV1};

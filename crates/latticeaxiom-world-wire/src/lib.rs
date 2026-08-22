@@ -7,15 +7,16 @@
 //! budgeted; deriving a serialization trait for a domain type does not make it
 //! a wire contract.
 //!
-//! Scope is limited to the WORLD-01 chunk-record key and WORLD-06 outer
-//! envelope foundation. This crate does not define `ChunkSnapshotV1`, palette
-//! canonicalization, voxel/fluid bit packing, database checkpoints, or headers.
+//! Scope is the WORLD-01 chunk-record key, WORLD-06 outer envelope, and the
+//! versioned solid/fluid palette snapshot. This crate does not define
+//! `ChunkSnapshotV1`, database checkpoints, or world headers.
 
 mod error;
 mod key;
 mod limits;
 mod persisted_chunk;
 mod snapshot;
+mod solid_fluid_palette;
 
 pub use error::{WireResult, WorldWireError};
 pub use key::{
@@ -35,6 +36,14 @@ pub use snapshot::{
     ValidatedSnapshotPayload, decode_typed_snapshot, encode_snapshot, encode_typed_snapshot,
     preflight_snapshot, preflight_snapshot_for_contract, read_snapshot, read_snapshot_for_contract,
     read_typed_snapshot, require_numeric_tag, write_snapshot,
+};
+pub use solid_fluid_palette::{
+    CHUNK_EDGE_V1, EncodedSolidFluidPaletteV1, FLUID_STATE_SCHEMA_V1,
+    FluidPaletteOpenDispositionV1, FluidPaletteWireEntryV1, SOLID_FLUID_PALETTE_OWNER_V1,
+    SOLID_FLUID_PALETTE_SCHEMA_ID_V1, SOLID_FLUID_PALETTE_SCHEMA_VERSION_V1,
+    SolidFluidPaletteSnapshotCodecV1, SolidFluidPaletteSnapshotV1, SolidPaletteWireEntryV1,
+    classify_fluid_palette_open, decode_solid_fluid_palette_v1, encode_solid_fluid_palette_v1,
+    linear_index,
 };
 
 /// The only chunk-record key major written by this crate.

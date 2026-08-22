@@ -5,9 +5,10 @@
 
 use latticeaxiom_core::{SchemaId, canonical_json_bytes};
 use latticeaxiom_gameplay::{
-    AuthorityTick, ContainerId, ContainerOwnerComponentV1, ContainerStateV1, DimensionChunkKey,
-    DimensionId, FurnaceContinuationV1, GameplayEditTarget, GameplayStorageDomain, ItemId,
-    ItemStackV1, ItemStateV1, ProcessId, SlotIndex, WorkstationId,
+    AuthorityTick, BlockKey, BlockPosition, ContainerId, ContainerOwnerComponentV1,
+    ContainerStateV1, DimensionChunkKey, DimensionId, DropEntityId, DroppedItemV1,
+    FurnaceContinuationV1, GameplayEditTarget, GameplayStorageDomain, ItemId, ItemStackV1,
+    ItemStateV1, ProcessId, SlotIndex, WorkstationId,
 };
 use latticeaxiom_storage::{
     ChunkCoordinate, ContinuationId, PayloadSchemaVersion, PersistentEntityId, VersionedPayload,
@@ -35,6 +36,10 @@ pub(super) struct DurablePlayerSessionV1 {
     inventory: Vec<Option<DurableItemStackV1>>,
     containers: Vec<DurableContainerV1>,
     scheduled: Vec<DurableScheduledV1>,
+    #[serde(default)]
+    drops: Vec<DurableDroppedItemV1>,
+    #[serde(default)]
+    next_drop: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -70,6 +75,15 @@ struct DurableScheduledV1 {
     revision: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DurableDroppedItemV1 {
+    entity: [u8; 16],
+    dimension: String,
+    position: [i32; 3],
+    stack: DurableItemStackV1,
+}
+
 impl DurablePlayerSessionV1 {
     pub(super) fn capture(
         pose: ProductionPlayerPose,
@@ -77,6 +91,8 @@ impl DurablePlayerSessionV1 {
         inventory: &[Option<ItemStackV1>],
         containers: &[(ContainerId, &ContainerStateV1)],
         scheduled: &[(ContinuationId, &FurnaceContinuationV1)],
+        drops: &[(DropEntityId, &DroppedItemV1)],
+        next_drop: u64,
     ) -> Self {
         let mut containers = containers
             .iter()
@@ -88,6 +104,11 @@ impl DurablePlayerSessionV1 {
             .map(|(id, continuation)| DurableScheduledV1::from_state(*id, continuation))
             .collect::<Vec<_>>();
         scheduled.sort_by_key(|left| left.id);
+        let mut drops = drops
+            .iter()
+            .map(|(id, drop)| DurableDroppedItemV1::from_state(*id, drop))
+            .collect::<Vec<_>>();
+        drops.sort_by_key(|left| left.entity);
         Self {
             schema_version: PLAYER_SESSION_SCHEMA_VERSION,
             translation_mm: [
@@ -103,6 +124,8 @@ impl DurablePlayerSessionV1 {
                 .collect(),
             containers,
             scheduled,
+            drops,
+            next_drop,
         }
     }
 
@@ -169,6 +192,19 @@ impl DurablePlayerSessionV1 {
             .map(DurableScheduledV1::to_state)
             .collect()
     }
+
+    pub(super) fn dropped_states(
+        &self,
+    ) -> Result<Vec<(DropEntityId, DroppedItemV1)>, ProductionHostError> {
+        self.drops
+            .iter()
+            .map(DurableDroppedItemV1::to_state)
+            .collect()
+    }
+
+    pub(super) const fn next_drop(&self) -> u64 {
+        self.next_drop
+    }
 }
 
 impl DurableContainerV1 {
@@ -214,6 +250,40 @@ impl DurableContainerV1 {
             container.seed_slot(SlotIndex::new(slot_index), decode_stack_ref(slot.as_ref())?)?;
         }
         Ok((ContainerId::from_bytes(self.entity), container))
+    }
+}
+
+impl DurableDroppedItemV1 {
+    fn from_state(id: DropEntityId, drop: &DroppedItemV1) -> Self {
+        Self {
+            entity: id.as_bytes(),
+            dimension: drop.location.dimension.as_str().to_owned(),
+            position: [
+                drop.location.position.x,
+                drop.location.position.y,
+                drop.location.position.z,
+            ],
+            stack: encode_stack(&drop.stack),
+        }
+    }
+
+    fn to_state(&self) -> Result<(DropEntityId, DroppedItemV1), ProductionHostError> {
+        let dimension =
+            DimensionId::new(self.dimension.parse()?).map_err(ProductionHostError::from)?;
+        Ok((
+            DropEntityId::from_bytes(self.entity),
+            DroppedItemV1 {
+                location: BlockKey::new(
+                    dimension,
+                    BlockPosition {
+                        x: self.position[0],
+                        y: self.position[1],
+                        z: self.position[2],
+                    },
+                ),
+                stack: decode_stack(&self.stack)?,
+            },
+        ))
     }
 }
 

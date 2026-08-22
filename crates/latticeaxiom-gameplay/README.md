@@ -32,8 +32,8 @@ integration gates and are deliberately not claimed here.
 
 Headless conformance covers:
 
-- dimension-qualified drop, pickup, placement, mining progress, tools, tiers,
-  and durability;
+- versioned stacks, player inventory, hotbar prefix selection, dimension-qualified
+  drop, pickup, placement, mining progress, tools, tiers, and durability;
 - shaped and shapeless recipes with Tag/Predicate inputs and frozen concrete
   Role outputs;
 - atomic inventory/container transfers and furnace input/fuel/output admission;
@@ -42,7 +42,9 @@ Headless conformance covers:
   storage identifiers, exact retry fingerprints and replay horizons;
 - invalid decoded stack/tool state, boundary-plus-one limits, mid-plan faults,
   discovery permutation, property conservation, canonical hash golden bytes,
-  and a 10,000-command soak.
+  a 10,000-command soak, and a non-Terrenia fixture dimension;
+- inventory, recipe, container, and furnace inspect fragments with no
+  presentation blobs.
 
 Run the automated gates with:
 

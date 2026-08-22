@@ -22,10 +22,10 @@ use latticeaxiom_gameplay::{
     ItemDefinitionV1, ItemId, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, ItemStackV1,
     ItemStateV1, ItemTagDefinitionV1, ItemTagId, MineCommandV1, MiningRuleV1, MoveStackCommandV1,
     PersistentEntityId, PickupCommandV1, PlaceCommandV1, PlayerId, ProcessDefinitionV1,
-    RecipeCraftCommandV1, RecipeDefinitionV1, RecipePatternV1, ReferenceGameplayState,
-    ReferencePlanApplier, RoleOutputV1, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex,
-    StartProcessCommandV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1, TransactionId,
-    WorkstationDefinitionV1, WorkstationId, WorldRevision,
+    RecipeCraftCommandV1, RecipeDefinitionV1, RecipeId, RecipePatternV1, ReferenceGameplayState,
+    ReferencePlanApplier, RoleOutputV1, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1,
+    SelectHotbarCommandV1, SlotIndex, StartProcessCommandV1, ToolClassId, ToolDefinitionV1,
+    ToolRequirementV1, TransactionId, WorkstationDefinitionV1, WorkstationId, WorldRevision,
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkData, ChunkKey, ChunkMutation,
@@ -2091,4 +2091,532 @@ fn canonical_empty_state_hash_matches_golden() {
         state.canonical_hash().to_hex(),
         "c8953c45654d8738433998af95652b44f2aa9d8788333ef8ebd780e02686ccd3"
     );
+}
+
+fn inventory_quantity(state: &ReferenceGameplayState, player: PlayerId) -> u64 {
+    let Some(inventory) = state.inventory(player) else {
+        panic!("quantity inventory missing");
+    };
+    inventory
+        .slots()
+        .iter()
+        .flatten()
+        .map(|stack| u64::from(stack.quantity()))
+        .sum()
+}
+
+fn tool_stack(item: &str, durability: u32) -> ItemStackV1 {
+    match ItemStackV1::tool(parsed(item), durability) {
+        Ok(stack) => stack,
+        Err(error) => panic!("fixture tool stack failed: {error}"),
+    }
+}
+
+#[test]
+fn inventory_hotbar_is_a_selected_prefix_not_a_second_array() {
+    let inventory = match InventoryStateV1::empty(persistent_target(fixture_chunk()), 36) {
+        Ok(inventory) => inventory,
+        Err(error) => panic!("hotbar inventory failed: {error}"),
+    };
+    assert_eq!(inventory.hotbar_slots(), 9);
+    assert_eq!(inventory.selected_hotbar(), SlotIndex::new(0));
+    assert_eq!(inventory.hotbar().len(), 9);
+    assert!(inventory.selected_stack().is_none());
+    assert!(matches!(
+        InventoryStateV1::empty_with_hotbar(persistent_target(fixture_chunk()), 8, 9),
+        Err(GameplayReject::LimitExceeded {
+            resource: "hotbar_slots",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn select_hotbar_is_durable_and_conserves_every_stack() {
+    let catalog = catalog();
+    let mut state = state_with_inventory(9);
+    seed_stack(&mut state, PLAYER, 0, plain("example:item/log", 2));
+    seed_stack(&mut state, PLAYER, 3, plain("example:item/plank", 4));
+    let before_hash = state.canonical_hash();
+    let before_quantity = inventory_quantity(&state, PLAYER);
+    let mut authority = applier(state, &catalog);
+    let receipt = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::SelectHotbar(SelectHotbarCommandV1 {
+            player: PLAYER,
+            slot: SlotIndex::new(3),
+            expected_inventory_revision: 0,
+        }),
+    );
+    assert!(matches!(
+        receipt.outcome,
+        CommandOutcomeV1::HotbarSelected { slot } if slot == SlotIndex::new(3)
+    ));
+    let Some(inventory) = authority.state().inventory(PLAYER) else {
+        panic!("hotbar inventory missing");
+    };
+    assert_eq!(inventory.selected_hotbar(), SlotIndex::new(3));
+    assert_eq!(inventory.revision(), 1);
+    assert_eq!(
+        inventory.selected_stack().map(ItemStackV1::quantity),
+        Some(4)
+    );
+    assert_eq!(
+        inventory_quantity(authority.state(), PLAYER),
+        before_quantity
+    );
+    assert_ne!(authority.state().canonical_hash(), before_hash);
+
+    let same = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::SelectHotbar(SelectHotbarCommandV1 {
+            player: PLAYER,
+            slot: SlotIndex::new(3),
+            expected_inventory_revision: 1,
+        }),
+    );
+    assert!(matches!(
+        same.outcome,
+        CommandOutcomeV1::HotbarSelected { .. }
+    ));
+    assert_eq!(
+        authority
+            .state()
+            .inventory(PLAYER)
+            .map(InventoryStateV1::revision),
+        Some(1)
+    );
+}
+
+#[test]
+fn select_hotbar_rejects_body_slots_and_stale_revision_without_mutation() {
+    let catalog = catalog();
+    let mut state = state_with_inventory(12);
+    seed_stack(&mut state, PLAYER, 0, plain("example:item/log", 1));
+    let before = state.clone();
+    let mut authority = applier(state, &catalog);
+    let body = envelope(
+        authority.state(),
+        GameplayCommandV1::SelectHotbar(SelectHotbarCommandV1 {
+            player: PLAYER,
+            slot: SlotIndex::new(9),
+            expected_inventory_revision: 0,
+        }),
+    );
+    assert!(matches!(
+        authority.execute(&body, FaultInjection::None),
+        Err(GameplayReject::SlotOutOfRange { slot, slots: 9 }) if slot == SlotIndex::new(9)
+    ));
+    assert_eq!(authority.state(), &before);
+
+    let stale_envelope = envelope(
+        authority.state(),
+        GameplayCommandV1::SelectHotbar(SelectHotbarCommandV1 {
+            player: PLAYER,
+            slot: SlotIndex::new(1),
+            expected_inventory_revision: 7,
+        }),
+    );
+    assert!(matches!(
+        authority.execute(&stale_envelope, FaultInjection::None),
+        Err(GameplayReject::StaleInventoryRevision {
+            expected: 7,
+            actual: 0
+        })
+    ));
+    assert_eq!(authority.state(), &before);
+}
+
+#[test]
+fn inspect_fragments_cover_inventory_recipe_machine_and_container() {
+    let catalog = catalog();
+    let mining = catalog
+        .mining_inspect(&parsed("example:block/copper-ore"))
+        .unwrap_or_else(|| panic!("ore mining inspect missing"));
+    assert_eq!(mining.hardness_ticks(), 6);
+    assert_eq!(
+        mining.tool_class().map(ToolClassId::as_str),
+        Some("latticeaxiom:tool-class/pickaxe@1")
+    );
+    assert_eq!(mining.minimum_tier(), Some(1));
+    assert!(
+        catalog
+            .fuel_ticks(&parsed("example:item/charcoal"))
+            .is_some()
+    );
+    assert!(
+        catalog
+            .fuel_ticks(&parsed("other:item/broad-material-only"))
+            .is_none()
+    );
+
+    let mut state = state_with_inventory(8);
+    seed_stack(&mut state, PLAYER, 0, plain("example:item/log", 1));
+    seed_stack(&mut state, PLAYER, 1, plain("example:item/stick", 2));
+    seed_workbench(&mut state);
+    let kernel = GameplayKernel::new(&catalog);
+    let inventory = kernel
+        .inspect_inventory(&state, PLAYER)
+        .unwrap_or_else(|error| panic!("inventory inspect failed: {error}"));
+    assert_eq!(inventory.occupied_slots(), 2);
+    assert_eq!(inventory.total_quantity(), 3);
+    assert_eq!(inventory.hotbar_slots(), 8);
+    let recipes = kernel
+        .inspect_recipes(&state, PLAYER, None)
+        .unwrap_or_else(|error| panic!("recipe inspect failed: {error}"));
+    assert!(recipes.iter().any(|fragment| {
+        fragment.recipe().as_str() == "example:recipe/planks@1" && fragment.craftable()
+    }));
+    assert!(recipes.iter().any(|fragment| {
+        fragment.recipe().as_str() == "example:recipe/pickaxe@1" && !fragment.craftable()
+    }));
+    let workbench: WorkstationId = parsed("latticeaxiom:workstation/crafting@1");
+    let craftable = kernel
+        .craftable_recipes(&state, PLAYER, None)
+        .unwrap_or_else(|error| panic!("craftable recipes failed: {error}"));
+    assert_eq!(
+        craftable.iter().map(RecipeId::as_str).collect::<Vec<_>>(),
+        vec!["example:recipe/planks@1"]
+    );
+    let bound = kernel
+        .inspect_recipes(&state, PLAYER, Some(&workbench))
+        .unwrap_or_else(|error| panic!("bound recipe inspect failed: {error}"));
+    assert!(bound.iter().any(|fragment| {
+        fragment.recipe().as_str() == "example:recipe/pickaxe@1" && !fragment.craftable()
+    }));
+    let container = kernel
+        .inspect_container(&state, WORKBENCH_CONTAINER)
+        .unwrap_or_else(|error| panic!("container inspect failed: {error}"));
+    assert_eq!(container.workstation(), Some(&workbench));
+    assert!(kernel.inspect_furnace(&state, FURNACE_CONTAINER).is_none());
+}
+
+#[test]
+fn wrong_tool_and_exhausted_tool_are_atomic() {
+    let catalog = catalog();
+    let dimension = fixture_dimension();
+    let ore = BlockPosition { x: 4, y: 8, z: 0 };
+    let log = BlockPosition { x: 5, y: 8, z: 0 };
+    let mut state = state_with_inventory(4);
+    seed_stack(&mut state, PLAYER, 0, tool_stack("example:item/pickaxe", 1));
+    if let Err(error) = state.seed_block(
+        block_key(&dimension, ore),
+        parsed("example:block/copper-ore"),
+    ) {
+        panic!("wrong-tool ore failed: {error}");
+    }
+    if let Err(error) = state.seed_block(block_key(&dimension, log), parsed("example:block/log")) {
+        panic!("wrong-tool log failed: {error}");
+    }
+    let before = state.clone();
+    let mut authority = applier(state, &catalog);
+    let missing_tool = envelope(
+        authority.state(),
+        GameplayCommandV1::Mine(MineCommandV1 {
+            reserved_drop: reserved_drop(),
+            player: PLAYER,
+            target: block_key(&dimension, ore),
+            expected_chunk_revision: ChunkRevision::ZERO,
+            tool_slot: None,
+        }),
+    );
+    assert!(matches!(
+        authority.execute(&missing_tool, FaultInjection::None),
+        Err(GameplayReject::ToolRequired)
+    ));
+    assert_eq!(authority.state(), &before);
+
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Mine(MineCommandV1 {
+            reserved_drop: reserved_drop(),
+            player: PLAYER,
+            target: block_key(&dimension, log),
+            expected_chunk_revision: ChunkRevision::ZERO,
+            tool_slot: Some(SlotIndex::new(0)),
+        }),
+    );
+    let Some(inventory) = authority.state().inventory(PLAYER) else {
+        panic!("exhausted-tool inventory missing");
+    };
+    assert!(matches!(inventory.slot(SlotIndex::new(0)), Ok(None)));
+    let after_break = authority.state().clone();
+    let exhausted = envelope(
+        authority.state(),
+        GameplayCommandV1::Mine(MineCommandV1 {
+            reserved_drop: reserved_drop(),
+            player: PLAYER,
+            target: block_key(&dimension, ore),
+            expected_chunk_revision: authority
+                .state()
+                .loaded_chunk_revision(&fixture_chunk())
+                .unwrap_or_else(|| panic!("exhausted-tool chunk missing")),
+            tool_slot: Some(SlotIndex::new(0)),
+        }),
+    );
+    assert!(matches!(
+        authority.execute(&exhausted, FaultInjection::None),
+        Err(GameplayReject::EmptySlot)
+    ));
+    assert_eq!(authority.state(), &after_break);
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the fixture-dimension journey is kept as one auditable command sequence"
+)]
+fn fixture_dimension_reuses_gather_craft_mine_place_without_terrenia_ids() {
+    let catalog = catalog();
+    assert!(
+        catalog
+            .items()
+            .keys()
+            .all(|item| item.namespace() != "terrenia")
+    );
+    assert!(
+        catalog
+            .blocks()
+            .keys()
+            .all(|block| block.namespace() != "terrenia")
+    );
+    assert!(
+        catalog
+            .recipes()
+            .keys()
+            .all(|recipe| recipe.namespace() != "terrenia")
+    );
+
+    let dimension: DimensionId = parsed("other:dimension/sandbox");
+    let chunk = DimensionChunkKey::new(dimension.clone(), ChunkCoordinate::new(0, 0, 0));
+    let mut state = match ReferenceGameplayState::new(GameplayLimits::default()) {
+        Ok(state) => state,
+        Err(error) => panic!("fixture-dimension state failed: {error}"),
+    };
+    if let Err(error) = state.seed_loaded_chunk(chunk.clone(), ChunkRevision::ZERO) {
+        panic!("fixture-dimension chunk failed: {error}");
+    }
+    let mut inventory = match InventoryStateV1::empty(
+        GameplayEditTarget::new(chunk.clone(), GameplayStorageDomain::PersistentEntities),
+        9,
+    ) {
+        Ok(inventory) => inventory,
+        Err(error) => panic!("fixture-dimension inventory failed: {error}"),
+    };
+    if let Err(error) = inventory.seed_slot(SlotIndex::new(1), Some(plain("example:item/stick", 2)))
+    {
+        panic!("fixture-dimension stick failed: {error}");
+    }
+    if let Err(error) = state.seed_player(PLAYER, inventory) {
+        panic!("fixture-dimension player failed: {error}");
+    }
+    let workbench = match ContainerStateV1::empty(
+        ContainerOwnerComponentV1 {
+            dimension: dimension.clone(),
+            chunk: chunk.coordinate,
+            entity: WORKBENCH_CONTAINER.into_persistent_entity_id(),
+        },
+        Some(parsed("latticeaxiom:workstation/crafting@1")),
+        9,
+    ) {
+        Ok(container) => container,
+        Err(error) => panic!("fixture-dimension workbench failed: {error}"),
+    };
+    if let Err(error) = state.seed_container(WORKBENCH_CONTAINER, workbench) {
+        panic!("fixture-dimension workbench seed failed: {error}");
+    }
+    let log_position = BlockPosition { x: 0, y: 8, z: 0 };
+    let ore_position = BlockPosition { x: 1, y: 8, z: 0 };
+    if let Err(error) = state.seed_block(
+        block_key(&dimension, log_position),
+        parsed("example:block/log"),
+    ) {
+        panic!("fixture-dimension log failed: {error}");
+    }
+    if let Err(error) = state.seed_block(
+        block_key(&dimension, ore_position),
+        parsed("example:block/copper-ore"),
+    ) {
+        panic!("fixture-dimension ore failed: {error}");
+    }
+
+    let mut authority = applier(state, &catalog);
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::SelectHotbar(SelectHotbarCommandV1 {
+            player: PLAYER,
+            slot: SlotIndex::new(1),
+            expected_inventory_revision: 0,
+        }),
+    );
+    let log_revision = authority
+        .state()
+        .loaded_chunk_revision(&chunk)
+        .unwrap_or_else(|| panic!("fixture-dimension log chunk missing"));
+    let log_drop = drop_from(&execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Mine(MineCommandV1 {
+            reserved_drop: reserved_drop(),
+            player: PLAYER,
+            target: block_key(&dimension, log_position),
+            expected_chunk_revision: log_revision,
+            tool_slot: None,
+        }),
+    ));
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Pickup(PickupCommandV1 {
+            player: PLAYER,
+            drop: log_drop,
+        }),
+    );
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Craft(RecipeCraftCommandV1 {
+            player: PLAYER,
+            recipe: parsed("example:recipe/planks@1"),
+            input_slots: vec![SlotIndex::new(0)].into_boxed_slice(),
+            workstation: None,
+        }),
+    );
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Craft(RecipeCraftCommandV1 {
+            player: PLAYER,
+            recipe: parsed("example:recipe/pickaxe@1"),
+            input_slots: vec![SlotIndex::new(0), SlotIndex::new(1)].into_boxed_slice(),
+            workstation: Some(WORKBENCH_CONTAINER),
+        }),
+    );
+    let ore_revision = authority
+        .state()
+        .loaded_chunk_revision(&chunk)
+        .unwrap_or_else(|| panic!("fixture-dimension ore chunk missing"));
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Mine(MineCommandV1 {
+            reserved_drop: reserved_drop(),
+            player: PLAYER,
+            target: block_key(&dimension, ore_position),
+            expected_chunk_revision: ore_revision,
+            tool_slot: Some(SlotIndex::new(1)),
+        }),
+    );
+    let ore_revision = authority
+        .state()
+        .loaded_chunk_revision(&chunk)
+        .unwrap_or_else(|| panic!("fixture-dimension ore chunk missing"));
+    let ore_drop = drop_from(&execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Mine(MineCommandV1 {
+            reserved_drop: reserved_drop(),
+            player: PLAYER,
+            target: block_key(&dimension, ore_position),
+            expected_chunk_revision: ore_revision,
+            tool_slot: Some(SlotIndex::new(1)),
+        }),
+    ));
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Pickup(PickupCommandV1 {
+            player: PLAYER,
+            drop: ore_drop,
+        }),
+    );
+    let hotbar_revision = authority.state().inventory(PLAYER).map_or_else(
+        || panic!("fixture-dimension inventory missing"),
+        InventoryStateV1::revision,
+    );
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::SelectHotbar(SelectHotbarCommandV1 {
+            player: PLAYER,
+            slot: SlotIndex::new(0),
+            expected_inventory_revision: hotbar_revision,
+        }),
+    );
+    let place_target = block_key(&dimension, BlockPosition { x: 2, y: 8, z: 0 });
+    let place_revision = authority
+        .state()
+        .loaded_chunk_revision(&chunk)
+        .unwrap_or_else(|| panic!("fixture-dimension place chunk missing"));
+    execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Place(PlaceCommandV1 {
+            player: PLAYER,
+            slot: SlotIndex::new(0),
+            target: place_target.clone(),
+            expected_chunk_revision: place_revision,
+        }),
+    );
+    assert_eq!(
+        authority.state().block(&place_target).map(BlockId::as_str),
+        Some("example:block/plank")
+    );
+    let Some(inventory) = authority.state().inventory(PLAYER) else {
+        panic!("fixture-dimension inventory missing after place");
+    };
+    assert_eq!(inventory.selected_hotbar(), SlotIndex::new(0));
+    let tool = match inventory.slot(SlotIndex::new(1)) {
+        Ok(Some(tool)) => tool,
+        other => panic!("fixture-dimension tool missing: {other:?}"),
+    };
+    assert!(matches!(
+        tool.state(),
+        ItemStateV1::ToolDurability { remaining } if remaining.get() == 9
+    ));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    #[test]
+    fn move_stack_conserves_quantity_across_merge_and_swap(
+        left in 1_u32..=40,
+        right in 1_u32..=24,
+    ) {
+        let catalog = catalog();
+        let mut state = state_with_inventory(4);
+        seed_stack(&mut state, PLAYER, 0, plain("example:item/log", left));
+        seed_stack(&mut state, PLAYER, 1, plain("example:item/plank", right));
+        let before = inventory_quantity(&state, PLAYER);
+        let mut authority = applier(state, &catalog);
+        execute(
+            &mut authority,
+            &catalog,
+            GameplayCommandV1::MoveStack(MoveStackCommandV1 {
+                player: PLAYER,
+                from: SlotIndex::new(0),
+                to: SlotIndex::new(2),
+                quantity: None,
+                expected_inventory_revision: 0,
+            }),
+        );
+        execute(
+            &mut authority,
+            &catalog,
+            GameplayCommandV1::MoveStack(MoveStackCommandV1 {
+                player: PLAYER,
+                from: SlotIndex::new(1),
+                to: SlotIndex::new(2),
+                quantity: None,
+                expected_inventory_revision: 1,
+            }),
+        );
+        prop_assert_eq!(inventory_quantity(authority.state(), PLAYER), before);
+        prop_assert_eq!(authority.state().dropped_items().len(), 0);
+    }
 }

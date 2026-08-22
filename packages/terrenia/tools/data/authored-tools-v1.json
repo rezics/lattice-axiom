@@ -5,7 +5,16 @@
     "kind": "intrinsic-no-item-fallback",
     "tool_class": "latticeaxiom:tool-class/hand@1",
     "tier": 0,
-    "mining_multiplier": 1
+    "mining_multiplier": 1,
+    "durability": null,
+    "mining_speed_predicate": {
+      "class": "latticeaxiom:tool-class/hand@1",
+      "minimum_tier": 0
+    },
+    "drop_predicate": {
+      "class": "latticeaxiom:tool-class/hand@1",
+      "minimum_tier": 0
+    }
   },
   "items": [
     {
@@ -49,42 +58,156 @@
       "class": "latticeaxiom:tool-class/axe@1",
       "tier": 2,
       "durability": 131,
-      "mining_multiplier": 4
+      "mining_multiplier": 4,
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/cobblestone",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/cobblestones@1"
+        }
+      },
+      "mining_speed_predicate": {
+        "class": "latticeaxiom:tool-class/axe@1",
+        "minimum_tier": 2
+      },
+      "drop_predicate": {
+        "class": "latticeaxiom:tool-class/axe@1",
+        "minimum_tier": 2
+      }
     },
     {
       "item": "terrenia:item/stone-pickaxe",
       "class": "latticeaxiom:tool-class/pickaxe@1",
       "tier": 2,
       "durability": 131,
-      "mining_multiplier": 4
+      "mining_multiplier": 4,
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/cobblestone",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/cobblestones@1"
+        }
+      },
+      "mining_speed_predicate": {
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 2
+      },
+      "drop_predicate": {
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 2
+      }
     },
     {
       "item": "terrenia:item/stone-shovel",
       "class": "latticeaxiom:tool-class/shovel@1",
       "tier": 2,
       "durability": 131,
-      "mining_multiplier": 4
+      "mining_multiplier": 4,
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/cobblestone",
+        "quantity": 1,
+        "accepts": {
+          "tag": "terrenia:item-tag/cobblestones@1"
+        }
+      },
+      "mining_speed_predicate": {
+        "class": "latticeaxiom:tool-class/shovel@1",
+        "minimum_tier": 2
+      },
+      "drop_predicate": {
+        "class": "latticeaxiom:tool-class/shovel@1",
+        "minimum_tier": 2
+      }
     },
     {
       "item": "terrenia:item/wooden-axe",
       "class": "latticeaxiom:tool-class/axe@1",
       "tier": 1,
       "durability": 59,
-      "mining_multiplier": 2
+      "mining_multiplier": 2,
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/oak-planks",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/planks@1"
+        }
+      },
+      "mining_speed_predicate": {
+        "class": "latticeaxiom:tool-class/axe@1",
+        "minimum_tier": 1
+      },
+      "drop_predicate": {
+        "class": "latticeaxiom:tool-class/axe@1",
+        "minimum_tier": 1
+      }
     },
     {
       "item": "terrenia:item/wooden-pickaxe",
       "class": "latticeaxiom:tool-class/pickaxe@1",
       "tier": 1,
       "durability": 59,
-      "mining_multiplier": 2
+      "mining_multiplier": 2,
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/oak-planks",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/planks@1"
+        }
+      },
+      "mining_speed_predicate": {
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      },
+      "drop_predicate": {
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      }
     },
     {
       "item": "terrenia:item/wooden-shovel",
       "class": "latticeaxiom:tool-class/shovel@1",
       "tier": 1,
       "durability": 59,
-      "mining_multiplier": 2
+      "mining_multiplier": 2,
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/oak-planks",
+        "quantity": 1,
+        "accepts": {
+          "tag": "terrenia:item-tag/planks@1"
+        }
+      },
+      "mining_speed_predicate": {
+        "class": "latticeaxiom:tool-class/shovel@1",
+        "minimum_tier": 1
+      },
+      "drop_predicate": {
+        "class": "latticeaxiom:tool-class/shovel@1",
+        "minimum_tier": 1
+      }
     }
   ],
   "recipes": [
@@ -97,6 +220,14 @@
         ["terrenia:item/oak-planks"],
         ["terrenia:item/oak-planks"]
       ],
+      "handle": null,
+      "head": {
+        "item": "terrenia:item/oak-planks",
+        "quantity": 2,
+        "accepts": {
+          "tag": "terrenia:item-tag/planks@1"
+        }
+      },
       "output": {
         "item": "terrenia:item/stick",
         "quantity": 4
@@ -114,6 +245,17 @@
         ["terrenia:item/cobblestone", "terrenia:item/stick", null],
         [null, "terrenia:item/stick", null]
       ],
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/cobblestone",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/cobblestones@1"
+        }
+      },
       "output": {
         "item": "terrenia:item/stone-axe",
         "quantity": 1
@@ -135,6 +277,17 @@
         [null, "terrenia:item/stick", null],
         [null, "terrenia:item/stick", null]
       ],
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/cobblestone",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/cobblestones@1"
+        }
+      },
       "output": {
         "item": "terrenia:item/stone-pickaxe",
         "quantity": 1
@@ -152,6 +305,17 @@
         [null, "terrenia:item/stick", null],
         [null, "terrenia:item/stick", null]
       ],
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/cobblestone",
+        "quantity": 1,
+        "accepts": {
+          "tag": "terrenia:item-tag/cobblestones@1"
+        }
+      },
       "output": {
         "item": "terrenia:item/stone-shovel",
         "quantity": 1
@@ -169,6 +333,17 @@
         ["terrenia:item/oak-planks", "terrenia:item/stick", null],
         [null, "terrenia:item/stick", null]
       ],
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/oak-planks",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/planks@1"
+        }
+      },
       "output": {
         "item": "terrenia:item/wooden-axe",
         "quantity": 1
@@ -190,6 +365,17 @@
         [null, "terrenia:item/stick", null],
         [null, "terrenia:item/stick", null]
       ],
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/oak-planks",
+        "quantity": 3,
+        "accepts": {
+          "tag": "terrenia:item-tag/planks@1"
+        }
+      },
       "output": {
         "item": "terrenia:item/wooden-pickaxe",
         "quantity": 1
@@ -207,6 +393,17 @@
         [null, "terrenia:item/stick", null],
         [null, "terrenia:item/stick", null]
       ],
+      "handle": {
+        "item": "terrenia:item/stick",
+        "quantity": 2
+      },
+      "head": {
+        "item": "terrenia:item/oak-planks",
+        "quantity": 1,
+        "accepts": {
+          "tag": "terrenia:item-tag/planks@1"
+        }
+      },
       "output": {
         "item": "terrenia:item/wooden-shovel",
         "quantity": 1

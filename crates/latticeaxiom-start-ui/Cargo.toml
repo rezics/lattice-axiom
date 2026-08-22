@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+latticeaxiom-client-ui = { path = "../latticeaxiom-client-ui" }
 latticeaxiom-core = { path = "../latticeaxiom-core" }
 latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
 latticeaxiom-runtime-contracts = { path = "../latticeaxiom-runtime-contracts" }

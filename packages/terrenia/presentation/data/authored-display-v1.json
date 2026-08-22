@@ -1,6 +1,8 @@
 {
   "authoring_schema": "terrenia:schema/authored-presentation-display@1",
   "owner_package": "@terrenia/presentation",
+  "authoritative": false,
+  "headless_removable": true,
   "default_locale": "en",
   "entries": [
     {

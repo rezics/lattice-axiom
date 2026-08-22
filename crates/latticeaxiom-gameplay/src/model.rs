@@ -15,6 +15,8 @@ use crate::{
 
 /// Absolute implementation ceiling for player inventory slots.
 pub const ABSOLUTE_MAX_INVENTORY_SLOTS: usize = 256;
+/// Default hotbar prefix length for a player inventory.
+pub const DEFAULT_HOTBAR_SLOTS: u16 = 9;
 /// Absolute implementation ceiling for container slots.
 pub const ABSOLUTE_MAX_CONTAINER_SLOTS: usize = 256;
 /// Absolute implementation ceiling for mutation intents in one command.
@@ -209,10 +211,15 @@ impl ItemStackV1 {
 }
 
 /// Version-one fixed-slot inventory state.
+///
+/// The hotbar is the selected prefix of this container, not a second client
+/// array. Selected-slot changes are authoritative inventory mutations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InventoryStateV1 {
     pub(crate) target: GameplayEditTarget,
     pub(crate) revision: u64,
+    pub(crate) hotbar_slots: u16,
+    pub(crate) selected_hotbar: u16,
     pub(crate) slots: Box<[Option<ItemStackV1>]>,
 }
 
@@ -226,6 +233,27 @@ impl InventoryStateV1 {
     ///
     /// Rejects zero slots and slot counts above the absolute implementation cap.
     pub fn empty(target: GameplayEditTarget, slot_count: usize) -> Result<Self, GameplayReject> {
+        let hotbar_slots = u16::try_from(slot_count.min(usize::from(DEFAULT_HOTBAR_SLOTS)))
+            .map_err(|_| GameplayReject::LimitExceeded {
+                resource: "hotbar_slots",
+                limit: usize::from(u16::MAX),
+                actual: slot_count,
+            })?;
+        Self::empty_with_hotbar(target, slot_count, hotbar_slots)
+    }
+
+    /// Creates an empty bounded inventory with an explicit hotbar prefix.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero slots, slot counts above the absolute implementation cap,
+    /// a hotbar prefix of zero or larger than the inventory, or a selected
+    /// hotbar index outside that prefix.
+    pub fn empty_with_hotbar(
+        target: GameplayEditTarget,
+        slot_count: usize,
+        hotbar_slots: u16,
+    ) -> Result<Self, GameplayReject> {
         if slot_count == 0 || slot_count > ABSOLUTE_MAX_INVENTORY_SLOTS {
             return Err(GameplayReject::LimitExceeded {
                 resource: "inventory_slots",
@@ -239,9 +267,12 @@ impl InventoryStateV1 {
                 actual: target.domain,
             });
         }
+        validate_hotbar(slot_count, hotbar_slots, 0)?;
         Ok(Self {
             target,
             revision: 0,
+            hotbar_slots,
+            selected_hotbar: 0,
             slots: vec![None; slot_count].into_boxed_slice(),
         })
     }
@@ -256,6 +287,33 @@ impl InventoryStateV1 {
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Returns the hotbar prefix length.
+    #[must_use]
+    pub const fn hotbar_slots(&self) -> u16 {
+        self.hotbar_slots
+    }
+
+    /// Returns the selected hotbar index in `0..hotbar_slots`.
+    #[must_use]
+    pub const fn selected_hotbar(&self) -> SlotIndex {
+        SlotIndex::new(self.selected_hotbar)
+    }
+
+    /// Returns the selected hotbar stack, if any.
+    #[must_use]
+    pub fn selected_stack(&self) -> Option<&ItemStackV1> {
+        self.slots
+            .get(usize::from(self.selected_hotbar))
+            .and_then(Option::as_ref)
+    }
+
+    /// Returns the hotbar prefix in index order.
+    #[must_use]
+    pub fn hotbar(&self) -> &[Option<ItemStackV1>] {
+        let end = usize::from(self.hotbar_slots).min(self.slots.len());
+        &self.slots[..end]
     }
 
     /// Returns the slot count.
@@ -309,6 +367,56 @@ impl InventoryStateV1 {
         *target = stack;
         Ok(())
     }
+
+    /// Seeds the selected hotbar index while constructing a fixture or decoded snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject::SlotOutOfRange`] when `slot` is outside the hotbar prefix.
+    pub fn seed_selected_hotbar(&mut self, slot: SlotIndex) -> Result<(), GameplayReject> {
+        validate_hotbar(self.slots.len(), self.hotbar_slots, slot.get())?;
+        self.selected_hotbar = slot.get();
+        Ok(())
+    }
+
+    /// Validates slot count and hotbar prefix invariants.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty inventory, a slot count above the absolute cap, or an
+    /// invalid hotbar prefix or selected index.
+    pub(crate) fn validate_structure(&self) -> Result<(), GameplayReject> {
+        if self.slots.is_empty() || self.slots.len() > ABSOLUTE_MAX_INVENTORY_SLOTS {
+            return Err(GameplayReject::LimitExceeded {
+                resource: "inventory_slots",
+                limit: ABSOLUTE_MAX_INVENTORY_SLOTS,
+                actual: self.slots.len(),
+            });
+        }
+        validate_hotbar(self.slots.len(), self.hotbar_slots, self.selected_hotbar)
+    }
+}
+
+fn validate_hotbar(
+    slot_count: usize,
+    hotbar_slots: u16,
+    selected_hotbar: u16,
+) -> Result<(), GameplayReject> {
+    let hotbar = usize::from(hotbar_slots);
+    if hotbar == 0 || hotbar > slot_count {
+        return Err(GameplayReject::LimitExceeded {
+            resource: "hotbar_slots",
+            limit: slot_count.max(1),
+            actual: hotbar,
+        });
+    }
+    if usize::from(selected_hotbar) >= hotbar {
+        return Err(GameplayReject::SlotOutOfRange {
+            slot: SlotIndex::new(selected_hotbar),
+            slots: hotbar,
+        });
+    }
+    Ok(())
 }
 
 /// Owner component persisted alongside a container.
@@ -974,13 +1082,7 @@ impl ReferenceGameplayState {
             }
         }
         for inventory in self.inventories.values() {
-            if inventory.slots.is_empty() || inventory.slots.len() > ABSOLUTE_MAX_INVENTORY_SLOTS {
-                return Err(GameplayReject::LimitExceeded {
-                    resource: "inventory_slots",
-                    limit: ABSOLUTE_MAX_INVENTORY_SLOTS,
-                    actual: inventory.slots.len(),
-                });
-            }
+            inventory.validate_structure()?;
             require_target_domain(&inventory.target, GameplayStorageDomain::PersistentEntities)?;
             self.require_loaded_chunk(&inventory.target.chunk)?;
             for stack in inventory.slots.iter().flatten() {
@@ -1195,6 +1297,37 @@ impl ReferenceGameplayState {
         self.blocks.insert(key, block);
         Ok(())
     }
+    /// Adds a decoded or fixture dropped stack before command execution.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate drop identities, colliding persistent-entity IDs, and
+    /// the configured drop boundary plus one.
+    pub fn seed_drop(
+        &mut self,
+        id: DropEntityId,
+        drop: DroppedItemV1,
+    ) -> Result<(), GameplayReject> {
+        if self.drops.contains_key(&id) {
+            return Err(GameplayReject::DuplicateStateKey { kind: "drop" });
+        }
+        if self.persistent_entity_id_in_use(id.as_persistent_entity_id()) {
+            return Err(GameplayReject::DuplicateStateKey {
+                kind: "persistent_entity",
+            });
+        }
+        if self.drops.len() >= self.limits.drops {
+            return Err(GameplayReject::LimitExceeded {
+                resource: "drops",
+                limit: self.limits.drops,
+                actual: checked_capacity_plus_one(self.drops.len(), "drops")?,
+            });
+        }
+        self.require_loaded_chunk(&self.block_chunk(&drop.location))?;
+        self.drops.insert(id, drop);
+        Ok(())
+    }
+
     /// Adds a decoded scheduled continuation before command execution.
     ///
     /// # Errors
@@ -1274,6 +1407,8 @@ pub enum GameplayCommandV1 {
     Transfer(TransferCommandV1),
     /// Move or merge a player-inventory stack between two slots.
     MoveStack(MoveStackCommandV1),
+    /// Select the hotbar prefix slot used by subsequent mine/place commands.
+    SelectHotbar(SelectHotbarCommandV1),
     /// Atomically consume furnace input and fuel and schedule output.
     StartProcess(StartProcessCommandV1),
     /// Complete a bounded prefix of due scheduled processes.
@@ -1391,6 +1526,17 @@ pub struct MoveStackCommandV1 {
     pub expected_inventory_revision: u64,
 }
 
+/// Authoritative hotbar-selection command payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectHotbarCommandV1 {
+    /// Player inventory.
+    pub player: PlayerId,
+    /// Hotbar prefix slot to select.
+    pub slot: SlotIndex,
+    /// Observed player inventory revision.
+    pub expected_inventory_revision: u64,
+}
+
 /// Start-process command payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartProcessCommandV1 {
@@ -1453,6 +1599,17 @@ pub enum GameplayMutationIntentV1 {
         before: u64,
         /// Replacement revision.
         after: u64,
+    },
+    /// Replace the selected hotbar prefix index.
+    InventoryHotbar {
+        /// Explicit persistent-entity capture target.
+        target: GameplayEditTarget,
+        /// Player inventory.
+        player: PlayerId,
+        /// Expected selected hotbar index.
+        before: u16,
+        /// Replacement selected hotbar index.
+        after: u16,
     },
     /// Replace one persistent container slot.
     ContainerSlot {
@@ -1534,6 +1691,7 @@ impl GameplayMutationIntentV1 {
         match self {
             Self::InventorySlot { target, .. }
             | Self::InventoryRevision { target, .. }
+            | Self::InventoryHotbar { target, .. }
             | Self::ContainerSlot { target, .. }
             | Self::ContainerRevision { target, .. }
             | Self::Block { target, .. }
@@ -1593,6 +1751,11 @@ pub enum CommandOutcomeV1 {
         from: SlotIndex,
         /// Destination slot.
         to: SlotIndex,
+    },
+    /// The selected hotbar prefix slot changed or was confirmed.
+    HotbarSelected {
+        /// Selected hotbar index.
+        slot: SlotIndex,
     },
     /// Input and fuel were consumed and a continuation was staged.
     ProcessScheduled {

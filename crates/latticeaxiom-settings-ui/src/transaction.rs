@@ -1,7 +1,8 @@
 //! Settings transaction UI adapter. Apply semantics stay in the registry.
 
 use latticeaxiom_runtime_contracts::{
-    SettingsApplyTransaction, SettingsTransactionError, SettingsTransactionPhase,
+    RestartImpactMetadata, SettingsApplyTransaction, SettingsTransactionError,
+    SettingsTransactionPhase,
 };
 
 /// UI request that must be forwarded to one registry transaction.
@@ -11,10 +12,21 @@ pub enum SettingsSurfaceTransactionRequest {
     Prepare,
     /// Begin a reversible preview.
     BeginPreview,
+    /// Disclose impact, then prepare. Persist remains registry-owned.
+    Apply,
     /// Cancel, preview timeout, or leave-page rollback.
     Rollback,
     /// Persist through the owning-scope store. The UI never writes the file.
     Persist,
+}
+
+/// Impact disclosed by the surface before the host may persist.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettingsApplyDisclosure {
+    /// Transaction phase after the UI request.
+    pub phase: SettingsTransactionPhase,
+    /// Restart and reactivation impact.
+    pub restart: RestartImpactMetadata,
 }
 
 impl SettingsSurfaceTransactionRequest {
@@ -29,7 +41,7 @@ impl SettingsSurfaceTransactionRequest {
         transaction: &mut SettingsApplyTransaction,
     ) -> Result<SettingsTransactionPhase, SettingsTransactionError> {
         match self {
-            Self::Prepare => transaction.prepare()?,
+            Self::Prepare | Self::Apply => transaction.prepare()?,
             Self::BeginPreview => {
                 transaction.begin_preview()?;
             }
@@ -41,5 +53,21 @@ impl SettingsSurfaceTransactionRequest {
             }
         }
         Ok(transaction.phase())
+    }
+
+    /// Forwards the request and returns restart impact for the apply control.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsTransactionError`] from the registry path.
+    pub fn disclose(
+        self,
+        transaction: &mut SettingsApplyTransaction,
+    ) -> Result<SettingsApplyDisclosure, SettingsTransactionError> {
+        let phase = self.apply(transaction)?;
+        Ok(SettingsApplyDisclosure {
+            phase,
+            restart: transaction.restart_impact(),
+        })
     }
 }

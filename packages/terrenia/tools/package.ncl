@@ -7,6 +7,7 @@ fun kernel_receipts =>
 let package_provenance = kernel_receipts.package_provenance in
 let registration_fragment_hash = kernel_receipts.registration_fragment_hash in
 let blocks_capability = "latticeaxiom:capability/content-blocks@1" in
+let tools_capability = "latticeaxiom:capability/sandbox-tools@1" in
 let fragment = registration.constructors.fragment {} in
 
 package.make {
@@ -29,6 +30,14 @@ package.make {
       capability = blocks_capability,
       version = "^1.0.0",
       provider = "@terrenia/blocks",
+      cardinality = "exactly-one",
+      domains = ["authoritative"],
+    },
+  },
+  provides = {
+    "latticeaxiom:capability/sandbox-tools@1" = {
+      capability = tools_capability,
+      version = "1.0.0",
       cardinality = "exactly-one",
       domains = ["authoritative"],
     },

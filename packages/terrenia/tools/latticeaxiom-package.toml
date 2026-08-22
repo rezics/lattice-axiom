@@ -17,6 +17,12 @@ provider = "@terrenia/blocks"
 cardinality = "exactly-one"
 domains = ["authoritative"]
 
+[provides."latticeaxiom:capability/sandbox-tools@1"]
+capability = "latticeaxiom:capability/sandbox-tools@1"
+version = "1.0.0"
+cardinality = "exactly-one"
+domains = ["authoritative"]
+
 [realizations.data]
 id = "data"
 kind = "data"

@@ -97,6 +97,22 @@ pub struct ButtonWidget {
 }
 
 impl ButtonWidget {
+    /// Constructs an enabled or disabled button.
+    #[must_use]
+    pub fn new(
+        key: SemanticKey,
+        name: impl Into<String>,
+        description: Option<String>,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            key,
+            name: name.into(),
+            description,
+            enabled,
+        }
+    }
+
     /// Projects button role, name, and activate/back actions.
     #[must_use]
     pub fn semantic_node(&self, focused: bool) -> SemanticNode {
@@ -249,6 +265,168 @@ impl ModalWidget {
                     .semantic_node(focused == Some(&self.confirm.key)),
                 self.cancel.semantic_node(focused == Some(&self.cancel.key)),
             ],
+        }
+    }
+}
+
+/// Boolean toggle projected as a switch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToggleWidget {
+    /// Stable key.
+    pub key: SemanticKey,
+    /// Accessible name.
+    pub name: String,
+    /// Accessible description.
+    pub description: Option<String>,
+    /// Current value.
+    pub on: bool,
+    /// Whether the switch may be activated.
+    pub enabled: bool,
+}
+
+impl ToggleWidget {
+    /// Projects switch role and activate action.
+    #[must_use]
+    pub fn semantic_node(&self, focused: bool) -> SemanticNode {
+        SemanticNode {
+            key: self.key.clone(),
+            role: SemanticRole::Switch,
+            name: self.name.clone(),
+            value: Some(if self.on {
+                "on".to_owned()
+            } else {
+                "off".to_owned()
+            }),
+            description: self.description.clone(),
+            state: SemanticState {
+                focusable: self.enabled,
+                focused: focused && self.enabled,
+                disabled: !self.enabled,
+                expanded: None,
+                busy: false,
+            },
+            actions: if self.enabled {
+                BTreeSet::from([SemanticAction::Activate])
+            } else {
+                BTreeSet::new()
+            },
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Bounded slider projected for integer or float rows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SliderWidget {
+    /// Stable key.
+    pub key: SemanticKey,
+    /// Accessible name.
+    pub name: String,
+    /// Accessible description.
+    pub description: Option<String>,
+    /// Current value as text.
+    pub value: String,
+    /// Whether the slider may be activated.
+    pub enabled: bool,
+}
+
+impl SliderWidget {
+    /// Projects slider role and activate action.
+    #[must_use]
+    pub fn semantic_node(&self, focused: bool) -> SemanticNode {
+        SemanticNode {
+            key: self.key.clone(),
+            role: SemanticRole::Slider,
+            name: self.name.clone(),
+            value: Some(self.value.clone()),
+            description: self.description.clone(),
+            state: SemanticState {
+                focusable: self.enabled,
+                focused: focused && self.enabled,
+                disabled: !self.enabled,
+                expanded: None,
+                busy: false,
+            },
+            actions: if self.enabled {
+                BTreeSet::from([
+                    SemanticAction::Activate,
+                    SemanticAction::NavLeft,
+                    SemanticAction::NavRight,
+                ])
+            } else {
+                BTreeSet::new()
+            },
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Editable text, including IME composition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextInputWidget {
+    /// Stable key.
+    pub key: SemanticKey,
+    /// Accessible name.
+    pub name: String,
+    /// Accessible description.
+    pub description: Option<String>,
+    /// Committed value.
+    pub value: String,
+    /// Whether the field may receive focus.
+    pub enabled: bool,
+}
+
+impl TextInputWidget {
+    /// Projects text-input role. Composition is held in [`crate::ImeTextState`].
+    #[must_use]
+    pub fn semantic_node(&self, focused: bool) -> SemanticNode {
+        SemanticNode {
+            key: self.key.clone(),
+            role: SemanticRole::TextInput,
+            name: self.name.clone(),
+            value: Some(self.value.clone()),
+            description: self.description.clone(),
+            state: SemanticState {
+                focusable: self.enabled,
+                focused: focused && self.enabled,
+                disabled: !self.enabled,
+                expanded: None,
+                busy: false,
+            },
+            actions: if self.enabled {
+                BTreeSet::from([SemanticAction::Activate])
+            } else {
+                BTreeSet::new()
+            },
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Transient status toast.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToastWidget {
+    /// Stable key.
+    pub key: SemanticKey,
+    /// Accessible name.
+    pub name: String,
+    /// Accessible description.
+    pub description: Option<String>,
+}
+
+impl ToastWidget {
+    /// Projects a non-focusable status toast.
+    #[must_use]
+    pub fn semantic_node(&self) -> SemanticNode {
+        SemanticNode {
+            key: self.key.clone(),
+            role: SemanticRole::Status,
+            name: self.name.clone(),
+            value: None,
+            description: self.description.clone(),
+            state: SemanticState::default(),
+            actions: BTreeSet::new(),
+            children: Vec::new(),
         }
     }
 }

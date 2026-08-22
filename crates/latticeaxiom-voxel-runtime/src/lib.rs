@@ -11,6 +11,7 @@ mod apply;
 mod dda;
 mod diagnostics;
 mod error;
+mod fluid;
 mod model;
 mod queue;
 mod working_set;
@@ -22,6 +23,12 @@ pub use apply::{
 pub use dda::{CellSelection, DdaCell, DdaOrigin, DdaOutcome, DdaQuery, DdaUnavailable};
 pub use diagnostics::{QueueDiagnostics, RuntimeDiagnostics};
 pub use error::{RuntimeError, RuntimeResult};
+pub use fluid::{
+    FLUID_CHUNK_EDGE_V1, FluidBoundaryIntent, FluidCellMutation, FluidCollisionKind, FluidFlow,
+    FluidLayerCell, FluidRevisionStamp, FluidRuntimeError, FluidRuntimeResult, FluidSelectionKind,
+    FluidTickPlan, FluidUpdateBudget, SolidFluidRuntimeCell, admit_fluid_completion,
+    plan_fluid_tick,
+};
 pub use model::{
     ApplyByteDeclaration, BackpressureReason, CancellationAckOutcome, CancellationReleaseReceipt,
     CancellationRequest, CancellationToken, ColliderFailure, ColliderSafetyState,

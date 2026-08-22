@@ -159,7 +159,6 @@ pub(super) fn toggle_pause(
     action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
     surface: Option<Res<'_, SurfaceActionFrame>>,
     mut pause: ResMut<'_, ProductionSessionPause>,
-    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
     mut page: ResMut<'_, PauseMenuPage>,
     mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
 ) {
@@ -178,26 +177,17 @@ pub(super) fn toggle_pause(
         } else {
             latticeaxiom_client_ui::SurfaceCommandV1::Pause
         };
-        if router.apply(&command).is_ok() {
-            pause.set(router.inner().route().modal() == latticeaxiom_client_ui::GameModalV1::Pause);
+        if let Ok(receipt) = router.apply(&command) {
+            pause.set(matches!(
+                receipt.route.modal(),
+                latticeaxiom_client_ui::GameModalV1::Pause
+                    | latticeaxiom_client_ui::GameModalV1::Settings
+                    | latticeaxiom_client_ui::GameModalV1::ConfirmSaveQuit
+            ));
             if !pause.is_paused() {
                 page.set_settings(false);
             }
-            return;
         }
-    }
-    if surfaces.inventory_open() {
-        surfaces.set_inventory_open(false);
-        return;
-    }
-    if pause.is_paused() && page.showing_settings() {
-        page.set_settings(false);
-        return;
-    }
-    let paused = !pause.is_paused();
-    pause.set(paused);
-    if !paused {
-        page.set_settings(false);
     }
 }
 
@@ -298,11 +288,33 @@ pub(super) fn pause_menu_buttons(
         }
         match action {
             PauseMenuAction::Resume => {
-                pause.set(false);
-                page.set_settings(false);
+                if let Some(router) = router.as_mut()
+                    && router
+                        .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
+                        .is_ok()
+                {
+                    pause.set(false);
+                    page.set_settings(false);
+                }
             }
-            PauseMenuAction::Settings => page.set_settings(true),
-            PauseMenuAction::Back => page.set_settings(false),
+            PauseMenuAction::Settings => {
+                if let Some(router) = router.as_mut()
+                    && router
+                        .apply(&latticeaxiom_client_ui::SurfaceCommandV1::OpenSettings)
+                        .is_ok()
+                {
+                    page.set_settings(true);
+                }
+            }
+            PauseMenuAction::Back => {
+                if let Some(router) = router.as_mut()
+                    && router
+                        .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
+                        .is_ok()
+                {
+                    page.set_settings(false);
+                }
+            }
             PauseMenuAction::ViewMinus => {
                 if let Some(spine) = spine.as_ref() {
                     let next = spine.requested_view_distance().saturating_sub(1).max(1);

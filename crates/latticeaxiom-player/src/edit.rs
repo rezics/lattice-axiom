@@ -158,6 +158,9 @@ pub enum BlockEditRejectV1 {
         /// Required registered tool class.
         required: ToolClassId,
     },
+    /// The selected tool has exhausted its durability.
+    #[error("selected tool is broken")]
+    ToolBroken,
     /// The action contributes progress but has not completed the break.
     #[error("block edit requires {remaining_work} more work units")]
     RequiresProgress {

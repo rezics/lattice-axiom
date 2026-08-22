@@ -21,11 +21,11 @@ pub use control::{
     SettingsControlKind, SettingsControlRecord,
 };
 pub use latticeaxiom_runtime_contracts::{
-    PreviewPolicyV1, SettingsApplyTransaction, SettingsDurabilityDomain, SettingsTransactionError,
-    SettingsTransactionPhase,
+    PreviewPolicyV1, RestartImpactMetadata, SettingsApplyTransaction, SettingsDurabilityDomain,
+    SettingsTransactionError, SettingsTransactionPhase,
 };
 pub use surface::{
     SettingsReadOnlyReason, SettingsSurfaceAuthority, SettingsSurfaceError, SettingsSurfaceModel,
-    SettingsSurfaceRow,
+    SettingsSurfaceRow, SettingsSurfaceScope,
 };
-pub use transaction::SettingsSurfaceTransactionRequest;
+pub use transaction::{SettingsApplyDisclosure, SettingsSurfaceTransactionRequest};

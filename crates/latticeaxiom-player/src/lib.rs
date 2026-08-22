@@ -31,6 +31,7 @@ pub use inspect::{
     AuthoritativeTargetInspectRequestV1, HeadlessTargetInspectV1, TargetInspectReceiptV1,
     TargetInspectRejectV1, chunk_line, occupancy_line,
 };
+pub use latticeaxiom_gameplay::{InventoryInspectV1, MiningInspectV1, RecipeInspectV1};
 pub use latticeaxiom_input::{
     AuthoritativePlayerActionV1, ClientSurfaceActionV1, CompiledInputCatalogV1,
     CompiledLeafwingMapV1,

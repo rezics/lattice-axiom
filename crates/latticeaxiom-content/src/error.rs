@@ -172,6 +172,20 @@ pub enum ContentError {
         /// Stable reason.
         reason: &'static str,
     },
+    /// A versioned fluid collision or selection policy could not be classified.
+    #[error("fluid policy `{id}` is invalid: {reason}")]
+    InvalidFluidPolicy {
+        /// Rejected policy identity.
+        id: StableId,
+        /// Stable reason.
+        reason: &'static str,
+    },
+    /// A versioned solid/fluid palette volume could not be compiled.
+    #[error("solid-fluid volume is invalid: {reason}")]
+    InvalidSolidFluidVolume {
+        /// Stable reason.
+        reason: &'static str,
+    },
 }
 
 /// Error returned when a fluid level is outside the frozen `0..=7` range.

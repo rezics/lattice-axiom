@@ -726,7 +726,7 @@ pub(super) fn recipe_buttons(
             continue;
         };
         let workstation = button.workbench.then_some(HOST_WORKBENCH_CONTAINER);
-        let _ = spine.craft_recipe(&recipe, workstation);
+        let _receipt = spine.craft_recipe(&recipe, workstation);
     }
 }
 
@@ -754,7 +754,12 @@ pub(super) fn sync_hand_recipe_list(
     if !surfaces.inventory_panel_open() {
         return;
     }
-    let recipes = spine.craftable_recipe_ids(None);
+    let recipes = spine
+        .recipe_inspect(None)
+        .into_iter()
+        .filter(|fragment| fragment.craftable() && fragment.workstation().is_none())
+        .map(|fragment| fragment.recipe().clone())
+        .collect::<Vec<_>>();
     let Some(children) = lists.iter().next() else {
         return;
     };
@@ -785,7 +790,12 @@ pub(super) fn sync_workbench_recipe_list(
     if !surfaces.workbench_open() {
         return;
     }
-    let recipes = spine.craftable_recipe_ids(Some(&crafting_workstation()));
+    let recipes = spine
+        .recipe_inspect(Some(&crafting_workstation()))
+        .into_iter()
+        .filter(latticeaxiom_gameplay::RecipeInspectV1::craftable)
+        .map(|fragment| fragment.recipe().clone())
+        .collect::<Vec<_>>();
     let Some(children) = lists.iter().next() else {
         return;
     };

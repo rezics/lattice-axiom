@@ -15,6 +15,7 @@ use std::{
 };
 
 use bevy::prelude::Resource;
+use latticeaxiom_client_ui::{GameModalV1, SurfaceCommandV1};
 use latticeaxiom_compose::LockedGameGraph;
 use latticeaxiom_core::{
     CanonicalHash, CapabilityId, IdentifierError, PackageName, WorldId, canonical_json_hash,
@@ -45,7 +46,8 @@ use thiserror::Error;
 
 use super::{
     ProductionHostError, ProductionInspectSurface, ProductionSessionPause, ProductionSpine,
-    SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding,
+    ProductionSurfaceRouter, SealedWorldWriterHost, SealedWriterHostError,
+    sealed_activation_binding,
 };
 use crate::{EngineInstance, LockVerifiedComposeImages, VerifiedProductLockHash};
 
@@ -407,7 +409,7 @@ impl ProductionMemoryStart {
             "playing/pause",
             SemanticActionId::PauseWorld,
         ))?;
-        set_session_paused(instance, true);
+        apply_game_surface(instance, &SurfaceCommandV1::Pause)?;
         Ok(effect)
     }
 
@@ -424,7 +426,7 @@ impl ProductionMemoryStart {
             "pause/resume",
             SemanticActionId::ResumeWorld,
         ))?;
-        set_session_paused(instance, false);
+        apply_game_surface(instance, &SurfaceCommandV1::Back)?;
         Ok(effect)
     }
 
@@ -440,9 +442,11 @@ impl ProductionMemoryStart {
     pub fn save_and_quit(
         &mut self,
         world_id: WorldId,
-        instance: EngineInstance,
+        mut instance: EngineInstance,
         writer: &mut SealedWorldWriterHost,
     ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
+        let _ = apply_game_surface(&mut instance, &SurfaceCommandV1::RequestSaveQuit);
+        let _ = apply_game_surface(&mut instance, &SurfaceCommandV1::Confirm);
         if writer.durability_capability() == StorageDurabilityCapabilityV1::WalSyncCheckpoint {
             let _ = self.save_and_quit_durable(world_id, instance, writer)?;
             return Ok(MemoryStartEffect::Shell(ShellEffect::RequestExitWorld));
@@ -827,6 +831,9 @@ pub enum ProductionMemoryStartError {
     /// Durable Save & Quit was requested on a volatile reference store.
     #[error("durable Save & Quit requires a WAL/sync/checkpoint storage capability")]
     DurableCapabilityRequired,
+    /// The game-process surface router rejected a typed command.
+    #[error(transparent)]
+    Surface(#[from] latticeaxiom_client_ui::SurfaceRouterError),
     /// Crash recovery proved the world readable but not writable.
     #[error("world {world} is recoverable read-only and must not open a writer")]
     RecoverableReadOnly {
@@ -928,6 +935,33 @@ fn session_command(target: &'static str, action: SemanticActionId) -> SemanticCo
         action,
         source: InputSource::Headless,
     }
+}
+
+fn apply_game_surface(
+    instance: &mut EngineInstance,
+    command: &SurfaceCommandV1,
+) -> Result<(), ProductionMemoryStartError> {
+    let paused = if let Some(mut router) = instance
+        .app
+        .world_mut()
+        .get_resource_mut::<ProductionSurfaceRouter>()
+    {
+        let receipt = router.apply(command)?;
+        matches!(
+            receipt.route.modal(),
+            GameModalV1::Pause
+                | GameModalV1::Settings
+                | GameModalV1::ConfirmSaveQuit
+                | GameModalV1::BindingCapture
+        ) || receipt.route.transition() != latticeaxiom_client_ui::GameTransitionV1::None
+    } else {
+        matches!(
+            command,
+            SurfaceCommandV1::Pause | SurfaceCommandV1::OpenSettings
+        )
+    };
+    set_session_paused(instance, paused);
+    Ok(())
 }
 
 fn set_session_paused(instance: &mut EngineInstance, paused: bool) {

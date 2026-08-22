@@ -75,6 +75,20 @@ game.make {
       cardinality = "exactly-one",
       domains = ["authoritative"],
     },
+    "latticeaxiom:capability/sandbox-gameplay@1" = {
+      capability = "latticeaxiom:capability/sandbox-gameplay@1",
+      version = "^1.0.0",
+      provider = "@terrenia/gameplay",
+      cardinality = "exactly-one",
+      domains = ["authoritative"],
+    },
+    "latticeaxiom:capability/sandbox-tools@1" = {
+      capability = "latticeaxiom:capability/sandbox-tools@1",
+      version = "^1.0.0",
+      provider = "@terrenia/tools",
+      cardinality = "exactly-one",
+      domains = ["authoritative"],
+    },
   },
   source_universe = [
     source_candidate

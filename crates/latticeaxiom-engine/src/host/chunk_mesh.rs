@@ -1,6 +1,6 @@
 //! GPU chunk meshes built from halo-aware derived geometry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::{
     asset::{Assets, Handle, RenderAssetUsages},
@@ -35,7 +35,7 @@ pub(super) struct ProductionTerrainMaterials {
 impl ProductionTerrainMaterials {
     pub(super) fn from_atlas(
         materials: &mut Assets<StandardMaterial>,
-        atlas: Handle<Image>,
+        atlas: &Handle<Image>,
     ) -> Self {
         let handles =
             MeshGroup::ALL.map(|group| materials.add(group_material(atlas.clone(), group)));
@@ -134,13 +134,13 @@ impl ProductionTerrainPalette {
     }
 
     pub(super) fn from_layer_table(table: CompiledTerrainLayerTableV1) -> Self {
-        let mut layer_ids = BTreeMap::new();
+        let mut layer_ids = BTreeSet::new();
         for row in table.rows() {
             for face in TerrainFaceV1::ALL {
-                layer_ids.insert(row.faces().layer(face).clone(), ());
+                layer_ids.insert(row.faces().layer(face).clone());
             }
         }
-        let unique_layers = layer_ids.into_keys().collect::<Vec<_>>();
+        let unique_layers = layer_ids.into_iter().collect::<Vec<_>>();
         let colors: Vec<[f32; 4]> = table
             .rows()
             .iter()
@@ -180,8 +180,7 @@ impl ProductionTerrainPalette {
                             .iter()
                             .any(|face| candidate.faces().layer(*face) == layer)
                     })
-                    .map(|row| block_color(row.content().as_str()))
-                    .unwrap_or(FALLBACK_COLOR);
+                    .map_or(FALLBACK_COLOR, |row| block_color(row.content().as_str()));
                 blit_tile(&mut atlas_rgba, atlas_width, col, row, &solid_tile(color));
                 let tile = atlas_tile(tile_index, columns, atlas_width, atlas_height);
                 tiles.push(tile);
@@ -232,12 +231,12 @@ impl ProductionTerrainPalette {
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn vertex_uvs<K>(&self, palette_index: u16, face: Face, quad: &Quad<K>) -> [[f32; 2]; 4] {
-        self.map_local_uvs(self.tile(palette_index), face, quad)
+        Self::map_local_uvs(self.tile(palette_index), face, quad)
     }
 
     fn layer_uvs(
         &self,
-        key: &LayerMergeKey,
+        key: LayerMergeKey,
         face: Face,
         quad: &Quad<LayerMergeKey>,
     ) -> [[f32; 2]; 4] {
@@ -252,10 +251,10 @@ impl ProductionTerrainPalette {
             })
             .copied()
             .unwrap_or(self.fallback_tile);
-        self.map_local_uvs(tile, face, quad)
+        Self::map_local_uvs(tile, face, quad)
     }
 
-    fn layer_color(&self, key: &LayerMergeKey) -> [f32; 4] {
+    fn layer_color(&self, key: LayerMergeKey) -> [f32; 4] {
         self.layer_table
             .as_ref()
             .and_then(|table| table.rows().get(usize::from(key.layer_index())))
@@ -264,7 +263,7 @@ impl ProductionTerrainPalette {
             .unwrap_or(FALLBACK_COLOR)
     }
 
-    fn map_local_uvs<K>(&self, tile: AtlasTile, face: Face, quad: &Quad<K>) -> [[f32; 2]; 4] {
+    fn map_local_uvs<K>(tile: AtlasTile, face: Face, quad: &Quad<K>) -> [[f32; 2]; 4] {
         let local = quad.uvs(face);
         let width = local[1][0].max(1.0);
         let height = local[3][1].max(1.0);
@@ -377,8 +376,8 @@ fn mesh_from_group(
     let cpu = adapter_cpu_mesh_from_group(
         geometry,
         group,
-        |key| palette.layer_color(key),
-        |key, face, quad| palette.layer_uvs(key, face, quad),
+        |key| palette.layer_color(*key),
+        |key, face, quad| palette.layer_uvs(*key, face, quad),
     )?;
     if cpu.group_count == 0 {
         return None;

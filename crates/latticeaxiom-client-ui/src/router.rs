@@ -587,9 +587,18 @@ fn apply_shell_command(
                 Ok((ShellRouteV1::Home, false))
             }
         }
+        (ShellRouteV1::Worlds, SurfaceCommandV1::OpenShell(ShellRouteV1::Recovery)) => {
+            Ok((ShellRouteV1::Recovery, false))
+        }
         (ShellRouteV1::Recovery, SurfaceCommandV1::OpenShell(ShellRouteV1::Home)) => {
             Ok((ShellRouteV1::Home, false))
         }
+        (
+            ShellRouteV1::Recovery,
+            SurfaceCommandV1::OpenShell(ShellRouteV1::Worlds)
+            | SurfaceCommandV1::Back
+            | SurfaceCommandV1::Cancel,
+        ) => Ok((ShellRouteV1::Worlds, false)),
         (ShellRouteV1::Home, SurfaceCommandV1::OpenSettings) => Ok((ShellRouteV1::Settings, false)),
         (ShellRouteV1::Home, SurfaceCommandV1::OpenShell(target)) => Ok((*target, false)),
         (

@@ -60,6 +60,10 @@ pub(super) const WORLDGEN_TERRAIN_CAPABILITY: &str =
     "latticeaxiom:capability/worldgen-terrain-provider@2";
 /// Exactly-one content-blocks provider selected by a reopened product lock.
 pub(super) const CONTENT_BLOCKS_CAPABILITY: &str = "latticeaxiom:capability/content-blocks@1";
+/// Exactly-one sandbox gameplay-rules provider selected by a reopened product lock.
+pub(super) const SANDBOX_GAMEPLAY_CAPABILITY: &str = "latticeaxiom:capability/sandbox-gameplay@1";
+/// Exactly-one sandbox tools provider selected by a reopened product lock.
+pub(super) const SANDBOX_TOOLS_CAPABILITY: &str = "latticeaxiom:capability/sandbox-tools@1";
 
 /// Worldgen identities compiled from the package catalog.
 #[derive(Clone, Debug)]
@@ -110,6 +114,36 @@ pub fn authored_gameplay_catalog() -> Result<GameplayCatalog, ProductionHostErro
         .map_err(ProductionHostError::from)?;
     require_compiled_gameplay_covers_d9(&catalog)?;
     Ok(catalog)
+}
+
+/// Compiles the gameplay catalog selected by a reopened product lock.
+///
+/// Generic sandbox mechanics stay in [`GameplayCatalog`]. Concrete tool and
+/// rule rows come from the lock-selected sandbox-tools and sandbox-gameplay
+/// providers. Missing both providers yields an empty catalog so voxel-only
+/// fixtures do not embed a hidden content fallback. Selecting only one of the
+/// two required providers fails closed.
+///
+/// # Errors
+///
+/// Returns [`ProductionHostError`] when the lock lists an empty or duplicate
+/// provider, only one of the two sandbox capabilities is selected, or the
+/// selected packages fail catalog compilation.
+pub fn lock_selected_gameplay_catalog(
+    images: &LockVerifiedComposeImages,
+) -> Result<GameplayCatalog, ProductionHostError> {
+    let gameplay = exactly_one_lock_provider(images, SANDBOX_GAMEPLAY_CAPABILITY)?;
+    let tools = exactly_one_lock_provider(images, SANDBOX_TOOLS_CAPABILITY)?;
+    match (gameplay.is_some(), tools.is_some()) {
+        (true, true) => authored_gameplay_catalog(),
+        (false, false) => empty_gameplay_catalog(),
+        (true, false) => Err(ProductionHostError::MissingLockProvider {
+            capability: SANDBOX_TOOLS_CAPABILITY.to_owned(),
+        }),
+        (false, true) => Err(ProductionHostError::MissingLockProvider {
+            capability: SANDBOX_GAMEPLAY_CAPABILITY.to_owned(),
+        }),
+    }
 }
 
 /// Compiles an empty gameplay catalog for hosts that only edit voxels.

@@ -26,17 +26,17 @@ use latticeaxiom_compose::{
     TargetPackageRealizationV1, TargetRealizationLockV1, TrustClass, persist_product_lock,
 };
 use latticeaxiom_core::{
-    CanonicalHash, NamespaceGrant, NamespaceGrantPattern, NamespaceGrantor, PackageName,
-    PackageVersion, PackageVersionReq, RegistrationNamespace, SourceId, SourceProvenance, StableId,
-    TargetTriple, canonical_json_bytes,
+    CanonicalHash, CapabilityId, NamespaceGrant, NamespaceGrantPattern, NamespaceGrantor,
+    PackageName, PackageVersion, PackageVersionReq, RegistrationNamespace, SourceId,
+    SourceProvenance, StableId, TargetTriple, canonical_json_bytes,
 };
 use latticeaxiom_engine::{
     ActionAxis2V1, AuthoritativeTransactionKernel, CellOccupancyV1, ChunkCoordinate, ChunkFaceV1,
     ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ChunkRevision, CommandOutcomeV1,
     ContainerId, DropEntityId, EngineInstance, EngineInstanceError, FluidFlowV1, FluidLevelV1,
-    FluidStateV1, GameplayReject, HOTBAR_SLOTS, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId,
-    ItemStackV1, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, MeshReceipt,
-    PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1, PreparationError,
+    FluidStateV1, GameplayCatalog, GameplayReject, HOTBAR_SLOTS, HeadlessTargetInspectV1,
+    INVENTORY_SLOTS, ItemId, ItemStackV1, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE,
+    MeshReceipt, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1, PreparationError,
     ProductionInspectSurface, ProductionMemoryStart, ProductionSessionPause, ProductionSpine,
     ProductionWorldList, ProductionWorldStorage, RecipeId, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1,
     SealedWorldWriterHost, SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages,
@@ -1150,6 +1150,11 @@ fn intra_chunk_motion_does_not_distance_evict_or_remesh() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss
+)]
 fn retain_keeps_former_core_after_immediate_boundary_reversal() {
     let mut instance =
         EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
@@ -1166,19 +1171,28 @@ fn retain_keeps_former_core_after_immediate_boundary_reversal() {
     let y0 = (pose.y - 0.9).floor() as i32;
     let z0 = pose.z.floor() as i32;
     for dx in 0..12 {
-        for dy in 0..3 {
-            let _ = mine_cover_cell(
-                &spine,
-                latticeaxiom_gameplay::BlockPosition {
-                    x: x0.saturating_add(dx),
-                    y: y0.saturating_add(dy),
-                    z: z0,
-                },
-            );
+        for dz in -1..=1 {
+            for dy in 0..3 {
+                let _ = mine_cover_cell(
+                    &spine,
+                    latticeaxiom_gameplay::BlockPosition {
+                        x: x0.saturating_add(dx),
+                        y: y0.saturating_add(dy),
+                        z: z0.saturating_add(dz),
+                    },
+                );
+            }
         }
     }
-    let mut generation =
-        enqueue_look_then_walk(&mut instance, 1, std::f32::consts::FRAC_PI_2, 0.0, 1.0, 16);
+    let mut generation = idle_at_hole(&mut instance, &spine, 1, 32);
+    generation = enqueue_look_then_walk(
+        &mut instance,
+        generation,
+        std::f32::consts::FRAC_PI_2,
+        0.0,
+        1.0,
+        16,
+    );
     instance.advance_fixed_ticks(2).expect("look ticks advance");
     let mut crossed = start;
     for yaw in [std::f32::consts::FRAC_PI_2, -std::f32::consts::FRAC_PI_2] {
@@ -1983,6 +1997,101 @@ fn durable_save_and_quit_returns_child_result_and_reopens_edits_and_inventory() 
     assert_eq!(restored_inventory.hotbar_slot(), selected_slot);
 }
 
+#[test]
+#[allow(clippy::too_many_lines)]
+fn durable_save_and_quit_restores_unpicked_drops() {
+    let images = lock_boot_fixture().prepared();
+    let record_owner = "latticeaxiom:schema/world-db-chunk@1"
+        .parse()
+        .expect("fixture record owner is canonical");
+    let mut writer_host =
+        SealedWorldWriterHost::durable_reference_with_default_publisher(record_owner);
+    let mut start = ProductionMemoryStart::new(images, start_shell_graph())
+        .with_storage(writer_host.storage().clone());
+    start.set_now_ms(10);
+    let intent = start
+        .quick_create_intent("Durable Drops")
+        .expect("quick-create binds the lock graph root");
+    let created = start
+        .create(&intent, 10)
+        .expect("create provisions durable storage");
+    let mut instance = start
+        .play_headless(created, 20, SPINE_TIMESTEP)
+        .expect("game host starts from the same lock");
+    instance
+        .advance_fixed_ticks(1)
+        .expect("one production tick plays");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    let filler =
+        ItemStackV1::plain(parse_item("terrenia:item/stone"), 64).expect("stone stacks are valid");
+    for slot in 0..INVENTORY_SLOTS {
+        let index = SlotIndex::new(u16::try_from(slot).expect("slot fits"));
+        if spine
+            .inventory_view()
+            .expect("inventory")
+            .slots()
+            .get(slot)
+            .and_then(Option::as_ref)
+            .is_none()
+        {
+            spine
+                .seed_inventory_slot(index, Some(filler.clone()))
+                .expect("capacity probe fills empty slots");
+        }
+    }
+    let grass = spine
+        .first_resident_block(&parse_block("terrenia:block/grass"))
+        .or_else(|| Some(first_resident_soil(&spine).1))
+        .expect("a gatherable soil block remains");
+    let _ = mine_until_broken(&spine, grass);
+    let pending = spine.dropped_items();
+    assert!(
+        !pending.is_empty(),
+        "full inventory must leave a world drop"
+    );
+    let drop_count = pending.len();
+    let drop_items: Vec<_> = pending
+        .values()
+        .map(|drop| drop.stack.item().clone())
+        .collect();
+
+    start.pause_session(&mut instance).expect("pause");
+    start
+        .save_and_quit_durable(created, instance, &mut writer_host)
+        .expect("durable Save & Quit");
+    let (continued, mut reopened) = start
+        .play_continued_headless(30, SPINE_TIMESTEP)
+        .expect("continue reopens storage-first after durable Save & Quit");
+    assert_eq!(continued, created);
+    reopened
+        .advance_fixed_ticks(1)
+        .expect("continued host advances one tick");
+    let reopened_spine = reopened
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("continued production spine is installed")
+        .clone();
+    let restored = reopened_spine.dropped_items();
+    assert_eq!(
+        restored.len(),
+        drop_count,
+        "unpicked drops must survive durable reopen"
+    );
+    for item in drop_items {
+        assert!(
+            restored.values().any(|drop| drop.stack.item() == &item),
+            "restored drops must keep {item}"
+        );
+    }
+}
+
 fn start_shell_graph() -> ClientShellGraph {
     ClientShellGraph::resolve([
         ShellPackageProvider {
@@ -2621,7 +2730,14 @@ fn fixture() -> Fixture {
                 signature_hash: signature,
             },
         )]),
-        provided_capabilities: BTreeSet::new(),
+        provided_capabilities: BTreeSet::from([
+            "latticeaxiom:capability/sandbox-gameplay@1"
+                .parse::<CapabilityId>()
+                .expect("sandbox gameplay capability is canonical"),
+            "latticeaxiom:capability/sandbox-tools@1"
+                .parse::<CapabilityId>()
+                .expect("sandbox tools capability is canonical"),
+        ]),
         semantic_grants: BTreeSet::new(),
     };
     let artifact_hash = CanonicalHash::digest(b"terrenia-artifact");
@@ -2661,7 +2777,20 @@ fn fixture() -> Fixture {
         evaluation_limits: composition.policy.evaluation_limits,
         roots: BTreeSet::from([package.clone()]),
         packages: BTreeMap::from([(package.clone(), locked)]),
-        capability_providers: BTreeMap::new(),
+        capability_providers: BTreeMap::from([
+            (
+                "latticeaxiom:capability/sandbox-gameplay@1"
+                    .parse::<CapabilityId>()
+                    .expect("sandbox gameplay capability is canonical"),
+                vec![package.clone()],
+            ),
+            (
+                "latticeaxiom:capability/sandbox-tools@1"
+                    .parse::<CapabilityId>()
+                    .expect("sandbox tools capability is canonical"),
+                vec![package.clone()],
+            ),
+        ]),
         namespace_grants: BTreeSet::from([grant]),
         explanation: Vec::new(),
         graph_hash: CanonicalHash::digest(b"unsealed-graph"),
@@ -3135,7 +3264,9 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
     });
     assert!(
         occupancy.fluid.is_none(),
-        "hydrology cannot own the cave entrance; aperture fluid must stay empty"
+        "hydrology cannot own the cave entrance; aperture fluid must stay empty, fluid={:?}, state={:?}",
+        occupancy.fluid,
+        occupancy.fluid_state
     );
 
     generation = walk_toward_column(
@@ -3628,6 +3759,262 @@ fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn production_host_v7_gather_craft_stone_tool_accelerated_mine_and_place() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let selected = latticeaxiom_engine::lock_selected_gameplay_catalog(&boot.prepared())
+        .expect("reopened graph selects sandbox gameplay and tools");
+    assert!(
+        selected
+            .recipe(&parse_recipe("terrenia:recipe/stone-pickaxe@1"))
+            .is_some(),
+        "lock-selected catalog must include @terrenia/tools recipes"
+    );
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    let stone_block = parse_block("terrenia:block/stone");
+    let cobble = parse_item("terrenia:item/cobblestone");
+    let log_item = parse_item("terrenia:item/oak-log");
+    let wooden = parse_item("terrenia:item/wooden-pickaxe");
+    let stone_pick = parse_item("terrenia:item/stone-pickaxe");
+    let (_, dirt_pos, dirt_item) = first_resident_soil(&spine);
+    gather_until_inventory_has(&spine, dirt_pos, &dirt_item, 1);
+    if let Some((_, log_pos, gathered_wood, _, _)) = first_resident_wood(&spine) {
+        gather_until_inventory_has(&spine, log_pos, &gathered_wood, 1);
+    }
+    top_up_item(&spine, &log_item, 8);
+    for _ in 0..4 {
+        spine
+            .craft_recipe(&parse_recipe("terrenia:recipe/oak-planks@1"), None)
+            .expect("oak planks craft");
+    }
+    spine
+        .craft_recipe(&parse_recipe("terrenia:recipe/stick@1"), None)
+        .expect("sticks craft");
+    spine
+        .craft_recipe(&parse_recipe("terrenia:recipe/workbench@1"), None)
+        .expect("workbench crafts");
+    let station = ContainerId::new(2);
+    spine
+        .bind_workstation(
+            WorkstationId::parse("latticeaxiom:workstation/crafting@1")
+                .expect("crafting workstation is a platform contract"),
+            station,
+        )
+        .expect("workbench binds");
+    spine
+        .craft_recipe(
+            &parse_recipe("terrenia:recipe/wooden-pickaxe@1"),
+            Some(station),
+        )
+        .expect("wooden pickaxe crafts");
+    select_item_in_hotbar(&spine, &wooden);
+    let stone_pos = spine
+        .first_resident_block(&stone_block)
+        .expect("generated stone exists");
+    let wooden_steps = count_mine_steps(&spine, stone_pos);
+    pickup_remaining(&spine);
+    assert!(
+        wooden_steps < 15,
+        "wooden pickaxe must beat hand hardness, steps {wooden_steps}"
+    );
+    assert!(
+        spine
+            .inventory_view()
+            .expect("inventory")
+            .count_item(&cobble)
+            >= 1
+    );
+    top_up_item(&spine, &cobble, 3);
+    top_up_item(&spine, &parse_item("terrenia:item/stick"), 2);
+    spine
+        .craft_recipe(
+            &parse_recipe("terrenia:recipe/stone-pickaxe@1"),
+            Some(station),
+        )
+        .expect("stone pickaxe crafts at the workbench");
+    select_item_in_hotbar(&spine, &stone_pick);
+    let next_stone = spine
+        .first_resident_block(&stone_block)
+        .expect("a second stone cell remains");
+    let stone_steps = count_mine_steps(&spine, next_stone);
+    pickup_remaining(&spine);
+    assert!(
+        stone_steps < wooden_steps,
+        "stone pickaxe must accelerate mining ({stone_steps} >= {wooden_steps})"
+    );
+    select_item_in_hotbar(&spine, &dirt_item);
+    let place_anchor = latticeaxiom_gameplay::BlockPosition {
+        x: dirt_pos.x,
+        y: dirt_pos.y.saturating_add(1),
+        z: dirt_pos.z,
+    };
+    spine
+        .place_from_hotbar(place_anchor, BlockFaceV1::NegativeY)
+        .expect("placement uses the same public command path");
+}
+
+#[test]
+fn production_host_v7_broken_tool_failed_craft_and_stale_move_are_atomic() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 1);
+    let stone_block = parse_block("terrenia:block/stone");
+    let stone_pos = spine
+        .first_resident_block(&stone_block)
+        .expect("generated stone exists");
+    let _ = mine_until_broken(&spine, stone_pos);
+    pickup_remaining(&spine);
+    assert!(
+        spine
+            .inventory_view()
+            .expect("inventory")
+            .tool_durability(&parse_item("terrenia:item/wooden-pickaxe"))
+            .is_none(),
+        "exhausted tool must leave the hotbar"
+    );
+    let next = spine
+        .first_resident_block(&stone_block)
+        .expect("another stone cell remains");
+    let broken = spine.mine_cell(next);
+    assert!(
+        matches!(
+            broken,
+            Err(BlockEditRejectV1::RequiresTool { .. } | BlockEditRejectV1::ToolBroken)
+        ),
+        "broken or missing tool must fail closed, got {broken:?}"
+    );
+    let failed = spine.craft_recipe(&parse_recipe("terrenia:recipe/wooden-pickaxe@1"), None);
+    assert!(
+        matches!(
+            failed,
+            Err(GameplayReject::RecipeMismatch { .. } | GameplayReject::WorkstationRequired { .. })
+        ),
+        "failed craft must reject, got {failed:?}"
+    );
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(3),
+            Some(ItemStackV1::plain(parse_item("terrenia:item/dirt"), 2).expect("dirt")),
+        )
+        .expect("dirt is seeded");
+    let before = spine
+        .inventory_view()
+        .expect("inventory")
+        .count_item(&parse_item("terrenia:item/dirt"));
+    let moved = spine.move_stack(SlotIndex::new(3), SlotIndex::new(4));
+    moved.expect("first move commits");
+    let swapped = spine.move_stack(SlotIndex::new(8), SlotIndex::new(7));
+    assert!(
+        matches!(swapped, Err(GameplayReject::EmptySlot) | Ok(_)),
+        "empty or no-op move must not panic, got {swapped:?}"
+    );
+    assert_eq!(
+        spine
+            .inventory_view()
+            .expect("inventory")
+            .count_item(&parse_item("terrenia:item/dirt")),
+        before,
+        "failed or empty-slot moves must conserve quantity"
+    );
+}
+
+#[test]
+fn fixture_dimension_reuses_public_commands_without_terrenia_ids() {
+    let catalog = fixture_sandbox_catalog();
+    let boot = lock_boot_fixture();
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("fixture catalog binds the production host");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    let log = parse_item("example:item/log");
+    let plank = parse_item("example:item/plank");
+    let pickaxe = parse_item("example:item/pickaxe");
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(0),
+            Some(ItemStackV1::plain(log.clone(), 8).expect("log stack")),
+        )
+        .expect("fixture logs seed");
+    for _ in 0..3 {
+        spine
+            .craft_recipe(&parse_recipe("example:recipe/plank@1"), None)
+            .expect("fixture hand-crafts planks");
+    }
+    spine
+        .craft_recipe(&parse_recipe("example:recipe/stick@1"), None)
+        .expect("fixture hand-crafts sticks");
+    let station = ContainerId::new(2);
+    spine
+        .bind_workstation(
+            WorkstationId::parse("latticeaxiom:workstation/crafting@1")
+                .expect("crafting workstation is a platform contract"),
+            station,
+        )
+        .expect("fixture workstation binds");
+    spine
+        .craft_recipe(&parse_recipe("example:recipe/pickaxe@1"), Some(station))
+        .expect("fixture crafts a tool at the workbench");
+    assert!(
+        spine
+            .inventory_view()
+            .expect("inventory")
+            .tool_durability(&pickaxe)
+            .is_some()
+    );
+    let failed = spine.craft_recipe(&parse_recipe("example:recipe/pickaxe@1"), None);
+    assert!(
+        matches!(
+            failed,
+            Err(GameplayReject::RecipeMismatch { .. } | GameplayReject::WorkstationRequired { .. })
+        ),
+        "fixture failed craft must reject, got {failed:?}"
+    );
+    assert!(
+        spine
+            .inventory_view()
+            .expect("inventory")
+            .count_item(&plank)
+            >= 1
+    );
+    let _ = log;
+}
+
+#[test]
 fn production_host_inspect_overlay_fills_harvest_and_omits_occupancy() {
     let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
     let boot = lock_boot_fixture();
@@ -4084,6 +4471,24 @@ fn select_item_in_hotbar(spine: &ProductionSpine, item: &ItemId) {
     }
 }
 
+fn count_mine_steps(
+    spine: &ProductionSpine,
+    position: latticeaxiom_gameplay::BlockPosition,
+) -> u32 {
+    let mut steps = 0_u32;
+    loop {
+        steps += 1;
+        match spine.mine_cell(position) {
+            Ok(_) => return steps,
+            Err(BlockEditRejectV1::RequiresProgress { .. }) if steps < 64 => {}
+            Err(error) => panic!(
+                "mining {position:?} failed after {steps} steps: {error:?}, reject={:?}",
+                spine.last_gameplay_reject()
+            ),
+        }
+    }
+}
+
 fn mine_until_broken(
     spine: &ProductionSpine,
     position: latticeaxiom_gameplay::BlockPosition,
@@ -4353,7 +4758,6 @@ fn player_in_cave(
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn player_topology_domain(spine: &ProductionSpine) -> Option<latticeaxiom_core::StableId> {
     let translation = spine.player_pose().translation;
     let cells = [
@@ -4373,6 +4777,7 @@ fn player_topology_domain(spine: &ProductionSpine) -> Option<latticeaxiom_core::
         .find_map(|&[x, y, z]| spine.cave_topology_domain(x, y, z))
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn player_sample_void(spine: &ProductionSpine, translation: bevy::prelude::Vec3) -> bool {
     let cells = [
         [
@@ -4395,6 +4800,194 @@ fn player_sample_void(spine: &ProductionSpine, translation: bevy::prelude::Vec3)
 
 fn parse_block(id: &str) -> BlockId {
     BlockId::parse(id).unwrap_or_else(|error| panic!("{id} parses: {error}"))
+}
+
+#[allow(clippy::too_many_lines)]
+fn fixture_sandbox_catalog() -> GameplayCatalog {
+    use std::num::{NonZeroU16, NonZeroU32};
+
+    use latticeaxiom_gameplay::{
+        BlockDefinitionV1, BlockSchemaBindingV1, CatalogLimits, ContainerStateV1,
+        FrozenItemRoleBindingV1, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1,
+        ItemPredicateV1, ItemRoleDefinitionV1, ItemStackV1 as Stack, MiningRuleV1,
+        RecipeDefinitionV1, RecipePatternV1, RoleOutputV1, ToolDefinitionV1,
+        WorkstationDefinitionV1,
+    };
+
+    let nz = |value: u32| NonZeroU32::new(value).expect("fixture quantity is non-zero");
+    let log = parse_item("example:item/log");
+    let plank = parse_item("example:item/plank");
+    let stick = parse_item("example:item/stick");
+    let pickaxe = parse_item("example:item/pickaxe");
+    let log_block = parse_block("example:block/log");
+    let plank_block = parse_block("example:block/plank");
+    let pickaxe_class =
+        latticeaxiom_gameplay::ToolClassId::parse("latticeaxiom:tool-class/pickaxe@1")
+            .expect("pickaxe class is a platform contract");
+    let plank_role =
+        latticeaxiom_gameplay::ItemRoleId::parse("latticeaxiom:item-role/plank-output@1")
+            .expect("plank role");
+    let stick_role =
+        latticeaxiom_gameplay::ItemRoleId::parse("latticeaxiom:item-role/stick-output@1")
+            .expect("stick role");
+    let pickaxe_role =
+        latticeaxiom_gameplay::ItemRoleId::parse("latticeaxiom:item-role/pickaxe-output@1")
+            .expect("pickaxe role");
+    let workbench = WorkstationId::parse("latticeaxiom:workstation/crafting@1")
+        .expect("crafting workstation is a platform contract");
+    GameplayCatalog::compile(
+        GameplayCatalogSourceV1 {
+            items: vec![
+                ItemDefinitionV1 {
+                    id: log.clone(),
+                    stack_limit: nz(64),
+                    placement_block: Some(log_block.clone()),
+                    durability: None,
+                },
+                ItemDefinitionV1 {
+                    id: plank.clone(),
+                    stack_limit: nz(64),
+                    placement_block: Some(plank_block.clone()),
+                    durability: None,
+                },
+                ItemDefinitionV1 {
+                    id: stick.clone(),
+                    stack_limit: nz(64),
+                    placement_block: None,
+                    durability: None,
+                },
+                ItemDefinitionV1 {
+                    id: pickaxe.clone(),
+                    stack_limit: nz(1),
+                    placement_block: None,
+                    durability: Some(nz(10)),
+                },
+            ],
+            blocks: vec![
+                BlockDefinitionV1 {
+                    id: log_block,
+                    mining: MiningRuleV1 {
+                        hardness: nz(2),
+                        tool: None,
+                    },
+                    drop: Stack::plain(log.clone(), 1).expect("log drop"),
+                },
+                BlockDefinitionV1 {
+                    id: plank_block.clone(),
+                    mining: MiningRuleV1 {
+                        hardness: nz(2),
+                        tool: None,
+                    },
+                    drop: Stack::plain(plank.clone(), 1).expect("plank drop"),
+                },
+            ],
+            tools: vec![ToolDefinitionV1 {
+                item: pickaxe.clone(),
+                class: pickaxe_class,
+                tier: 1,
+                work_per_step: nz(4),
+                maximum_durability: nz(10),
+            }],
+            roles: vec![
+                ItemRoleDefinitionV1 {
+                    id: plank_role.clone(),
+                    accepts: ItemPredicateV1::Exact(plank.clone()),
+                },
+                ItemRoleDefinitionV1 {
+                    id: stick_role.clone(),
+                    accepts: ItemPredicateV1::Exact(stick.clone()),
+                },
+                ItemRoleDefinitionV1 {
+                    id: pickaxe_role.clone(),
+                    accepts: ItemPredicateV1::Exact(pickaxe),
+                },
+            ],
+            bindings: vec![
+                FrozenItemRoleBindingV1 {
+                    role: plank_role.clone(),
+                    item: plank.clone(),
+                },
+                FrozenItemRoleBindingV1 {
+                    role: stick_role.clone(),
+                    item: stick.clone(),
+                },
+                FrozenItemRoleBindingV1 {
+                    role: pickaxe_role.clone(),
+                    item: parse_item("example:item/pickaxe"),
+                },
+            ],
+            recipes: vec![
+                RecipeDefinitionV1 {
+                    id: parse_recipe("example:recipe/plank@1"),
+                    workstation: None,
+                    pattern: RecipePatternV1::Shapeless {
+                        ingredients: vec![IngredientV1 {
+                            accepts: ItemPredicateV1::Exact(log),
+                            quantity: nz(1),
+                        }]
+                        .into_boxed_slice(),
+                    },
+                    output: RoleOutputV1 {
+                        role: plank_role,
+                        quantity: nz(4),
+                    },
+                },
+                RecipeDefinitionV1 {
+                    id: parse_recipe("example:recipe/stick@1"),
+                    workstation: None,
+                    pattern: RecipePatternV1::Shapeless {
+                        ingredients: vec![IngredientV1 {
+                            accepts: ItemPredicateV1::Exact(plank),
+                            quantity: nz(2),
+                        }]
+                        .into_boxed_slice(),
+                    },
+                    output: RoleOutputV1 {
+                        role: stick_role,
+                        quantity: nz(4),
+                    },
+                },
+                RecipeDefinitionV1 {
+                    id: parse_recipe("example:recipe/pickaxe@1"),
+                    workstation: Some(workbench.clone()),
+                    pattern: RecipePatternV1::Shapeless {
+                        ingredients: vec![
+                            IngredientV1 {
+                                accepts: ItemPredicateV1::Exact(parse_item("example:item/stick")),
+                                quantity: nz(2),
+                            },
+                            IngredientV1 {
+                                accepts: ItemPredicateV1::Exact(parse_item("example:item/plank")),
+                                quantity: nz(3),
+                            },
+                        ]
+                        .into_boxed_slice(),
+                    },
+                    output: RoleOutputV1 {
+                        role: pickaxe_role,
+                        quantity: nz(1),
+                    },
+                },
+            ],
+            workstations: vec![WorkstationDefinitionV1 {
+                id: workbench.clone(),
+            }],
+            block_schema_bindings: vec![BlockSchemaBindingV1 {
+                block: plank_block,
+                schemas: vec![
+                    ContainerStateV1::SCHEMA_ID
+                        .parse()
+                        .expect("container schema is reserved"),
+                ]
+                .into_boxed_slice(),
+                workstation: Some(workbench),
+                container_slots: NonZeroU16::new(9),
+            }],
+            ..GameplayCatalogSourceV1::default()
+        },
+        CatalogLimits::default(),
+    )
+    .expect("fixture sandbox catalog compiles")
 }
 
 fn parse_item(id: &str) -> ItemId {

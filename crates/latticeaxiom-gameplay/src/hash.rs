@@ -247,6 +247,8 @@ impl Encoder {
     fn inventory(&mut self, inventory: &InventoryStateV1) {
         self.target(&inventory.target);
         self.u64(inventory.revision);
+        self.u16(inventory.hotbar_slots);
+        self.u16(inventory.selected_hotbar);
         self.len(inventory.slots.len());
         for slot in &inventory.slots {
             self.stack_option(slot.as_ref());
@@ -372,6 +374,12 @@ impl Encoder {
                 }
                 self.u64(command.expected_inventory_revision);
             }
+            GameplayCommandV1::SelectHotbar(command) => {
+                self.u8(9);
+                self.bytes(&command.player.as_bytes());
+                self.u16(command.slot.get());
+                self.u64(command.expected_inventory_revision);
+            }
             GameplayCommandV1::StartProcess(command) => {
                 self.u8(6);
                 self.bytes(&command.container.as_bytes());
@@ -420,6 +428,17 @@ impl Encoder {
                 self.bytes(&player.as_bytes());
                 self.u64(*before);
                 self.u64(*after);
+            }
+            GameplayMutationIntentV1::InventoryHotbar {
+                player,
+                before,
+                after,
+                ..
+            } => {
+                self.u8(8);
+                self.bytes(&player.as_bytes());
+                self.u16(*before);
+                self.u16(*after);
             }
             GameplayMutationIntentV1::ContainerSlot {
                 container,
@@ -528,6 +547,10 @@ impl Encoder {
                 self.u8(9);
                 self.u16(from.get());
                 self.u16(to.get());
+            }
+            CommandOutcomeV1::HotbarSelected { slot } => {
+                self.u8(10);
+                self.u16(slot.get());
             }
             CommandOutcomeV1::ProcessScheduled {
                 continuation,

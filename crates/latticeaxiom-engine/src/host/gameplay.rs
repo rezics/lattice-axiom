@@ -8,12 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use latticeaxiom_gameplay::{
     BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1,
     ContainerId, ContainerOwnerComponentV1, ContainerStateV1, ContinuationId, DimensionChunkKey,
-    DimensionId, DropEntityId, FaultInjection, FurnaceContinuationV1, GameplayCatalog,
-    GameplayCommandV1, GameplayEditTarget, GameplayLimits, GameplayReject, GameplayStorageDomain,
-    IngredientV1, InventoryStateV1, ItemId, ItemStackV1, ItemStateV1, MineCommandV1,
-    MoveStackCommandV1, PickupCommandV1, PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipeId,
-    RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier, RuntimePlanReceiptV1, SlotIndex,
-    ToolClassId, TransactionId, WorkstationId, WorldId, WorldRevision,
+    DimensionId, DropEntityId, DroppedItemV1, FaultInjection, FurnaceContinuationV1,
+    GameplayCatalog, GameplayCommandV1, GameplayEditTarget, GameplayKernel, GameplayLimits,
+    GameplayReject, GameplayStorageDomain, IngredientV1, InventoryInspectV1, InventoryStateV1,
+    ItemId, ItemStackV1, ItemStateV1, MineCommandV1, MoveStackCommandV1, PickupCommandV1,
+    PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipeId, RecipeInspectV1, RecipePatternV1,
+    ReferenceGameplayState, ReferencePlanApplier, RuntimePlanReceiptV1, SlotIndex, ToolClassId,
+    TransactionId, WorkstationId, WorldId, WorldRevision,
 };
 use latticeaxiom_player::BlockEditRejectV1;
 use latticeaxiom_storage::{ChangedDomains, CommitReceipt};
@@ -194,10 +195,42 @@ impl ProductionGameplay {
         self.applier.state_mut().seed_continuation(id, continuation)
     }
 
-    pub(super) fn dropped_items(
-        &self,
-    ) -> &BTreeMap<DropEntityId, latticeaxiom_gameplay::DroppedItemV1> {
+    pub(super) fn restore_drop(
+        &mut self,
+        id: DropEntityId,
+        drop: DroppedItemV1,
+    ) -> Result<(), GameplayReject> {
+        if self.applier.state().dropped_item(id).is_some() {
+            return Ok(());
+        }
+        self.applier.state_mut().seed_drop(id, drop)
+    }
+
+    pub(super) fn set_next_drop(&mut self, next_drop: u64) {
+        self.next_drop = self.next_drop.max(next_drop);
+    }
+
+    pub(super) const fn next_drop(&self) -> u64 {
+        self.next_drop
+    }
+
+    pub(super) fn dropped_items(&self) -> &BTreeMap<DropEntityId, DroppedItemV1> {
         self.applier.state().dropped_items()
+    }
+
+    pub(super) fn inventory_inspect(&self) -> Result<InventoryInspectV1, GameplayReject> {
+        GameplayKernel::new(self.catalog()).inspect_inventory(self.applier.state(), self.player)
+    }
+
+    pub(super) fn recipe_inspect(
+        &self,
+        workstation: Option<&WorkstationId>,
+    ) -> Result<Vec<RecipeInspectV1>, GameplayReject> {
+        GameplayKernel::new(self.catalog()).inspect_recipes(
+            self.applier.state(),
+            self.player,
+            workstation,
+        )
     }
 
     pub(super) fn last_outcome(&self) -> Option<&CommandOutcomeV1> {
@@ -917,6 +950,7 @@ pub(super) fn block_edit_reject(
     required_tool: Option<&ToolClassId>,
 ) -> BlockEditRejectV1 {
     match reject {
+        GameplayReject::ToolBroken => BlockEditRejectV1::ToolBroken,
         GameplayReject::ToolRequired
         | GameplayReject::ToolClassMismatch { .. }
         | GameplayReject::ToolTierTooLow { .. }
@@ -956,4 +990,20 @@ fn fallback_tool_class() -> ToolClassId {
 #[must_use]
 pub(super) const fn remaining_work(accumulated: u32, required: u32) -> u32 {
     required.saturating_sub(accumulated)
+}
+
+#[cfg(test)]
+mod tests {
+    use latticeaxiom_gameplay::GameplayReject;
+    use latticeaxiom_player::BlockEditRejectV1;
+
+    use super::block_edit_reject;
+
+    #[test]
+    fn tool_broken_maps_to_the_typed_block_edit_reject() {
+        assert_eq!(
+            block_edit_reject(&GameplayReject::ToolBroken, None),
+            BlockEditRejectV1::ToolBroken
+        );
+    }
 }

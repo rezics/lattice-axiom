@@ -1,5 +1,5 @@
 use bevy::prelude::Message;
-use latticeaxiom_gameplay::{BlockId, ChunkCoordinate, PlayerId};
+use latticeaxiom_gameplay::{BlockId, ChunkCoordinate, MiningInspectV1, PlayerId};
 use thiserror::Error;
 
 use crate::{ClientTargetObservationV1, TargetEyePoseV1};
@@ -69,6 +69,13 @@ impl HeadlessTargetInspectV1 {
             harvest_tier: None,
             hardness_ticks: 0,
         }
+    }
+
+    /// Fills harvestability from a typed catalog fragment.
+    pub fn apply_mining_inspect(&mut self, harvest: &MiningInspectV1) {
+        self.hardness_ticks = harvest.hardness_ticks();
+        self.harvest_tool = harvest.tool_class().map(|class| class.as_str().to_owned());
+        self.harvest_tier = harvest.minimum_tier();
     }
 
     /// Player overlay: name, harvest, declared-by, and stable id.

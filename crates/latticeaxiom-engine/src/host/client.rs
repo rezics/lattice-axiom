@@ -37,7 +37,7 @@ pub(super) fn spawn_production_client_view(
     let atlas = images.add(atlas_image);
     commands.insert_resource(ProductionTerrainMaterials::from_atlas(
         &mut materials,
-        atlas,
+        &atlas,
     ));
     commands.spawn((
         Name::new("Production Camera"),

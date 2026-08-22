@@ -7,8 +7,8 @@ use crate::{
     GameplayEditTarget, GameplayMutationIntentV1, GameplayPlanV1, GameplayReject,
     GameplayStorageDomain, InventoryStateV1, ItemStackV1, ItemStateV1, MineCommandV1,
     MoveStackCommandV1, PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipePatternV1,
-    ReferenceGameplayState, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex,
-    StartProcessCommandV1, TransactionId, TransferCommandV1, TransferDirectionV1,
+    ReferenceGameplayState, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SelectHotbarCommandV1,
+    SlotIndex, StartProcessCommandV1, TransactionId, TransferCommandV1, TransferDirectionV1,
 };
 
 /// Pure deterministic planner for version-one sandbox commands.
@@ -22,6 +22,12 @@ impl<'catalog> GameplayKernel<'catalog> {
     #[must_use]
     pub const fn new(catalog: &'catalog GameplayCatalog) -> Self {
         Self { catalog }
+    }
+
+    /// Returns the catalog bound to this planner.
+    #[must_use]
+    pub const fn catalog(&self) -> &'catalog GameplayCatalog {
+        self.catalog
     }
 
     /// Produces a bounded runtime-staged plan without mutating loaded state.
@@ -46,6 +52,7 @@ impl<'catalog> GameplayKernel<'catalog> {
             GameplayCommandV1::Craft(command) => self.plan_craft(state, command)?,
             GameplayCommandV1::Transfer(command) => self.plan_transfer(state, command)?,
             GameplayCommandV1::MoveStack(command) => self.plan_move_stack(state, command)?,
+            GameplayCommandV1::SelectHotbar(command) => self.plan_select_hotbar(state, command)?,
             GameplayCommandV1::StartProcess(command) => {
                 self.plan_start_process(state, envelope.transaction_id, command)?
             }
@@ -563,6 +570,58 @@ impl<'catalog> GameplayKernel<'catalog> {
             }
         }
         Ok((inventory_diff(command.player, inventory, &after)?, outcome))
+    }
+
+    #[allow(
+        clippy::unused_self,
+        reason = "hotbar selection shares the command-planner method surface"
+    )]
+    fn plan_select_hotbar(
+        &self,
+        state: &ReferenceGameplayState,
+        command: &SelectHotbarCommandV1,
+    ) -> Result<(Vec<GameplayMutationIntentV1>, CommandOutcomeV1), GameplayReject> {
+        let inventory = player_inventory(state, command.player)?;
+        if inventory.revision != command.expected_inventory_revision {
+            return Err(GameplayReject::StaleInventoryRevision {
+                expected: command.expected_inventory_revision,
+                actual: inventory.revision,
+            });
+        }
+        if command.slot.get() >= inventory.hotbar_slots {
+            return Err(GameplayReject::SlotOutOfRange {
+                slot: command.slot,
+                slots: usize::from(inventory.hotbar_slots),
+            });
+        }
+        let outcome = CommandOutcomeV1::HotbarSelected { slot: command.slot };
+        if command.slot.get() == inventory.selected_hotbar {
+            return Ok((Vec::new(), outcome));
+        }
+        let revision =
+            inventory
+                .revision
+                .checked_add(1)
+                .ok_or(GameplayReject::RevisionOverflow {
+                    counter: "inventory_revision",
+                })?;
+        Ok((
+            vec![
+                GameplayMutationIntentV1::InventoryHotbar {
+                    target: inventory.target.clone(),
+                    player: command.player,
+                    before: inventory.selected_hotbar,
+                    after: command.slot.get(),
+                },
+                GameplayMutationIntentV1::InventoryRevision {
+                    target: inventory.target.clone(),
+                    player: command.player,
+                    before: inventory.revision,
+                    after: revision,
+                },
+            ],
+            outcome,
+        ))
     }
 
     #[allow(
@@ -1337,6 +1396,22 @@ fn validate_plan_targets(
                 )?;
                 format!("inventory-revision:{:?}", player.as_bytes())
             }
+            GameplayMutationIntentV1::InventoryHotbar { player, after, .. } => {
+                let inventory = player_inventory(state, *player)?;
+                require_exact_target(
+                    target,
+                    &inventory.target,
+                    GameplayStorageDomain::PersistentEntities,
+                    "inventory_target",
+                )?;
+                if *after >= inventory.hotbar_slots {
+                    return Err(GameplayReject::SlotOutOfRange {
+                        slot: SlotIndex::new(*after),
+                        slots: usize::from(inventory.hotbar_slots),
+                    });
+                }
+                format!("inventory-hotbar:{:?}", player.as_bytes())
+            }
             GameplayMutationIntentV1::ContainerSlot {
                 container, slot, ..
             } => {
@@ -1837,7 +1912,7 @@ fn consume_shaped(
     Ok(())
 }
 
-fn consume_shapeless(
+pub(crate) fn consume_shapeless(
     catalog: &GameplayCatalog,
     slots: &mut [Option<ItemStackV1>],
     input_slots: &[SlotIndex],
@@ -2095,6 +2170,32 @@ fn apply_intent(
             }
             inventory.revision = *after;
         }
+        GameplayMutationIntentV1::InventoryHotbar {
+            player,
+            before,
+            after,
+            ..
+        } => {
+            let inventory =
+                state
+                    .inventories
+                    .get_mut(player)
+                    .ok_or(GameplayReject::UnknownPlayer {
+                        player: player.as_bytes(),
+                    })?;
+            if inventory.selected_hotbar != *before {
+                return Err(GameplayReject::MutationPreconditionFailed {
+                    resource: "inventory_hotbar",
+                });
+            }
+            if *after >= inventory.hotbar_slots {
+                return Err(GameplayReject::SlotOutOfRange {
+                    slot: SlotIndex::new(*after),
+                    slots: usize::from(inventory.hotbar_slots),
+                });
+            }
+            inventory.selected_hotbar = *after;
+        }
         GameplayMutationIntentV1::ContainerSlot {
             container,
             slot,
@@ -2205,6 +2306,11 @@ fn rollback_intent(state: &mut ReferenceGameplayState, intent: &GameplayMutation
         GameplayMutationIntentV1::InventoryRevision { player, before, .. } => {
             if let Some(inventory) = state.inventories.get_mut(player) {
                 inventory.revision = *before;
+            }
+        }
+        GameplayMutationIntentV1::InventoryHotbar { player, before, .. } => {
+            if let Some(inventory) = state.inventories.get_mut(player) {
+                inventory.selected_hotbar = *before;
             }
         }
         GameplayMutationIntentV1::ContainerSlot {

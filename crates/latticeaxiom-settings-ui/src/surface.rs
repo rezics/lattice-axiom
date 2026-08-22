@@ -8,8 +8,8 @@ use latticeaxiom_client_ui::{
 };
 use latticeaxiom_core::StableId;
 use latticeaxiom_runtime_contracts::{
-    EffectiveSettingsSnapshot, RuntimeApplyImpact, SettingAuthority, SettingSpec, SettingWriter,
-    SettingsDurabilityDomain,
+    EffectiveSettingsSnapshot, RestartImpactMetadata, RuntimeApplyImpact, SettingAuthority,
+    SettingSpec, SettingWriter, SettingsDurabilityDomain,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -25,6 +25,15 @@ pub struct SettingsSurfaceAuthority {
     pub has_world_writer: bool,
     /// Authenticated writer kind when a writer is open.
     pub writer: Option<SettingWriter>,
+}
+
+/// Scope filter applied to the typed catalog projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettingsSurfaceScope {
+    /// Shell shows every frozen category, including Packages.
+    Shell,
+    /// In-game Settings from Pause hides composition Packages rows.
+    InGame,
 }
 
 impl SettingsSurfaceAuthority {
@@ -162,6 +171,39 @@ impl SettingsSurfaceModel {
         self.search = query.into().nfc().collect();
     }
 
+    /// Applies shell versus in-game category filtering.
+    pub fn apply_scope_filter(&mut self, scope: SettingsSurfaceScope) {
+        if scope == SettingsSurfaceScope::InGame {
+            self.rows
+                .retain(|row| row.category != SettingsCategoryV1::Packages);
+        }
+    }
+
+    /// Strongest apply impact among visible editable rows.
+    #[must_use]
+    pub fn restart_impact(&self) -> RestartImpactMetadata {
+        let strongest = self
+            .visible_rows()
+            .into_iter()
+            .filter(|row| row.editable)
+            .map(|row| row.impact)
+            .max_by_key(|impact| match impact {
+                RuntimeApplyImpact::Preview => 0_u8,
+                RuntimeApplyImpact::Immediate => 1,
+                RuntimeApplyImpact::WorldReactivate => 2,
+                RuntimeApplyImpact::ProcessRestart => 3,
+            });
+        RestartImpactMetadata {
+            strongest_impact: strongest,
+            process_restart: matches!(strongest, Some(RuntimeApplyImpact::ProcessRestart)),
+            world_reactivate: matches!(
+                strongest,
+                Some(RuntimeApplyImpact::WorldReactivate | RuntimeApplyImpact::ProcessRestart)
+            ),
+            live_immediate: matches!(strongest, Some(RuntimeApplyImpact::Immediate)),
+        }
+    }
+
     /// Returns whether visible editable rows span more than one durability domain.
     #[must_use]
     pub fn mixed_durability_domains(&self) -> bool {
@@ -188,13 +230,20 @@ impl SettingsSurfaceModel {
         }
     }
 
-    /// Projects the unique settings surface into the shared semantic tree.
+    /// Projects a settings fragment that can be hosted under the unique UI root.
     ///
     /// # Errors
     ///
-    /// Returns [`SettingsSurfaceError`] when a semantic key is invalid or a
-    /// second UI root would be created.
-    pub fn semantic_tree(&self) -> Result<SemanticNode, SettingsSurfaceError> {
+    /// Returns [`SettingsSurfaceError`] when a semantic key is invalid.
+    pub fn semantic_fragment(&self) -> Result<SemanticNode, SettingsSurfaceError> {
+        let impact = self.restart_impact();
+        let apply_description = if impact.process_restart {
+            "Process restart required after persistence. The UI never writes the file."
+        } else if impact.world_reactivate {
+            "World reactivation required after persistence. The UI never writes the file."
+        } else {
+            "Validate the complete draft and show impact before atomic persistence"
+        };
         let mut children = vec![
             ButtonWidget {
                 key: semantic_key("settings/back")?,
@@ -203,6 +252,22 @@ impl SettingsSurfaceModel {
                 enabled: true,
             }
             .semantic_node(false),
+            SemanticNode {
+                key: semantic_key("settings/search")?,
+                role: SemanticRole::TextInput,
+                name: "Search settings".to_owned(),
+                value: Some(self.search.clone()),
+                description: Some("IME and CJK search over identity, label, and owner".to_owned()),
+                state: SemanticState {
+                    focusable: true,
+                    focused: false,
+                    disabled: false,
+                    expanded: None,
+                    busy: false,
+                },
+                actions: BTreeSet::from([SemanticAction::Activate]),
+                children: Vec::new(),
+            },
         ];
         for category in SettingsCategoryV1::ALL {
             let rows = self
@@ -232,16 +297,44 @@ impl SettingsSurfaceModel {
             ButtonWidget {
                 key: semantic_key("settings/apply")?,
                 name: "Apply settings".to_owned(),
-                description: Some(
-                    "Validate the complete draft and show impact before atomic persistence"
-                        .to_owned(),
-                ),
+                description: Some(apply_description.to_owned()),
                 enabled: !self.mixed_durability_domains(),
             }
             .semantic_node(false),
         );
-        application_root(semantic_key("settings")?, "Settings", children)
-            .map_err(|_| SettingsSurfaceError::SecondUiRoot)
+        Ok(SemanticNode {
+            key: semantic_key("modal/settings")?,
+            role: SemanticRole::Group,
+            name: "Settings".to_owned(),
+            value: impact
+                .strongest_impact
+                .map(|impact| format!("{impact:?}").to_lowercase()),
+            description: Some(apply_description.to_owned()),
+            state: SemanticState {
+                focusable: false,
+                focused: false,
+                disabled: false,
+                expanded: Some(true),
+                busy: false,
+            },
+            actions: BTreeSet::from([SemanticAction::Cancel, SemanticAction::Back]),
+            children,
+        })
+    }
+
+    /// Projects the unique settings surface into the shared semantic tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsSurfaceError`] when a semantic key is invalid or a
+    /// second UI root would be created.
+    pub fn semantic_tree(&self) -> Result<SemanticNode, SettingsSurfaceError> {
+        application_root(
+            semantic_key("settings")?,
+            "Settings",
+            vec![self.semantic_fragment()?],
+        )
+        .map_err(|_| SettingsSurfaceError::SecondUiRoot)
     }
 }
 
@@ -277,7 +370,12 @@ fn read_only_reason(
 }
 
 fn row_node(row: &SettingsSurfaceRow) -> Result<SemanticNode, SettingsSurfaceError> {
-    let key = semantic_key(&format!("settings/row/{}", sanitize_id(row.id.as_str())))?;
+    let prefix = if row.control == SettingsControlKind::KeyBinding {
+        "settings/controls"
+    } else {
+        "settings/row"
+    };
+    let key = semantic_key(&format!("{prefix}/{}", sanitize_id(row.id.as_str())))?;
     Ok(SemanticNode {
         key,
         role: match row.control {
@@ -286,7 +384,7 @@ fn row_node(row: &SettingsSurfaceRow) -> Result<SemanticNode, SettingsSurfaceErr
                 SemanticRole::Slider
             }
             SettingsControlKind::Text | SettingsControlKind::Path => SemanticRole::TextInput,
-            SettingsControlKind::Command => SemanticRole::Button,
+            SettingsControlKind::Command | SettingsControlKind::KeyBinding => SemanticRole::Button,
             _ => SemanticRole::Group,
         },
         name: row.label_key.clone(),

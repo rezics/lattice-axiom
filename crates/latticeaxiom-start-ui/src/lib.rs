@@ -14,6 +14,7 @@ mod semantic;
 mod session;
 mod settings;
 mod shell;
+mod typed;
 mod world;
 
 pub use capability::*;
@@ -24,4 +25,5 @@ pub use semantic::*;
 pub use session::*;
 pub use settings::*;
 pub use shell::*;
+pub use typed::*;
 pub use world::*;
