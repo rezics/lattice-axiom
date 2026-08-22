@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:launcher",
+  "requirements": [
+    {
+      "id": "LAUNCHER-SUPERVISOR-001",
+      "document_id": "platform.launcher.supervisor-loop",
+      "level": "must",
+      "statement": "A non-Bevy supervisor runs the shell-to-world-to-shell replacement-process product loop using atomic launch intents.",
+      "acceptance": [
+        "The menu-driven product smoke returns to shell after durable world shutdown.",
+        "Stale intents, child crashes and lease conflicts fail into bounded recovery."
+      ]
+    }
+  ]
+}

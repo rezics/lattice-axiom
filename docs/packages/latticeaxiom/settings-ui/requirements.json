@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@latticeaxiom/settings-ui",
+  "requirements": [
+    {
+      "id": "SETTINGS-SURFACE-001",
+      "document_id": "package.latticeaxiom.settings-ui.settings-surface",
+      "level": "must",
+      "statement": "The client and tool render the typed settings catalog through one accessible draft, preview and apply surface.",
+      "acceptance": [
+        "Mouse, keyboard and gamepad complete apply and cancel at 800x600 and both required UI scales.",
+        "Controls rows, conflict diagnostics and restart impacts are mechanically projected from typed specs."
+      ]
+    }
+  ]
+}

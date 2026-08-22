@@ -6,7 +6,8 @@ document_type: package-spec
 owners:
   - "@latticeaxiom/inspect"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TARGET-INSPECT-001
 updated: 2026-08-22
 ---
 

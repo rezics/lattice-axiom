@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@terrenia/metallurgy"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-METALLURGY-001
 updated: 2026-08-22
 ---
 

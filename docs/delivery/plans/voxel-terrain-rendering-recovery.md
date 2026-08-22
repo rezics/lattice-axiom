@@ -4,7 +4,8 @@ document_id: delivery.plan.voxel-terrain-rendering-recovery
 document_status: active
 document_type: plan
 tracks_implementation: true
-requirements: []
+requirements:
+  - DELIVERY-VOXEL-001
 updated: 2026-08-22
 decision:
   - ../../decisions/0014-adopt-bevy-upstream-first.md

@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@latticeaxiom/settings",
+  "requirements": [
+    {
+      "id": "SETTINGS-REGISTRY-001",
+      "document_id": "package.latticeaxiom.settings.settings-and-configuration",
+      "level": "must",
+      "statement": "One graph-selected typed settings registry applies authorized transactions and persists values in their owning scopes.",
+      "acceptance": [
+        "Client and headless derive the same authoritative effective settings snapshot.",
+        "Preview failure rolls back and user/world values survive through their authorized persistence paths."
+      ]
+    }
+  ]
+}

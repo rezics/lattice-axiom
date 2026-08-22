@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@latticeaxiom/progress"
 tracks_implementation: true
-requirements: []
+requirements:
+  - PROGRESS-GRAPH-001
 updated: 2026-08-22
 ---
 

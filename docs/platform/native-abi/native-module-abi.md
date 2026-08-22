@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:native-abi"
 tracks_implementation: true
-requirements: []
+requirements:
+  - NATIVE-ABI-001
 updated: 2026-08-20
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md

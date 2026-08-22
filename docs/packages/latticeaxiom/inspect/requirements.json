@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@latticeaxiom/inspect",
+  "requirements": [
+    {
+      "id": "TARGET-INSPECT-001",
+      "document_id": "package.latticeaxiom.inspect.target-inspect",
+      "level": "must",
+      "statement": "The client projects authoritative target receipts and typed package fragments through one permission-aware inspect surface.",
+      "acceptance": [
+        "The first playable displays name, fallback icon, owner and stable ID without a second raycast.",
+        "Missing data, denied information and provider faults remain distinct states."
+      ]
+    }
+  ]
+}

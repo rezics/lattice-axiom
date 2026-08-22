@@ -7,7 +7,8 @@ owners:
   - "platform:input"
   - "@latticeaxiom/input"
 tracks_implementation: true
-requirements: []
+requirements:
+  - INPUT-RUNTIME-001
 updated: 2026-08-22
 ---
 

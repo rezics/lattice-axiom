@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:composition",
+  "requirements": [
+    {
+      "id": "COMPOSITION-001",
+      "document_id": "platform.composition.module-composition",
+      "level": "must",
+      "statement": "Trusted Nickel composition compiles the locked package graph into deterministic typed runtime and registration images under bounded evaluation.",
+      "acceptance": [
+        "Canonical outputs are stable under source and registration order.",
+        "Untrusted imports, resource limit failures and invalid receipts fail before activation."
+      ]
+    }
+  ]
+}

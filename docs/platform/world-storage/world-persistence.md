@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:world-storage"
 tracks_implementation: true
-requirements: []
+requirements:
+  - WORLD-STORAGE-001
 updated: 2026-08-20
 decision:
   - ../../decisions/0003-no-global-version-switch.md

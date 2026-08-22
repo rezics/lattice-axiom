@@ -6,7 +6,8 @@ document_type: package-spec
 owners:
   - "@latticeaxiom/settings-ui"
 tracks_implementation: true
-requirements: []
+requirements:
+  - SETTINGS-SURFACE-001
 updated: 2026-08-22
 ---
 

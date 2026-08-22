@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@latticeaxiom/front-end"
 tracks_implementation: true
-requirements: []
+requirements:
+  - FRONTEND-SHELL-001
 updated: 2026-08-22
 ---
 

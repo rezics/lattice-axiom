@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@terrenia/blocks",
+  "requirements": [
+    {
+      "id": "TERRENIA-BLOCKS-001",
+      "document_id": "package.terrenia.blocks.catalog",
+      "level": "must",
+      "statement": "The package registers the exact 72 block and two fluid definitions with all authoritative references closed.",
+      "acceptance": [
+        "The canonical 72+2 matrix has no missing drop, recipe, role, placement, asset or worldgen reference.",
+        "State and fluid palettes round-trip across chunk boundaries and negative coordinates."
+      ]
+    }
+  ]
+}

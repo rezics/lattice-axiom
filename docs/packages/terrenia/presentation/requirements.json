@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@terrenia/presentation",
+  "requirements": [
+    {
+      "id": "TERRENIA-PRESENTATION-001",
+      "document_id": "package.terrenia.presentation.index",
+      "level": "must",
+      "statement": "The client package supplies complete deterministic block, fluid and tool presentation while remaining removable in headless mode.",
+      "acceptance": [
+        "Every locked content row resolves an asset or deterministic fallback.",
+        "Omitting presentation leaves authoritative receipts, snapshots and world hash unchanged."
+      ]
+    }
+  ]
+}

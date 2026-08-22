@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:client-ui"
 tracks_implementation: true
-requirements: []
+requirements:
+  - CLIENT-UI-001
 updated: 2026-08-22
 ---
 

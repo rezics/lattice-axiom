@@ -4,7 +4,8 @@ document_id: delivery.plan.v1-playable
 document_status: active
 document_type: plan
 tracks_implementation: true
-requirements: []
+requirements:
+  - DELIVERY-V1-001
 updated: 2026-08-21
 ---
 

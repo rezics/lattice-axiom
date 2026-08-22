@@ -1,0 +1,67 @@
+{
+  "$schema": "../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "delivery",
+  "requirements": [
+    {
+      "id": "DELIVERY-PLAYER-SURFACES-001",
+      "document_id": "package.latticeaxiom.front-end.player-surfaces",
+      "level": "must",
+      "statement": "The first-playable inspect, pick-block, inventory move and catalog crafting integration plan closes through production and headless paths.",
+      "acceptance": [
+        "All listed headless tests and production interactions pass through shared public commands.",
+        "No remaining surface uses a test-only authority."
+      ]
+    },
+    {
+      "id": "DELIVERY-FUTURE-SYSTEMS-001",
+      "document_id": "delivery.plan.terrenia-science-magic-and-relations",
+      "level": "must",
+      "statement": "The future science, magic, progress and relations package plan completes without entering the v1 product lock prematurely.",
+      "acceptance": [
+        "Each package passes its independent runtime and persistence gates before product selection.",
+        "Removing any optional track preserves unrelated materialized state."
+      ]
+    },
+    {
+      "id": "DELIVERY-V1-001",
+      "document_id": "delivery.plan.v1-playable",
+      "level": "must",
+      "statement": "The complete v1 playable journey passes from clean offline checkout through durable reopen within frozen budgets.",
+      "acceptance": [
+        "Every V0-V9 exit gate is backed by production evidence.",
+        "The release journey explores, gathers, crafts, builds, checkpoints, exits and reopens exactly."
+      ]
+    },
+    {
+      "id": "DELIVERY-VOXEL-001",
+      "document_id": "delivery.plan.voxel-terrain-rendering-recovery",
+      "level": "must",
+      "statement": "The voxel rendering recovery plan closes its mesh, task, streaming, collider, material and budget phases.",
+      "acceptance": [
+        "All P0-P7 exit gates have commit-bound checks and representative client evidence.",
+        "No workaround disables culling or removes bounded backpressure."
+      ]
+    },
+    {
+      "id": "DELIVERY-FIRST-DEMO-001",
+      "document_id": "delivery.roadmap.first-demo",
+      "level": "must",
+      "statement": "All D0-D10 first-demo milestones satisfy their package-driven, durable and playable exit gates.",
+      "acceptance": [
+        "The complete first-demo journey passes from a clean checkout and reopened lock.",
+        "D11 remains optional and does not hide D0-D10 gaps."
+      ]
+    },
+    {
+      "id": "DELIVERY-ENGINE-001",
+      "document_id": "delivery.roadmap.game-engine",
+      "level": "must",
+      "statement": "All D0-D10 runtime, ABI, persistence, render and supply-chain gates complete without parallel engine subsystems.",
+      "acceptance": [
+        "Client and headless release evidence close every milestone.",
+        "ABI and upgrade gates preserve the documented compatibility contracts."
+      ]
+    }
+  ]
+}

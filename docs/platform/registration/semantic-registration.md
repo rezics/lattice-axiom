@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:registration"
 tracks_implementation: true
-requirements: []
+requirements:
+  - REGISTRATION-001
 updated: 2026-08-20
 decision:
   - ../../decisions/0010-nickel-driven-package-system.md

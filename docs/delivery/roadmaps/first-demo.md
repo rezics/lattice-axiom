@@ -4,7 +4,8 @@ document_id: delivery.roadmap.first-demo
 document_status: active
 document_type: roadmap
 tracks_implementation: true
-requirements: []
+requirements:
+  - DELIVERY-FIRST-DEMO-001
 updated: 2026-08-21
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md

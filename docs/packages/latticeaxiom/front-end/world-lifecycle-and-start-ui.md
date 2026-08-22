@@ -6,7 +6,8 @@ document_type: package-spec
 owners:
   - "@latticeaxiom/front-end"
 tracks_implementation: true
-requirements: []
+requirements:
+  - FRONTEND-SHELL-001
 updated: 2026-08-22
 decision:
   - ../../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md

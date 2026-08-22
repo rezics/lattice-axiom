@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@terrenia/journey"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-JOURNEY-001
 updated: 2026-08-22
 ---
 

@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:compatibility"
 tracks_implementation: true
-requirements: []
+requirements:
+  - COMPATIBILITY-001
 updated: 2026-08-20
 decision:
   - ../../decisions/0003-no-global-version-switch.md

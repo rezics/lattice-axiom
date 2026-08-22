@@ -6,7 +6,8 @@ document_type: package-spec
 owners:
   - "@latticeaxiom/observability"
 tracks_implementation: true
-requirements: []
+requirements:
+  - OBSERVABILITY-REGISTRY-001
 updated: 2026-08-22
 ---
 

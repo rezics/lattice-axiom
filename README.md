@@ -11,6 +11,13 @@ checks 的 evidence 才能把 requirement 标为已实现。
 从[文档入口](docs/README.md)开始，或直接浏览 [logical packages](docs/packages/README.md)、
 [platform contracts](docs/platform/README.md) 与 [delivery](docs/delivery/README.md)。
 
+文档改动在提交前运行：
+
+```powershell
+python tools/docs_status.py generate
+python tools/docs_status.py check
+```
+
 ## License
 
 Except where otherwise noted, REZICS is licensed under the

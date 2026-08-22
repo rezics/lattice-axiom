@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@terrenia/blocks"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-BLOCKS-001
 updated: 2026-08-22
 ---
 

@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@terrenia/science",
+  "requirements": [
+    {
+      "id": "TERRENIA-SCIENCE-001",
+      "document_id": "package.terrenia.science.index",
+      "level": "must",
+      "statement": "The package provides versioned science processing and voltage state with optional metallurgy composition.",
+      "acceptance": [
+        "Science runs with and without the optional metallurgy provider.",
+        "Processing state survives save and reopen."
+      ]
+    }
+  ]
+}

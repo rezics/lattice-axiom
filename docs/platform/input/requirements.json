@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:input",
+  "requirements": [
+    {
+      "id": "INPUT-RUNTIME-001",
+      "document_id": "platform.input.input-binding-and-contexts",
+      "level": "must",
+      "statement": "A stable binding profile, action catalog and context stack replace all parallel hard-coded gameplay, HUD and shell input paths.",
+      "acceptance": [
+        "Rebinding persists, conflicts fail deterministically and contexts prevent input leakage.",
+        "Client physical input and headless command input preserve authoritative receipts."
+      ]
+    }
+  ]
+}

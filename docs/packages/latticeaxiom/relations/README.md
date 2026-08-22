@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@latticeaxiom/relations"
 tracks_implementation: true
-requirements: []
+requirements:
+  - RELATIONS-GRAPH-001
 updated: 2026-08-22
 ---
 

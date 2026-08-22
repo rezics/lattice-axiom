@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@latticeaxiom/input"
 tracks_implementation: true
-requirements: []
+requirements:
+  - INPUT-PACKAGE-001
 updated: 2026-08-22
 ---
 

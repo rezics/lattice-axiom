@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@latticeaxiom/world-library"
 tracks_implementation: true
-requirements: []
+requirements:
+  - WORLD-LIBRARY-001
 updated: 2026-08-22
 ---
 

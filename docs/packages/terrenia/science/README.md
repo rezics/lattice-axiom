@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@terrenia/science"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-SCIENCE-001
 updated: 2026-08-22
 ---
 

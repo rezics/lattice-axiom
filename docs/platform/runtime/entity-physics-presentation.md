@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:runtime"
 tracks_implementation: true
-requirements: []
+requirements:
+  - ENTITY-PHYSICS-001
 updated: 2026-08-19
 decision:
   - ../../decisions/0014-adopt-bevy-upstream-first.md

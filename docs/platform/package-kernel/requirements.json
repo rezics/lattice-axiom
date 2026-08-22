@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:package-kernel",
+  "requirements": [
+    {
+      "id": "PACKAGE-KERNEL-001",
+      "document_id": "platform.package-kernel.package-management",
+      "level": "must",
+      "statement": "The offline package lifecycle acquires immutable sources, resolves exact closures and reopens a tamper-evident final product lock before activation.",
+      "acceptance": [
+        "Check, pack, publish-to-directory, acquire and frozen reopen succeed from a clean offline checkout.",
+        "Tampered source, manifest, toolchain, artifact or registration evidence fails before native loading."
+      ]
+    }
+  ]
+}

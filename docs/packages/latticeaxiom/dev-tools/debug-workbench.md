@@ -6,7 +6,8 @@ document_type: package-spec
 owners:
   - "@latticeaxiom/dev-tools"
 tracks_implementation: true
-requirements: []
+requirements:
+  - DEV-TOOLS-001
 updated: 2026-08-22
 ---
 

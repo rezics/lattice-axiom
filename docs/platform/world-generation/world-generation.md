@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:world-generation"
 tracks_implementation: true
-requirements: []
+requirements:
+  - WORLDGEN-COORDINATOR-001
 updated: 2026-08-20
 decision:
   - ../../decisions/0001-territory-first-biome-driven-world-generation.md

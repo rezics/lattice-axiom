@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@latticeaxiom/settings"
 tracks_implementation: true
-requirements: []
+requirements:
+  - SETTINGS-REGISTRY-001
 updated: 2026-08-22
 ---
 

@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:content"
 tracks_implementation: true
-requirements: []
+requirements:
+  - PHYSICAL-AUTHORING-001
 updated: 2026-08-19
 ---
 

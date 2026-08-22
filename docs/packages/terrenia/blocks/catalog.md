@@ -6,7 +6,8 @@ document_type: package-spec
 owners:
   - "@terrenia/blocks"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-BLOCKS-001
 updated: 2026-08-20
 decision:
   - ../../../decisions/0028-freeze-worldgen-content-and-asset-contract.md

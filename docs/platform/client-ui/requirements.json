@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:client-ui",
+  "requirements": [
+    {
+      "id": "CLIENT-UI-001",
+      "document_id": "platform.client-ui.ui-system",
+      "level": "must",
+      "statement": "One shared accessible Bevy UI system provides theme, focus, typed widgets and semantic projection to all client surfaces.",
+      "acceptance": [
+        "Required shell and in-game flows pass keyboard, mouse, gamepad, AccessKit, CJK and scale gates.",
+        "Headless omits the UI crate without authoritative differences."
+      ]
+    }
+  ]
+}

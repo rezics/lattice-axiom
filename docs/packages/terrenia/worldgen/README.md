@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@terrenia/worldgen"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-WORLDGEN-001
 updated: 2026-08-22
 ---
 

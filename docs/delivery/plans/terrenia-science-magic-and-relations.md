@@ -4,7 +4,8 @@ document_id: delivery.plan.terrenia-science-magic-and-relations
 document_status: proposed
 document_type: plan
 tracks_implementation: true
-requirements: []
+requirements:
+  - DELIVERY-FUTURE-SYSTEMS-001
 updated: 2026-08-22
 decision:
   - ../../decisions/0018-package-kernel-from-first-vertical-slice.md

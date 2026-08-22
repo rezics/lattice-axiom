@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@terrenia/gameplay",
+  "requirements": [
+    {
+      "id": "TERRENIA-GAMEPLAY-001",
+      "document_id": "package.terrenia.gameplay.index",
+      "level": "must",
+      "statement": "Terrenia contributes content-specific drops, recipes and workstation rules through generic authoritative gameplay transactions.",
+      "acceptance": [
+        "The complete gather, craft, mine and place journey conserves quantities and revisions.",
+        "A fixture dimension reuses the mechanics without Terrenia host references."
+      ]
+    }
+  ]
+}

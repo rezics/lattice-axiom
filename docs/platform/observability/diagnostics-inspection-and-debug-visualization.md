@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:observability"
 tracks_implementation: true
-requirements: []
+requirements:
+  - OBSERVABILITY-HOST-001
 updated: 2026-08-22
 decision:
   - ../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md

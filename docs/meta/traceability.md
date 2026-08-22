@@ -126,3 +126,16 @@ MUST`，而不是人工百分比。
 - evidence 指向已提交代码和真实产品入口。
 - fixture evidence 没有被误当成 production integration。
 - `implemented` 是工具计算结果，而非 reviewer 主观批准。
+
+## 本地与 CI 检查
+
+更新 requirement 或 evidence 后运行：
+
+```powershell
+python tools/docs_status.py generate
+python tools/docs_status.py check
+```
+
+`generate`只重写 `docs/delivery/status.md`；`check`验证 frontmatter、唯一 document/requirement
+IDs、内部链接、ADR references、requirements/evidence 结构、verified evidence 门槛，以及生成页是否
+过期。GitHub Actions 在每个 pull request 与 `main` push 上运行同一检查。

@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:gameplay"
 tracks_implementation: true
-requirements: []
+requirements:
+  - PLAYER-MECHANICS-001
 updated: 2026-08-22
 ---
 

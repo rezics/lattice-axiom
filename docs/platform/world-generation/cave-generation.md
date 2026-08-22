@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:world-generation"
 tracks_implementation: true
-requirements: []
+requirements:
+  - CAVE-COMPOSITION-001
 updated: 2026-08-19
 decision:
   - ../../decisions/0002-hybrid-cave-generation-composition.md

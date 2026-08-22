@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:launcher"
 tracks_implementation: true
-requirements: []
+requirements:
+  - LAUNCHER-SUPERVISOR-001
 updated: 2026-08-22
 ---
 

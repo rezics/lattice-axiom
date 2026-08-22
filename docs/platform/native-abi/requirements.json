@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:native-abi",
+  "requirements": [
+    {
+      "id": "NATIVE-ABI-001",
+      "document_id": "platform.native-abi.native-module-abi",
+      "level": "must",
+      "statement": "Portable native modules execute versioned bounded batches with lifecycle, fault and authoritative equivalence to static realization.",
+      "acceptance": [
+        "Static and portable journeys produce identical receipts, state hash and save bytes.",
+        "Panic, invalid pointers, budgets and lifecycle faults never cross or corrupt the host boundary."
+      ]
+    }
+  ]
+}

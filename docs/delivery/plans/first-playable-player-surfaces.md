@@ -7,7 +7,8 @@ owners:
   - "platform:gameplay"
   - "@latticeaxiom/inspect"
 tracks_implementation: true
-requirements: []
+requirements:
+  - DELIVERY-PLAYER-SURFACES-001
 updated: 2026-08-22
 decision:
   - ../../decisions/0014-adopt-bevy-upstream-first.md

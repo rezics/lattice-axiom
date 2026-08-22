@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@terrenia/gameplay"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-GAMEPLAY-001
 updated: 2026-08-22
 ---
 

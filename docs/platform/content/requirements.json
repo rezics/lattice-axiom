@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:content",
+  "requirements": [
+    {
+      "id": "PHYSICAL-AUTHORING-001",
+      "document_id": "platform.content.physical-authoring",
+      "level": "must",
+      "statement": "Physical content authoring compiles stable material, state and interaction semantics without embedding engine handles.",
+      "acceptance": [
+        "Authoring validation rejects incompatible physical/state combinations.",
+        "Static and portable realizations consume the same normative data."
+      ]
+    }
+  ]
+}

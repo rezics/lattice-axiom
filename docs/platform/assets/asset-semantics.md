@@ -6,7 +6,8 @@ document_type: platform-spec
 owners:
   - "platform:assets"
 tracks_implementation: true
-requirements: []
+requirements:
+  - ASSET-SEMANTICS-001
 updated: 2026-08-20
 decision:
   - ../../decisions/0014-adopt-bevy-upstream-first.md

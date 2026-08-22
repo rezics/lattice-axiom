@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "terrenia"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-ROOT-001
 updated: 2026-08-22
 ---
 

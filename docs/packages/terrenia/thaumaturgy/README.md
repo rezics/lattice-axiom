@@ -6,7 +6,8 @@ document_type: index
 owners:
   - "@terrenia/thaumaturgy"
 tracks_implementation: true
-requirements: []
+requirements:
+  - TERRENIA-THAUMATURGY-001
 updated: 2026-08-22
 ---
 

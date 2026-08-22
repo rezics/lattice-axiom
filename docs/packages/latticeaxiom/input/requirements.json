@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@latticeaxiom/input",
+  "requirements": [
+    {
+      "id": "INPUT-PACKAGE-001",
+      "document_id": "package.latticeaxiom.input.index",
+      "level": "must",
+      "statement": "An accepted logical package declares the stable action catalog and default bindings consumed by the input runtime.",
+      "acceptance": [
+        "The package is present in the lock and all action rows match the client adapter catalog.",
+        "Package removal and user override preservation have deterministic behavior."
+      ]
+    }
+  ]
+}
