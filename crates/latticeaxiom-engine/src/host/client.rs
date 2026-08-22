@@ -3,13 +3,15 @@
 use bevy::{
     asset::Assets,
     prelude::{
-        AmbientLight, Camera3d, Color, Commands, Component, DirectionalLight, EulerRot, Name, Quat,
-        Query, Res, ResMut, StandardMaterial, Transform, Vec3, With, Without,
+        AmbientLight, Camera3d, Color, Commands, Component, DirectionalLight, EulerRot, Image,
+        Name, Quat, Query, Res, ResMut, StandardMaterial, Transform, Vec3, With, Without,
     },
 };
 use latticeaxiom_player::{LocalPlayerInput, PlayerMovementProfileV1, PlayerViewV1};
 
-use super::chunk_mesh::ProductionTerrainMaterial;
+use super::chunk_mesh::{
+    ProductionTerrainMaterial, ProductionTerrainPalette, nearest_clamp_sampler,
+};
 
 use crate::EngineProfile;
 
@@ -23,13 +25,19 @@ pub(super) fn spawn_production_client_view(
     mut commands: Commands<'_, '_>,
     profile: Res<'_, EngineProfile>,
     mut materials: ResMut<'_, Assets<StandardMaterial>>,
+    mut images: ResMut<'_, Assets<Image>>,
+    palette: Res<'_, ProductionTerrainPalette>,
 ) {
     if *profile != EngineProfile::Client {
         return;
     }
 
+    let mut atlas_image = palette.atlas_image();
+    atlas_image.sampler = nearest_clamp_sampler();
+    let atlas = images.add(atlas_image);
     commands.insert_resource(ProductionTerrainMaterial(materials.add(StandardMaterial {
         base_color: Color::WHITE,
+        base_color_texture: Some(atlas),
         perceptual_roughness: 0.95,
         reflectance: 0.06,
         ..StandardMaterial::default()

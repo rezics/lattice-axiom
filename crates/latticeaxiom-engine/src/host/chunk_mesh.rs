@@ -3,28 +3,85 @@
 use bevy::{
     asset::{Assets, Handle, RenderAssetUsages},
     camera::primitives::Aabb as GpuAabb,
+    image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::{Indices, Mesh, PrimitiveTopology},
     prelude::{
         Commands, Component, Entity, Mesh3d, MeshMaterial3d, Resource, StandardMaterial, Vec3,
     },
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use latticeaxiom_gameplay::BlockId;
-use latticeaxiom_voxel_mesh::{Aabb, Face, MeshBuffer, MeshGroup};
+use latticeaxiom_voxel_mesh::{Aabb, Face, MeshBuffer, MeshGroup, Quad};
 
-/// Shared PBR material multiplied by per-vertex block colors.
+/// Pixel edge length of one color-block atlas tile.
+const TILE_PX: u32 = 16;
+
+/// Linear fallback used for an empty palette or an out-of-range index.
+const FALLBACK_COLOR: [f32; 4] = [0.38, 0.41, 0.43, 1.0];
+
+/// Shared PBR material using the color-block atlas; vertex colors can still tint.
 #[derive(Clone, Debug, Resource)]
 pub(super) struct ProductionTerrainMaterial(pub(super) Handle<StandardMaterial>);
 
-/// Palette-index to linear RGBA table for one production session.
+/// Palette-index to linear RGBA table and a deterministic color-block atlas.
 #[derive(Clone, Debug, Resource)]
 pub(super) struct ProductionTerrainPalette {
     colors: Vec<[f32; 4]>,
+    tiles: Vec<AtlasTile>,
+    fallback_tile: AtlasTile,
+    atlas_rgba: Vec<u8>,
+    atlas_width: u32,
+    atlas_height: u32,
+}
+
+/// One 16×16 atlas tile in UV space, inset by half a texel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AtlasTile {
+    min: [f32; 2],
+    size: [f32; 2],
 }
 
 impl ProductionTerrainPalette {
     pub(super) fn from_ids(ids: &[BlockId]) -> Self {
+        let colors: Vec<[f32; 4]> = ids.iter().map(|id| block_color(id.as_str())).collect();
+        let tile_count = colors.len().max(1);
+        let columns = ceil_sqrt(tile_count);
+        let rows = div_ceil_u32(tile_count, columns);
+        let atlas_width = columns.saturating_mul(TILE_PX).max(TILE_PX);
+        let atlas_height = rows.saturating_mul(TILE_PX).max(TILE_PX);
+        let pixel_count =
+            usize::try_from(atlas_width.saturating_mul(atlas_height).saturating_mul(4))
+                .unwrap_or(0);
+        let mut atlas_rgba = vec![0_u8; pixel_count];
+        fill_solid(&mut atlas_rgba, FALLBACK_COLOR);
+
+        let mut tiles = Vec::with_capacity(colors.len());
+        if colors.is_empty() {
+            blit_tile(
+                &mut atlas_rgba,
+                atlas_width,
+                0,
+                0,
+                &solid_tile(FALLBACK_COLOR),
+            );
+        } else {
+            for (tile_index, color) in colors.iter().copied().enumerate() {
+                let index = u32::try_from(tile_index).unwrap_or(0);
+                let col = index % columns.max(1);
+                let row = index / columns.max(1);
+                blit_tile(&mut atlas_rgba, atlas_width, col, row, &solid_tile(color));
+                tiles.push(atlas_tile(tile_index, columns, atlas_width, atlas_height));
+            }
+        }
+
+        let fallback_tile = atlas_tile(0, columns, atlas_width, atlas_height);
         Self {
-            colors: ids.iter().map(|id| block_color(id.as_str())).collect(),
+            colors,
+            tiles,
+            fallback_tile,
+            atlas_rgba,
+            atlas_width,
+            atlas_height,
         }
     }
 
@@ -32,8 +89,73 @@ impl ProductionTerrainPalette {
         self.colors
             .get(usize::from(palette_index))
             .copied()
-            .unwrap_or([0.38, 0.41, 0.43, 1.0])
+            .unwrap_or(FALLBACK_COLOR)
     }
+
+    fn tile(&self, palette_index: u16) -> AtlasTile {
+        self.tiles
+            .get(usize::from(palette_index))
+            .copied()
+            .unwrap_or(self.fallback_tile)
+    }
+
+    /// Unit-quad atlas UVs for `palette_index`. Stable for a given ID table.
+    #[cfg(test)]
+    fn tile_uvs(&self, palette_index: u16) -> [[f32; 2]; 4] {
+        let tile = self.tile(palette_index);
+        [
+            map_uv([0.0, 0.0], tile, 1.0, 1.0),
+            map_uv([1.0, 0.0], tile, 1.0, 1.0),
+            map_uv([1.0, 1.0], tile, 1.0, 1.0),
+            map_uv([0.0, 1.0], tile, 1.0, 1.0),
+        ]
+    }
+
+    fn vertex_uvs<K>(&self, palette_index: u16, face: Face, quad: &Quad<K>) -> [[f32; 2]; 4] {
+        let tile = self.tile(palette_index);
+        let local = quad.uvs(face);
+        let width = local[1][0].max(1.0);
+        let height = local[3][1].max(1.0);
+        [
+            map_uv(local[0], tile, width, height),
+            map_uv(local[1], tile, width, height),
+            map_uv(local[2], tile, width, height),
+            map_uv(local[3], tile, width, height),
+        ]
+    }
+
+    /// Deterministic solid-color atlas from palette IDs in index order.
+    ///
+    /// Missing PNG textures use this 16×16 color-block fallback. Tiles are
+    /// packed left-to-right, top-to-bottom, with nearest sampling and clamp.
+    pub(super) fn atlas_image(&self) -> Image {
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: self.atlas_width,
+                height: self.atlas_height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        image.data = Some(self.atlas_rgba.clone());
+        image.sampler = nearest_clamp_sampler();
+        image
+    }
+}
+
+/// Nearest-filtered, clamp-to-edge sampler for voxel color-block textures.
+pub(super) fn nearest_clamp_sampler() -> ImageSampler {
+    ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        address_mode_w: ImageAddressMode::ClampToEdge,
+        mag_filter: ImageFilterMode::Nearest,
+        min_filter: ImageFilterMode::Nearest,
+        mipmap_filter: ImageFilterMode::Nearest,
+        ..ImageSamplerDescriptor::nearest()
+    })
 }
 
 /// Marker that a chunk entity currently presents a complete GPU mesh.
@@ -83,7 +205,11 @@ fn mesh_from_buffer(
     geometry: &MeshBuffer<u16>,
     palette: &ProductionTerrainPalette,
 ) -> Option<Mesh> {
-    let cpu = adapter_cpu_mesh_from_buffer(geometry, |key| palette.color(*key))?;
+    let cpu = adapter_cpu_mesh_from_buffer(
+        geometry,
+        |key| palette.color(*key),
+        |key, face, quad| palette.vertex_uvs(*key, face, quad),
+    )?;
     if cpu.group_count == 0 {
         return None;
     }
@@ -94,6 +220,7 @@ fn mesh_from_buffer(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, cpu.positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, cpu.normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, cpu.colors);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, cpu.uvs);
     mesh.insert_indices(Indices::U32(cpu.indices));
     Some(mesh)
 }
@@ -108,6 +235,7 @@ struct AdapterCpuMesh {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
+    uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
     group_count: usize,
 }
@@ -115,6 +243,7 @@ struct AdapterCpuMesh {
 fn adapter_cpu_mesh_from_buffer<K>(
     geometry: &MeshBuffer<K>,
     mut color_of: impl FnMut(&K) -> [f32; 4],
+    mut uv_of: impl FnMut(&K, Face, &Quad<K>) -> [[f32; 2]; 4],
 ) -> Option<AdapterCpuMesh> {
     if geometry.is_empty() {
         return None;
@@ -122,6 +251,7 @@ fn adapter_cpu_mesh_from_buffer<K>(
     let mut positions = Vec::with_capacity(geometry.vertex_count());
     let mut normals = Vec::with_capacity(geometry.vertex_count());
     let mut colors = Vec::with_capacity(geometry.vertex_count());
+    let mut uvs = Vec::with_capacity(geometry.vertex_count());
     let mut indices = Vec::with_capacity(geometry.index_count());
     let mut group_count = 0_usize;
 
@@ -136,11 +266,17 @@ fn adapter_cpu_mesh_from_buffer<K>(
                     break;
                 };
                 let color = color_of(quad.merge_key());
-                for (position, normal) in quad.positions(face).into_iter().zip(face.quad_normals())
+                let quad_uvs = uv_of(quad.merge_key(), face, quad);
+                for ((position, normal), uv) in quad
+                    .positions(face)
+                    .into_iter()
+                    .zip(face.quad_normals())
+                    .zip(quad_uvs)
                 {
                     positions.push(position);
                     normals.push(normal);
                     colors.push(color);
+                    uvs.push(uv);
                 }
                 indices.extend(quad_indices);
                 group_has_quads = true;
@@ -158,6 +294,7 @@ fn adapter_cpu_mesh_from_buffer<K>(
         positions,
         normals,
         colors,
+        uvs,
         indices,
         group_count,
     })
@@ -209,16 +346,127 @@ fn channel(value: u32) -> u8 {
     u8::try_from(value & 0xff).unwrap_or(0)
 }
 
+fn map_uv(local: [f32; 2], tile: AtlasTile, width: f32, height: f32) -> [f32; 2] {
+    [
+        tile.min[0] + local[0] / width * tile.size[0],
+        tile.min[1] + local[1] / height * tile.size[1],
+    ]
+}
+
+fn ceil_sqrt(count: usize) -> u32 {
+    let count = u32::try_from(count.max(1)).unwrap_or(u32::MAX);
+    let root = count.isqrt();
+    if root.saturating_mul(root) < count {
+        root.saturating_add(1).max(1)
+    } else {
+        root.max(1)
+    }
+}
+
+fn div_ceil_u32(count: usize, divisor: u32) -> u32 {
+    let count = u32::try_from(count.max(1)).unwrap_or(u32::MAX);
+    count.div_ceil(divisor.max(1))
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "atlas pixel coordinates stay below f32's exact integer range"
+)]
+fn atlas_tile(index: usize, columns: u32, atlas_width: u32, atlas_height: u32) -> AtlasTile {
+    let index = u32::try_from(index).unwrap_or(0);
+    let col = index % columns.max(1);
+    let row = index / columns.max(1);
+    let atlas_w = atlas_width.max(1) as f32;
+    let atlas_h = atlas_height.max(1) as f32;
+    let tile = TILE_PX as f32;
+    let inset = 0.5;
+    AtlasTile {
+        min: [
+            (col as f32 * tile + inset) / atlas_w,
+            (row as f32 * tile + inset) / atlas_h,
+        ],
+        size: [(tile - 1.0) / atlas_w, (tile - 1.0) / atlas_h],
+    }
+}
+
+fn solid_tile(color: [f32; 4]) -> Vec<u8> {
+    let pixel = rgba8_unorm(color);
+    let len = usize::try_from(TILE_PX.saturating_mul(TILE_PX).saturating_mul(4)).unwrap_or(0);
+    pixel.iter().copied().cycle().take(len).collect()
+}
+
+fn fill_solid(atlas: &mut [u8], color: [f32; 4]) {
+    let pixel = rgba8_unorm(color);
+    for chunk in atlas.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&pixel);
+    }
+}
+
+fn rgba8_unorm(color: [f32; 4]) -> [u8; 4] {
+    [
+        channel_unorm(color[0]),
+        channel_unorm(color[1]),
+        channel_unorm(color[2]),
+        channel_unorm(color[3]),
+    ]
+}
+
+fn channel_unorm(value: f32) -> u8 {
+    let scaled = (value.clamp(0.0, 1.0) * 255.0).round();
+    if scaled >= 255.0 {
+        255
+    } else if scaled <= 0.0 {
+        0
+    } else {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "scaled is in 0..255 after clamp and round"
+        )]
+        {
+            scaled as u8
+        }
+    }
+}
+
+fn blit_tile(atlas: &mut [u8], atlas_width: u32, col: u32, row: u32, tile: &[u8]) {
+    let tile_stride = usize::try_from(TILE_PX.saturating_mul(4)).unwrap_or(0);
+    let atlas_stride = usize::try_from(atlas_width.saturating_mul(4)).unwrap_or(0);
+    if tile_stride == 0 || atlas_stride == 0 {
+        return;
+    }
+    for y in 0..TILE_PX {
+        let src_start = usize::try_from(y).unwrap_or(0).saturating_mul(tile_stride);
+        let src_end = src_start.saturating_add(tile_stride);
+        let dst_y = usize::try_from(row.saturating_mul(TILE_PX).saturating_add(y)).unwrap_or(0);
+        let dst_x = usize::try_from(col.saturating_mul(TILE_PX))
+            .unwrap_or(0)
+            .saturating_mul(4);
+        let dst_start = dst_y.saturating_mul(atlas_stride).saturating_add(dst_x);
+        let dst_end = dst_start.saturating_add(tile_stride);
+        if let (Some(src), Some(dst)) = (
+            tile.get(src_start..src_end),
+            atlas.get_mut(dst_start..dst_end),
+        ) {
+            dst.copy_from_slice(src);
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    use latticeaxiom_gameplay::BlockId;
     use latticeaxiom_voxel_mesh::{
         Aabb, ChunkCoordinate, Face, FaceDescriptor, FaceOcclusion, MeshBuffer, MeshGroup,
         MeshSource, PaddedChunk, SourceEpoch, SourceFingerprint, SourceRevision, Voxel,
-        visible_faces,
+        greedy_quads, visible_faces,
     };
 
-    use super::{AdapterCpuMesh, ProductionTerrainPalette, adapter_cpu_mesh_from_buffer};
+    use super::{
+        AdapterCpuMesh, ImageAddressMode, ImageFilterMode, ImageSampler, ProductionTerrainPalette,
+        adapter_cpu_mesh_from_buffer, nearest_clamp_sampler, rgba8_unorm,
+    };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TestVoxel {
@@ -296,8 +544,13 @@ mod tests {
     }
 
     fn adapter_from_buffer(buffer: &MeshBuffer<u8>) -> AdapterCpuMesh {
-        adapter_cpu_mesh_from_buffer(buffer, |key| palette().color(u16::from(*key)))
-            .expect("MeshBuffer emits adapter geometry")
+        let palette = palette();
+        adapter_cpu_mesh_from_buffer(
+            buffer,
+            |key| palette.color(u16::from(*key)),
+            |key, face, quad| palette.vertex_uvs(u16::from(*key), face, quad),
+        )
+        .expect("MeshBuffer emits adapter geometry")
     }
 
     fn adapter_mesh(voxels: &[TestVoxel], dimensions: PaddedChunk) -> AdapterCpuMesh {
@@ -399,6 +652,71 @@ mod tests {
             nonempty_group_count(buffer)
         );
         assert_eq!(adapter_bounds(adapter), buffer.bounds());
+        assert_eq!(
+            adapter.uvs.len(),
+            adapter.vertex_count(),
+            "adapter UVs {} != adapter vertices {}",
+            adapter.uvs.len(),
+            adapter.vertex_count()
+        );
+        assert_eq!(
+            adapter.uvs.len(),
+            buffer.vertex_count(),
+            "adapter UVs {} != MeshBuffer vertices {}",
+            adapter.uvs.len(),
+            buffer.vertex_count()
+        );
+    }
+
+    fn block_id(id: &str) -> BlockId {
+        BlockId::parse(id).expect("fixture block ID is canonical")
+    }
+
+    fn sample_atlas(image: &bevy::image::Image, uv: [f32; 2]) -> [u8; 4] {
+        let data = image
+            .data
+            .as_ref()
+            .expect("color-block atlas keeps CPU data");
+        let size = image.texture_descriptor.size;
+        let x = uv_to_texel(uv[0], size.width);
+        let y = uv_to_texel(uv[1], size.height);
+        let offset = usize::try_from(
+            y.saturating_mul(size.width)
+                .saturating_add(x)
+                .saturating_mul(4),
+        )
+        .expect("atlas pixel offset fits usize");
+        data.get(offset..offset + 4)
+            .expect("atlas UV lands inside the image")
+            .try_into()
+            .expect("RGBA pixel is 4 bytes")
+    }
+
+    fn uv_to_texel(uv: f32, extent: u32) -> u32 {
+        if extent == 0 {
+            return 0;
+        }
+        let max = extent - 1;
+        let scaled = (uv.clamp(0.0, 0.999_999) * atlas_extent_f32(extent)).floor();
+        if scaled <= 0.0 {
+            0
+        } else {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "test atlas UVs stay within the tile pixel range"
+            )]
+            {
+                u32::try_from(scaled as i64).unwrap_or(max).min(max)
+            }
+        }
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test atlas extents stay below f32 exact integer range"
+    )]
+    fn atlas_extent_f32(value: u32) -> f32 {
+        value as f32
     }
 
     #[test]
@@ -420,6 +738,21 @@ mod tests {
                 "adapter triangle {triangle:?} opposes outward {outward:?}"
             );
         }
+    }
+
+    #[test]
+    fn adapter_uv_count_equals_vertex_count() {
+        let (voxels, dimensions) = volume([2, 1, 1], |position| {
+            if position[0] == 0 {
+                TestVoxel::opaque(1)
+            } else {
+                TestVoxel::grouped(2, MeshGroup::Cutout)
+            }
+        });
+        let mesh = adapter_mesh(&voxels, dimensions);
+        assert_eq!(mesh.uvs.len(), mesh.positions.len());
+        assert_eq!(mesh.uvs.len(), mesh.vertex_count());
+        assert_eq!(mesh.colors.len(), mesh.vertex_count());
     }
 
     #[test]
@@ -463,5 +796,46 @@ mod tests {
             .clone();
         let adapter = adapter_from_buffer(&buffer);
         assert_adapter_counts_match_buffer(&adapter, &buffer);
+    }
+
+    #[test]
+    fn atlas_uv_for_palette_index_is_stable() {
+        let ids = [
+            block_id("terrenia:block/stone"),
+            block_id("terrenia:block/dirt"),
+            block_id("terrenia:block/grass"),
+        ];
+        let first = ProductionTerrainPalette::from_ids(&ids);
+        let rebuilt = ProductionTerrainPalette::from_ids(&ids);
+        for index in 0..ids.len() {
+            let index = u16::try_from(index).expect("palette index fits u16");
+            assert_eq!(first.tile_uvs(index), rebuilt.tile_uvs(index));
+        }
+        assert_ne!(first.tile_uvs(0), first.tile_uvs(1));
+        assert_ne!(first.tile_uvs(1), first.tile_uvs(2));
+
+        let (voxels, dimensions) = volume([2, 1, 1], |_| TestVoxel::opaque(1));
+        let greedy = greedy_quads(&voxels, dimensions, source()).expect("valid samples");
+        for (_group, face, quad) in greedy.geometry().iter() {
+            let index = u16::from(*quad.merge_key());
+            assert_eq!(first.vertex_uvs(index, face, quad), first.tile_uvs(index));
+        }
+
+        let atlas = first.atlas_image();
+        assert_eq!(atlas.sampler, nearest_clamp_sampler());
+        match &atlas.sampler {
+            ImageSampler::Descriptor(descriptor) => {
+                assert_eq!(descriptor.mag_filter, ImageFilterMode::Nearest);
+                assert_eq!(descriptor.min_filter, ImageFilterMode::Nearest);
+                assert_eq!(descriptor.address_mode_u, ImageAddressMode::ClampToEdge);
+                assert_eq!(descriptor.address_mode_v, ImageAddressMode::ClampToEdge);
+            }
+            ImageSampler::Default => {
+                panic!("expected nearest clamp sampler, got ImageSampler::Default")
+            }
+        }
+
+        let pixel = sample_atlas(&atlas, first.tile_uvs(1)[0]);
+        assert_eq!(pixel, rgba8_unorm(first.color(1)));
     }
 }
