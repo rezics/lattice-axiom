@@ -15,12 +15,16 @@ use std::{
 
 use bevy::prelude::Resource;
 use latticeaxiom_compose::LockedGameGraph;
-use latticeaxiom_core::{CapabilityId, IdentifierError, WorldId};
+use latticeaxiom_core::{CanonicalHash, CapabilityId, IdentifierError, PackageName, WorldId};
+use latticeaxiom_launcher::{
+    LaunchGeneration, MAX_LAUNCH_INTENT_LIFETIME_MS, SettingTransactionRevision,
+};
 use latticeaxiom_start_ui::{
     ClientShellGraph, ClientShellGraphError, HomePrimaryAction, InMemoryWorldList, InputSource,
-    MemoryStartEffect, MemoryStartError, MemoryStartFlow, QuickCreateIntent, SemanticActionId,
-    SemanticCommand, SemanticNodeId, ShellCapability, ShellEffect, ShellPackageProvider,
-    WorldShellError, WorldSort, memory_session_store_id, memory_session_template,
+    LaunchHandoff, LaunchHandoffContext, LaunchHandoffError, MemoryStartEffect, MemoryStartError,
+    MemoryStartFlow, QuickCreateIntent, SemanticActionId, SemanticCommand, SemanticNodeId,
+    ShellCapability, ShellEffect, ShellPackageProvider, WorldShellError, WorldShellRecord,
+    WorldSort, memory_session_store_id, memory_session_template,
 };
 use latticeaxiom_world_catalog::{
     ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
@@ -128,6 +132,64 @@ impl ProductionMemoryStart {
     ) -> Result<Self, ProductionMemoryStartError> {
         let graph = shell_graph_from_lock(images.images().graph())?;
         Ok(Self::new(images, graph))
+    }
+
+    /// Selects the start-shell process from reopened lock graph roots.
+    ///
+    /// True only when `roots` contains `@latticeaxiom/front-end` and does not
+    /// contain `terrenia`. A `terrenia` root, including `profiles/dev.toml`
+    /// client-world, boots the production game host instead.
+    #[must_use]
+    pub fn lock_roots_select_shell<I, S>(roots: I) -> bool
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut has_front_end = false;
+        let mut has_terrenia = false;
+        for root in roots {
+            match root.as_ref() {
+                FRONT_END_PACKAGE => has_front_end = true,
+                TERRENIA_PACKAGE => has_terrenia = true,
+                _ => {}
+            }
+        }
+        has_front_end && !has_terrenia
+    }
+
+    /// Selects the start-shell process from a reopened locked graph.
+    #[must_use]
+    pub fn lock_graph_selects_shell(graph: &LockedGameGraph) -> bool {
+        Self::lock_roots_select_shell(graph.roots.iter().map(PackageName::as_str))
+    }
+
+    /// Seals a replacement-process handoff for an exact-ready session world.
+    ///
+    /// This does not create a Bevy game [`bevy::app::App`] and does not spawn
+    /// [`super::ProductionSpine`]. An external supervisor must persist the
+    /// intent and spawn the game process.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the world is absent or is
+    /// not exact-ready, or when launcher intent validation fails.
+    pub fn launch_handoff_for_ready_exact(
+        &self,
+        world_id: WorldId,
+        now_ms: u64,
+    ) -> Result<LaunchHandoff, ProductionMemoryStartError> {
+        let record = self
+            .flow
+            .worlds()
+            .get(world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        sealed_ready_exact_handoff(
+            record,
+            self.images.product_lock_hash(),
+            self.images.product_lock_hash(),
+            now_ms,
+        )
+        .map_err(ProductionMemoryStartError::from)
     }
 
     /// Returns the presentation-neutral start flow.
@@ -545,12 +607,50 @@ pub enum ProductionMemoryStartError {
         /// World whose preflight lacked a ready permit.
         world: WorldId,
     },
+    /// `ReadyExact` replacement-process handoff could not be sealed.
+    #[error(transparent)]
+    LaunchHandoff(#[from] LaunchHandoffError),
 }
 
 impl From<WorldShellError> for ProductionMemoryStartError {
     fn from(error: WorldShellError) -> Self {
         Self::Start(error.into())
     }
+}
+
+/// Logical package name of the package-driven start shell.
+const FRONT_END_PACKAGE: &str = "@latticeaxiom/front-end";
+/// Logical package name of the current demo game world.
+const TERRENIA_PACKAGE: &str = "terrenia";
+
+/// Seals [`LaunchHandoff::for_ready_exact`] from a catalog record and lock hashes.
+pub(crate) fn sealed_ready_exact_handoff(
+    record: &WorldShellRecord,
+    shell_lock_hash: CanonicalHash,
+    world_lock_hash: CanonicalHash,
+    now_ms: u64,
+) -> Result<LaunchHandoff, LaunchHandoffError> {
+    LaunchHandoff::for_ready_exact(
+        record,
+        LaunchHandoffContext {
+            generation: LaunchGeneration::FIRST,
+            issued_at_ms: now_ms,
+            expires_at_ms: now_ms.saturating_add(MAX_LAUNCH_INTENT_LIFETIME_MS),
+            shell_lock_hash,
+            world_lock_hash,
+            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+        },
+    )
+}
+
+/// Milliseconds since Unix epoch; `0` when the system clock is unavailable.
+#[cfg(feature = "client")]
+pub(crate) fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 fn session_command(target: &'static str, action: SemanticActionId) -> SemanticCommand {
@@ -620,7 +720,8 @@ fn memory_session_authoritative_metadata(
     Ok(AuthoritativeMetadataInputV1::new(lock, closure))
 }
 
-fn shell_graph_from_lock(
+/// Resolves the exactly-one start-ui capability providers from a locked graph.
+pub(crate) fn shell_graph_from_lock(
     graph: &LockedGameGraph,
 ) -> Result<ClientShellGraph, ProductionMemoryStartError> {
     const CAPABILITIES: [(ShellCapability, &str); 5] = [
@@ -662,4 +763,111 @@ fn shell_graph_from_lock(
         }
     }
     Ok(ClientShellGraph::resolve(providers)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FRONT_END_PACKAGE, ProductionMemoryStart, TERRENIA_PACKAGE, sealed_ready_exact_handoff,
+    };
+    use latticeaxiom_core::{CanonicalHash, WorldId};
+    use latticeaxiom_launcher::LaunchTargetV1;
+    use latticeaxiom_start_ui::{
+        ClientProcessDisposition, LaunchHandoffError, WorldCardMetadata, WorldShellRecord,
+    };
+    use latticeaxiom_world_catalog::{
+        CatalogEntry, CatalogEntryState, CatalogProjection, DisplayName, LiveWorldLocation,
+        ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
+        WorldRootId,
+    };
+
+    fn world_id(value: &str) -> WorldId {
+        value
+            .parse()
+            .unwrap_or_else(|error| panic!("world fixture: {error}"))
+    }
+
+    fn ready_exact_record() -> WorldShellRecord {
+        let world_id = world_id("123e4567-e89b-42d3-a456-426614174000");
+        let action = WorldOpenAction::UseFrozenLock;
+        WorldShellRecord::new(
+            CatalogEntry {
+                location: LiveWorldLocation::new(WorldRootId(0), world_id),
+                state: CatalogEntryState::Projected(CatalogProjection {
+                    world_id,
+                    display_name: DisplayName::new("Exact")
+                        .unwrap_or_else(|error| panic!("display fixture: {error}")),
+                    metadata_epoch: 1,
+                    clean_shutdown: true,
+                    durable_frontier: 0,
+                }),
+            },
+            WorldCardMetadata {
+                created_at_ms: 1,
+                last_played_at_ms: 2,
+                physical_bytes: None,
+                game_summary: None,
+                dimension_summary: None,
+            },
+            Some(WorldOpenPlan {
+                world_id,
+                status: WorldOpenStatus::ReadyExact,
+                risk: WorldOpenRisk::None,
+                reconciliation: ReconciliationState::InSync { metadata_epoch: 1 },
+                next_safe_step: Some(action.clone()),
+                actions: vec![action],
+                diagnostics: Vec::new(),
+                activation_binding: None,
+            }),
+        )
+        .unwrap_or_else(|error| panic!("record fixture: {error}"))
+    }
+
+    #[test]
+    fn lock_roots_select_shell_only_for_front_end_without_terrenia() {
+        assert!(ProductionMemoryStart::lock_roots_select_shell([
+            FRONT_END_PACKAGE
+        ]));
+        assert!(!ProductionMemoryStart::lock_roots_select_shell([
+            TERRENIA_PACKAGE
+        ]));
+        assert!(!ProductionMemoryStart::lock_roots_select_shell([
+            FRONT_END_PACKAGE,
+            TERRENIA_PACKAGE,
+        ]));
+        assert!(!ProductionMemoryStart::lock_roots_select_shell([
+            "@latticeaxiom/settings"
+        ]));
+        assert!(!ProductionMemoryStart::lock_roots_select_shell(
+            None::<&str>
+        ));
+    }
+
+    #[test]
+    fn continue_ready_exact_seals_replacement_process_handoff() {
+        let record = ready_exact_record();
+        let lock = CanonicalHash::digest(b"shell-lock");
+        let handoff = sealed_ready_exact_handoff(&record, lock, lock, 1_000)
+            .unwrap_or_else(|error| panic!("ReadyExact handoff: {error}"));
+        assert_eq!(
+            handoff.intent.target(),
+            LaunchTargetV1::World {
+                world_id: record.world_id()
+            }
+        );
+        assert_eq!(
+            handoff.disposition,
+            ClientProcessDisposition::ExitAfterAtomicIntentPublish
+        );
+
+        let mut compatible = ready_exact_record();
+        if let Some(plan) = compatible.open_plan.as_mut() {
+            plan.status = WorldOpenStatus::ReadyCompatible;
+            plan.actions = vec![WorldOpenAction::ResolveCompatibleGraph];
+        }
+        assert!(matches!(
+            sealed_ready_exact_handoff(&compatible, lock, lock, 1_000),
+            Err(LaunchHandoffError::NotReadyExact)
+        ));
+    }
 }

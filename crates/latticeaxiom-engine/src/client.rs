@@ -14,7 +14,10 @@ use latticeaxiom_launcher::{
 use latticeaxiom_packages::{CasError, FilesystemCas, LOCAL_CATALOG_CAS_DIRECTORY};
 use thiserror::Error;
 
-use crate::{EngineInstance, LockVerifiedComposeImages, PreparationError, ProductionHostError};
+use crate::{
+    EngineInstance, LockVerifiedComposeImages, PreparationError, ProductionHostError,
+    ProductionMemoryStart, ProductionMemoryStartError,
+};
 
 /// Directory beside `latticeaxiom.lock` that holds the local catalog and CAS.
 const CLIENT_CATALOG_DIRECTORY: &str = "catalog";
@@ -59,6 +62,9 @@ pub enum ProductionClientError {
     /// Production spine construction failed.
     #[error(transparent)]
     Host(Box<ProductionHostError>),
+    /// Client-shell graph resolution or start-surface construction failed.
+    #[error(transparent)]
+    Shell(#[from] ProductionMemoryStartError),
     /// This process already claimed its client App lease.
     #[error(transparent)]
     Lease(#[from] ClientAppLeaseError),
@@ -84,26 +90,41 @@ impl ProductionClientError {
     }
 }
 
-/// Boots the V2/V4 production host from a reopened `latticeaxiom.lock`.
+/// Boots the package-driven client from a reopened `latticeaxiom.lock`.
 ///
 /// Ordinary launch reads `latticeaxiom.lock` and `catalog/cas` from the
-/// current workspace, freeze-verifies every CAS receipt, and starts one
-/// [`bevy::prelude::DefaultPlugins`] client through
-/// [`EngineInstance::new_client_host_from_lock`]. Missing lock or CAS fails
-/// closed. This path does not load native modules or open a world writer.
+/// current workspace and freeze-verifies every CAS receipt. Lock graph roots
+/// select one process role:
+///
+/// - Roots contain `@latticeaxiom/front-end` and do not contain `terrenia`:
+///   one [`bevy::prelude::DefaultPlugins`] start-shell App from the start-ui
+///   semantic tree. Continue/Play of a `ReadyExact` world seals
+///   [`latticeaxiom_start_ui::LaunchHandoff::for_ready_exact`] and exits.
+///   An external supervisor must spawn the replacement game process; this
+///   process does not.
+/// - Roots contain `terrenia` (including `profiles/dev.toml` client-world):
+///   one production game App through
+///   [`EngineInstance::new_client_host_from_lock`].
+///
+/// Start-shell and Playing never share one `DefaultPlugins` App. Missing lock
+/// or CAS fails closed. This path does not load native modules or open a
+/// world writer.
 ///
 /// # Errors
 ///
 /// Returns [`ProductionClientError`] when the lock or CAS is missing, frozen
-/// verification fails, reconstructed images do not rebind to the lock, or the
-/// process event loop is already reserved.
+/// verification fails, reconstructed images do not rebind to the lock, the
+/// shell graph is invalid, or the process event loop is already reserved.
 pub fn run_client_host_from_lock() -> Result<(), ProductionClientError> {
     let workspace =
         std::env::current_dir().map_err(|source| ProductionClientError::Workspace { source })?;
     run_client_host_from_workspace(&workspace)
 }
 
-/// Boots the production client from lock and CAS paths under `workspace`.
+/// Boots the interactive client from lock and CAS paths under `workspace`.
+///
+/// Lock graph roots select the start-shell process or the production game
+/// process as documented on [`run_client_host_from_lock`].
 ///
 /// # Errors
 ///
@@ -112,7 +133,12 @@ pub fn run_client_host_from_lock() -> Result<(), ProductionClientError> {
 pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), ProductionClientError> {
     let images = load_lock_verified_images(workspace)?;
     let lease = claim_fresh_client_app_lease(ProcessEpoch::FIRST)?;
-    let (instance, _proof) = EngineInstance::new_client_host_from_lock(images, lease)?;
+    let (instance, _proof) =
+        if ProductionMemoryStart::lock_graph_selects_shell(images.images().graph()) {
+            EngineInstance::new_client_shell_from_lock(images, lease)?
+        } else {
+            EngineInstance::new_client_host_from_lock(images, lease)?
+        };
     instance.run();
     Ok(())
 }

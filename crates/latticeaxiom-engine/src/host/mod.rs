@@ -18,6 +18,8 @@ mod gameplay;
 mod hud;
 #[cfg(feature = "client")]
 mod pause;
+#[cfg(feature = "client")]
+mod shell_view;
 mod spine;
 mod start;
 mod stream;
