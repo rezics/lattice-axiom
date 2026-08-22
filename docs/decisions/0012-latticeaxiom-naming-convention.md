@@ -1,7 +1,9 @@
 ---
 title: 統一品牌識別字 latticeaxiom 與命名約定
-status: superseded
-type: decision
+document_id: decision.0012-latticeaxiom-naming-convention
+document_status: superseded
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 superseded_by: 0019
 ---
@@ -56,6 +58,6 @@ superseded_by: 0019
 
 ## 相關文件
 
-- [技術棧](../foundations/technology-stack.md)
-- [模組與內容組合](../architecture/module-composition.md)
+- [技術棧](../project/technology-stack.md)
+- [模組與內容組合](../platform/composition/module-composition.md)
 - [決策 0014：採用 Bevy 並以上游能力為預設](0014-adopt-bevy-upstream-first.md)

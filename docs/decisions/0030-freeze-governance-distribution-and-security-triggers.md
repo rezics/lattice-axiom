@@ -1,7 +1,9 @@
 ---
 title: 冻结治理、分发与安全触发条件
-status: accepted
-type: decision
+document_id: decision.0030-freeze-governance-distribution-and-security-triggers
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -283,10 +285,10 @@ non-frozen resolve／build transaction。
 
 ## 相关文件
 
-- [套件内核与分发边界](../architecture/package-management.md)
-- [原生模组 ABI](../architecture/native-module-abi.md)
-- [版本与相容性](../architecture/versioning-and-compatibility.md)
-- [套件驱动的 Bevy runtime](../architecture/game-engine-runtime.md)
-- [第一个可玩 demo 路线图](../planning/roadmap-first-demo.md)
-- [执行期整合路线图](../planning/roadmap-game-engine.md)
-- [待决问题](../planning/open-questions.md)
+- [套件内核与分发边界](../platform/package-kernel/package-management.md)
+- [原生模组 ABI](../platform/native-abi/native-module-abi.md)
+- [版本与相容性](../platform/compatibility/versioning-and-compatibility.md)
+- [套件驱动的 Bevy runtime](../platform/runtime/game-engine-runtime.md)
+- [第一个可玩 demo 路线图](../delivery/roadmaps/first-demo.md)
+- [执行期整合路线图](../delivery/roadmaps/game-engine.md)
+- [待决问题](../delivery/open-questions.md)

@@ -1,7 +1,9 @@
 ---
 title: 凍結首版 SDK、Registration 與語義編譯契約
-status: accepted
-type: decision
+document_id: decision.0023-freeze-sdk-registration-and-semantic-compilation
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -590,9 +592,9 @@ Foreign drop、allocator與process-local ID都無法成為portable storage contr
 - [分離 package 與 registration identity](0019-separate-package-and-registration-identities.md)
 - [語義註冊與內容選擇](0020-semantic-registration-and-content-selection.md)
 - [R0／R1 Package、Nickel 契約與解析政策](0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md)
-- [套件模組、註冊清單與靜動雙實現](../architecture/module-composition.md)
-- [語義註冊、內容判定與候選選擇](../architecture/semantic-registration.md)
-- [原生模組 ABI、批次資料與生命週期](../architecture/native-module-abi.md)
-- [Bevy 世界持久化](../architecture/world-persistence.md)
-- [套件驅動的 Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
-- [第一個套件驅動的 Bevy 可玩 demo 路線圖](../planning/roadmap-first-demo.md)
+- [套件模組、註冊清單與靜動雙實現](../platform/composition/module-composition.md)
+- [語義註冊、內容判定與候選選擇](../platform/registration/semantic-registration.md)
+- [原生模組 ABI、批次資料與生命週期](../platform/native-abi/native-module-abi.md)
+- [Bevy 世界持久化](../platform/world-storage/world-persistence.md)
+- [套件驅動的 Bevy 執行期整合路線](../delivery/roadmaps/game-engine.md)
+- [第一個套件驅動的 Bevy 可玩 demo 路線圖](../delivery/roadmaps/first-demo.md)

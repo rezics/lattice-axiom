@@ -1,7 +1,9 @@
 ---
 title: 開源遊戲引擎提供什麼，以及如何接入 Bevy
-status: active
-type: research
+document_id: research.open-source-game-engine-adoption
+document_status: active
+document_type: research
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -122,7 +124,7 @@ Godot 提供另一種成熟的 engine-hosted／editor-first 模式，適合作�
 ## 相關文件
 
 - [決策 0014：採用 Bevy 並以上游能力為預設](../decisions/0014-adopt-bevy-upstream-first.md)
-- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
-- [技術棧](../foundations/technology-stack.md)
+- [Bevy 執行期架構](../platform/runtime/game-engine-runtime.md)
+- [技術棧](../project/technology-stack.md)
 - [Bevy 生態調查](renderer-physics-landscape.md)
 - [原生外掛與渲染模組教訓](native-plugin-and-render-mod-lessons.md)

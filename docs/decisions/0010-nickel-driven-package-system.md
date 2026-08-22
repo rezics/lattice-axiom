@@ -1,7 +1,9 @@
 ---
 title: 以 Nickel 驅動套件系統並以 Rust 執行
-status: accepted
-type: decision
+document_id: decision.0010-nickel-driven-package-system
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 amended_by:
   - 0032-freeze-local-package-acquisition-imports-and-product-lock.md
@@ -114,7 +116,7 @@ Cargo 能解决 Rust build 依赖，Bevy Plugin 能注册 runtime 系统，但�
 ## 相關文件
 
 - [決策 0008：靜態與動態共用一圖](0008-static-and-dynamic-realizations-share-one-graph.md)
-- [套件管理架構](../architecture/package-management.md)
-- [版本與相容性](../architecture/versioning-and-compatibility.md)
+- [套件管理架構](../platform/package-kernel/package-management.md)
+- [版本與相容性](../platform/compatibility/versioning-and-compatibility.md)
 - [決策 0020：語義註冊與內容選擇](0020-semantic-registration-and-content-selection.md)
-- [語義註冊架構](../architecture/semantic-registration.md)
+- [語義註冊架構](../platform/registration/semantic-registration.md)

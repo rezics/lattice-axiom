@@ -1,7 +1,9 @@
 ---
 title: Minecraft 世界生成與洞穴模組的設計教訓
-status: exploration
-type: research
+document_id: research.minecraft-world-generation-lessons
+document_status: exploration
+document_type: research
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -112,10 +114,10 @@ Minecraft 官方回饋同時出現偏好巨大洞窟與認為巨大洞窟過於�
 
 ## 相關文件
 
-- [可組合世界生成架構](../architecture/world-generation.md)
-- [可組合洞穴生成架構](../architecture/cave-generation.md)
+- [可組合世界生成架構](../platform/world-generation/world-generation.md)
+- [可組合洞穴生成架構](../platform/world-generation/cave-generation.md)
 - [世界生成方向決策](../decisions/0001-territory-first-biome-driven-world-generation.md)
 - [洞穴生成組合決策](../decisions/0002-hybrid-cave-generation-composition.md)
 - [空間生成領地委派決策](../decisions/0004-territorial-delegation-for-spatial-generation.md)
 - [現代地形與洞穴生成研究](modern-terrain-and-cave-generation.md)
-- [待決問題](../planning/open-questions.md)
+- [待決問題](../delivery/open-questions.md)

@@ -1,7 +1,9 @@
 ---
 title: 原生外掛、Bevy 與 Minecraft 渲染模組的設計教訓
-status: active
-type: research
+document_id: research.native-plugin-and-render-mod-lessons
+document_status: active
+document_type: research
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -208,7 +210,7 @@ Lattice 不能保证永不破坏；能做得更好的是把破坏限制在准确
 
 ## 相關文件
 
-- [原生模組 ABI](../architecture/native-module-abi.md)
-- [渲染架構](../architecture/rendering.md)
-- [套件內核](../architecture/package-management.md)
+- [原生模組 ABI](../platform/native-abi/native-module-abi.md)
+- [渲染架構](../platform/rendering/rendering.md)
+- [套件內核](../platform/package-kernel/package-management.md)
 - [Bevy 生態調查](renderer-physics-landscape.md)

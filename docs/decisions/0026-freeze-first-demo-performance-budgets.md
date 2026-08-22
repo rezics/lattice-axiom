@@ -1,7 +1,9 @@
 ---
 title: 凍結第一個 Demo 性能預算
-status: accepted
-type: decision
+document_id: decision.0026-freeze-first-demo-performance-budgets
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -9,7 +11,7 @@ updated: 2026-08-20
 
 ## 背景
 
-[第一個可玩 demo 路線圖](../planning/roadmap-first-demo.md)要求 D2 量測 frame、fixed tick、
+[第一個可玩 demo 路線圖](../delivery/roadmaps/first-demo.md)要求 D2 量測 frame、fixed tick、
 edit-to-visible、memory 與 queues，並在 D10 以十分鐘固定路徑旅程凍結
 active／resident／visible chunks、generation／mesh／collider／save P95、task／I/O／FFI queues
 與 RAM／VRAM 預算。既有架構也已規定：
@@ -329,12 +331,12 @@ D10 freeze後：
 
 ## 相關文件
 
-- [第一個可玩 demo 路線圖](../planning/roadmap-first-demo.md)
-- [Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
-- [Bevy 執行期](../architecture/game-engine-runtime.md)
-- [原生模組 ABI](../architecture/native-module-abi.md)
-- [渲染架構](../architecture/rendering.md)
-- [實體、物理與呈現](../architecture/entity-physics-presentation.md)
-- [世界持久化](../architecture/world-persistence.md)
-- [診斷、檢查與除錯可視化](../architecture/diagnostics-inspection-and-debug-visualization.md)
-- [待決問題](../planning/open-questions.md)
+- [第一個可玩 demo 路線圖](../delivery/roadmaps/first-demo.md)
+- [Bevy 執行期整合路線](../delivery/roadmaps/game-engine.md)
+- [Bevy 執行期](../platform/runtime/game-engine-runtime.md)
+- [原生模組 ABI](../platform/native-abi/native-module-abi.md)
+- [渲染架構](../platform/rendering/rendering.md)
+- [實體、物理與呈現](../platform/runtime/entity-physics-presentation.md)
+- [世界持久化](../platform/world-storage/world-persistence.md)
+- [診斷、檢查與除錯可視化](../platform/observability/diagnostics-inspection-and-debug-visualization.md)
+- [待決問題](../delivery/open-questions.md)

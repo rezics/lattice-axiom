@@ -1,7 +1,9 @@
 ---
 title: 不以全域版本代替實際相容性
-status: accepted
-type: decision
+document_id: decision.0003-no-global-version-switch
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -71,8 +73,8 @@ updated: 2026-08-20
 
 ## 相關文件
 
-- [版本與相容性](../architecture/versioning-and-compatibility.md)
-- [世界持久化](../architecture/world-persistence.md)
+- [版本與相容性](../platform/compatibility/versioning-and-compatibility.md)
+- [世界持久化](../platform/world-storage/world-persistence.md)
 - [決策 0014：採用 Bevy 並以上游能力為預設](0014-adopt-bevy-upstream-first.md)
 - [決策 0010：Nickel 驅動套件系統](0010-nickel-driven-package-system.md)
 - [決策 0017：版本化原生模組 ABI](0017-versioned-native-module-abi.md)

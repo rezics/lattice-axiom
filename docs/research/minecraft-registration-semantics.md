@@ -1,7 +1,9 @@
 ---
 title: Minecraft 註冊、Tag 與語義相容性的設計教訓
-status: exploration
-type: research
+document_id: research.minecraft-registration-semantics
+document_status: exploration
+document_type: research
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -118,7 +120,7 @@ pre-activation、declarative、locked fallback bundle，而不是推广 late imp
 ## 相關文件
 
 - [決策 0020：分離註冊身分、語義與選擇](../decisions/0020-semantic-registration-and-content-selection.md)
-- [語義註冊架構](../architecture/semantic-registration.md)
-- [模組與註冊清單](../architecture/module-composition.md)
+- [語義註冊架構](../platform/registration/semantic-registration.md)
+- [模組與註冊清單](../platform/composition/module-composition.md)
 - [Minecraft 世界生成教訓](minecraft-world-generation-lessons.md)
 

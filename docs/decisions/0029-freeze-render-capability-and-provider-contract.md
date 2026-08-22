@@ -1,7 +1,9 @@
 ---
 title: 凍結首版渲染能力與 Provider 契約
-status: accepted
-type: decision
+document_id: decision.0029-freeze-render-capability-and-provider-contract
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -325,6 +327,6 @@ portable ABI不是全project的最低共同分母。
 - [首版 SDK、Registration 與語義編譯契約](0023-freeze-sdk-registration-and-semantic-compilation.md)
 - [Portable Native ABI `0.x`](0024-freeze-portable-native-abi-0x.md)
 - [第一個 Demo 性能預算](0026-freeze-first-demo-performance-budgets.md)
-- [Bevy 渲染能力、Pass 與 Provider 組合](../architecture/rendering.md)
-- [套件驅動的 Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
-- [第一個套件驅動的 Bevy 可玩 demo 路線圖](../planning/roadmap-first-demo.md)
+- [Bevy 渲染能力、Pass 與 Provider 組合](../platform/rendering/rendering.md)
+- [套件驅動的 Bevy 執行期整合路線](../delivery/roadmaps/game-engine.md)
+- [第一個套件驅動的 Bevy 可玩 demo 路線圖](../delivery/roadmaps/first-demo.md)

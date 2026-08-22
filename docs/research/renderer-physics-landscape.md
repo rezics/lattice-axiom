@@ -1,7 +1,9 @@
 ---
 title: Bevy 渲染、物理、輸入與體素生態調查
-status: exploration
-type: research
+document_id: research.renderer-physics-landscape
+document_status: exploration
+document_type: research
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -99,7 +101,7 @@ updated: 2026-08-19
 
 [`bevy_asset_loader`](https://github.com/NiklasEi/bevy_asset_loader) 可提供 loading state 與 collection，但 Bevy `AssetServer` 已具備載入、狀態與 dependency 基礎。只有 D0／D1 顯示 loading orchestration 重複且容易錯，才做此 spike。
 
-資產格式與 semantic sidecar 仍以 Bevy loader／glTF 為基線，詳見[資產語義](../architecture/asset-semantics.md)。
+資產格式與 semantic sidecar 仍以 Bevy loader／glTF 為基線，詳見[資產語義](../platform/assets/asset-semantics.md)。
 
 ## 授權與供應鏈檢查
 
@@ -135,8 +137,8 @@ Godot 不參與 renderer／physics runtime 選型。它只在實際作者工作�
 
 ## 相關文件
 
-- [技術棧](../foundations/technology-stack.md)
-- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
-- [渲染架構](../architecture/rendering.md)
-- [Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
+- [技術棧](../project/technology-stack.md)
+- [Bevy 執行期架構](../platform/runtime/game-engine-runtime.md)
+- [渲染架構](../platform/rendering/rendering.md)
+- [Bevy 執行期整合路線](../delivery/roadmaps/game-engine.md)
 - [原生外掛與渲染模組教訓](native-plugin-and-render-mod-lessons.md)

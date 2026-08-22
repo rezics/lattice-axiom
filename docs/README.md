@@ -1,7 +1,9 @@
 ---
 title: Lattice Axiom 文件
-status: active
-type: index
+document_id: docs.index
+document_status: active
+document_type: index
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -35,40 +37,40 @@ Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静�
 
 ## 建议阅读顺序
 
-1. [专案愿景与设计支柱](foundations/project-vision.md)
-2. [Package-first／Bevy-first 开发策略](foundations/development-strategy.md)
-3. [技术栈与边界](foundations/technology-stack.md)
-4. [套件内核](architecture/package-management.md)
-5. [模组、注册清单与双实现](architecture/module-composition.md)
-6. [语义注册、内容判定与候选选择](architecture/semantic-registration.md)
-7. [Demo workspace 与 Terrenia package 组织](architecture/demo-workspace-organization.md)
-8. [原生模组 ABI](architecture/native-module-abi.md)
-9. [套件驱动的 Bevy runtime](architecture/game-engine-runtime.md)
-10. [Package 设置与配置](architecture/settings-and-configuration.md)
-11. [诊断、检查与除错可视化](architecture/diagnostics-inspection-and-debug-visualization.md)
-12. [渲染 capability／pass／provider](architecture/rendering.md)
-13. [版本与相容性](architecture/versioning-and-compatibility.md)
-14. [World 目录、开始页与安全生命周期](architecture/world-lifecycle-and-start-ui.md)
-15. [世界持久化](architecture/world-persistence.md)
-16. [Terrenia 方块内容规划](planning/terrenia-block-catalog.md)
-17. [第一个可玩 demo 路线图](planning/roadmap-first-demo.md)
-18. [执行期整合路线](planning/roadmap-game-engine.md)
-19. [可组合世界生成](architecture/world-generation.md)
-20. [可组合洞穴生成](architecture/cave-generation.md)
-21. [实体、物理与表现](architecture/entity-physics-presentation.md)
-22. [资产语义](architecture/asset-semantics.md)
-23. [问题决议索引](planning/open-questions.md)
+1. [专案愿景与设计支柱](project/project-vision.md)
+2. [Package-first／Bevy-first 开发策略](project/development-strategy.md)
+3. [技术栈与边界](project/technology-stack.md)
+4. [套件内核](platform/package-kernel/package-management.md)
+5. [模组、注册清单与双实现](platform/composition/module-composition.md)
+6. [语义注册、内容判定与候选选择](platform/registration/semantic-registration.md)
+7. [Demo workspace 与 Terrenia package 组织](meta/repository-and-package-layout.md)
+8. [原生模组 ABI](platform/native-abi/native-module-abi.md)
+9. [套件驱动的 Bevy runtime](platform/runtime/game-engine-runtime.md)
+10. [Package 设置与配置](packages/latticeaxiom/settings/settings-and-configuration.md)
+11. [诊断、检查与除错可视化](platform/observability/diagnostics-inspection-and-debug-visualization.md)
+12. [渲染 capability／pass／provider](platform/rendering/rendering.md)
+13. [版本与相容性](platform/compatibility/versioning-and-compatibility.md)
+14. [World 目录、开始页与安全生命周期](packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)
+15. [世界持久化](platform/world-storage/world-persistence.md)
+16. [Terrenia 方块内容规划](packages/terrenia/blocks/catalog.md)
+17. [第一个可玩 demo 路线图](delivery/roadmaps/first-demo.md)
+18. [执行期整合路线](delivery/roadmaps/game-engine.md)
+19. [可组合世界生成](platform/world-generation/world-generation.md)
+20. [可组合洞穴生成](platform/world-generation/cave-generation.md)
+21. [实体、物理与表现](platform/runtime/entity-physics-presentation.md)
+22. [资产语义](platform/assets/asset-semantics.md)
+23. [问题决议索引](delivery/open-questions.md)
 
 ## 文件地图
 
 | 分类 | 用途 | 入口 |
 | --- | --- | --- |
-| 基础 | 愿景、策略、技术与共同词汇 | [愿景](foundations/project-vision.md)、[策略](foundations/development-strategy.md)、[技术栈](foundations/technology-stack.md)、[词汇表](foundations/glossary.md) |
-| Package／ABI | 游戏如何组合、锁定、生成与加载 | [套件内核](architecture/package-management.md)、[模组组合](architecture/module-composition.md)、[语义注册](architecture/semantic-registration.md)、[设置](architecture/settings-and-configuration.md)、[demo组织](architecture/demo-workspace-organization.md)、[原生 ABI](architecture/native-module-abi.md)、[版本相容](architecture/versioning-and-compatibility.md) |
-| Bevy runtime／前端 | package closure如何成为一个Bevy App并提供一致surface | [执行期](architecture/game-engine-runtime.md)、[诊断／检查／可视化](architecture/diagnostics-inspection-and-debug-visualization.md)、[渲染](architecture/rendering.md)、[开始页／world lifecycle](architecture/world-lifecycle-and-start-ui.md)、[实体／物理／表现](architecture/entity-physics-presentation.md)、[资产](architecture/asset-semantics.md) |
-| 世界 | Lattice Axiom的权威资料与生成差异层 | [持久化](architecture/world-persistence.md)、[world lifecycle](architecture/world-lifecycle-and-start-ui.md)、[世界生成](architecture/world-generation.md)、[洞穴](architecture/cave-generation.md)、[物理创作](architecture/physical-authoring.md) |
+| 基础 | 愿景、策略、技术与共同词汇 | [愿景](project/project-vision.md)、[策略](project/development-strategy.md)、[技术栈](project/technology-stack.md)、[词汇表](project/glossary.md) |
+| Package／ABI | 游戏如何组合、锁定、生成与加载 | [套件内核](platform/package-kernel/package-management.md)、[模组组合](platform/composition/module-composition.md)、[语义注册](platform/registration/semantic-registration.md)、[设置](packages/latticeaxiom/settings/settings-and-configuration.md)、[demo组织](meta/repository-and-package-layout.md)、[原生 ABI](platform/native-abi/native-module-abi.md)、[版本相容](platform/compatibility/versioning-and-compatibility.md) |
+| Bevy runtime／前端 | package closure如何成为一个Bevy App并提供一致surface | [执行期](platform/runtime/game-engine-runtime.md)、[诊断／检查／可视化](platform/observability/diagnostics-inspection-and-debug-visualization.md)、[渲染](platform/rendering/rendering.md)、[开始页／world lifecycle](packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)、[实体／物理／表现](platform/runtime/entity-physics-presentation.md)、[资产](platform/assets/asset-semantics.md) |
+| 世界 | Lattice Axiom的权威资料与生成差异层 | [持久化](platform/world-storage/world-persistence.md)、[world lifecycle](packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)、[世界生成](platform/world-generation/world-generation.md)、[洞穴](platform/world-generation/cave-generation.md)、[物理创作](platform/content/physical-authoring.md) |
 | 研究 | 外部证据、候选与失败模式，不自动成为承诺 | [信息／设置／存档UX](research/debug-settings-and-world-ux-lessons.md)、[引擎采用](research/open-source-game-engine-adoption.md)、[原生外挂机制／渲染模组](research/native-plugin-and-render-mod-lessons.md)、[Bevy生态](research/renderer-physics-landscape.md)、[Godot工具对照](research/godot-toolchain-comparison.md)、[Minecraft注册语义](research/minecraft-registration-semantics.md)、[Minecraft世界生成](research/minecraft-world-generation-lessons.md)、[现代地形／洞穴](research/modern-terrain-and-cave-generation.md) |
-| 规划 | 内容范围、依赖顺序、可玩验收、问题决议 | [Terrenia方块](planning/terrenia-block-catalog.md)、[第一个demo](planning/roadmap-first-demo.md)、[runtime路线](planning/roadmap-game-engine.md)、[问题决议](planning/open-questions.md) |
+| 规划 | 内容范围、依赖顺序、可玩验收、问题决议 | [Terrenia方块](packages/terrenia/blocks/catalog.md)、[第一个demo](delivery/roadmaps/first-demo.md)、[runtime路线](delivery/roadmaps/game-engine.md)、[问题决议](delivery/open-questions.md) |
 | 元文件 | 文档维护规则 | [组织方式](meta/documentation-organization.md) |
 
 ## Accepted Decisions

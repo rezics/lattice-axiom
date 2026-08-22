@@ -1,7 +1,9 @@
 ---
 title: 採用 Bevy 原生右手 Y-up 世界座標
-status: accepted
-type: decision
+document_id: decision.0015-bevy-native-y-up-world-coordinates
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -38,7 +40,7 @@ Bevy 的 3D 世界採右手座標：`+X` 向右、`+Y` 向上，慣用前方為 
 
 ## 相關文件
 
-- [資產語義](../architecture/asset-semantics.md)
-- [世界生成](../architecture/world-generation.md)
-- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
+- [資產語義](../platform/assets/asset-semantics.md)
+- [世界生成](../platform/world-generation/world-generation.md)
+- [Bevy 執行期架構](../platform/runtime/game-engine-runtime.md)
 - [Bevy glTF coordinate conversion API](https://docs.rs/bevy/latest/bevy/gltf/convert_coordinates/struct.GltfConvertCoordinates.html)

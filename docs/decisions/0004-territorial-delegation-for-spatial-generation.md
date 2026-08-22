@@ -1,7 +1,9 @@
 ---
 title: 空間生成採領地遞迴委派
-status: accepted
-type: decision
+document_id: decision.0004-territorial-delegation-for-spatial-generation
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-09
 ---
 

@@ -1,7 +1,9 @@
 ---
 title: 從第一個垂直切片交付套件內核與雙實現
-status: accepted
-type: decision
+document_id: decision.0018-package-kernel-from-first-vertical-slice
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -77,4 +79,4 @@ K0–K4 是最小架构闭环，不要求先建立 registry service。K5 防止 
 
 - [決策 0010：Nickel 驅動套件系統](0010-nickel-driven-package-system.md)
 - [決策 0017：版本化原生模組 ABI](0017-versioned-native-module-abi.md)
-- [第一個 demo 路線圖](../planning/roadmap-first-demo.md)
+- [第一個 demo 路線圖](../delivery/roadmaps/first-demo.md)

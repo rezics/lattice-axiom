@@ -1,7 +1,9 @@
 ---
 title: 冻结本地包取得、Nickel package import 与产品 lock
-status: accepted
-type: decision
+document_id: decision.0032-freeze-local-package-acquisition-imports-and-product-lock
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -309,6 +311,6 @@ namespace、trust与world activation边界。
 - [决策 0022：受控 Nickel 求值计量与 Worker 协议](0022-freeze-controlled-nickel-evaluation-metering-and-worker-protocol.md)
 - [决策 0027：权威世界与持久化契约](0027-freeze-authoritative-world-and-persistence-contract.md)
 - [决策 0030：治理、分发与安全触发条件](0030-freeze-governance-distribution-and-security-triggers.md)
-- [Package 内核与分发边界](../architecture/package-management.md)
-- [第一个可玩 Demo 路线图](../planning/roadmap-first-demo.md)
-- [执行期整合路线](../planning/roadmap-game-engine.md)
+- [Package 内核与分发边界](../platform/package-kernel/package-management.md)
+- [第一个可玩 Demo 路线图](../delivery/roadmaps/first-demo.md)
+- [执行期整合路线](../delivery/roadmaps/game-engine.md)

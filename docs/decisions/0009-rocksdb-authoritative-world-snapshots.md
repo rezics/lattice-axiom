@@ -1,7 +1,9 @@
 ---
 title: demo 以 RocksDB 保存權威世界快照
-status: accepted
-type: decision
+document_id: decision.0009-rocksdb-authoritative-world-snapshots
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 ---
 

@@ -1,7 +1,9 @@
 ---
 title: 凍結首版權威世界與持久化契約
-status: accepted
-type: decision
+document_id: decision.0027-freeze-authoritative-world-and-persistence-contract
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -555,9 +557,9 @@ checkpoint或改變相同 schema major 的bytes。
 - [決策 0023：首版 SDK、Registration 與語義編譯契約](0023-freeze-sdk-registration-and-semantic-compilation.md)
 - [決策 0026：第一個 Demo 性能預算](0026-freeze-first-demo-performance-budgets.md)
 - [決策 0028：世界生成、內容與資產契約](0028-freeze-worldgen-content-and-asset-contract.md)
-- [世界持久化](../architecture/world-persistence.md)
-- [World 目錄、開始頁與安全生命週期](../architecture/world-lifecycle-and-start-ui.md)
-- [套件、ABI、Bevy 與持久化相容性](../architecture/versioning-and-compatibility.md)
-- [執行期路線圖](../planning/roadmap-game-engine.md)
-- [第一個可玩 demo 路線圖](../planning/roadmap-first-demo.md)
-- [待決問題](../planning/open-questions.md)
+- [世界持久化](../platform/world-storage/world-persistence.md)
+- [World 目錄、開始頁與安全生命週期](../packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)
+- [套件、ABI、Bevy 與持久化相容性](../platform/compatibility/versioning-and-compatibility.md)
+- [執行期路線圖](../delivery/roadmaps/game-engine.md)
+- [第一個可玩 demo 路線圖](../delivery/roadmaps/first-demo.md)
+- [待決問題](../delivery/open-questions.md)

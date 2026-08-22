@@ -1,7 +1,9 @@
 ---
 title: 冻结 Bevy 升级、依赖与供应链政策
-status: accepted
-type: decision
+document_id: decision.0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -286,9 +288,9 @@ input schema、license/source trust boundary 或 SBOM contract 需要新的决�
 - [决策 0021：冻结 R0／R1 package contract](0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md)
 - [决策 0026：冻结 first-demo performance budgets](0026-freeze-first-demo-performance-budgets.md)
 - [决策 0030：冻结治理、分发与安全 triggers](0030-freeze-governance-distribution-and-security-triggers.md)
-- [版本与相容性](../architecture/versioning-and-compatibility.md)
-- [原生模组 ABI](../architecture/native-module-abi.md)
-- [技术栈](../foundations/technology-stack.md)
-- [开发策略](../foundations/development-strategy.md)
-- [执行期路线图](../planning/roadmap-game-engine.md)
-- [第一个可玩 demo](../planning/roadmap-first-demo.md)
+- [版本与相容性](../platform/compatibility/versioning-and-compatibility.md)
+- [原生模组 ABI](../platform/native-abi/native-module-abi.md)
+- [技术栈](../project/technology-stack.md)
+- [开发策略](../project/development-strategy.md)
+- [执行期路线图](../delivery/roadmaps/game-engine.md)
+- [第一个可玩 demo](../delivery/roadmaps/first-demo.md)

@@ -1,7 +1,9 @@
 ---
 title: 採用領地優先、群系驅動、約束求解的世界生成
-status: accepted
-type: decision
+document_id: decision.0001-territory-first-biome-driven-world-generation
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 amended_by:
   - 0003-no-global-version-switch.md
@@ -40,7 +42,7 @@ Lattice Axiom 的世界生成採用以下方向：
 - 洞穴是群系內部能力、獨立生成層，或共享拓撲加群系形態的混合形式；此項後由[決策 0002](0002-hybrid-cave-generation-composition.md)確定為混合形式。
 - 河流、侵蝕、地質與文明模擬採用何種具體演算法。
 
-以上內容由[可組合世界生成架構](../architecture/world-generation.md)繼續細化；[決策 0003](0003-no-global-version-switch.md)修正版本與閉包粒度，[決策 0004](0004-territorial-delegation-for-spatial-generation.md)修正地形和洞穴的領地委派，洞穴責任分界另見[可組合洞穴生成架構](../architecture/cave-generation.md)。
+以上內容由[可組合世界生成架構](../platform/world-generation/world-generation.md)繼續細化；[決策 0003](0003-no-global-version-switch.md)修正版本與閉包粒度，[決策 0004](0004-territorial-delegation-for-spatial-generation.md)修正地形和洞穴的領地委派，洞穴責任分界另見[可組合洞穴生成架構](../platform/world-generation/cave-generation.md)。
 
 ## 考慮過的選項
 

@@ -1,7 +1,9 @@
 ---
 title: 原生動態模組採版本化 C ABI 與 capability table
-status: accepted
-type: decision
+document_id: decision.0017-versioned-native-module-abi
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -176,5 +178,5 @@ ABI 只能在以下证据齐全后从 `0.x` 冻结为 `1.0`：
 ## 相關文件
 
 - [決策 0008：靜態與動態共用一圖](0008-static-and-dynamic-realizations-share-one-graph.md)
-- [原生模組 ABI 架構](../architecture/native-module-abi.md)
-- [版本與相容性](../architecture/versioning-and-compatibility.md)
+- [原生模組 ABI 架構](../platform/native-abi/native-module-abi.md)
+- [版本與相容性](../platform/compatibility/versioning-and-compatibility.md)

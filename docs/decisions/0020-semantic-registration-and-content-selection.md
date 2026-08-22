@@ -1,7 +1,9 @@
 ---
 title: 分離精確註冊身分、內容語義與候選選擇
-status: accepted
-type: decision
+document_id: decision.0020-semantic-registration-and-content-selection
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -174,9 +176,9 @@ Terrenia 是第一个内容 consumer，不是 host 或标准库。让它拥有�
 
 ## 相關文件
 
-- [語義註冊、內容判定與選擇架構](../architecture/semantic-registration.md)
-- [套件內核](../architecture/package-management.md)
-- [模組與註冊清單](../architecture/module-composition.md)
+- [語義註冊、內容判定與選擇架構](../platform/registration/semantic-registration.md)
+- [套件內核](../platform/package-kernel/package-management.md)
+- [模組與註冊清單](../platform/composition/module-composition.md)
 - [Minecraft 註冊與語義相容性調查](../research/minecraft-registration-semantics.md)
 - [決策 0010：Nickel 驅動套件系統](0010-nickel-driven-package-system.md)
 - [決策 0019：Package 與 registration identity 分離](0019-separate-package-and-registration-identities.md)

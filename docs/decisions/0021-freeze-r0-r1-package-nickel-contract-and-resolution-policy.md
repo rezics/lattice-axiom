@@ -1,7 +1,9 @@
 ---
 title: 凍結 R0／R1 Package、Nickel 契約與解析政策
-status: accepted
-type: decision
+document_id: decision.0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 amended_by:
   - 0032-freeze-local-package-acquisition-imports-and-product-lock.md
@@ -303,6 +305,6 @@ Cargo的left-most-nonzero规则是Cargo依赖体验，不是SemVer 2.0本身。L
 
 - [決策 0010：Nickel 驅動套件系統](0010-nickel-driven-package-system.md)
 - [決策 0018：首個垂直切片交付套件內核](0018-package-kernel-from-first-vertical-slice.md)
-- [套件內核](../architecture/package-management.md)
-- [執行期整合路線](../planning/roadmap-game-engine.md)
-- [待決問題](../planning/open-questions.md)
+- [套件內核](../platform/package-kernel/package-management.md)
+- [執行期整合路線](../delivery/roadmaps/game-engine.md)
+- [待決問題](../delivery/open-questions.md)

@@ -1,7 +1,9 @@
 ---
 title: 靜態與動態實現收斂於同一套件圖
-status: accepted
-type: decision
+document_id: decision.0008-static-and-dynamic-realizations-share-one-graph
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -99,4 +101,4 @@ Rust layout、trait object、panic、allocator 与 Bevy内部 API 都不是稳�
 
 - [決策 0010：Nickel 驅動套件系統](0010-nickel-driven-package-system.md)
 - [決策 0017：版本化原生模組 ABI](0017-versioned-native-module-abi.md)
-- [模組組合](../architecture/module-composition.md)
+- [模組組合](../platform/composition/module-composition.md)

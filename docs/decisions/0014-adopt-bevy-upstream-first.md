@@ -1,7 +1,9 @@
 ---
 title: 採用 Bevy 並以上游能力為預設
-status: accepted
-type: decision
+document_id: decision.0014-adopt-bevy-upstream-first
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -58,10 +60,10 @@ Lattice Axiom 曾規劃自行建立生命週期、ECS 門面、排程器、輸�
 ## 相關文件
 
 - [開源遊戲引擎提供什麼，以及如何接入 Bevy](../research/open-source-game-engine-adoption.md)
-- [Bevy 執行期架構](../architecture/game-engine-runtime.md)
+- [Bevy 執行期架構](../platform/runtime/game-engine-runtime.md)
 - [決策 0010：Nickel 驅動套件系統](0010-nickel-driven-package-system.md)
 - [決策 0017：版本化原生模組 ABI](0017-versioned-native-module-abi.md)
 - [決策 0018：首階段交付套件內核](0018-package-kernel-from-first-vertical-slice.md)
-- [開發策略](../foundations/development-strategy.md)
-- [技術棧](../foundations/technology-stack.md)
-- [Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
+- [開發策略](../project/development-strategy.md)
+- [技術棧](../project/technology-stack.md)
+- [Bevy 執行期整合路線](../delivery/roadmaps/game-engine.md)

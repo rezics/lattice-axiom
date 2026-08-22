@@ -1,7 +1,9 @@
 ---
 title: 分離 package 名稱與統一註冊識別，並以 Terrenia 作為第一維度
-status: accepted
-type: decision
+document_id: decision.0019-separate-package-and-registration-identities
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-19
 supersedes:
   - 0012
@@ -119,9 +121,9 @@ Terrenia 是第一个维度及其 package closure，不是 Lattice Axiom 的替�
 
 ## 相關文件
 
-- [Demo workspace 与 Terrenia package 组织](../architecture/demo-workspace-organization.md)
-- [套件内核](../architecture/package-management.md)
-- [模组与注册组合](../architecture/module-composition.md)
+- [Demo workspace 与 Terrenia package 组织](../meta/repository-and-package-layout.md)
+- [套件内核](../platform/package-kernel/package-management.md)
+- [模组与注册组合](../platform/composition/module-composition.md)
 - [决策 0020：语义注册与内容选择](0020-semantic-registration-and-content-selection.md)
-- [语义注册架构](../architecture/semantic-registration.md)
+- [语义注册架构](../platform/registration/semantic-registration.md)
 - [决策 0012：旧命名约定](0012-latticeaxiom-naming-convention.md)

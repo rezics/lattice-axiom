@@ -1,7 +1,9 @@
 ---
 title: 冻结 Portable Native ABI 0.x 的线协议、执行政策与证据门禁
-status: accepted
-type: decision
+document_id: decision.0024-freeze-portable-native-abi-0x
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -553,8 +555,8 @@ soft deadline或终止process；需要可抢占隔离时使用未来process／Wa
 - [决策 0008：静态与动态共用一图](0008-static-and-dynamic-realizations-share-one-graph.md)
 - [决策 0017：版本化原生模组 ABI](0017-versioned-native-module-abi.md)
 - [决策 0018：从第一个垂直切片交付套件内核与双实现](0018-package-kernel-from-first-vertical-slice.md)
-- [原生模组 ABI 架构](../architecture/native-module-abi.md)
-- [模组组合](../architecture/module-composition.md)
-- [版本与相容性](../architecture/versioning-and-compatibility.md)
-- [执行期路线图](../planning/roadmap-game-engine.md)
-- [第一个可玩 demo](../planning/roadmap-first-demo.md)
+- [原生模组 ABI 架构](../platform/native-abi/native-module-abi.md)
+- [模组组合](../platform/composition/module-composition.md)
+- [版本与相容性](../platform/compatibility/versioning-and-compatibility.md)
+- [执行期路线图](../delivery/roadmaps/game-engine.md)
+- [第一个可玩 demo](../delivery/roadmaps/first-demo.md)

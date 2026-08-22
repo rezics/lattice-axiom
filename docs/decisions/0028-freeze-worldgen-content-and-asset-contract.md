@@ -1,7 +1,9 @@
 ---
 title: 凍結第一版世界生成、內容與資產契約
-status: accepted
-type: decision
+document_id: decision.0028-freeze-worldgen-content-and-asset-contract
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -305,7 +307,7 @@ mining rule / drop table / tool predicate / placement item / recipe references
 semantic contributions / Role offers / worldgen Predicate and Role references
 ```
 
-matrix 必須精確等於 [Terrenia 方塊內容規劃](../planning/terrenia-block-catalog.md)的 72 個 ID，
+matrix 必須精確等於 [Terrenia 方塊內容規劃](../packages/terrenia/blocks/catalog.md)的 72 個 ID，
 並同時驗證兩個 fluid definitions 與相鄰 item／drop／tool／recipe references。D8 evidence 把完整
 authoring 與 gameplay schema 壓力提前；它不表示 D8 已把 72 個 block 全部註冊到 shipped profile。
 D9 才要求 active manifest 精確得到 72 blocks + 2 fluids 並通過完整玩法／持久化門禁。
@@ -666,12 +668,12 @@ meaning必須進typed sidecar／package schema。
 
 ## 相關文件
 
-- [可組合世界生成架構](../architecture/world-generation.md)
-- [可組合洞穴生成架構](../architecture/cave-generation.md)
-- [世界持久化與 RocksDB World Store](../architecture/world-persistence.md)
-- [語義註冊、內容判定與候選選擇](../architecture/semantic-registration.md)
-- [Bevy 資產管線與模型語義](../architecture/asset-semantics.md)
-- [Demo workspace 與 Terrenia 維度套件組織](../architecture/demo-workspace-organization.md)
-- [Terrenia 方塊內容規劃](../planning/terrenia-block-catalog.md)
-- [第一個可玩 demo 路線圖](../planning/roadmap-first-demo.md)
-- [套件驅動的 Bevy 執行期整合路線](../planning/roadmap-game-engine.md)
+- [可組合世界生成架構](../platform/world-generation/world-generation.md)
+- [可組合洞穴生成架構](../platform/world-generation/cave-generation.md)
+- [世界持久化與 RocksDB World Store](../platform/world-storage/world-persistence.md)
+- [語義註冊、內容判定與候選選擇](../platform/registration/semantic-registration.md)
+- [Bevy 資產管線與模型語義](../platform/assets/asset-semantics.md)
+- [Demo workspace 與 Terrenia 維度套件組織](../meta/repository-and-package-layout.md)
+- [Terrenia 方塊內容規劃](../packages/terrenia/blocks/catalog.md)
+- [第一個可玩 demo 路線圖](../delivery/roadmaps/first-demo.md)
+- [套件驅動的 Bevy 執行期整合路線](../delivery/roadmaps/game-engine.md)

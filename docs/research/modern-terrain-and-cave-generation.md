@@ -1,7 +1,9 @@
 ---
 title: 現代地形與洞穴生成的演算法和硬體邊界
-status: exploration
-type: research
+document_id: research.modern-terrain-and-cave-generation
+document_status: exploration
+document_type: research
+tracks_implementation: false
 updated: 2026-08-09
 ---
 
@@ -109,8 +111,8 @@ updated: 2026-08-09
 
 ## 相關文件
 
-- [可組合世界生成架構](../architecture/world-generation.md)
-- [可組合洞穴生成架構](../architecture/cave-generation.md)
+- [可組合世界生成架構](../platform/world-generation/world-generation.md)
+- [可組合洞穴生成架構](../platform/world-generation/cave-generation.md)
 - [空間生成採領地遞迴委派](../decisions/0004-territorial-delegation-for-spatial-generation.md)
 - [Minecraft 世界生成與洞穴模組的設計教訓](minecraft-world-generation-lessons.md)
-- [待決問題](../planning/open-questions.md)
+- [待決問題](../delivery/open-questions.md)

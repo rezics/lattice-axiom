@@ -1,7 +1,9 @@
 ---
 title: 凍結 Client Shell、設定、可觀測性與玩家契約
-status: accepted
-type: decision
+document_id: decision.0025-freeze-client-shell-settings-observability-and-player-contracts
+document_status: accepted
+document_type: decision
+tracks_implementation: false
 updated: 2026-08-20
 ---
 
@@ -564,9 +566,9 @@ primitive表達的真實consumer、generic fallback及新的versioned capability
 - [Bevy 原生 Y-up 世界座標](0015-bevy-native-y-up-world-coordinates.md)
 - [版本化 Native Module ABI](0017-versioned-native-module-abi.md)
 - [凍結 R0／R1 Package、Nickel 契約與解析政策](0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md)
-- [Package 可注入的設定與配置架構](../architecture/settings-and-configuration.md)
-- [Package 可組合的診斷、檢查與除錯可視化](../architecture/diagnostics-inspection-and-debug-visualization.md)
-- [World 目錄、開始頁與安全生命週期](../architecture/world-lifecycle-and-start-ui.md)
-- [Entity、物理與表現](../architecture/entity-physics-presentation.md)
-- [第一個完整 Demo 路線圖](../planning/roadmap-first-demo.md)
-- [執行期路線圖](../planning/roadmap-game-engine.md)
+- [Package 可注入的設定與配置架構](../packages/latticeaxiom/settings/settings-and-configuration.md)
+- [Package 可組合的診斷、檢查與除錯可視化](../platform/observability/diagnostics-inspection-and-debug-visualization.md)
+- [World 目錄、開始頁與安全生命週期](../packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)
+- [Entity、物理與表現](../platform/runtime/entity-physics-presentation.md)
+- [第一個完整 Demo 路線圖](../delivery/roadmaps/first-demo.md)
+- [執行期路線圖](../delivery/roadmaps/game-engine.md)

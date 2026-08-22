@@ -1,7 +1,9 @@
 ---
 title: 體素遊戲的資訊、設定與存檔 UX 教訓
-status: exploration
-type: research
+document_id: research.debug-settings-and-world-ux-lessons
+document_status: exploration
+document_type: research
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -232,7 +234,7 @@ configuration；它也不建议把长按作为唯一的破坏性确认方式。
 
 ## 相關文件
 
-- [Package 設定與配置](../architecture/settings-and-configuration.md)
-- [診斷、檢查與除錯可視化](../architecture/diagnostics-inspection-and-debug-visualization.md)
-- [World 目錄、開始頁與安全生命週期](../architecture/world-lifecycle-and-start-ui.md)
-- [第一個可玩 demo 路線圖](../planning/roadmap-first-demo.md)
+- [Package 設定與配置](../packages/latticeaxiom/settings/settings-and-configuration.md)
+- [診斷、檢查與除錯可視化](../platform/observability/diagnostics-inspection-and-debug-visualization.md)
+- [World 目錄、開始頁與安全生命週期](../packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)
+- [第一個可玩 demo 路線圖](../delivery/roadmaps/first-demo.md)

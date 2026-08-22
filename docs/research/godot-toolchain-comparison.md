@@ -1,7 +1,9 @@
 ---
 title: Godot 作為作者工具鏈對照組
-status: exploration
-type: research
+document_id: research.godot-toolchain-comparison
+document_status: exploration
+document_type: research
+tracks_implementation: false
 updated: 2026-08-19
 ---
 
@@ -119,7 +121,7 @@ Godot 不輸出 Bevy `Entity`／`Handle`，也不把 `.tscn`／`.tres` 直接變
 
 ## 相關文件
 
-- [資產語義](../architecture/asset-semantics.md)
-- [技術棧](../foundations/technology-stack.md)
-- [開發策略](../foundations/development-strategy.md)
-- [待決問題](../planning/open-questions.md)
+- [資產語義](../platform/assets/asset-semantics.md)
+- [技術棧](../project/technology-stack.md)
+- [開發策略](../project/development-strategy.md)
+- [待決問題](../delivery/open-questions.md)
