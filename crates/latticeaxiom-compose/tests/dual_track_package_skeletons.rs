@@ -15,12 +15,10 @@ fn workspace_file(relative: &str) -> PathBuf {
 
 fn read_json(relative: &str) -> Value {
     let path = workspace_file(relative);
-    let bytes = fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("{} must exist: {error}", path.display())
-    });
-    serde_json::from_str(&bytes).unwrap_or_else(|error| {
-        panic!("{} must be JSON: {error}", path.display())
-    })
+    let bytes = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{} must exist: {error}", path.display()));
+    serde_json::from_str(&bytes)
+        .unwrap_or_else(|error| panic!("{} must be JSON: {error}", path.display()))
 }
 
 #[test]
@@ -46,10 +44,7 @@ fn metallurgy_lists_copper_alloys_as_stable_ids() {
 #[test]
 fn thaumaturgy_mana_is_not_voltage() {
     let value = read_json("packages/terrenia/thaumaturgy/data/mana-v1.json");
-    assert_eq!(
-        value["mana_property"].as_str(),
-        Some("terrenia:state/mana")
-    );
+    assert_eq!(value["mana_property"].as_str(), Some("terrenia:state/mana"));
     assert_eq!(
         value["not_voltage_property"].as_str(),
         Some("terrenia:state/voltage")

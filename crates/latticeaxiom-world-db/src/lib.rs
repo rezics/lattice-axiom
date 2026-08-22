@@ -1,13 +1,19 @@
-//! Fail-closed D3 world-persistence boundary and volatile reference.
+//! Fail-closed D3 world-persistence boundary, volatile reference, and durable
+//! recovery oracle.
 //!
-//! [`DeterministicWorldStorage`] proves only deterministic in-process atomic
-//! transitions. It reports [`StorageDurabilityCapabilityV1::VolatileReference`]
-//! and rejects durable, flush, and physical-checkpoint operations. Writer
-//! activation is authorized only when [`WriterActivationV1`] carries a sealed
-//! catalog receipt that matches the storage permit; missing, stale, or
-//! mismatched receipts fail closed. The storage permit alone is not authority.
-//! No filesystem, WAL, restart, or storage-media durability is claimed.
+//! [`DeterministicWorldStorage::new`] reports
+//! [`StorageDurabilityCapabilityV1::VolatileReference`] and rejects durable,
+//! flush, physical-checkpoint, and canonical-reopen operations.
+//! [`DeterministicWorldStorage::durable`] reports
+//! [`StorageDurabilityCapabilityV1::WalSyncCheckpoint`] and proves sealed
+//! writer activation, materialized-chunk reads, WAL/sync frontiers, independent
+//! checkpoints, lease exclusivity, low-disk admission, read-only recovery, and
+//! canonical reopen of the last durable image. Writer activation is authorized
+//! only when [`WriterActivationV1`] carries a sealed catalog receipt that
+//! matches the storage permit, including plan generation. The storage permit
+//! alone is not authority.
 mod contract;
+mod durable;
 mod error;
 mod header;
 mod keyspace;
@@ -26,6 +32,9 @@ pub use keyspace::{
 };
 pub use latticeaxiom_world_catalog::{DisplayName, StoreId};
 pub use memory::{DatabaseFaultPointV1, DeterministicWorldStorage, FakeKeyspaceStatsV1};
+#[cfg(test)]
+mod property_tests;
+
 pub use model::{
     ActivationPermitV1, AuthoritativeMetadataInputV1, CheckpointId, CheckpointKindV1,
     CheckpointOutcomeV1, CheckpointReceiptV1, CheckpointRequestV1, ChunkCommitReceiptV1,

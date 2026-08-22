@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::{
     AuthoritativeMetadataV1, CheckpointId, DiskAdmission, HeaderCodecError, LiveWorldLocation,
     MAX_WORLD_HEADER_BYTES, MigrationPlan, ReadOnlyWorldSource, SourceReadError, StorageOperation,
-    StoragePressureState, StoreId, WorldHeaderV1,
+    StoragePressureState, StoreId, WorldHeaderV1, WriterLeaseState,
 };
 
 /// Normative metadata-only world-open status from ADR 0027 `WORLD-13`.
@@ -335,6 +335,8 @@ pub enum WorldOpenAction {
         /// Pure-data migration plan; no code has executed yet.
         plan: MigrationPlan,
     },
+    /// Clear a crash-abandoned exclusive writer lease without opening a writer.
+    RecoverStaleLease,
 }
 
 /// Stable diagnostic code carried by structured plan diagnostics.
@@ -361,6 +363,10 @@ pub enum DiagnosticCode {
     AuthoritativeDataBlocked,
     /// Storage pressure restricts or pauses operations.
     LowDisk,
+    /// A live process still holds the exclusive writer lease.
+    WriterLeaseHeld,
+    /// A crash left an exclusive writer lease with no live writer.
+    StaleWriterLease,
 }
 
 /// Typed diagnostic payload retained alongside the next safe step.
@@ -417,6 +423,10 @@ pub enum WorldDiagnostic {
         /// Mutation-pause threshold used for this plan.
         mutation_paused_below: u64,
     },
+    /// Another process still holds the exclusive writer.
+    WriterLeaseHeld,
+    /// A crash or abandoned process left an exclusive writer lease.
+    StaleWriterLease,
 }
 
 impl WorldDiagnostic {
@@ -434,6 +444,8 @@ impl WorldDiagnostic {
             Self::AuthoritativeDataReadOnly { .. } => DiagnosticCode::AuthoritativeDataReadOnly,
             Self::AuthoritativeDataBlocked { .. } => DiagnosticCode::AuthoritativeDataBlocked,
             Self::LowDisk { .. } => DiagnosticCode::LowDisk,
+            Self::WriterLeaseHeld => DiagnosticCode::WriterLeaseHeld,
+            Self::StaleWriterLease => DiagnosticCode::StaleWriterLease,
         }
     }
 }
@@ -448,6 +460,9 @@ pub struct PreflightContext {
     pub disk: DiskAdmission,
     /// Whether another live catalog location has the same UUID.
     pub duplicate_live_world_id: bool,
+    /// Exclusive writer lease observed without opening a writer.
+    #[serde(default)]
+    pub lease: WriterLeaseState,
 }
 
 /// Bound catalog evidence used to mint a sealed writer-activation receipt.
@@ -749,27 +764,19 @@ impl WorldPreflight {
                 durable_frontier: projection.durable_frontier,
             });
         }
+        match context.lease {
+            WriterLeaseState::Held => diagnostics.push(WorldDiagnostic::WriterLeaseHeld),
+            WriterLeaseState::Stale => diagnostics.push(WorldDiagnostic::StaleWriterLease),
+            WriterLeaseState::Absent => {}
+        }
         if !diagnostics.is_empty() {
-            let restore = projection
-                .checkpoints
-                .latest
-                .clone()
-                .map(|checkpoint| WorldOpenAction::RestoreCheckpoint { checkpoint });
-            let next_safe_step = restore.clone().or(Some(WorldOpenAction::OpenReadOnly));
-            let mut actions = vec![WorldOpenAction::OpenReadOnly, WorldOpenAction::Export];
-            if let Some(action) = restore {
-                actions.insert(0, action);
-            }
-            return WorldOpenPlan {
+            return crash_or_lease_plan(
                 world_id,
-                status: WorldOpenStatus::RecoverableReadOnly,
-                risk: WorldOpenRisk::Elevated,
                 reconciliation,
-                next_safe_step,
-                actions,
+                projection.checkpoints.latest.clone(),
                 diagnostics,
-                activation_binding: None,
-            };
+                context.lease,
+            );
         }
 
         if !context.disk.allows(StorageOperation::AuthoritativeMutation) {
@@ -896,6 +903,36 @@ impl WorldPreflight {
                 activation_binding: None,
             },
         }
+    }
+}
+
+fn crash_or_lease_plan(
+    world_id: WorldId,
+    reconciliation: ReconciliationState,
+    latest_checkpoint: Option<CheckpointId>,
+    diagnostics: Vec<WorldDiagnostic>,
+    lease: WriterLeaseState,
+) -> WorldOpenPlan {
+    let restore =
+        latest_checkpoint.map(|checkpoint| WorldOpenAction::RestoreCheckpoint { checkpoint });
+    let mut actions = Vec::new();
+    if lease == WriterLeaseState::Stale {
+        actions.push(WorldOpenAction::RecoverStaleLease);
+    }
+    if let Some(action) = restore {
+        actions.push(action);
+    }
+    actions.push(WorldOpenAction::OpenReadOnly);
+    actions.push(WorldOpenAction::Export);
+    WorldOpenPlan {
+        world_id,
+        status: WorldOpenStatus::RecoverableReadOnly,
+        risk: WorldOpenRisk::Elevated,
+        reconciliation,
+        next_safe_step: actions.first().cloned(),
+        actions,
+        diagnostics,
+        activation_binding: None,
     }
 }
 
@@ -1043,6 +1080,7 @@ mod tests {
             compatibility: CompatibilityAssessment::Exact,
             disk: normal_disk(),
             duplicate_live_world_id: false,
+            lease: WriterLeaseState::Absent,
         };
 
         let plan = WorldPreflight::evaluate(&mut source, location, context);
@@ -1120,6 +1158,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stale_or_held_lease_is_not_ready_exact_and_does_not_mint_activation() {
+        let (mut source, location, mut context) = fixture(CompatibilityAssessment::Exact);
+        context.lease = WriterLeaseState::Stale;
+        let stale = WorldPreflight::evaluate(&mut source, location, context.clone());
+        assert_eq!(stale.status, WorldOpenStatus::RecoverableReadOnly);
+        assert_eq!(
+            stale.next_safe_step,
+            Some(WorldOpenAction::RecoverStaleLease)
+        );
+        assert!(stale.activation_binding.is_none());
+        assert!(
+            !stale
+                .accept(WorldOpenAction::RecoverStaleLease)
+                .unwrap_or_else(|error| panic!("{error}"))
+                .writable()
+        );
+
+        context.lease = WriterLeaseState::Held;
+        let held = WorldPreflight::evaluate(&mut source, location, context);
+        assert_eq!(held.status, WorldOpenStatus::RecoverableReadOnly);
+        assert!(!held.actions.contains(&WorldOpenAction::RecoverStaleLease));
+        assert_eq!(
+            held.next_safe_step,
+            Some(WorldOpenAction::RestoreCheckpoint {
+                checkpoint: CheckpointId::new("checkpoint-1")
+                    .unwrap_or_else(|error| panic!("{error}")),
+            })
+        );
+        assert!(held.activation_binding.is_none());
+    }
+
     fn fixture(
         compatibility: CompatibilityAssessment,
     ) -> (MemoryWorldSource, LiveWorldLocation, PreflightContext) {
@@ -1146,6 +1216,7 @@ mod tests {
                 compatibility,
                 disk: normal_disk(),
                 duplicate_live_world_id: false,
+                lease: WriterLeaseState::Absent,
             },
         )
     }

@@ -27,7 +27,7 @@ mod mesher;
 mod source;
 mod volume;
 
-pub use geometry::{Aabb, Face, MeshBuffer, MeshGroup, Quad};
+pub use geometry::{Aabb, Face, LayerMergeKey, MeshAlphaMode, MeshBuffer, MeshGroup, Quad};
 pub use mesher::{
     ChunkMesh, GreedyMesher, MeshError, greedy_quads, visible_faces, visible_faces_into,
 };

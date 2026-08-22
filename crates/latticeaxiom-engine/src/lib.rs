@@ -12,9 +12,10 @@
 //!
 //! The production playable spine lives in [`host`]. It starts from
 //! [`LockVerifiedComposeImages`], stores voxels through
-//! [`latticeaxiom_storage::MemoryTransactionKernel`], streams a bounded chunk
-//! working set around the local player, and presents chunk meshes rather than
-//! one entity per block. The default client binary boots that host from a
+//! [`latticeaxiom_storage::MemoryTransactionKernel`] as the session cache,
+//! streams a bounded chunk working set around the local player, and presents
+//! chunk meshes rather than one entity per block. Durable Save & Quit is
+//! sealed-receipt gated. The default client binary boots that host from a
 //! reopened lock. The `playable` module remains a non-production fixture
 //! reachable only through the `latticeaxiom-playable-fixture` extra binary.
 
@@ -38,15 +39,17 @@ pub use client::{
     run_client_host_from_lock, run_client_host_from_workspace,
 };
 pub use host::{
-    CaveOccupancyArbitrationV1, CellOccupancyV1, ChunkFaceV1, ChunkLifecycle, ChunkMeshCursor,
-    ChunkPresentation, ContentDisplayCatalogV1, ContentDisplayLabelV1, HOTBAR_SLOTS,
-    INVENTORY_SLOTS, ProductionHostError, ProductionHostPlugin, ProductionInspectSurface,
-    ProductionInventoryView, ProductionMemoryStart, ProductionMemoryStartError,
-    ProductionPlayerPose, ProductionSessionPause, ProductionSpine, ProductionSurfaceRouter,
-    ProductionWorldList, ProductionWorldStorage, RequiredCaveEntranceV1, SealedWorldWriterHost,
-    SealedWriterHostError, WorkingSetDiagnosticsV1, authored_content_catalog,
-    authored_content_display_catalog, authored_gameplay_catalog, empty_gameplay_catalog,
-    sealed_activation_binding,
+    ADR_0026_ACTIVE_COVERAGE_M, ADR_0026_CHUNK_EDGE_VOXELS, ADR_0026_RESIDENT_COVERAGE_M,
+    CaveOccupancyArbitrationV1, CellOccupancyV1, ChildResultV1, ChunkFaceV1, ChunkLifecycle,
+    ChunkMeshCursor, ChunkPresentation, ContentDisplayCatalogV1, ContentDisplayLabelV1,
+    DerivedQueueSnapshotV1, HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionHostError,
+    ProductionHostPlugin, ProductionInspectSurface, ProductionInventoryView, ProductionMemoryStart,
+    ProductionMemoryStartError, ProductionPlayerPose, ProductionSessionPause, ProductionSpine,
+    ProductionSurfaceRouter, ProductionWorldList, ProductionWorldStorage, RequiredCaveEntranceV1,
+    STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost, SealedWriterHostError,
+    StreamingProfileCountsV1, StreamingProfileEvidenceV1, WorkingSetDiagnosticsV1,
+    authored_content_catalog, authored_content_display_catalog, authored_gameplay_catalog,
+    coverage_m, empty_gameplay_catalog, radius_for_coverage, sealed_activation_binding,
 };
 pub use input::{HostInputError, compile_lock_selected_input, graph_selects_input_actions};
 pub use instance::{

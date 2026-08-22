@@ -17,8 +17,9 @@ use latticeaxiom_world_catalog::{
     CatalogCardState, CatalogDiagnosticCode, CatalogEntry, CatalogEntryFailure, CatalogEntryState,
     CatalogProjection, DiagnosticCode, DisplayName, LiveWorldLocation, ManagedTrashLocation,
     PackagePreparation, ReconciliationState, RestoreMode, RestorePlanningOutcome,
-    StoragePressureState, TrashEntryId, TrashRetentionPolicy, TrashTombstone, WorldDiagnostic,
-    WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus, WorldRootId, WriterBarrier,
+    SealedActivationBindingV1, StoragePressureState, StoreId, TrashEntryId, TrashRetentionPolicy,
+    TrashTombstone, WorldDiagnostic, WorldOpenAction, WorldOpenPlan, WorldOpenRisk,
+    WorldOpenStatus, WorldRootId, WriterBarrier, WriterLeaseState,
 };
 use serde_json::json;
 
@@ -69,7 +70,15 @@ fn plan(id: WorldId, status: WorldOpenStatus) -> WorldOpenPlan {
         next_safe_step: actions.first().cloned(),
         actions,
         diagnostics: Vec::new(),
-        activation_binding: None,
+        activation_binding: (status == WorldOpenStatus::ReadyExact).then(|| {
+            SealedActivationBindingV1 {
+                store_id: StoreId::new("store-1").unwrap_or_else(|error| panic!("{error}")),
+                metadata_epoch: 1,
+                metadata_hash: CanonicalHash::digest(b"metadata"),
+                projection_hash: CanonicalHash::digest(b"projection"),
+                plan_generation: 1,
+            }
+        }),
     }
 }
 
@@ -818,4 +827,71 @@ fn world_library_create_continue_prepares_launch_without_a_writer() {
             .map(LoadingState::cancel_disposition),
         Some(LoadingCancelDisposition::CancelBeforeWriter)
     );
+}
+
+#[test]
+fn crash_lease_and_low_disk_cues_are_actionable_and_block_continue() {
+    let id = world("123e4567-e89b-42d3-a456-426614174000");
+    let mut crash = projected_record(id, "Crash", 20, WorldOpenStatus::RecoverableReadOnly);
+    crash.open_plan = Some(WorldOpenPlan {
+        diagnostics: vec![
+            WorldDiagnostic::UncleanShutdown,
+            WorldDiagnostic::StaleWriterLease,
+            WorldDiagnostic::LowDisk {
+                state: StoragePressureState::MutationPaused,
+                usable_free_bytes: 1,
+                mutation_paused_below: 2,
+            },
+        ],
+        actions: vec![
+            WorldOpenAction::RecoverStaleLease,
+            WorldOpenAction::OpenReadOnly,
+            WorldOpenAction::Export,
+        ],
+        next_safe_step: Some(WorldOpenAction::RecoverStaleLease),
+        ..plan(id, WorldOpenStatus::RecoverableReadOnly)
+    });
+    let cues = crash.recovery_cues();
+    assert!(
+        cues.iter()
+            .any(|cue| cue.code == DiagnosticCode::UncleanShutdown)
+    );
+    assert!(
+        cues.iter()
+            .any(|cue| cue.code == DiagnosticCode::StaleWriterLease)
+    );
+    assert!(cues.iter().any(|cue| cue.code == DiagnosticCode::LowDisk));
+    assert!(
+        cues.iter()
+            .all(|cue| !cue.description.contains("cannot open"))
+    );
+
+    let list = WorldListModel::new(vec![crash.clone()], WorldSort::LastPlayed);
+    assert!(matches!(
+        list.home_primary_action(),
+        HomePrimaryAction::Review { .. }
+    ));
+    assert!(crash.actions().iter().any(|action| matches!(
+        action,
+        WorldCardAction::Preflight(WorldOpenAction::RecoverStaleLease)
+    )));
+
+    let mut shell = StartShellModel::new(shell_graph(), list);
+    shell.screen = ShellScreen::Worlds;
+    let tree = shell.semantic_tree();
+    let node = tree
+        .find(&crash.semantic_id())
+        .unwrap_or_else(|| panic!("world row missing"));
+    assert_eq!(node.role, SemanticRole::Alert);
+    assert!(
+        node.description
+            .as_ref()
+            .is_some_and(|text| text.contains("Stale writer lease"))
+    );
+    assert!(
+        node.children
+            .iter()
+            .any(|child| child.role == SemanticRole::Alert && child.name == "Stale writer lease")
+    );
+    assert_eq!(WriterLeaseState::Absent, WriterLeaseState::default());
 }

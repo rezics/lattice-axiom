@@ -869,8 +869,12 @@ impl RuntimeLimits {
     pub const COMBINED_JOB_CAP: usize = 512;
     /// ADR 0026 combined in-flight byte hard cap.
     pub const COMBINED_BYTE_CAP: u64 = 384 * 1024 * 1024;
+    /// ADR 0026 main-world completion apply job cap per render frame.
+    pub const MAIN_WORLD_APPLY_JOB_CAP: usize = 16;
     /// ADR 0026 main-world completion apply byte cap per render frame.
     pub const MAIN_WORLD_APPLY_BYTE_CAP: u64 = 16 * 1024 * 1024;
+    /// ADR 0026 main-world completion apply wall-clock cap per render frame.
+    pub const MAIN_WORLD_APPLY_WALL_CLOCK_NANOS: u64 = 2_000_000;
     /// Occupancy that stops remote prefetch and coalesces pending revisions.
     pub const SOFT_HIGH_WATER_PERCENT: u32 = 75;
 
@@ -959,6 +963,21 @@ impl RuntimeLimits {
     #[must_use]
     pub const fn cpu_heavy_concurrency(self) -> usize {
         self.cpu_heavy_concurrency
+    }
+    /// 75% combined in-flight occupancy that stops prefetch.
+    #[must_use]
+    pub const fn combined_soft_high_water_jobs(self) -> usize {
+        percent_of_usize(self.combined_in_flight, Self::SOFT_HIGH_WATER_PERCENT)
+    }
+    /// 75% combined reserved-byte occupancy that stops prefetch.
+    #[must_use]
+    pub const fn combined_soft_high_water_bytes(self) -> u64 {
+        percent_of_u64(self.combined_reserved_bytes, Self::SOFT_HIGH_WATER_PERCENT)
+    }
+    /// ADR 0026 main-world apply slice caps.
+    #[must_use]
+    pub const fn main_world_apply_budget() -> crate::apply::DerivedApplyBudget {
+        crate::apply::DerivedApplyBudget::desktop_reference_v1()
     }
     /// Mesh limits.
     #[must_use]
@@ -1638,8 +1657,10 @@ pub enum ColliderSafetyState {
 pub enum ColliderFailure {
     /// Typed apply rejection.
     ApplyRejected,
-    /// Contained panic.
+    /// Contained panic in the host apply closure.
     ApplyPanicked,
+    /// Worker panic or lost ticket before apply.
+    ExecutorPanicked,
     /// Retained-memory violation.
     MemoryContractViolation,
 }

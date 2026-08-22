@@ -1,8 +1,11 @@
 //! Deterministic in-memory implementation of the product storage contract.
 //!
-//! This backend models atomic database transitions, DB-first header publication,
-//! writer leases, portable records, and independent checkpoints. It deliberately
-//! makes no filesystem, WAL, restart, or media-durability claim.
+//! The default constructor is a volatile reference: it models atomic database
+//! transitions, DB-first header publication, writer leases, and portable
+//! records, and it refuses physical durability claims. The durable constructor
+//! additionally retains a versioned store image at the contiguous durable
+//! frontier so crash reopen, checkpoint restore, and read-only recovery can be
+//! proved without a physical `RocksDB` adapter.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -17,9 +20,11 @@ use latticeaxiom_storage::{
 };
 use latticeaxiom_world_catalog::{
     AuthoritativeMetadataV1 as CatalogAuthoritativeMetadataV1, CheckpointId as CatalogCheckpointId,
-    CheckpointSummary, HeaderObservation, HeaderProjectionV1, LiveWorldLocation, ReadOperation,
-    ReconciliationState, SealedWorldActivationReceiptV1, SourceReadError,
-    WORLD_HEADER_SCHEMA_VERSION, WorldFingerprints, WorldHeaderV1, WorldRootId, reconcile_header,
+    CheckpointSummary, DirtyDrainState, DiskAdmission, DiskSample, HeaderObservation,
+    HeaderProjectionV1, HeadroomInputs, LiveWorldLocation, LowDiskMonitor, ReadOperation,
+    ReconciliationState, SealedWorldActivationReceiptV1, SourceReadError, StorageFailure,
+    StorageOperation, StoragePressureState, WORLD_HEADER_SCHEMA_VERSION, WorldFingerprints,
+    WorldHeaderV1, WorldRootId, reconcile_header,
 };
 use latticeaxiom_world_wire::{
     ChunkRecordKey, PersistedChunkDomainRevisionsV1, PersistedChunkSnapshotV1, RecordKind,
@@ -28,18 +33,19 @@ use latticeaxiom_world_wire::{
 };
 use serde::Serialize;
 
+use crate::durable::{DurableRootImageV1, DurableStoreImageV1};
 use crate::keyspace::encode_record_key_for_write;
 use crate::model::{next_revision, validate_metadata_limits};
 use crate::{
-    ActivationPermitV1, AuthoritativeMetadataInputV1, CheckpointId, CheckpointOutcomeV1,
-    CheckpointReceiptV1, CheckpointRequestV1, ChunkCommitReceiptV1, CommitDurabilityV1,
-    CommitHeaderStatusV1, DigestV1, DisplayName, DomainRevisionsV1, HeaderFaultPointV1,
-    HeaderPublishErrorV1, HeaderPublishStageV1, HeaderPublisher, HeaderRepairPermitV1,
-    MetadataEpoch, PersistedChunkV1, PreflightInstrumentationV1, PreparedWorldHeaderV1,
-    StorageDurabilityCapabilityV1, StoragePreflightStatusV1, StoreId, WorldCommitOutcomeV1,
-    WorldCommitReceiptV1, WorldCommitRequestV1, WorldCreateOutcomeV1, WorldCreateRequestV1,
-    WorldDbError, WorldDbResult, WorldFrontierV1, WorldReadView, WorldStorage,
-    WorldStorageLimitsV1, WorldStoragePreflightV1, WorldWriter, WriterActivationV1,
+    ActivationPermitV1, AuthoritativeMetadataInputV1, CheckpointId, CheckpointKindV1,
+    CheckpointOutcomeV1, CheckpointReceiptV1, CheckpointRequestV1, ChunkCommitReceiptV1,
+    CommitDurabilityV1, CommitHeaderStatusV1, DigestV1, DisplayName, DomainRevisionsV1,
+    HeaderFaultPointV1, HeaderPublishErrorV1, HeaderPublishStageV1, HeaderPublisher,
+    HeaderRepairPermitV1, MetadataEpoch, PersistedChunkV1, PreflightInstrumentationV1,
+    PreparedWorldHeaderV1, StorageDurabilityCapabilityV1, StoragePreflightStatusV1, StoreId,
+    WorldCommitOutcomeV1, WorldCommitReceiptV1, WorldCommitRequestV1, WorldCreateOutcomeV1,
+    WorldCreateRequestV1, WorldDbError, WorldDbResult, WorldFrontierV1, WorldReadView,
+    WorldStorage, WorldStorageLimitsV1, WorldStoragePreflightV1, WorldWriter, WriterActivationV1,
 };
 
 /// One-shot deterministic failures before authoritative fake publication.
@@ -114,42 +120,48 @@ struct StoredWorld {
     receipts: BTreeMap<TransactionId, RetainedReceipt>,
     receipt_order: VecDeque<TransactionId>,
     checkpoints: BTreeMap<CheckpointId, CheckpointReceiptV1>,
-}
-
-#[derive(Clone, Serialize)]
-struct CheckpointImage {
-    world: WorldId,
-    store_id: StoreId,
-    source_revision: WorldRevision,
-    metadata: AuthoritativeMetadataInputV1,
-    records: BTreeMap<Vec<u8>, Vec<u8>>,
+    recovery_verified: bool,
 }
 
 #[derive(Clone)]
-#[allow(
-    dead_code,
-    reason = "retained reference-checkpoint prototype is not a physical durability capability"
-)]
 struct RetainedCheckpoint {
-    image: CheckpointImage,
+    image: DurableStoreImageV1,
     world: WorldId,
     store_id: StoreId,
     receipt: CheckpointReceiptV1,
 }
 
-#[derive(Default)]
 struct FakeDatabase {
     worlds: BTreeMap<WorldId, StoredWorld>,
     checkpoints: BTreeMap<(WorldId, CheckpointId), RetainedCheckpoint>,
     active_writers: BTreeMap<WorldId, u128>,
     next_lease: u128,
     fault: Option<DatabaseFaultPointV1>,
+    durable_root: Option<(Vec<u8>, DigestV1)>,
+    disk: LowDiskMonitor,
+    admission: Option<DiskAdmission>,
+}
+
+impl Default for FakeDatabase {
+    fn default() -> Self {
+        Self {
+            worlds: BTreeMap::new(),
+            checkpoints: BTreeMap::new(),
+            active_writers: BTreeMap::new(),
+            next_lease: 0,
+            fault: None,
+            durable_root: None,
+            disk: LowDiskMonitor::new(),
+            admission: None,
+        }
+    }
 }
 
 struct StorageInner {
     record_owner: StableId,
     wire_limits: WorldWireLimits,
     limits: WorldStorageLimitsV1,
+    capability: StorageDurabilityCapabilityV1,
     publisher: Arc<dyn HeaderPublisher>,
     database: Mutex<FakeDatabase>,
 }
@@ -167,11 +179,12 @@ impl fmt::Debug for DeterministicWorldStorage {
             .field("record_owner", &self.inner.record_owner)
             .field("wire_limits", &self.inner.wire_limits)
             .field("limits", &self.inner.limits)
+            .field("capability", &self.inner.capability)
             .finish_non_exhaustive()
     }
 }
 impl DeterministicWorldStorage {
-    /// Creates a fake with an explicit portable record contract and publisher.
+    /// Creates a volatile fake with an explicit portable record contract.
     #[must_use]
     pub fn new(
         record_owner: StableId,
@@ -179,14 +192,67 @@ impl DeterministicWorldStorage {
         limits: WorldStorageLimitsV1,
         publisher: Arc<dyn HeaderPublisher>,
     ) -> Self {
+        Self::with_capability(
+            record_owner,
+            wire_limits,
+            limits,
+            publisher,
+            StorageDurabilityCapabilityV1::VolatileReference,
+        )
+    }
+
+    /// Creates a durable recovery oracle with WAL/sync/checkpoint semantics.
+    ///
+    /// The oracle still uses in-process maps. It does not open `RocksDB`. Durable
+    /// commits, flushes, checkpoints, and canonical reopen operate on a
+    /// versioned store image captured at the contiguous durable frontier.
+    #[must_use]
+    pub fn durable(
+        record_owner: StableId,
+        wire_limits: WorldWireLimits,
+        limits: WorldStorageLimitsV1,
+        publisher: Arc<dyn HeaderPublisher>,
+    ) -> Self {
+        Self::with_capability(
+            record_owner,
+            wire_limits,
+            limits,
+            publisher,
+            StorageDurabilityCapabilityV1::WalSyncCheckpoint,
+        )
+    }
+
+    fn with_capability(
+        record_owner: StableId,
+        wire_limits: WorldWireLimits,
+        limits: WorldStorageLimitsV1,
+        publisher: Arc<dyn HeaderPublisher>,
+        capability: StorageDurabilityCapabilityV1,
+    ) -> Self {
         Self {
             inner: Arc::new(StorageInner {
                 record_owner,
                 wire_limits,
                 limits,
+                capability,
                 publisher,
                 database: Mutex::new(FakeDatabase::default()),
             }),
+        }
+    }
+
+    fn is_durable(&self) -> bool {
+        matches!(
+            self.inner.capability,
+            StorageDurabilityCapabilityV1::WalSyncCheckpoint
+        )
+    }
+
+    fn require_durable(&self, operation: &'static str) -> WorldDbResult<()> {
+        if self.is_durable() {
+            Ok(())
+        } else {
+            Err(WorldDbError::PhysicalDurabilityUnsupported { operation })
         }
     }
 
@@ -231,6 +297,103 @@ impl DeterministicWorldStorage {
         })
     }
 
+    /// Observes one filesystem sample or write failure for low-disk admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when threshold arithmetic overflows or the fake
+    /// database lock is poisoned.
+    pub fn observe_disk(
+        &self,
+        sample: DiskSample,
+        inputs: HeadroomInputs,
+        failure: Option<StorageFailure>,
+        dirty: DirtyDrainState,
+    ) -> WorldDbResult<DiskAdmission> {
+        let mut database = self.lock("observing storage pressure")?;
+        let admission = database
+            .disk
+            .evaluate(sample, inputs, failure, dirty)
+            .map_err(|_| WorldDbError::LengthOverflow {
+                what: "low-disk threshold",
+            })?;
+        database.admission = Some(admission);
+        Ok(admission)
+    }
+
+    /// Reopens an independent durable instance from the last synchronized image.
+    ///
+    /// Writer leases are never copied. Written-but-not-durable mutations are
+    /// discarded. The caller supplies a header publisher; a fresh publisher
+    /// correctly appears as sidecar-behind-DB until header repair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldDbError::PhysicalDurabilityUnsupported`] on the volatile
+    /// reference, or a typed error if no durable image exists or it fails
+    /// bounded decode.
+    pub fn canonical_reopen(&self, publisher: Arc<dyn HeaderPublisher>) -> WorldDbResult<Self> {
+        self.require_durable("canonical durable reopen")?;
+        let (bytes, digest) = {
+            let database = self.lock("encoding canonical durable image")?;
+            database
+                .durable_root
+                .clone()
+                .ok_or(WorldDbError::CorruptDurableImage {
+                    reason: "no durable store image has been published".to_owned(),
+                })?
+        };
+        let root = DurableRootImageV1::decode(&bytes, digest)?;
+        Self::from_durable_root(
+            self.inner.record_owner.clone(),
+            self.inner.wire_limits,
+            self.inner.limits,
+            publisher,
+            &root,
+        )
+    }
+
+    fn from_durable_root(
+        record_owner: StableId,
+        wire_limits: WorldWireLimits,
+        limits: WorldStorageLimitsV1,
+        publisher: Arc<dyn HeaderPublisher>,
+        root: &DurableRootImageV1,
+    ) -> WorldDbResult<Self> {
+        let storage = Self::durable(record_owner, wire_limits, limits, publisher);
+        let world = restore_stored_world(&storage.inner, root.world(), root.checkpoint_receipts())?;
+        let mut checkpoints = BTreeMap::new();
+        for (id, image) in root.checkpoints() {
+            let receipt =
+                world
+                    .checkpoints
+                    .get(id)
+                    .cloned()
+                    .ok_or(WorldDbError::CorruptDurableImage {
+                        reason: "durable root is missing a checkpoint receipt".to_owned(),
+                    })?;
+            checkpoints.insert(
+                (world.world, *id),
+                RetainedCheckpoint {
+                    image: image.clone(),
+                    world: world.world,
+                    store_id: world.store_id.clone(),
+                    receipt,
+                },
+            );
+        }
+        let encoded = root.encode()?;
+        {
+            let mut database = storage.lock("installing canonical durable image")?;
+            database.worlds.insert(world.world, world);
+            database.checkpoints = checkpoints;
+            database.durable_root = Some(encoded);
+            database.active_writers.clear();
+            database.next_lease = 0;
+        }
+        Ok(storage)
+    }
+
     fn lock(&self, operation: &'static str) -> WorldDbResult<MutexGuard<'_, FakeDatabase>> {
         self.inner
             .database
@@ -245,6 +408,7 @@ impl DeterministicWorldStorage {
         let (lease, prepared) =
             {
                 let mut database = self.lock("activating reference fixture writer")?;
+                deny_writer_if_read_only_locked(self, &database, permit.world)?;
                 if database.active_writers.contains_key(&permit.world) {
                     return Err(WorldDbError::WriterAlreadyActive {
                         world: permit.world,
@@ -258,6 +422,7 @@ impl DeterministicWorldStorage {
                 Self::validate_activation(&staged, permit)?;
                 staged.metadata_epoch = staged.metadata_epoch.checked_next()?;
                 staged.metadata.mark_writer_open();
+                staged.recovery_verified = false;
                 staged.metadata_hash = hash_json(
                     b"latticeaxiom/authoritative-metadata/v1",
                     &staged.metadata,
@@ -328,6 +493,12 @@ impl DeterministicWorldStorage {
                 field: "projection_hash",
                 permit: permit.projection_hash,
                 actual: DigestV1::from_bytes(*receipt.projection_hash.as_bytes()),
+            });
+        }
+        if receipt.plan_generation != permit.metadata_epoch.get() {
+            return Err(WorldDbError::ActivationPermitInvalid {
+                world: permit.world,
+                reason: "plan generation mismatch",
             });
         }
         Ok(())
@@ -485,7 +656,7 @@ impl DeterministicWorldStorage {
 
 impl WorldStorage for DeterministicWorldStorage {
     fn durability_capability(&self) -> StorageDurabilityCapabilityV1 {
-        StorageDurabilityCapabilityV1::VolatileReference
+        self.inner.capability
     }
 
     fn limits(&self) -> WorldStorageLimitsV1 {
@@ -517,6 +688,7 @@ impl WorldStorage for DeterministicWorldStorage {
             receipts: BTreeMap::new(),
             receipt_order: VecDeque::new(),
             checkpoints: BTreeMap::new(),
+            recovery_verified: true,
         };
         let prepared = self.prepare_header(&staged)?;
         staged.expected_header_hash = prepared.projection_hash();
@@ -529,6 +701,7 @@ impl WorldStorage for DeterministicWorldStorage {
             }
             consume_fault(&mut database, DatabaseFaultPointV1::BeforeBatchPublication)?;
             database.worlds.insert(request.world(), staged.clone());
+            persist_durable_root(self, &mut database, &staged)?;
         }
         let header = self.publish_header(&prepared);
         Ok(WorldCreateOutcomeV1 {
@@ -578,33 +751,12 @@ impl WorldStorage for DeterministicWorldStorage {
             observation,
             &catalog_metadata,
         );
-        let (status, permit, repair_permit) = match reconciliation {
-            ReconciliationState::InSync { .. } => (
-                StoragePreflightStatusV1::ReadyForActivation,
-                Some(ActivationPermitV1 {
-                    world: stored.world,
-                    store_id: stored.store_id.clone(),
-                    metadata_epoch: stored.metadata_epoch,
-                    metadata_hash: stored.metadata_hash,
-                    projection_hash: stored.expected_header_hash,
-                }),
-                None,
-            ),
-            ReconciliationState::RepairRequired { reason, .. } => (
-                StoragePreflightStatusV1::HeaderRepairRequired(reason),
-                None,
-                Some(HeaderRepairPermitV1 {
-                    world: stored.world,
-                    store_id: stored.store_id.clone(),
-                    metadata_epoch: stored.metadata_epoch,
-                    metadata_hash: stored.metadata_hash,
-                    projection_hash: stored.expected_header_hash,
-                }),
-            ),
-            ReconciliationState::Blocked { reason } => {
-                (StoragePreflightStatusV1::Blocked(reason), None, None)
-            }
-        };
+        let disk_read_only = self
+            .lock("reading storage-pressure admission")?
+            .admission
+            .is_some_and(admission_is_read_only);
+        let (status, permit, repair_permit) =
+            preflight_status(self, &stored, reconciliation, disk_read_only);
         Ok(WorldStoragePreflightV1 {
             world: stored.world,
             store_id: stored.store_id,
@@ -669,6 +821,7 @@ impl WorldStorage for DeterministicWorldStorage {
         activation: WriterActivationV1,
     ) -> WorldDbResult<Box<dyn WorldWriter>> {
         let permit = activation.permit();
+        deny_writer_if_read_only(self, permit.world)?;
         let Some(receipt) = activation.accepted_plan().activation_receipt() else {
             return Err(WorldDbError::ActivationEvidenceUnavailable {
                 world: permit.world,
@@ -677,14 +830,38 @@ impl WorldStorage for DeterministicWorldStorage {
         Self::receipt_matches_permit(receipt, permit)?;
         Ok(self.activate_validated_writer(permit)?)
     }
+
     fn verify_checkpoint(
         &self,
-        _world: WorldId,
-        _checkpoint: CheckpointId,
+        world: WorldId,
+        checkpoint: CheckpointId,
     ) -> WorldDbResult<CheckpointReceiptV1> {
-        Err(WorldDbError::PhysicalDurabilityUnsupported {
-            operation: "physical checkpoint verification",
-        })
+        self.require_durable("physical checkpoint verification")?;
+        let database = self.lock("verifying independent checkpoint")?;
+        let retained = database
+            .checkpoints
+            .get(&(world, checkpoint))
+            .ok_or(WorldDbError::CheckpointNotFound { world, checkpoint })?;
+        verify_checkpoint_image(&self.inner, retained)?;
+        Ok(retained.receipt.clone())
+    }
+
+    fn verify_crash_recovery(&self, world: WorldId) -> WorldDbResult<WorldCommitReceiptV1> {
+        let mut database = self.lock("verifying crash recovery")?;
+        let mut stored = database
+            .worlds
+            .get(&world)
+            .cloned()
+            .ok_or(WorldDbError::WorldNotFound { world })?;
+        if database.active_writers.contains_key(&world) {
+            return Err(WorldDbError::WriterAlreadyActive { world });
+        }
+        validate_frontier(&stored)?;
+        restore_chunks_and_index(&self.inner, &mut stored)?;
+        stored.recovery_verified = true;
+        let receipt = Self::operation_receipt(&stored, durability_of_frontier(&stored.frontier));
+        database.worlds.insert(world, stored);
+        Ok(receipt)
     }
 }
 
@@ -736,6 +913,20 @@ impl DeterministicWriter {
         if self.closed {
             return Err(WorldDbError::WriterLeaseInvalid { world: self.world });
         }
+        if self.storage.is_durable() {
+            let current = {
+                let database = self.storage.lock("inspecting durable close frontier")?;
+                self.validate_lease(&database)?;
+                database
+                    .worlds
+                    .get(&self.world)
+                    .cloned()
+                    .ok_or(WorldDbError::WorldNotFound { world: self.world })?
+            };
+            if current.frontier.current() != current.frontier.durable() {
+                flush_world(self)?;
+            }
+        }
         let prepared = {
             let mut database = self.storage.lock("closing authoritative writer")?;
             self.validate_lease(&database)?;
@@ -746,6 +937,7 @@ impl DeterministicWriter {
                 .ok_or(WorldDbError::WorldNotFound { world: self.world })?;
             staged.metadata_epoch = staged.metadata_epoch.checked_next()?;
             staged.metadata.mark_clean_shutdown();
+            staged.recovery_verified = true;
             staged.metadata_hash = hash_json(
                 b"latticeaxiom/authoritative-metadata/v1",
                 &staged.metadata,
@@ -754,8 +946,9 @@ impl DeterministicWriter {
             let prepared = self.storage.prepare_header(&staged)?;
             staged.expected_header_hash = prepared.projection_hash();
             consume_fault(&mut database, DatabaseFaultPointV1::BeforeBatchPublication)?;
-            database.worlds.insert(self.world, staged);
+            database.worlds.insert(self.world, staged.clone());
             database.active_writers.remove(&self.world);
+            persist_durable_root(&self.storage, &mut database, &staged)?;
             prepared
         };
         let _header_status = self.storage.publish_header(&prepared);
@@ -774,18 +967,23 @@ impl WorldWriter for DeterministicWriter {
     }
 
     fn flush_durable(&mut self) -> WorldDbResult<WorldCommitOutcomeV1> {
-        Err(WorldDbError::PhysicalDurabilityUnsupported {
-            operation: "durable frontier flush",
-        })
+        self.storage.require_durable("durable frontier flush")?;
+        admit_operation(&self.storage, self.world, StorageOperation::DurabilityDrain)?;
+        flush_world(self)
     }
 
     fn create_checkpoint(
         &mut self,
-        _request: CheckpointRequestV1,
+        request: CheckpointRequestV1,
     ) -> WorldDbResult<CheckpointOutcomeV1> {
-        Err(WorldDbError::PhysicalDurabilityUnsupported {
-            operation: "physical checkpoint creation",
-        })
+        self.storage
+            .require_durable("physical checkpoint creation")?;
+        let operation = match request.kind() {
+            CheckpointKindV1::Protected => StorageOperation::DurabilityDrain,
+            CheckpointKindV1::RotatingAutomatic => StorageOperation::AutomaticCheckpoint,
+        };
+        admit_operation(&self.storage, self.world, operation)?;
+        checkpoint_world(self, &request)
     }
 
     fn close(mut self: Box<Self>) -> WorldDbResult<()> {
@@ -802,6 +1000,9 @@ impl Drop for DeterministicWriter {
             && database.active_writers.get(&self.world) == Some(&self.lease)
         {
             database.active_writers.remove(&self.world);
+            if let Some(stored) = database.worlds.get_mut(&self.world) {
+                stored.recovery_verified = false;
+            }
         }
         self.closed = true;
     }
@@ -852,10 +1053,13 @@ fn commit_world(
     request: &WorldCommitRequestV1,
 ) -> WorldDbResult<WorldCommitOutcomeV1> {
     if matches!(request.durability(), CommitDurabilityV1::Durable) {
-        return Err(WorldDbError::PhysicalDurabilityUnsupported {
-            operation: "durable commit",
-        });
+        writer.storage.require_durable("durable commit")?;
     }
+    admit_operation(
+        &writer.storage,
+        writer.world,
+        StorageOperation::AuthoritativeMutation,
+    )?;
     let transaction = request.transaction();
     if transaction.world() != writer.world {
         return Err(WorldDbError::TransactionWorldMismatch {
@@ -897,6 +1101,9 @@ fn commit_world(
     staged.expected_header_hash = prepared.projection_hash();
     consume_fault(&mut database, DatabaseFaultPointV1::BeforeBatchPublication)?;
     database.worlds.insert(writer.world, staged.clone());
+    if matches!(request.durability(), CommitDurabilityV1::Durable) {
+        persist_durable_root(&writer.storage, &mut database, &staged)?;
+    }
     drop(database);
     let header = if matches!(request.durability(), CommitDurabilityV1::Durable) {
         writer.storage.publish_header(&prepared)
@@ -1257,10 +1464,6 @@ fn replay_header(
     Ok(storage.publish_header(&prepared))
 }
 
-#[allow(
-    dead_code,
-    reason = "retained reference-checkpoint prototype is not a physical durability capability"
-)]
 fn flush_world(writer: &mut DeterministicWriter) -> WorldDbResult<WorldCommitOutcomeV1> {
     let mut database = writer.storage.lock("synchronizing durable frontier")?;
     writer.validate_lease(&database)?;
@@ -1296,6 +1499,7 @@ fn flush_world(writer: &mut DeterministicWriter) -> WorldDbResult<WorldCommitOut
     staged.expected_header_hash = prepared.projection_hash();
     consume_fault(&mut database, DatabaseFaultPointV1::BeforeBatchPublication)?;
     database.worlds.insert(writer.world, staged.clone());
+    persist_durable_root(&writer.storage, &mut database, &staged)?;
     let receipt =
         DeterministicWorldStorage::operation_receipt(&staged, CommitDurabilityV1::Durable);
     drop(database);
@@ -1305,10 +1509,6 @@ fn flush_world(writer: &mut DeterministicWriter) -> WorldDbResult<WorldCommitOut
     })
 }
 
-#[allow(
-    dead_code,
-    reason = "retained reference-checkpoint prototype is not a physical durability capability"
-)]
 fn validate_frontier(world: &StoredWorld) -> WorldDbResult<()> {
     let frontier = world.frontier;
     if frontier.checkpointed() > frontier.durable() {
@@ -1335,10 +1535,6 @@ fn validate_frontier(world: &StoredWorld) -> WorldDbResult<()> {
 #[allow(
     clippy::too_many_lines,
     reason = "checkpoint publication keeps fault ordering explicit"
-)]
-#[allow(
-    dead_code,
-    reason = "retained reference-checkpoint prototype is not a physical durability capability"
 )]
 fn checkpoint_world(
     writer: &mut DeterministicWriter,
@@ -1397,17 +1593,14 @@ fn checkpoint_world(
         });
     }
 
-    let image = CheckpointImage {
-        world: current.world,
-        store_id: current.store_id.clone(),
-        source_revision: current.frontier.current(),
-        metadata: current.metadata.clone(),
-        records: (*current.records).clone(),
-    };
-    let image_bytes = postcard::to_allocvec(&image)
-        .map_err(|error| WorldDbError::postcard_encode("checkpoint image v1", &error))?;
-    let physical_bytes = usize_to_u64(image_bytes.len(), "checkpoint image")?;
-    let content_hash = DigestV1::hash(b"latticeaxiom/checkpoint-image/v1", &image_bytes);
+    let image = capture_store_image(&current)?;
+    let physical_bytes = usize_to_u64(
+        postcard::to_allocvec(&image)
+            .map_err(|error| WorldDbError::postcard_encode("durable store image v1", &error))?
+            .len(),
+        "checkpoint image",
+    )?;
+    let content_hash = image.content_hash()?;
 
     let mut staged = current;
     staged.metadata_epoch = staged.metadata_epoch.checked_next()?;
@@ -1454,10 +1647,11 @@ fn checkpoint_world(
         &mut database,
         DatabaseFaultPointV1::BeforeCheckpointPublication,
     )?;
-    database.worlds.insert(writer.world, staged);
+    database.worlds.insert(writer.world, staged.clone());
     database
         .checkpoints
         .insert((writer.world, request.id()), retained);
+    persist_durable_root(&writer.storage, &mut database, &staged)?;
     drop(database);
     Ok(CheckpointOutcomeV1 {
         receipt,
@@ -1465,10 +1659,6 @@ fn checkpoint_world(
     })
 }
 
-#[allow(
-    dead_code,
-    reason = "retained reference-checkpoint prototype is not a physical durability capability"
-)]
 fn verify_checkpoint_image(
     inner: &StorageInner,
     retained: &RetainedCheckpoint,
@@ -1485,15 +1675,17 @@ fn verify_checkpoint_image(
             "physical byte count mismatch".to_owned(),
         ));
     }
-    let content_hash = DigestV1::hash(b"latticeaxiom/checkpoint-image/v1", &bytes);
+    let content_hash = image
+        .content_hash()
+        .map_err(|error| corrupt_checkpoint(retained, error.to_string()))?;
     if content_hash != receipt.content_hash() {
         return Err(corrupt_checkpoint(
             retained,
             "checkpoint content hash mismatch".to_owned(),
         ));
     }
-    if image.source_revision != receipt.source_revision()
-        || image.metadata.frozen_lock().lock_hash() != receipt.exact_lock_hash()
+    if image.source_revision() != receipt.source_revision()
+        || image.metadata().frozen_lock().lock_hash() != receipt.exact_lock_hash()
     {
         return Err(corrupt_checkpoint(
             retained,
@@ -1502,7 +1694,7 @@ fn verify_checkpoint_image(
     }
     let metadata_hash = hash_json(
         b"latticeaxiom/authoritative-metadata/v1",
-        &image.metadata,
+        image.metadata(),
         "checkpoint authoritative metadata v1",
     )
     .map_err(|error| corrupt_checkpoint(retained, error.to_string()))?;
@@ -1515,28 +1707,24 @@ fn verify_checkpoint_image(
     verify_checkpoint_records(inner, retained)
 }
 
-#[allow(
-    dead_code,
-    reason = "retained reference-checkpoint prototype is not a physical durability capability"
-)]
 fn verify_checkpoint_records(
     inner: &StorageInner,
     retained: &RetainedCheckpoint,
 ) -> WorldDbResult<()> {
     let image = &retained.image;
-    if image.world != retained.world || image.store_id != retained.store_id {
+    if image.world() != retained.world || image.store_id() != &retained.store_id {
         return Err(corrupt_checkpoint(
             retained,
             "checkpoint world or store generation mismatch".to_owned(),
         ));
     }
     let expected_closure = image
-        .metadata
+        .metadata()
         .requirement_closure()
         .content_hash()
         .map_err(|error| corrupt_checkpoint(retained, error.to_string()))?;
     let mut entity_index = BTreeMap::new();
-    for encoded_key in image.records.keys() {
+    for encoded_key in image.records().keys() {
         let logical = decode_chunk_record_key(encoded_key, inner.wire_limits)
             .map_err(|error| corrupt_checkpoint(retained, error.to_string()))?;
         if logical.chunk().world != retained.world
@@ -1550,7 +1738,7 @@ fn verify_checkpoint_records(
         }
         let chunk = decode_record(
             logical.chunk(),
-            &image.records,
+            image.records(),
             &inner.record_owner,
             inner.wire_limits,
         )
@@ -1561,7 +1749,7 @@ fn verify_checkpoint_records(
                 "checkpoint record vanished during immutable verification".to_owned(),
             )
         })?;
-        if chunk.captured_world_revision() > image.source_revision {
+        if chunk.captured_world_revision() > image.source_revision() {
             return Err(corrupt_checkpoint(
                 retained,
                 "chunk revision was captured after the checkpoint frontier".to_owned(),
@@ -1631,10 +1819,6 @@ fn corrupt_chunk(key: &ChunkKey, reason: String) -> WorldDbError {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "retained reference-checkpoint prototype is not a physical durability capability"
-)]
 fn corrupt_checkpoint(retained: &RetainedCheckpoint, reason: String) -> WorldDbError {
     WorldDbError::CorruptCheckpoint {
         world: retained.world,
@@ -1679,6 +1863,272 @@ fn consume_fault(database: &mut FakeDatabase, expected: DatabaseFaultPointV1) ->
         })
     } else {
         Ok(())
+    }
+}
+
+fn capture_store_image(world: &StoredWorld) -> WorldDbResult<DurableStoreImageV1> {
+    DurableStoreImageV1::from_parts(DurableStoreImageV1 {
+        schema_version: crate::durable::DURABLE_STORE_IMAGE_SCHEMA_VERSION_V1,
+        world: world.world,
+        display_name: world.display_name.clone(),
+        store_id: world.store_id.clone(),
+        metadata_epoch: world.metadata_epoch,
+        metadata: world.metadata.clone(),
+        metadata_hash: world.metadata_hash,
+        expected_header_hash: world.expected_header_hash,
+        frontier: world.frontier,
+        records: (*world.records).clone(),
+    })
+}
+
+fn persist_durable_root(
+    storage: &DeterministicWorldStorage,
+    database: &mut FakeDatabase,
+    world: &StoredWorld,
+) -> WorldDbResult<()> {
+    if !storage.is_durable() {
+        return Ok(());
+    }
+    let mut checkpoints = BTreeMap::new();
+    for ((owner, id), retained) in &database.checkpoints {
+        if *owner == world.world {
+            checkpoints.insert(*id, retained.image.clone());
+        }
+    }
+    let root = DurableRootImageV1::new(
+        capture_store_image(world)?,
+        checkpoints,
+        world.checkpoints.clone(),
+    )?;
+    database.durable_root = Some(root.encode()?);
+    Ok(())
+}
+
+fn restore_stored_world(
+    inner: &StorageInner,
+    image: &DurableStoreImageV1,
+    checkpoints: BTreeMap<CheckpointId, CheckpointReceiptV1>,
+) -> WorldDbResult<StoredWorld> {
+    let mut stored = StoredWorld {
+        world: image.world(),
+        display_name: image.display_name(),
+        store_id: image.store_id().clone(),
+        metadata_epoch: image.metadata_epoch(),
+        metadata: image.metadata().clone(),
+        metadata_hash: image.metadata_hash(),
+        expected_header_hash: image.expected_header_hash(),
+        frontier: image.frontier(),
+        chunks: Arc::new(BTreeMap::new()),
+        records: Arc::new(image.records().clone()),
+        entity_index: BTreeMap::new(),
+        receipts: BTreeMap::new(),
+        receipt_order: VecDeque::new(),
+        checkpoints,
+        recovery_verified: false,
+    };
+    restore_chunks_and_index(inner, &mut stored)?;
+    Ok(stored)
+}
+
+fn restore_chunks_and_index(inner: &StorageInner, stored: &mut StoredWorld) -> WorldDbResult<()> {
+    validate_frontier(stored)?;
+    let mut chunks = BTreeMap::new();
+    let mut entity_index = BTreeMap::new();
+    for encoded_key in stored.records.keys() {
+        let logical = decode_chunk_record_key(encoded_key, inner.wire_limits).map_err(|error| {
+            WorldDbError::CorruptDurableImage {
+                reason: error.to_string(),
+            }
+        })?;
+        if logical.chunk().world != stored.world
+            || logical.record_kind() != RecordKind::CHUNK_SNAPSHOT
+            || logical.owner() != &inner.record_owner
+        {
+            return Err(WorldDbError::CorruptDurableImage {
+                reason: "durable image contains a record outside its closed key contract"
+                    .to_owned(),
+            });
+        }
+        let chunk = decode_record(
+            logical.chunk(),
+            &stored.records,
+            &inner.record_owner,
+            inner.wire_limits,
+        )?
+        .ok_or_else(|| WorldDbError::CorruptDurableImage {
+            reason: "durable record vanished during bounded restore".to_owned(),
+        })?;
+        if chunk.captured_world_revision() > stored.frontier.current() {
+            return Err(WorldDbError::CorruptDurableImage {
+                reason: "chunk revision was captured after the durable frontier".to_owned(),
+            });
+        }
+        for entity in chunk.data().persistent_entities().keys() {
+            if let Some(existing) = entity_index.insert(*entity, chunk.key().clone())
+                && existing != *chunk.key()
+            {
+                return Err(WorldDbError::EntityIndexInvariant {
+                    world: stored.world,
+                    entity: *entity,
+                });
+            }
+        }
+        chunks.insert(chunk.key().clone(), chunk);
+    }
+    stored.chunks = Arc::new(chunks);
+    stored.entity_index = entity_index;
+    Ok(())
+}
+
+fn admit_operation(
+    storage: &DeterministicWorldStorage,
+    world: WorldId,
+    operation: StorageOperation,
+) -> WorldDbResult<()> {
+    let database = storage.lock("evaluating storage-pressure admission")?;
+    let Some(admission) = database.admission else {
+        return Ok(());
+    };
+    if admission.allows(operation) {
+        return Ok(());
+    }
+    if matches!(
+        admission.state,
+        StoragePressureState::RecoverableReadOnly | StoragePressureState::ShutdownRequired
+    ) {
+        return Err(WorldDbError::RecoverableReadOnly {
+            world,
+            reason: pressure_name(admission.state),
+        });
+    }
+    Err(WorldDbError::LowDiskMutationPaused {
+        world,
+        pressure: pressure_name(admission.state),
+    })
+}
+
+fn deny_writer_if_read_only(
+    storage: &DeterministicWorldStorage,
+    world: WorldId,
+) -> WorldDbResult<()> {
+    let database = storage.lock("evaluating read-only writer admission")?;
+    deny_writer_if_read_only_locked(storage, &database, world)
+}
+
+fn deny_writer_if_read_only_locked(
+    storage: &DeterministicWorldStorage,
+    database: &FakeDatabase,
+    world: WorldId,
+) -> WorldDbResult<()> {
+    if database.active_writers.contains_key(&world) {
+        return Err(WorldDbError::WriterAlreadyActive { world });
+    }
+    if database.admission.is_some_and(|admission| {
+        matches!(
+            admission.state,
+            StoragePressureState::RecoverableReadOnly | StoragePressureState::ShutdownRequired
+        )
+    }) {
+        return Err(WorldDbError::RecoverableReadOnly {
+            world,
+            reason: "storage pressure forbids writer activation",
+        });
+    }
+    let Some(stored) = database.worlds.get(&world) else {
+        return Ok(());
+    };
+    if let Some(reason) = read_only_activation_reason(storage, stored, false) {
+        return Err(WorldDbError::RecoverableReadOnly { world, reason });
+    }
+    Ok(())
+}
+
+fn admission_is_read_only(admission: DiskAdmission) -> bool {
+    matches!(
+        admission.state,
+        StoragePressureState::RecoverableReadOnly | StoragePressureState::ShutdownRequired
+    )
+}
+
+fn preflight_status(
+    storage: &DeterministicWorldStorage,
+    stored: &StoredWorld,
+    reconciliation: ReconciliationState,
+    disk_read_only: bool,
+) -> (
+    StoragePreflightStatusV1,
+    Option<ActivationPermitV1>,
+    Option<HeaderRepairPermitV1>,
+) {
+    match reconciliation {
+        ReconciliationState::InSync { .. } => {
+            if let Some(reason) = read_only_activation_reason(storage, stored, disk_read_only) {
+                (
+                    StoragePreflightStatusV1::RecoverableReadOnly { reason },
+                    None,
+                    None,
+                )
+            } else {
+                (
+                    StoragePreflightStatusV1::ReadyForActivation,
+                    Some(ActivationPermitV1 {
+                        world: stored.world,
+                        store_id: stored.store_id.clone(),
+                        metadata_epoch: stored.metadata_epoch,
+                        metadata_hash: stored.metadata_hash,
+                        projection_hash: stored.expected_header_hash,
+                    }),
+                    None,
+                )
+            }
+        }
+        ReconciliationState::RepairRequired { reason, .. } => (
+            StoragePreflightStatusV1::HeaderRepairRequired(reason),
+            None,
+            Some(HeaderRepairPermitV1 {
+                world: stored.world,
+                store_id: stored.store_id.clone(),
+                metadata_epoch: stored.metadata_epoch,
+                metadata_hash: stored.metadata_hash,
+                projection_hash: stored.expected_header_hash,
+            }),
+        ),
+        ReconciliationState::Blocked { reason } => {
+            (StoragePreflightStatusV1::Blocked(reason), None, None)
+        }
+    }
+}
+
+fn read_only_activation_reason(
+    storage: &DeterministicWorldStorage,
+    stored: &StoredWorld,
+    disk_read_only: bool,
+) -> Option<&'static str> {
+    if disk_read_only {
+        Some("storage pressure forbids writer activation")
+    } else if storage.is_durable() && !stored.metadata.clean_shutdown() && !stored.recovery_verified
+    {
+        Some("unclean shutdown has not been verified")
+    } else {
+        None
+    }
+}
+
+fn durability_of_frontier(frontier: &WorldFrontierV1) -> CommitDurabilityV1 {
+    if frontier.current() == frontier.durable() {
+        CommitDurabilityV1::Durable
+    } else {
+        CommitDurabilityV1::Written
+    }
+}
+
+const fn pressure_name(state: StoragePressureState) -> &'static str {
+    match state {
+        StoragePressureState::Normal => "normal",
+        StoragePressureState::Warning => "warning",
+        StoragePressureState::MutationPaused => "mutation-paused",
+        StoragePressureState::RecoverableReadOnly => "recoverable-read-only",
+        StoragePressureState::ShutdownRequired => "shutdown-required",
     }
 }
 
@@ -1764,8 +2214,9 @@ mod tests {
         PersistentEntityId, TransactionId, VersionedPayload, WorldRevision, WorldTransaction,
     };
     use latticeaxiom_world_catalog::{
-        ReconciliationState, SealedActivationBindingV1, WorldOpenAction, WorldOpenPlan,
-        WorldOpenRisk, WorldOpenStatus,
+        DirtyDrainState, DiskSample, GIB, HeadroomInputs, ReconciliationState,
+        SealedActivationBindingV1, StorageFailure, WorldOpenAction, WorldOpenPlan, WorldOpenRisk,
+        WorldOpenStatus,
     };
     use latticeaxiom_world_wire::WorldWireLimits;
 
@@ -1827,23 +2278,46 @@ mod tests {
         AuthoritativeMetadataInputV1::new(lock, closure)
     }
 
+    fn fixture_record_owner() -> StableId {
+        StableId::from_str("latticeaxiom:schema/world-db-chunk@1")
+            .expect("fixture record owner is canonical")
+    }
+
+    fn fixture_world() -> WorldId {
+        WorldId::from_str("018f1e2d-3c4b-4a59-8c6d-7e8f9012abcd")
+            .expect("fixture world UUID is canonical")
+    }
+
     fn fixture_storage() -> (
         DeterministicWorldStorage,
         Arc<DeterministicHeaderPublisher>,
         WorldId,
     ) {
-        let world = WorldId::from_str("018f1e2d-3c4b-4a59-8c6d-7e8f9012abcd")
-            .expect("fixture world UUID is canonical");
         let publisher = Arc::new(DeterministicHeaderPublisher::new());
         let erased: Arc<dyn HeaderPublisher> = publisher.clone();
         let storage = DeterministicWorldStorage::new(
-            StableId::from_str("latticeaxiom:schema/world-db-chunk@1")
-                .expect("fixture record owner is canonical"),
+            fixture_record_owner(),
             WorldWireLimits::default(),
             WorldStorageLimitsV1::D3_BOOTSTRAP,
             erased,
         );
-        (storage, publisher, world)
+        (storage, publisher, fixture_world())
+    }
+
+    fn fixture_durable_storage() -> (
+        DeterministicWorldStorage,
+        Arc<DeterministicHeaderPublisher>,
+        WorldId,
+    ) {
+        let publisher = Arc::new(DeterministicHeaderPublisher::new());
+        let erased: Arc<dyn HeaderPublisher> = publisher.clone();
+        let storage = DeterministicWorldStorage::durable(
+            fixture_record_owner(),
+            WorldWireLimits::default(),
+            WorldStorageLimitsV1::D3_BOOTSTRAP,
+            erased,
+        );
+        (storage, publisher, fixture_world())
     }
 
     fn fixture_key(world: WorldId) -> ChunkKey {
@@ -2151,10 +2625,10 @@ mod tests {
         assert!(
             matches!(
                 storage.activate_writer(stale_receipt),
-                Err(WorldDbError::ActivationEvidenceUnavailable { world: found })
-                    | Err(WorldDbError::ActivationPermitInvalid { world: found, .. })
-                    | Err(WorldDbError::ActivationPermitHashMismatch { world: found, .. })
-                    | Err(WorldDbError::ActivationPermitStale { world: found, .. })
+                Err(WorldDbError::ActivationEvidenceUnavailable { world: found }
+                    | WorldDbError::ActivationPermitInvalid { world: found, .. }
+                    | WorldDbError::ActivationPermitHashMismatch { world: found, .. }
+                    | WorldDbError::ActivationPermitStale { world: found, .. })
                     if found == world
             ),
             "a sealed receipt from a prior epoch must fail closed against a fresh permit"
@@ -2196,6 +2670,31 @@ mod tests {
                 world: found,
                 field: "metadata_hash",
                 ..
+            }) if found == world
+        ));
+    }
+
+    #[test]
+    fn sealed_writer_plan_generation_mismatch_fails_closed() {
+        let (storage, _, world) = fixture_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let binding = SealedActivationBindingV1 {
+            store_id: permit.store_id.clone(),
+            metadata_epoch: permit.metadata_epoch.get(),
+            metadata_hash: CanonicalHash::from_bytes(*permit.metadata_hash.as_bytes()),
+            projection_hash: CanonicalHash::from_bytes(*permit.projection_hash.as_bytes()),
+            plan_generation: permit.metadata_epoch.get().saturating_add(9),
+        };
+        assert!(matches!(
+            storage.activate_writer(fixture_activation_with_binding(
+                world,
+                permit,
+                Some(binding),
+            )),
+            Err(WorldDbError::ActivationPermitInvalid {
+                world: found,
+                reason: "plan generation mismatch",
             }) if found == world
         ));
     }
@@ -2559,5 +3058,273 @@ mod tests {
             WorldRevision::new(65)
         );
         writer.close().expect("writer closes cleanly");
+    }
+
+    #[test]
+    fn durable_storage_reads_materialized_chunks_before_generation() {
+        let (storage, _, world) = fixture_durable_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let absent = storage
+            .begin_read(world)
+            .expect("provisioned durable world is readable")
+            .load_chunk(&fixture_key(world))
+            .expect("absent chunk reads do not fail");
+        assert!(
+            absent.is_none(),
+            "generation may run only after storage proves absence"
+        );
+
+        let mut writer = storage
+            .activate_writer(fixture_sealed_activation(world, permit))
+            .expect("sealed durable writer activates");
+        writer
+            .commit(fixture_request(
+                world,
+                7,
+                CommitDurabilityV1::Durable,
+                &metadata,
+            ))
+            .expect("durable commit publishes a materialized chunk");
+        writer.close().expect("durable writer closes");
+
+        let loaded = storage
+            .begin_read(world)
+            .expect("closed durable world remains readable")
+            .load_chunk(&fixture_key(world))
+            .expect("portable record decodes")
+            .expect("materialized chunk is loaded before generation");
+        assert_eq!(loaded.chunk_revision(), ChunkRevision::new(1));
+        assert_eq!(loaded.data(), &fixture_data(11));
+    }
+
+    #[test]
+    fn durable_lease_conflict_rejects_a_second_writer() {
+        let (storage, _, world) = fixture_durable_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let writer = storage
+            .activate_writer(fixture_sealed_activation(world, permit.clone()))
+            .expect("first durable writer lease is exclusive");
+        assert!(matches!(
+            storage.activate_writer(fixture_sealed_activation(world, permit)),
+            Err(WorldDbError::WriterAlreadyActive { world: found }) if found == world
+        ));
+        writer
+            .close()
+            .expect("exclusive lease is released on close");
+    }
+
+    #[test]
+    fn durable_crash_discards_written_state_and_canonical_reopen_restores_durable_chunks() {
+        let (storage, publisher, world) = fixture_durable_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let mut writer = storage
+            .activate_writer(fixture_sealed_activation(world, permit))
+            .expect("sealed durable writer activates");
+        writer
+            .commit(fixture_request(
+                world,
+                7,
+                CommitDurabilityV1::Durable,
+                &metadata,
+            ))
+            .expect("durable commit reaches the sync frontier");
+        writer
+            .commit(fixture_request_at(
+                world,
+                8,
+                WorldRevision::new(1),
+                ChunkRevisionExpectation::Exact(ChunkRevision::new(1)),
+                12,
+                &metadata,
+            ))
+            .expect("a later Written commit stays off the durable frontier");
+        drop(writer);
+
+        let reopened_publisher = Arc::new(DeterministicHeaderPublisher::new());
+        let erased: Arc<dyn HeaderPublisher> = reopened_publisher.clone();
+        let recovered = storage
+            .canonical_reopen(erased)
+            .expect("canonical reopen decodes the last durable image");
+        assert_eq!(
+            recovered.durability_capability(),
+            StorageDurabilityCapabilityV1::WalSyncCheckpoint
+        );
+        assert!(matches!(
+            recovered.activate_writer(fixture_sealed_activation(
+                world,
+                ActivationPermitV1 {
+                    world,
+                    store_id: StoreId::new("store-generation-1")
+                        .expect("fixture store ID is valid"),
+                    metadata_epoch: MetadataEpoch::new(1),
+                    metadata_hash: DigestV1::default(),
+                    projection_hash: DigestV1::default(),
+                }
+            )),
+            Err(WorldDbError::RecoverableReadOnly { world: found, .. }
+                | WorldDbError::ActivationPermitStale { world: found, .. }
+                | WorldDbError::ActivationPermitInvalid { world: found, .. }
+                | WorldDbError::ActivationPermitHashMismatch { world: found, .. })
+                if found == world
+        ));
+
+        let preflight = recovered
+            .preflight(world)
+            .expect("reopened durable metadata remains readable");
+        assert!(matches!(
+            preflight.status(),
+            StoragePreflightStatusV1::HeaderRepairRequired(_)
+                | StoragePreflightStatusV1::RecoverableReadOnly { .. }
+        ));
+        assert!(preflight.activation_permit().is_none());
+
+        if let Some(repair) = preflight.header_repair_permit().cloned() {
+            recovered
+                .repair_header(repair)
+                .expect("sidecar repair is a read-only recovery action");
+        }
+        recovered
+            .verify_crash_recovery(world)
+            .expect("unclean durable frontier verifies without a writer");
+        let ready = recovered
+            .preflight(world)
+            .expect("verified recovery becomes activatable");
+        assert_eq!(
+            ready.status(),
+            &StoragePreflightStatusV1::ReadyForActivation
+        );
+        let restored = recovered
+            .begin_read(world)
+            .expect("verified recovery remains readable")
+            .load_chunk(&fixture_key(world))
+            .expect("reopened portable record decodes")
+            .expect("durable materialized chunk survived crash");
+        assert_eq!(restored.chunk_revision(), ChunkRevision::new(1));
+        assert_eq!(restored.data(), &fixture_data(11));
+        assert_eq!(
+            recovered
+                .begin_read(world)
+                .expect("reopened frontier is readable")
+                .frontier()
+                .durable(),
+            WorldRevision::new(1)
+        );
+        let _ = publisher;
+    }
+
+    #[test]
+    fn durable_checkpoint_recovers_atomically_and_rejects_non_durable_frontiers() {
+        let (storage, _, world) = fixture_durable_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let mut writer = storage
+            .activate_writer(fixture_sealed_activation(world, permit))
+            .expect("sealed durable writer activates");
+        let checkpoint = CheckpointRequestV1::new(
+            CheckpointId::from_u128(1),
+            CheckpointKindV1::Protected,
+            "manual recovery point",
+        );
+        writer
+            .commit(fixture_request(
+                world,
+                9,
+                CommitDurabilityV1::Written,
+                &metadata,
+            ))
+            .expect("written commit is not a recovery point");
+        assert!(matches!(
+            writer.create_checkpoint(checkpoint.clone()),
+            Err(WorldDbError::CheckpointRequiresDurableFrontier { world: found, .. })
+                if found == world
+        ));
+        writer
+            .flush_durable()
+            .expect("flush advances the contiguous durable frontier");
+        let created = writer
+            .create_checkpoint(checkpoint.clone())
+            .expect("checkpoint at the durable frontier is retained");
+        assert!(created.receipt().restore_verified());
+        writer.close().expect("durable writer closes");
+
+        let verified = storage
+            .verify_checkpoint(world, checkpoint.id())
+            .expect("independent checkpoint verification does not open a writer");
+        assert_eq!(verified.id(), checkpoint.id());
+        assert_eq!(verified.source_revision(), WorldRevision::new(1));
+        assert_eq!(
+            storage
+                .keyspace_stats()
+                .expect("durable statistics remain readable")
+                .checkpoint_images(),
+            1
+        );
+    }
+
+    #[test]
+    fn low_disk_pauses_mutation_and_read_only_recovery_never_opens_a_writer() {
+        let (storage, _, world) = fixture_durable_storage();
+        let metadata = fixture_metadata();
+        let permit = provision(&storage, world, &metadata);
+        let mut writer = storage
+            .activate_writer(fixture_sealed_activation(world, permit.clone()))
+            .expect("sealed durable writer activates");
+        storage
+            .observe_disk(
+                DiskSample {
+                    usable_free_bytes: 4 * GIB,
+                    capacity_bytes: 100 * GIB,
+                },
+                HeadroomInputs::default(),
+                None,
+                DirtyDrainState::Clean,
+            )
+            .expect("low-disk sample is admitted");
+        assert!(matches!(
+            writer.commit(fixture_request(
+                world,
+                11,
+                CommitDurabilityV1::Durable,
+                &metadata,
+            )),
+            Err(WorldDbError::LowDiskMutationPaused { world: found, .. }) if found == world
+        ));
+        writer.close().expect("paused writer still closes");
+
+        storage
+            .observe_disk(
+                DiskSample {
+                    usable_free_bytes: 0,
+                    capacity_bytes: 100 * GIB,
+                },
+                HeadroomInputs::default(),
+                Some(StorageFailure::NoSpace),
+                DirtyDrainState::FailedReadOnlyAvailable,
+            )
+            .expect("failed drain escalates to read-only recovery");
+        let preflight = storage
+            .preflight(world)
+            .expect("read-only recovery still reads metadata");
+        assert!(matches!(
+            preflight.status(),
+            StoragePreflightStatusV1::RecoverableReadOnly { .. }
+        ));
+        assert!(preflight.activation_permit().is_none());
+        assert!(
+            storage
+                .begin_read(world)
+                .expect("read-only recovery remains readable")
+                .load_chunk(&fixture_key(world))
+                .expect("absence stays decodable")
+                .is_none()
+        );
+        let ready_permit = preflight.activation_permit().cloned().unwrap_or(permit);
+        assert!(matches!(
+            storage.activate_writer(fixture_sealed_activation(world, ready_permit)),
+            Err(WorldDbError::RecoverableReadOnly { world: found, .. }) if found == world
+        ));
     }
 }

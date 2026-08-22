@@ -1,26 +1,39 @@
 # `latticeaxiom-world-db`
 
-`latticeaxiom-world-db` is a D3 persistence-boundary prototype and a volatile,
-deterministic reference implementation. It does **not** provide RocksDB,
-filesystem persistence, WAL behavior, media synchronization, crash/restart
-recovery, or physical checkpoints.
+`latticeaxiom-world-db` is a D3 persistence-boundary prototype. It does **not**
+open RocksDB or claim on-disk WAL/sync media. Two in-process oracles share the
+product contract:
+
+- `DeterministicWorldStorage::new` reports
+  `StorageDurabilityCapabilityV1::VolatileReference`. It accepts only `Written`
+  reference commits. Requests for `Durable`, `flush_durable`, physical
+  checkpoint creation, canonical reopen, or checkpoint verification fail before
+  publication with `PhysicalDurabilityUnsupported`.
+- `DeterministicWorldStorage::durable` reports
+  `StorageDurabilityCapabilityV1::WalSyncCheckpoint`. It retains a versioned,
+  bounded-decode store image at the contiguous durable frontier and uses that
+  image for crash reopen, checkpoint restore, and read-only recovery.
 
 ## Current safety posture
-
-`DeterministicWorldStorage` reports
-`StorageDurabilityCapabilityV1::VolatileReference`. It accepts only `Written`
-reference commits. Requests for `Durable`, `flush_durable`, physical checkpoint
-creation, or physical checkpoint verification fail before publication with
-`PhysicalDurabilityUnsupported`; their receipts and frontiers are never forged
-by the memory implementation.
 
 Writer activation fails closed with `ActivationEvidenceUnavailable` when the
 accepted catalog plan has no sealed receipt. A writer opens only when
 `AcceptedWorldOpenPlan` carries a non-forgeable receipt binding world ID, store
 ID, metadata epoch/hash, projection hash, and plan generation, and that receipt
 matches `ActivationPermitV1`. The storage permit alone is not authority.
-`flush_durable` and physical checkpoints remain `PhysicalDurabilityUnsupported`
-on this volatile reference.
+
+The durable oracle additionally:
+
+- loads materialized chunks through `begin_read` before generation is allowed
+  to consider absence;
+- publishes `Durable` commits, `flush_durable`, and independently verified
+  checkpoints onto one atomic store image;
+- refuses a second writer lease and does not copy leases across canonical
+  reopen;
+- pauses new authoritative mutation under low-disk admission and never opens a
+  writer in `RecoverableReadOnly`;
+- treats unclean shutdown as read-only until `verify_crash_recovery` proves the
+  durable frontier.
 
 The internal test-only writer fixture exists solely to exercise atomic
 reference transitions. It is compiled only for this crate's unit tests and is
@@ -28,7 +41,7 @@ not a product API.
 
 ## Implemented reference invariants
 
-The volatile reference currently exercises:
+Both oracles currently exercise:
 
 - bounded, read-only storage preflight and coherent captured reads;
 - catalog-owned header reconciliation, including non-repairable world/store
@@ -45,11 +58,11 @@ The volatile reference currently exercises:
 - versioned metadata and chunk-record keys delegated to
   `latticeaxiom-world-wire`.
 
-The memory model is not a conformance substitute for a physical backend.
-Frontier fields named `durable` and `checkpointed` remain zero in this backend.
-The private reference-checkpoint prototype is deliberately not reachable
-through the public implementation because its image is not yet the complete,
-versioned, bounded-decode store image required for a recovery claim.
+The memory model is not a conformance substitute for a physical RocksDB
+adapter. Volatile frontiers named `durable` and `checkpointed` remain zero
+unless a `Durable` request is rejected. The durable oracle's image is the
+complete, versioned, bounded-decode store image required for a recovery claim
+inside this process; it is not evidence of filesystem or WAL media.
 
 ## Typed persisted-chunk wire boundary
 

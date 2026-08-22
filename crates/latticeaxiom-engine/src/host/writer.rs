@@ -13,10 +13,11 @@ use latticeaxiom_world_catalog::{
     WorldOpenPlan,
 };
 use latticeaxiom_world_db::{
-    ActivationPermitV1, DeterministicHeaderPublisher, DeterministicWorldStorage, HeaderPublisher,
-    WorldCommitOutcomeV1, WorldCommitRequestV1, WorldCreateOutcomeV1, WorldCreateRequestV1,
-    WorldDbError, WorldReadView, WorldStorage, WorldStorageLimitsV1, WorldStoragePreflightV1,
-    WorldWriter, WriterActivationV1,
+    ActivationPermitV1, CheckpointOutcomeV1, CheckpointRequestV1, DeterministicHeaderPublisher,
+    DeterministicWorldStorage, HeaderPublisher, HeaderRepairPermitV1,
+    StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitReceiptV1,
+    WorldCommitRequestV1, WorldCreateOutcomeV1, WorldCreateRequestV1, WorldDbError, WorldReadView,
+    WorldStorage, WorldStorageLimitsV1, WorldStoragePreflightV1, WorldWriter, WriterActivationV1,
 };
 use latticeaxiom_world_wire::WorldWireLimits;
 use thiserror::Error;
@@ -77,6 +78,34 @@ impl SealedWorldWriterHost {
     pub fn volatile_reference_with_default_publisher(record_owner: StableId) -> Self {
         let publisher: Arc<dyn HeaderPublisher> = Arc::new(DeterministicHeaderPublisher::new());
         Self::volatile_reference(record_owner, publisher)
+    }
+
+    /// Builds a durable recovery oracle with D3 bootstrap limits.
+    ///
+    /// The oracle retains a versioned store image at the contiguous durable
+    /// frontier. It does not open `RocksDB`. Writer activation still requires
+    /// a sealed catalog receipt.
+    #[must_use]
+    pub fn durable_reference(record_owner: StableId, publisher: Arc<dyn HeaderPublisher>) -> Self {
+        Self::new(DeterministicWorldStorage::durable(
+            record_owner,
+            WorldWireLimits::default(),
+            WorldStorageLimitsV1::D3_BOOTSTRAP,
+            publisher,
+        ))
+    }
+
+    /// Builds a durable recovery oracle with the in-process header publisher.
+    #[must_use]
+    pub fn durable_reference_with_default_publisher(record_owner: StableId) -> Self {
+        let publisher: Arc<dyn HeaderPublisher> = Arc::new(DeterministicHeaderPublisher::new());
+        Self::durable_reference(record_owner, publisher)
+    }
+
+    /// Returns the strongest persistence boundary this host can prove.
+    #[must_use]
+    pub fn durability_capability(&self) -> StorageDurabilityCapabilityV1 {
+        self.storage.durability_capability()
     }
 
     /// Returns the wrapped deterministic store.
@@ -161,9 +190,11 @@ impl SealedWorldWriterHost {
         Ok(())
     }
 
-    /// Publishes [`latticeaxiom_world_db::CommitDurabilityV1::Written`] chunk mutations.
+    /// Publishes chunk mutations at the requested durability.
     ///
-    /// Durable commits remain [`WorldDbError::PhysicalDurabilityUnsupported`].
+    /// Volatile references accept only [`latticeaxiom_world_db::CommitDurabilityV1::Written`].
+    /// Durable oracles accept [`latticeaxiom_world_db::CommitDurabilityV1::Durable`]
+    /// after the same sealed activation gate.
     ///
     /// # Errors
     ///
@@ -195,6 +226,65 @@ impl SealedWorldWriterHost {
             .ok_or(SealedWriterHostError::WriterInactive)?
             .flush_durable()
             .map_err(SealedWriterHostError::from)
+    }
+
+    /// Creates an independently verified checkpoint at the durable frontier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedWriterHostError::WriterInactive`] when no writer is
+    /// leased, or a typed storage error if the frontier is not durable.
+    pub fn create_checkpoint(
+        &mut self,
+        request: CheckpointRequestV1,
+    ) -> Result<CheckpointOutcomeV1, SealedWriterHostError> {
+        self.writer
+            .as_mut()
+            .ok_or(SealedWriterHostError::WriterInactive)?
+            .create_checkpoint(request)
+            .map_err(SealedWriterHostError::from)
+    }
+
+    /// Reopens an independent durable instance from the last synchronized image.
+    ///
+    /// Writer leases are never copied. Written-but-not-durable mutations are
+    /// discarded. The current writer, if any, is dropped uncleanly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldDbError::PhysicalDurabilityUnsupported`] on the volatile
+    /// reference, or a typed error if no durable image exists.
+    pub fn canonical_reopen(&mut self) -> Result<(), SealedWriterHostError> {
+        self.writer = None;
+        let publisher: Arc<dyn HeaderPublisher> = Arc::new(DeterministicHeaderPublisher::new());
+        self.storage = self.storage.canonical_reopen(publisher)?;
+        Ok(())
+    }
+
+    /// Verifies an unclean durable frontier without opening a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the world is missing or the frontier
+    /// is inconsistent.
+    pub fn verify_crash_recovery(
+        &self,
+        world: WorldId,
+    ) -> Result<WorldCommitReceiptV1, SealedWriterHostError> {
+        Ok(self.storage.verify_crash_recovery(world)?)
+    }
+
+    /// Repairs a missing, stale, or corrupt sidecar before writer activation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error if the DB evidence changed or cannot be
+    /// read.
+    pub fn repair_header(
+        &self,
+        permit: HeaderRepairPermitV1,
+    ) -> Result<WorldCommitOutcomeV1, SealedWriterHostError> {
+        Ok(self.storage.repair_header(permit)?)
     }
 
     /// Returns whether a sealed writer lease is currently open.

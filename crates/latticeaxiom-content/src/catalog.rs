@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BiomeDefinitionV1, BlockDefinitionV1, BlockRuleReferencesV1, BlockStatePropertyV1,
-    BlockStateSemanticsV1, BlockStateV1, ContentError, ContentResult, FluidDefinitionV1,
-    ValidatedBlockDefinitionV1, biome::normalize_biome_definition,
-    block::validate_block_definition, fluid::validate_fluid_definition, header::validate_exact_id,
+    BlockStateSemanticsV1, BlockStateV1, ContentError, ContentPresentationBindingV1,
+    ContentPresentationKindV1, ContentResult, FluidDefinitionV1, ValidatedBlockDefinitionV1,
+    biome::normalize_biome_definition, block::validate_block_definition,
+    fluid::validate_fluid_definition, header::validate_exact_id,
 };
 
 /// Content catalog schema major compiled by this crate.
@@ -281,6 +282,41 @@ impl ContentCatalogV1 {
     #[must_use]
     pub fn material_role_bindings(&self) -> &[ValidatedMaterialRoleBindingV1] {
         &self.material_role_bindings
+    }
+
+    /// Returns presentation bindings in stable content-identity order.
+    ///
+    /// The rows are derived from compiled definitions and never enter
+    /// [`Self::canonical_authoritative_hash`].
+    #[must_use]
+    pub fn presentation_bindings(&self) -> Vec<ContentPresentationBindingV1> {
+        let mut rows = Vec::with_capacity(self.blocks.len() + self.fluids.len());
+        rows.extend(self.blocks.iter().map(|block| {
+            let definition = block.definition();
+            ContentPresentationBindingV1::new(
+                definition.header.stable_id.clone(),
+                ContentPresentationKindV1::Block,
+                definition.presentation_binding.clone(),
+            )
+        }));
+        rows.extend(self.fluids.iter().map(|fluid| {
+            ContentPresentationBindingV1::new(
+                fluid.header.stable_id.clone(),
+                ContentPresentationKindV1::Fluid,
+                fluid.presentation_binding.clone(),
+            )
+        }));
+        rows.sort_by(|left, right| left.content().cmp(right.content()));
+        rows
+    }
+
+    /// Hashes the presentation-only binding index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if canonical JSON encoding fails.
+    pub fn presentation_binding_hash(&self) -> ContentResult<CanonicalHash> {
+        canonical_json_hash(&self.presentation_bindings()).map_err(ContentError::from)
     }
 
     /// Finds an exact block definition.

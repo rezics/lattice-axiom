@@ -16,15 +16,17 @@ use latticeaxiom_voxel_mesh::{Face, PaddedChunk};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ApplyByteDeclaration, BackpressureReason, CancellationAckOutcome, CancellationReleaseReceipt,
-    ColliderFailure, ColliderSafetyState, ColliderSemanticFingerprint, CollisionSemantics,
-    CommittedChunkProjection, CompletionOutcome, DerivedApplyReceipt, DerivedEnqueueReceipt,
-    DerivedInput, DerivedJobId, DerivedJobKey, DerivedKind, DerivedRequest, DerivedRequestSet,
-    DerivedSemanticFingerprint, DerivedSourceFingerprint, DispatchOutcome, EnqueueDecision,
-    EvictionLeaseGeneration, EvictionPermit, EvictionReceipt, FixedTick, InterestWindow,
-    MemoryStage, MeshSemanticFingerprint, NeighborRevision, NeighborRevisions, ProjectionDecision,
-    ProjectionReceipt, RetainedBytes, RuntimeDiagnostics, RuntimeError, RuntimeGeneration,
-    RuntimeLimits, RuntimeResult, StaleReason, VoxelCoordinate, WorkingSetScope,
+    ApplyAdmission, ApplyByteDeclaration, BackpressureReason, CancellationAckOutcome,
+    CancellationReleaseReceipt, ColliderFailure, ColliderSafetyState, ColliderSemanticFingerprint,
+    CollisionSemantics, CommittedChunkProjection, CompletionOutcome, DerivedAdmissionSnapshot,
+    DerivedApplyReceipt, DerivedEnqueueReceipt, DerivedInput, DerivedJobId, DerivedJobKey,
+    DerivedKind, DerivedRequest, DerivedRequestSet, DerivedSemanticFingerprint,
+    DerivedSourceFingerprint, DerivedTicket, DispatchOutcome, EnqueueDecision,
+    EvictionLeaseGeneration, EvictionPermit, EvictionReceipt, ExecutorFinish, ExecutorOutcome,
+    FixedTick, InterestWindow, MemoryStage, MeshSemanticFingerprint, NeighborRevision,
+    NeighborRevisions, ProjectionDecision, ProjectionReceipt, RetainedBytes, RuntimeDiagnostics,
+    RuntimeError, RuntimeGeneration, RuntimeLimits, RuntimeResult, StaleReason, VoxelCoordinate,
+    WorkerAbortOutcome, WorkerAbortReceipt, WorkingSetScope,
     model::ProjectionParts,
     queue::{DerivedQueue, JobState, PendingJob},
 };
@@ -175,6 +177,14 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             .mesh
             .in_flight()
             .saturating_add(diagnostics.collider.in_flight());
+        diagnostics.combined_pending_jobs = diagnostics
+            .mesh
+            .pending()
+            .saturating_add(diagnostics.collider.pending());
+        diagnostics.combined_pending_bytes = diagnostics
+            .mesh
+            .pending_bytes()
+            .saturating_add(diagnostics.collider.pending_bytes());
         diagnostics.saving_chunks = 0;
         diagnostics.byte_budget = self.limits.max_combined_reserved_bytes();
         diagnostics
@@ -630,6 +640,75 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             )
     }
 
+    /// Combined pending mesh and collider jobs.
+    #[must_use]
+    pub fn pending_jobs(&self) -> usize {
+        self.queues[DerivedKind::Mesh.index()]
+            .diagnostics()
+            .pending()
+            .saturating_add(
+                self.queues[DerivedKind::Collider.index()]
+                    .diagnostics()
+                    .pending(),
+            )
+    }
+
+    /// Combined declared reservations of pending jobs.
+    #[must_use]
+    pub fn pending_bytes(&self) -> u64 {
+        self.queues[DerivedKind::Mesh.index()]
+            .diagnostics()
+            .pending_bytes()
+            .saturating_add(
+                self.queues[DerivedKind::Collider.index()]
+                    .diagnostics()
+                    .pending_bytes(),
+            )
+    }
+
+    /// Combined in-flight input, result, and apply reservations.
+    #[must_use]
+    pub fn in_flight_bytes(&self) -> u64 {
+        self.diagnostics.combined_reserved_bytes
+    }
+
+    /// Pending, in-flight, and waiting-to-apply ledgers for dispatch and apply.
+    #[must_use]
+    pub fn admission_snapshot(&self) -> DerivedAdmissionSnapshot {
+        let diagnostics = self.diagnostics();
+        DerivedAdmissionSnapshot {
+            pending_jobs: diagnostics.combined_pending_jobs(),
+            pending_bytes: diagnostics.combined_pending_bytes(),
+            in_flight_jobs: self.in_flight_jobs(),
+            in_flight_bytes: self.in_flight_bytes(),
+            waiting_to_apply_jobs: diagnostics.waiting_to_apply_jobs(),
+            waiting_to_apply_bytes: diagnostics.waiting_to_apply_bytes(),
+            cpu_heavy_concurrency: self.limits.cpu_heavy_concurrency(),
+            combined_in_flight_cap: self.limits.max_combined_in_flight(),
+            combined_byte_cap: self.limits.max_combined_reserved_bytes(),
+            at_soft_high_water: self.at_soft_high_water(),
+        }
+    }
+
+    /// Records why a host apply slice stopped before draining waiting work.
+    pub fn record_apply_budget_stop(&mut self, admission: ApplyAdmission) {
+        match admission {
+            ApplyAdmission::Admit => {}
+            ApplyAdmission::StopJobs => {
+                self.diagnostics.apply_stopped_jobs =
+                    self.diagnostics.apply_stopped_jobs.saturating_add(1);
+            }
+            ApplyAdmission::StopBytes => {
+                self.diagnostics.apply_stopped_bytes =
+                    self.diagnostics.apply_stopped_bytes.saturating_add(1);
+            }
+            ApplyAdmission::StopWallClock => {
+                self.diagnostics.apply_stopped_wall_clock =
+                    self.diagnostics.apply_stopped_wall_clock.saturating_add(1);
+            }
+        }
+    }
+
     /// Records a computed result that is waiting for host presentation apply.
     ///
     /// Waiting bytes are distinct from in-flight reservations: they are the
@@ -656,6 +735,97 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
             .diagnostics
             .waiting_to_apply_bytes
             .saturating_sub(bytes);
+    }
+
+    /// Routes an executor outcome to apply, cancellation acknowledgement, or abort.
+    ///
+    /// `Ready` and cancelled-with-result jobs use [`Self::complete_derived`],
+    /// which still stale-rejects and refuses cancel-requested applies.
+    /// Worker panics never run `apply`.
+    pub fn complete_executor<R, A, E>(
+        &mut self,
+        outcome: ExecutorOutcome<V, R>,
+        apply_bytes: ApplyByteDeclaration,
+        completed_tick: FixedTick,
+        apply: impl FnOnce(R) -> Result<A, E>,
+    ) -> ExecutorFinish<A, E, V, R>
+    where
+        R: RetainedBytes,
+    {
+        match outcome {
+            ExecutorOutcome::Ready { input, result }
+            | ExecutorOutcome::Cancelled {
+                input,
+                result: Some(result),
+            } => ExecutorFinish::Completed(self.complete_derived(
+                input,
+                result,
+                apply_bytes,
+                completed_tick,
+                apply,
+            )),
+            ExecutorOutcome::Cancelled {
+                input,
+                result: None,
+            } => match self.acknowledge_cancelled::<R>(input, None) {
+                CancellationAckOutcome::Released(receipt) => {
+                    ExecutorFinish::Completed(CompletionOutcome::Cancelled { receipt })
+                }
+                CancellationAckOutcome::MemoryContractViolation {
+                    job,
+                    budget,
+                    actual,
+                } => ExecutorFinish::Completed(CompletionOutcome::MemoryContractViolation {
+                    job,
+                    stage: MemoryStage::Result,
+                    budget,
+                    actual,
+                }),
+                CancellationAckOutcome::NotRequested { input, .. }
+                | CancellationAckOutcome::UnknownJob { input, .. } => {
+                    ExecutorFinish::Aborted(WorkerAbortOutcome::UnknownInput { input })
+                }
+            },
+            ExecutorOutcome::Panicked { input } => {
+                ExecutorFinish::Aborted(self.complete_panicked(input))
+            }
+        }
+    }
+
+    /// Releases an owned input after the worker panicked without applying.
+    ///
+    /// Previous derived presentation remains unchanged. Collider safety stays
+    /// conservative when the panicked job is still the current source.
+    pub fn complete_panicked(&mut self, input: DerivedInput<V>) -> WorkerAbortOutcome<V> {
+        let ticket = input.ticket.clone();
+        let kind = ticket.key.kind();
+        if self.queues[kind.index()].state(&ticket).is_none() {
+            return WorkerAbortOutcome::UnknownInput { input };
+        }
+        drop(input);
+        self.queues[kind.index()].mark_executor_panicked();
+        self.set_collider_failure_if_current(&ticket.key, ColliderFailure::ExecutorPanicked);
+        let released = self.release_ticket(&ticket);
+        WorkerAbortOutcome::Panicked(WorkerAbortReceipt::new(ticket.id(), released))
+    }
+
+    /// Releases a ticket whose owned input was dropped by a panicking executor.
+    ///
+    /// Hosts must clone the ticket before transferring input ownership. Calling
+    /// this while the input still exists is fail-closed: later completion of
+    /// that input is [`CompletionOutcome::UnknownJob`].
+    pub fn recover_lost_ticket(&mut self, ticket: DerivedTicket) -> WorkerAbortOutcome<V> {
+        let kind = ticket.key.kind();
+        if self.queues[kind.index()].state(&ticket).is_none() {
+            return WorkerAbortOutcome::UnknownTicket {
+                job: ticket.id(),
+                ticket,
+            };
+        }
+        self.queues[kind.index()].mark_lost_ticket();
+        self.set_collider_failure_if_current(&ticket.key, ColliderFailure::ExecutorPanicked);
+        let released = self.release_ticket(&ticket);
+        WorkerAbortOutcome::Lost(WorkerAbortReceipt::new(ticket.id(), released))
     }
 
     /// Starts ready jobs until empty, backpressured, or `max_jobs` is reached.
@@ -975,6 +1145,20 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         }))
     }
 
+    fn at_soft_high_water(&self) -> bool {
+        let mesh = self.queues[DerivedKind::Mesh.index()].diagnostics();
+        let collider = self.queues[DerivedKind::Collider.index()].diagnostics();
+        self.limits
+            .mesh()
+            .at_soft_high_water(mesh.pending(), mesh.reserved_bytes())
+            || self
+                .limits
+                .collider()
+                .at_soft_high_water(collider.pending(), collider.reserved_bytes())
+            || self.in_flight_jobs() >= self.limits.combined_soft_high_water_jobs()
+            || self.in_flight_bytes() >= self.limits.combined_soft_high_water_bytes()
+    }
+
     fn enqueue_work(
         &mut self,
         work: &BTreeSet<(ChunkCoordinate, DerivedKind)>,
@@ -1211,7 +1395,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         canonical_index(usize::from(self.edge), x, y, z)
     }
 
-    fn release_ticket(&mut self, ticket: &crate::DerivedTicket) -> u64 {
+    fn release_ticket(&mut self, ticket: &DerivedTicket) -> u64 {
         let released = self.queues[ticket.key.kind().index()]
             .release(ticket)
             .expect("ticket state was validated before owned resources were dropped");

@@ -1,12 +1,13 @@
 //! In-memory start-ui create/list/pause/save/exit/continue for the production host.
 //!
-//! Worlds published here live in [`crate::MemoryTransactionKernel`] for the
-//! current process. Pause opens the start-ui overlay and does not mutate the
-//! materialized-chunk world hash. Save flushes dirty chunks through
-//! [`SealedWorldWriterHost`] as Written commits and closes the writer; it does
-//! not call [`SealedWorldWriterHost::flush_durable`]. Exit drops the live host
-//! so Continue on a storage-backed world reopens [`DeterministicWorldStorage`]
-//! first. This is not a physical checkpoint, trash, or restore path.
+//! Worlds published here live in [`crate::MemoryTransactionKernel`] as the
+//! session cache. Pause opens the start-ui overlay and does not mutate the
+//! materialized-chunk world hash. Durable Save & Quit activates a sealed
+//! writer only after exact lock, catalog, world-header, and lease receipts
+//! match, publishes player/chunk state, checkpoints, and returns a validated
+//! [`ChildResultV1`]. Continue on a storage-backed world reopens
+//! [`DeterministicWorldStorage`] first. Recoverable read-only, low-disk, and
+//! lease-conflict paths never open a second writer.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -15,9 +16,14 @@ use std::{
 
 use bevy::prelude::Resource;
 use latticeaxiom_compose::LockedGameGraph;
-use latticeaxiom_core::{CanonicalHash, CapabilityId, IdentifierError, PackageName, WorldId};
+use latticeaxiom_core::{
+    CanonicalHash, CapabilityId, IdentifierError, PackageName, WorldId, canonical_json_hash,
+};
 use latticeaxiom_launcher::{
-    LaunchGeneration, MAX_LAUNCH_INTENT_LIFETIME_MS, SettingTransactionRevision,
+    ChildExitKindV1, ChildExitReportDraftV1, ChildExitReportV1, ChildRoleV1,
+    DurableWorldRevisionV1, LaunchAttempt, LaunchGeneration, LaunchIntentDraftV1, LaunchIntentV1,
+    LaunchTargetV1, MAX_LAUNCH_INTENT_LIFETIME_MS, ProcessEpoch, SettingTransactionRevision,
+    WorldRevision as LauncherWorldRevision,
 };
 use latticeaxiom_start_ui::{
     ClientShellGraph, ClientShellGraphError, HomePrimaryAction, InMemoryWorldList, InputSource,
@@ -30,9 +36,10 @@ use latticeaxiom_world_catalog::{
     ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
 };
 use latticeaxiom_world_db::{
-    ActivationPermitV1, AuthoritativeMetadataInputV1, DeterministicWorldStorage, DigestV1,
-    FrozenLockReceiptV1, WorldCreateRequestV1, WorldDbError, WorldRequirementClosureV1,
-    WorldStorage,
+    ActivationPermitV1, AuthoritativeMetadataInputV1, CheckpointId, CheckpointKindV1,
+    CheckpointReceiptV1, CheckpointRequestV1, DeterministicWorldStorage, DigestV1,
+    FrozenLockReceiptV1, StorageDurabilityCapabilityV1, StoragePreflightStatusV1,
+    WorldCreateRequestV1, WorldDbError, WorldRequirementClosureV1, WorldStorage,
 };
 use thiserror::Error;
 
@@ -41,6 +48,34 @@ use super::{
     SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding,
 };
 use crate::{EngineInstance, LockVerifiedComposeImages, VerifiedProductLockHash};
+
+/// Validated world-child result published after a durable Save & Quit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChildResultV1 {
+    report: ChildExitReportV1,
+    intent: LaunchIntentV1,
+    checkpoint: CheckpointReceiptV1,
+}
+
+impl ChildResultV1 {
+    /// Returns the checksummed child-exit envelope.
+    #[must_use]
+    pub const fn report(&self) -> &ChildExitReportV1 {
+        &self.report
+    }
+
+    /// Returns the one-shot shell intent that must accompany the report.
+    #[must_use]
+    pub const fn intent(&self) -> &LaunchIntentV1 {
+        &self.intent
+    }
+
+    /// Returns the independently verified Save & Quit checkpoint.
+    #[must_use]
+    pub const fn checkpoint(&self) -> &CheckpointReceiptV1 {
+        &self.checkpoint
+    }
+}
 
 /// Process-local world list installed on a production host after Continue.
 #[derive(Clone, Debug, Resource)]
@@ -393,10 +428,11 @@ impl ProductionMemoryStart {
         Ok(effect)
     }
 
-    /// Save & Quit: flush Written chunks, drop the host, and return Home.
+    /// Save & Quit: flush dirty state, drop the host, and return Home.
     ///
-    /// V2 uses the sealed-writer Written close as the replacement-process
-    /// barrier. This is not a `RocksDB` Durable checkpoint.
+    /// Durable oracles additionally checkpoint and return a validated
+    /// [`ChildResultV1`] through [`Self::save_and_quit_durable`]. Volatile
+    /// references keep the Written close used by V2 tests.
     ///
     /// # Errors
     ///
@@ -407,8 +443,62 @@ impl ProductionMemoryStart {
         instance: EngineInstance,
         writer: &mut SealedWorldWriterHost,
     ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
+        if writer.durability_capability() == StorageDurabilityCapabilityV1::WalSyncCheckpoint {
+            let _ = self.save_and_quit_durable(world_id, instance, writer)?;
+            return Ok(MemoryStartEffect::Shell(ShellEffect::RequestExitWorld));
+        }
         self.save_world(world_id, writer)?;
         self.exit_world(world_id, instance)
+    }
+
+    /// Durable Save & Quit: sealed writer, checkpoint, and child result.
+    ///
+    /// Exact lock/catalog/world-header/lease receipts are revalidated before
+    /// the writer opens. Player pose, inventory, selected slot, tool
+    /// durability, containers, scheduled work, and edited chunks are
+    /// published at [`CommitDurabilityV1::Durable`]. A protected checkpoint
+    /// is created at that frontier. The writer is closed before the child
+    /// result is sealed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the world is absent,
+    /// activation evidence is missing, durability is unsupported, or the
+    /// child-result envelope is invalid.
+    pub fn save_and_quit_durable(
+        &mut self,
+        world_id: WorldId,
+        instance: EngineInstance,
+        writer: &mut SealedWorldWriterHost,
+    ) -> Result<ChildResultV1, ProductionMemoryStartError> {
+        if writer.durability_capability() != StorageDurabilityCapabilityV1::WalSyncCheckpoint {
+            return Err(ProductionMemoryStartError::DurableCapabilityRequired);
+        }
+        self.inject(&session_command("pause/save", SemanticActionId::SaveWorld))?;
+        let outcome = self.flush_dirty_chunks(world_id, writer)?;
+        if outcome.is_none() {
+            writer.flush_durable()?;
+        }
+        let checkpoint = writer.create_checkpoint(CheckpointRequestV1::new(
+            CheckpointId::from_u128(u128::from(self.flow.now_ms()).saturating_add(1)),
+            CheckpointKindV1::Protected,
+            "save-and-quit",
+        ))?;
+        let frontier = writer.begin_read(world_id)?.frontier();
+        if frontier.durable() != frontier.current() || frontier.checkpointed() != frontier.durable()
+        {
+            return Err(ProductionMemoryStartError::DurableFrontierIncomplete { world: world_id });
+        }
+        writer.close()?;
+        self.flow
+            .record_durable_frontier(world_id, frontier.durable().get(), true)?;
+        let result = self.seal_child_result(
+            world_id,
+            frontier.durable().get(),
+            checkpoint.receipt().clone(),
+        )?;
+        self.exit_world(world_id, instance)?;
+        Ok(result)
     }
 
     /// Flushes dirty chunks through the sealed writer and then closes it.
@@ -429,6 +519,9 @@ impl ProductionMemoryStart {
     ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
         let effect = self.inject(&session_command("pause/save", SemanticActionId::SaveWorld))?;
         self.flush_dirty_chunks(world_id, writer)?;
+        if writer.is_writer_active() {
+            writer.close()?;
+        }
         Ok(effect)
     }
 
@@ -476,7 +569,8 @@ impl ProductionMemoryStart {
         &mut self,
         world_id: WorldId,
         writer: &mut SealedWorldWriterHost,
-    ) -> Result<(), ProductionMemoryStartError> {
+    ) -> Result<Option<latticeaxiom_world_db::WorldCommitOutcomeV1>, ProductionMemoryStartError>
+    {
         if self.flow.worlds().get(world_id).is_none() {
             return Err(WorldShellError::MissingLiveWorld.into());
         }
@@ -492,9 +586,103 @@ impl ProductionMemoryStart {
             .ok_or(ProductionMemoryStartError::StorageActivationUnavailable { world: world_id })?;
         let plan = writable_open_plan(world_id, &permit);
         writer.reactivate(&plan, permit)?;
-        spine.flush_dirty_chunks(writer, preflight.metadata())?;
-        writer.close()?;
+        let outcome = spine.flush_dirty_chunks(writer, preflight.metadata())?;
+        if writer.durability_capability() != StorageDurabilityCapabilityV1::WalSyncCheckpoint {
+            writer.close()?;
+        }
+        Ok(outcome)
+    }
+
+    /// Recovers a crash-abandoned durable world without opening a writer first.
+    ///
+    /// Canonical reopen discards written-but-not-durable mutations, header
+    /// repair is a read-only recovery action, and
+    /// [`SealedWorldWriterHost::verify_crash_recovery`] must succeed before a
+    /// later sealed activation. Recoverable read-only status never yields a
+    /// writer permit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when shared storage is absent,
+    /// reopen fails, or recovery verification cannot complete.
+    pub fn recover_after_crash(
+        &mut self,
+        world_id: WorldId,
+        writer: &mut SealedWorldWriterHost,
+    ) -> Result<(), ProductionMemoryStartError> {
+        writer.canonical_reopen()?;
+        self.set_storage(writer.storage().clone());
+        let preflight = writer.preflight(world_id)?;
+        if let Some(repair) = preflight.header_repair_permit().cloned() {
+            writer.repair_header(repair)?;
+        }
+        writer.verify_crash_recovery(world_id)?;
+        let ready = writer.preflight(world_id)?;
+        if matches!(
+            ready.status(),
+            StoragePreflightStatusV1::RecoverableReadOnly { .. }
+        ) {
+            return Err(ProductionMemoryStartError::RecoverableReadOnly { world: world_id });
+        }
+        if ready.activation_permit().is_none() {
+            return Err(ProductionMemoryStartError::StorageActivationUnavailable {
+                world: world_id,
+            });
+        }
         Ok(())
+    }
+
+    fn seal_child_result(
+        &self,
+        world_id: WorldId,
+        durable_revision: u64,
+        checkpoint: CheckpointReceiptV1,
+    ) -> Result<ChildResultV1, ProductionMemoryStartError> {
+        let record = self
+            .flow
+            .worlds()
+            .get(world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        let plan = record
+            .open_plan
+            .as_ref()
+            .ok_or(ProductionMemoryStartError::StorageActivationUnavailable { world: world_id })?;
+        let plan_hash = canonical_json_hash(plan)?;
+        let now_ms = self.flow.now_ms();
+        let child_generation = current_launch_generation();
+        let intent = LaunchIntentV1::seal(LaunchIntentDraftV1 {
+            generation: child_generation.next()?,
+            attempt: LaunchAttempt::FIRST,
+            issued_at_ms: now_ms,
+            expires_at_ms: now_ms.saturating_add(MAX_LAUNCH_INTENT_LIFETIME_MS),
+            target: LaunchTargetV1::Shell,
+            shell_lock_hash: self.images.product_lock_hash(),
+            world_lock_hash: None,
+            world_open_plan_hash: None,
+            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+        })?;
+        let durable =
+            DurableWorldRevisionV1::new(world_id, LauncherWorldRevision::new(durable_revision));
+        let report = ChildExitReportV1::seal(ChildExitReportDraftV1 {
+            child_generation,
+            process_epoch: current_process_epoch(),
+            role: ChildRoleV1::World { world_id },
+            exit_kind: ChildExitKindV1::SaveAndQuit,
+            intent_generation: Some(intent.generation()),
+            intent_checksum: Some(intent.checksum()),
+            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+            last_written_world: Some(durable),
+            last_durable_world: Some(durable),
+            shell_lock_hash: self.images.product_lock_hash(),
+            world_lock_hash: Some(self.images.product_lock_hash()),
+            world_open_plan_hash: Some(plan_hash),
+            diagnostic_ref: None,
+        })?;
+        Ok(ChildResultV1 {
+            report,
+            intent,
+            checkpoint,
+        })
     }
 
     /// Constructs a new GPU-free host from shared world-db for `world_id`.
@@ -636,6 +824,33 @@ pub enum ProductionMemoryStartError {
     /// `ReadyExact` replacement-process handoff could not be sealed.
     #[error(transparent)]
     LaunchHandoff(#[from] LaunchHandoffError),
+    /// Durable Save & Quit was requested on a volatile reference store.
+    #[error("durable Save & Quit requires a WAL/sync/checkpoint storage capability")]
+    DurableCapabilityRequired,
+    /// Crash recovery proved the world readable but not writable.
+    #[error("world {world} is recoverable read-only and must not open a writer")]
+    RecoverableReadOnly {
+        /// World that remains read-only.
+        world: WorldId,
+    },
+    /// Save & Quit closed before the durable and checkpointed frontiers matched.
+    #[error("world {world} durable Save & Quit frontier is incomplete")]
+    DurableFrontierIncomplete {
+        /// World whose frontier lagged the checkpoint.
+        world: WorldId,
+    },
+}
+
+impl From<latticeaxiom_core::CanonicalJsonError> for ProductionMemoryStartError {
+    fn from(error: latticeaxiom_core::CanonicalJsonError) -> Self {
+        Self::LaunchHandoff(error.into())
+    }
+}
+
+impl From<latticeaxiom_launcher::LaunchModelError> for ProductionMemoryStartError {
+    fn from(error: latticeaxiom_launcher::LaunchModelError) -> Self {
+        Self::LaunchHandoff(error.into())
+    }
 }
 
 impl From<WorldShellError> for ProductionMemoryStartError {
@@ -676,6 +891,22 @@ fn next_launch_generation() -> LaunchGeneration {
         .and_then(|current| current.checked_add(1))
         .and_then(|next| LaunchGeneration::new(next).ok())
         .unwrap_or(LaunchGeneration::FIRST)
+}
+
+fn current_launch_generation() -> LaunchGeneration {
+    std::env::var("LATTICEAXIOM_GENERATION")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(|current| LaunchGeneration::new(current).ok())
+        .unwrap_or(LaunchGeneration::FIRST)
+}
+
+fn current_process_epoch() -> ProcessEpoch {
+    std::env::var("LATTICEAXIOM_PROCESS_EPOCH")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(|value| ProcessEpoch::new(value).ok())
+        .unwrap_or(ProcessEpoch::FIRST)
 }
 
 /// Milliseconds since Unix epoch; `0` when the system clock is unavailable.

@@ -351,8 +351,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Aabb, ChunkCoordinate, FaceOcclusion, MeshGroup, SourceEpoch, SourceFingerprint,
-        SourceRevision,
+        Aabb, ChunkCoordinate, FaceOcclusion, LayerMergeKey, MeshGroup, SourceEpoch,
+        SourceFingerprint, SourceRevision,
     };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -546,6 +546,52 @@ mod tests {
             1
         );
         assert_eq!(mesh.geometry().quad_count(), 11);
+    }
+
+    #[test]
+    fn layer_merge_keys_keep_distinct_face_slots_from_greedy_merging() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        struct LayerVoxel {
+            key: Option<LayerMergeKey>,
+            group: MeshGroup,
+        }
+
+        impl Voxel for LayerVoxel {
+            type MergeKey = LayerMergeKey;
+
+            fn face(&self, _face: Face) -> Option<FaceDescriptor<Self::MergeKey>> {
+                self.key
+                    .map(|key| FaceDescriptor::new(self.group, key, FaceOcclusion::Full))
+            }
+        }
+
+        let dimensions = PaddedChunk::new([2, 1, 1]).expect("valid test dimensions");
+        let mut voxels = vec![
+            LayerVoxel {
+                key: None,
+                group: MeshGroup::Opaque,
+            };
+            dimensions.volume_len()
+        ];
+        let left = dimensions
+            .linearize([1, 1, 1])
+            .expect("interior coordinate is in bounds");
+        let right = dimensions
+            .linearize([2, 1, 1])
+            .expect("interior coordinate is in bounds");
+        voxels[left] = LayerVoxel {
+            key: Some(LayerMergeKey::new(1, 0)),
+            group: MeshGroup::Cutout,
+        };
+        voxels[right] = LayerVoxel {
+            key: Some(LayerMergeKey::new(1, 1)),
+            group: MeshGroup::Cutout,
+        };
+
+        let mesh = greedy_quads(&voxels, dimensions, source()).expect("valid samples");
+        let tops = mesh.geometry().group(MeshGroup::Cutout, Face::PosY);
+        assert_eq!(tops.len(), 2);
+        assert_ne!(tops[0].merge_key(), tops[1].merge_key());
     }
 
     #[test]

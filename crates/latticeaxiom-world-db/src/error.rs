@@ -354,6 +354,28 @@ pub enum WorldDbError {
         /// Physical operation that was requested.
         operation: &'static str,
     },
+    /// New authoritative mutation is paused by storage-pressure admission.
+    #[error("world {world} rejected authoritative mutation under storage pressure `{pressure}`")]
+    LowDiskMutationPaused {
+        /// World whose mutation was refused before publication.
+        world: WorldId,
+        /// Stable storage-pressure state name.
+        pressure: &'static str,
+    },
+    /// Writer activation is refused because only read-only recovery is safe.
+    #[error("world {world} is recoverable read-only: {reason}")]
+    RecoverableReadOnly {
+        /// World that must not open a writer.
+        world: WorldId,
+        /// Stable recovery diagnostic.
+        reason: &'static str,
+    },
+    /// A canonical durable-store image failed bounded decode or integrity checks.
+    #[error("canonical durable store image is corrupt: {reason}")]
+    CorruptDurableImage {
+        /// Validation diagnostic.
+        reason: String,
+    },
     /// A catalog identity conflict is non-repairable and blocks opening.
     #[error("world {world} header identity disagrees with authoritative metadata: {reason}")]
     ReconciliationBlocked {

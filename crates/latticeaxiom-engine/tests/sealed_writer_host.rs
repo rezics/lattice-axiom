@@ -20,9 +20,10 @@ use latticeaxiom_world_catalog::{
     WorldOpenStatus,
 };
 use latticeaxiom_world_db::{
-    ActivationPermitV1, AuthoritativeMetadataInputV1, CommitDurabilityV1, DisplayName,
-    FrozenLockReceiptV1, StoreId, WorldCommitRequestV1, WorldCreateRequestV1, WorldDbError,
-    WorldRequirementClosureV1, WriterActivationV1,
+    ActivationPermitV1, AuthoritativeMetadataInputV1, CheckpointId, CheckpointKindV1,
+    CheckpointRequestV1, CommitDurabilityV1, DisplayName, FrozenLockReceiptV1,
+    StorageDurabilityCapabilityV1, StoreId, WorldCommitRequestV1, WorldCreateRequestV1,
+    WorldDbError, WorldRequirementClosureV1, WriterActivationV1,
 };
 
 fn fixture_host() -> (SealedWorldWriterHost, WorldId, AuthoritativeMetadataInputV1) {
@@ -32,6 +33,18 @@ fn fixture_host() -> (SealedWorldWriterHost, WorldId, AuthoritativeMetadataInput
         .expect("fixture record owner is canonical");
     (
         SealedWorldWriterHost::volatile_reference_with_default_publisher(record_owner),
+        world,
+        fixture_metadata(),
+    )
+}
+
+fn fixture_durable_host() -> (SealedWorldWriterHost, WorldId, AuthoritativeMetadataInputV1) {
+    let world = WorldId::from_str("018f1e2d-3c4b-4a59-8c6d-7e8f9012abcd")
+        .expect("fixture world UUID is canonical");
+    let record_owner = StableId::from_str("latticeaxiom:schema/world-db-chunk@1")
+        .expect("fixture record owner is canonical");
+    (
+        SealedWorldWriterHost::durable_reference_with_default_publisher(record_owner),
         world,
         fixture_metadata(),
     )
@@ -281,4 +294,97 @@ fn sealed_commit_then_close_is_visible_to_begin_read_and_can_reactivate() {
     host.reactivate(&reopen_plan, reopened)
         .expect("sealed reactivation succeeds after close");
     host.close().expect("reactivated writer closes");
+}
+
+fn fixture_durable_commit(
+    world: WorldId,
+    metadata: &AuthoritativeMetadataInputV1,
+) -> WorldCommitRequestV1 {
+    WorldCommitRequestV1::new(
+        WorldTransaction::new(
+            TransactionId::from_u128(9),
+            world,
+            WorldRevision::ZERO,
+            vec![ChunkMutation::new(
+                fixture_key(world),
+                ChunkRevisionExpectation::Absent,
+                ChangedDomains::ALL,
+                fixture_data(11),
+            )],
+        ),
+        metadata.clone(),
+        CommitDurabilityV1::Durable,
+    )
+}
+
+#[test]
+fn durable_sealed_commit_checkpoint_and_crash_reopen_restores_materialized_chunk() {
+    let (mut host, world, metadata) = fixture_durable_host();
+    assert_eq!(
+        host.durability_capability(),
+        StorageDurabilityCapabilityV1::WalSyncCheckpoint
+    );
+    let permit = provision_ready(&host, world, &metadata);
+    let stale = permit.clone();
+    let plan = ready_exact_plan(world, Some(sealed_activation_binding(&permit)));
+    let accepted = host
+        .accept(&plan, WorldOpenAction::UseFrozenLock)
+        .expect("frozen-lock accept requires bound catalog evidence");
+    host.activate_writer(
+        WriterActivationV1::new(accepted, permit).expect("sealed accept is writable"),
+    )
+    .expect("sealed durable writer activation succeeds");
+    let conflict_plan = ready_exact_plan(world, Some(sealed_activation_binding(&stale)));
+    let conflict_accepted = conflict_plan
+        .accept(WorldOpenAction::UseFrozenLock)
+        .expect("catalog accept is still offered");
+    let conflict = WriterActivationV1::new(conflict_accepted, stale)
+        .expect("writable accept binds to a storage permit");
+    assert!(
+        matches!(
+            host.activate_writer(conflict),
+            Err(SealedWriterHostError::WorldDb(
+                WorldDbError::WriterAlreadyActive { world: found }
+            )) if found == world
+        ),
+        "lease conflict must reject a second writer"
+    );
+    host.commit(fixture_durable_commit(world, &metadata))
+        .expect("sealed durable writer commits a Durable chunk mutation");
+    let checkpoint = host
+        .create_checkpoint(CheckpointRequestV1::new(
+            CheckpointId::from_u128(1),
+            CheckpointKindV1::Protected,
+            "save-and-quit",
+        ))
+        .expect("checkpoint at the durable frontier is retained");
+    assert!(checkpoint.receipt().restore_verified());
+
+    host.canonical_reopen()
+        .expect("canonical reopen drops the lease and restores the durable image");
+    assert!(!host.is_writer_active());
+    let preflight = host
+        .preflight(world)
+        .expect("reopened durable metadata remains readable");
+    if let Some(repair) = preflight.header_repair_permit().cloned() {
+        host.repair_header(repair)
+            .expect("sidecar repair is a read-only recovery action");
+    }
+    host.verify_crash_recovery(world)
+        .expect("unclean durable frontier verifies without a writer");
+    let restored = host
+        .begin_read(world)
+        .expect("reopened durable world remains readable")
+        .load_chunk(&fixture_key(world))
+        .expect("portable record decodes")
+        .expect("durable materialized chunk survived reopen");
+    assert_eq!(restored.chunk_revision(), ChunkRevision::new(1));
+    assert_eq!(restored.data(), &fixture_data(11));
+    assert!(
+        host.preflight(world)
+            .expect("post-recovery preflight remains readable")
+            .activation_permit()
+            .is_some(),
+        "verified recovery may later open a sealed writer"
+    );
 }

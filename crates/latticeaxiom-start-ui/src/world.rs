@@ -5,9 +5,10 @@ use std::{cmp::Ordering, collections::BTreeMap};
 use latticeaxiom_core::{CanonicalHash, PackageName, StableId, WorldId};
 use latticeaxiom_world_catalog::{
     CatalogCardState, CatalogDiagnosticCode, CatalogEntry, CatalogEntryFailure, CatalogEntryState,
-    DisplayName, LiveWorldLocation, ManagedTrashLocation, MoveToTrashPlan, RestoreMode,
-    RestorePlanningOutcome, TrashTombstone, WorldLifecycleEvidence, WorldOpenAction, WorldOpenPlan,
-    WorldOpenStatus, WorldRootId, WriterBarrier, classify_catalog_card, plan_restore,
+    CrashMarker, DiagnosticCode, DisplayName, LiveWorldLocation, ManagedTrashLocation,
+    MoveToTrashPlan, RestoreMode, RestorePlanningOutcome, TrashTombstone, WorldDiagnostic,
+    WorldLifecycleEvidence, WorldOpenAction, WorldOpenPlan, WorldOpenStatus, WorldRootId,
+    WriterBarrier, WriterLeaseState, classify_catalog_card, plan_restore,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -156,6 +157,143 @@ impl WorldShellRecord {
         let suffix = action.semantic_suffix()?;
         SemanticNodeId::new(format!("{}/{suffix}", self.semantic_id().as_str())).ok()
     }
+
+    /// Actionable recovery cues derived from preflight and lifecycle evidence.
+    ///
+    /// Continue remains unavailable unless health is `ReadyExact`. These cues
+    /// never collapse crash, lease, and low-disk into a generic cannot-open
+    /// string.
+    #[must_use]
+    pub fn recovery_cues(&self) -> Vec<RecoveryCue> {
+        let mut cues = Vec::new();
+        if let Some(plan) = &self.open_plan {
+            cues.extend(plan.diagnostics.iter().map(recovery_cue_from_diagnostic));
+        } else {
+            match &self.lifecycle {
+                Some(evidence) if evidence.crash_marker == CrashMarker::Present => {
+                    cues.push(RecoveryCue {
+                        code: DiagnosticCode::UncleanShutdown,
+                        title: "Unclean shutdown".to_owned(),
+                        description: "Run metadata-only preflight. A writer will not open."
+                            .to_owned(),
+                        next_action: Some(WorldCardAction::RunPreflight),
+                    });
+                }
+                Some(evidence) if evidence.lease == WriterLeaseState::Stale => {
+                    cues.push(RecoveryCue {
+                        code: DiagnosticCode::StaleWriterLease,
+                        title: "Stale writer lease".to_owned(),
+                        description:
+                            "Run metadata-only preflight. The abandoned lease is not copied."
+                                .to_owned(),
+                        next_action: Some(WorldCardAction::RunPreflight),
+                    });
+                }
+                Some(evidence) if evidence.lease == WriterLeaseState::Held => {
+                    cues.push(RecoveryCue {
+                        code: DiagnosticCode::WriterLeaseHeld,
+                        title: "Writer lease held".to_owned(),
+                        description:
+                            "Another process holds the exclusive writer. Continue is unavailable."
+                                .to_owned(),
+                        next_action: Some(WorldCardAction::RunPreflight),
+                    });
+                }
+                _ => {}
+            }
+        }
+        cues
+    }
+}
+
+/// Player-facing recovery diagnostic that names the next safe action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryCue {
+    /// Stable diagnostic code.
+    pub code: DiagnosticCode,
+    /// Accessible title.
+    pub title: String,
+    /// Actionable description; never a generic cannot-open label.
+    pub description: String,
+    /// Explicit next card action, when one exists.
+    pub next_action: Option<WorldCardAction>,
+}
+
+fn recovery_cue_from_diagnostic(diagnostic: &WorldDiagnostic) -> RecoveryCue {
+    let (title, description, next_action) = match diagnostic {
+        WorldDiagnostic::UncleanShutdown => (
+            "Unclean shutdown",
+            "Restore a verified checkpoint or open read-only. A writer will not open.",
+            Some(WorldCardAction::Preflight(WorldOpenAction::OpenReadOnly)),
+        ),
+        WorldDiagnostic::NonDurableFrontier { .. } => (
+            "Non-durable frontier",
+            "Restore a verified checkpoint or open read-only. Continue is unavailable.",
+            Some(WorldCardAction::Preflight(WorldOpenAction::OpenReadOnly)),
+        ),
+        WorldDiagnostic::StaleWriterLease => (
+            "Stale writer lease",
+            "Clear the abandoned exclusive lease. The catalog will not copy a process-local lease.",
+            Some(WorldCardAction::Preflight(
+                WorldOpenAction::RecoverStaleLease,
+            )),
+        ),
+        WorldDiagnostic::WriterLeaseHeld => (
+            "Writer lease held",
+            "Another process holds the exclusive writer. Open read-only or wait; Continue is unavailable.",
+            Some(WorldCardAction::Preflight(WorldOpenAction::OpenReadOnly)),
+        ),
+        WorldDiagnostic::LowDisk { state, .. } => (
+            "Storage pressure",
+            match state {
+                latticeaxiom_world_catalog::StoragePressureState::Warning => {
+                    "Free disk space. Automatic checkpoints and remote prefetch are paused."
+                }
+                latticeaxiom_world_catalog::StoragePressureState::MutationPaused => {
+                    "Free disk space. New authoritative writes are paused until drain succeeds."
+                }
+                _ => "Free disk space before any writable open. A writer will not open.",
+            },
+            Some(WorldCardAction::OpenStorageLocation),
+        ),
+        WorldDiagnostic::HeaderRepairRequired { .. } => (
+            "Header repair required",
+            "Rebuild the bounded sidecar from authoritative metadata before Continue.",
+            Some(WorldCardAction::RunPreflight),
+        ),
+        WorldDiagnostic::PackagePreparationRequired { .. } => (
+            "Missing package",
+            "Acquire or build the required artifact, then rerun preflight.",
+            Some(WorldCardAction::RunPreflight),
+        ),
+        WorldDiagnostic::MigrationRequired => (
+            "Migration required",
+            "Checkpoint and clone before staged migration. The original world stays unmodified.",
+            Some(WorldCardAction::Duplicate),
+        ),
+        WorldDiagnostic::AuthoritativeDataReadOnly { .. } => (
+            "Read-only recovery",
+            "Inspect or export opaque bytes. A writer will not open.",
+            Some(WorldCardAction::Preflight(WorldOpenAction::OpenReadOnly)),
+        ),
+        WorldDiagnostic::AuthoritativeDataBlocked { .. }
+        | WorldDiagnostic::ReconciliationBlocked { .. } => (
+            "World blocked",
+            "Identity, trust, or corruption prevents safe preservation. Continue is unavailable.",
+            Some(WorldCardAction::InspectRecovery),
+        ),
+        WorldDiagnostic::CompatibleDiff { .. } => (
+            "Compatible lock differs",
+            "Review the explicit graph diff. Compatible reopen does not rewrite the frozen lock.",
+            Some(WorldCardAction::RunPreflight),
+        ),
+    };
+    RecoveryCue {
+        code: diagnostic.code(),
+        title: title.to_owned(),
+        description: description.to_owned(),
+        next_action,
+    }
 }
 
 fn catalog_failure_code(failure: &CatalogEntryFailure) -> CatalogDiagnosticCode {
@@ -235,9 +373,8 @@ impl WorldCardAction {
     #[must_use]
     pub fn semantic_suffix(&self) -> Option<&'static str> {
         match self {
-            Self::PlayExact => Some("play"),
+            Self::PlayExact | Self::Preflight(WorldOpenAction::UseFrozenLock) => Some("play"),
             Self::RunPreflight => Some("preflight"),
-            Self::Preflight(WorldOpenAction::UseFrozenLock) => Some("play"),
             Self::Preflight(WorldOpenAction::ResolveCompatibleGraph) => Some("compatible"),
             Self::Preflight(WorldOpenAction::PreparePackage { .. }) => Some("prepare"),
             Self::Preflight(WorldOpenAction::OpenReadOnly) => Some("read-only"),
@@ -247,6 +384,7 @@ impl WorldCardAction {
             }
             Self::Preflight(WorldOpenAction::RepairHeader { .. }) => Some("repair"),
             Self::Preflight(WorldOpenAction::CloneAndMigrate { .. }) => Some("migrate"),
+            Self::Preflight(WorldOpenAction::RecoverStaleLease) => Some("lease"),
             Self::InspectRecovery => Some("inspect"),
             Self::CreateCheckpoint => Some("checkpoint"),
             Self::Duplicate => Some("clone"),
@@ -264,7 +402,13 @@ impl WorldCardAction {
             Self::PlayExact | Self::Preflight(WorldOpenAction::UseFrozenLock) => {
                 SemanticActionId::PlayExact
             }
-            Self::RunPreflight => SemanticActionId::RunPreflight,
+            Self::RunPreflight
+            | Self::Preflight(
+                WorldOpenAction::OpenReadOnly
+                | WorldOpenAction::PreparePackage { .. }
+                | WorldOpenAction::ResolveCompatibleGraph
+                | WorldOpenAction::RepairHeader { .. },
+            ) => SemanticActionId::RunPreflight,
             Self::CreateCheckpoint => SemanticActionId::CreateCheckpoint,
             Self::Duplicate | Self::Preflight(WorldOpenAction::CloneAndMigrate { .. }) => {
                 SemanticActionId::CloneWorld
@@ -277,11 +421,8 @@ impl WorldCardAction {
             Self::Preflight(WorldOpenAction::RestoreCheckpoint { .. }) => {
                 SemanticActionId::RestoreCheckpoint
             }
-            Self::Preflight(WorldOpenAction::OpenReadOnly)
-            | Self::Preflight(WorldOpenAction::PreparePackage { .. })
-            | Self::Preflight(WorldOpenAction::ResolveCompatibleGraph)
-            | Self::Preflight(WorldOpenAction::RepairHeader { .. }) => {
-                SemanticActionId::RunPreflight
+            Self::Preflight(WorldOpenAction::RecoverStaleLease) => {
+                SemanticActionId::RecoverStaleLease
             }
             Self::Rename | Self::OpenStorageLocation | Self::Details => SemanticActionId::Activate,
         }

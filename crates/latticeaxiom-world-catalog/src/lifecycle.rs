@@ -16,10 +16,11 @@ use crate::{
 };
 
 /// Catalog-visible crash marker derived from the bounded header clean flag.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CrashMarker {
     /// Last shutdown reached the clean marker.
+    #[default]
     Absent,
     /// Unclean shutdown or an explicit crash marker is present.
     Present,
@@ -35,6 +36,22 @@ impl CrashMarker {
             Self::Present
         }
     }
+}
+
+/// Process-local exclusive writer lease observed without opening a writer.
+///
+/// Clone, export, and restore never copy this identity. A held or stale lease
+/// is not [`crate::WorldOpenStatus::ReadyExact`].
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WriterLeaseState {
+    /// No exclusive writer lease is recorded.
+    #[default]
+    Absent,
+    /// Another live process still holds the exclusive writer.
+    Held,
+    /// A crash or abandoned process left a lease without a live writer.
+    Stale,
 }
 
 /// Retention class used when planning a checkpoint.
@@ -120,6 +137,9 @@ pub struct WorldLifecycleEvidence {
     pub metadata_checksum: CanonicalHash,
     /// Crash marker derived from the clean-shutdown projection.
     pub crash_marker: CrashMarker,
+    /// Exclusive writer lease observed from catalog/sidecar evidence.
+    #[serde(default)]
+    pub lease: WriterLeaseState,
 }
 
 /// Immutable create plan; publishing a sidecar or opening a writer is external.
@@ -407,6 +427,57 @@ pub fn plan_export_world(
     })
 }
 
+/// Catalog plan that clears a stale exclusive lease without opening a writer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StaleLeaseRecoveryPlan {
+    /// World whose abandoned lease may be cleared.
+    pub world_id: WorldId,
+    /// Live catalog location.
+    pub location: LiveWorldLocation,
+    /// `false` by contract: recovery never copies a process-local lease.
+    pub copies_process_local_lease: bool,
+}
+
+/// Failure to form a stale-lease recovery plan.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum StaleLeaseRecoveryError {
+    /// Unique writer or bounded tasks have not fully drained.
+    #[error("stale-lease recovery requires a closed writer and drained tasks")]
+    WriterNotDrained,
+    /// No abandoned lease is recorded.
+    #[error("writer lease is not stale")]
+    LeaseNotStale,
+    /// A live process still holds the exclusive writer.
+    #[error("a live writer lease cannot be recovered from the catalog")]
+    LeaseHeld,
+}
+
+/// Plans stale-lease recovery from catalog evidence without opening a writer.
+///
+/// # Errors
+///
+/// Returns [`StaleLeaseRecoveryError`] when the writer is not drained, the
+/// lease is still held by a live process, or no stale lease exists.
+pub fn plan_recover_stale_lease(
+    location: LiveWorldLocation,
+    evidence: &WorldLifecycleEvidence,
+    writer: WriterBarrier,
+) -> Result<StaleLeaseRecoveryPlan, StaleLeaseRecoveryError> {
+    if writer != WriterBarrier::ClosedAndDrained {
+        return Err(StaleLeaseRecoveryError::WriterNotDrained);
+    }
+    match evidence.lease {
+        WriterLeaseState::Stale => Ok(StaleLeaseRecoveryPlan {
+            world_id: location.world_id,
+            location,
+            copies_process_local_lease: false,
+        }),
+        WriterLeaseState::Held => Err(StaleLeaseRecoveryError::LeaseHeld),
+        WriterLeaseState::Absent => Err(StaleLeaseRecoveryError::LeaseNotStale),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,6 +575,35 @@ mod tests {
         assert!(!export.includes_secrets);
     }
 
+    #[test]
+    fn stale_lease_recovery_never_copies_a_live_lease() {
+        let source_world = world("123e4567-e89b-42d3-a456-426614174000");
+        let location = LiveWorldLocation::new(WorldRootId(1), source_world);
+        let evidence = evidence();
+        let stale = plan_recover_stale_lease(
+            location,
+            &WorldLifecycleEvidence {
+                lease: WriterLeaseState::Stale,
+                crash_marker: CrashMarker::Present,
+                ..evidence.clone()
+            },
+            WriterBarrier::ClosedAndDrained,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(!stale.copies_process_local_lease);
+        assert_eq!(
+            plan_recover_stale_lease(
+                location,
+                &WorldLifecycleEvidence {
+                    lease: WriterLeaseState::Held,
+                    ..evidence
+                },
+                WriterBarrier::ClosedAndDrained,
+            ),
+            Err(StaleLeaseRecoveryError::LeaseHeld)
+        );
+    }
+
     fn world(value: &str) -> WorldId {
         value
             .parse()
@@ -543,6 +643,7 @@ mod tests {
             header_checksum: CanonicalHash::digest(b"header"),
             metadata_checksum: CanonicalHash::digest(b"metadata"),
             crash_marker: CrashMarker::Absent,
+            lease: WriterLeaseState::Absent,
         }
     }
 

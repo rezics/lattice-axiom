@@ -1,11 +1,12 @@
-//! Production playable host spine for the V2 package-driven slice.
+//! Production playable host spine for the V2/V4 package-driven slice.
 //!
 //! This module is the production Bevy world session. It starts from a
-//! reopened [`LockVerifiedComposeImages`], stores voxels through
-//! [`MemoryTransactionKernel`], and presents one Avian collider plus CPU mesh
-//! per chunk. Chunk interest streams around the local player. It does not open
-//! a durable writer and must not be confused with the `playable` development
-//! fixture.
+//! reopened [`LockVerifiedComposeImages`], streams a bounded working set
+//! around the local player, and presents one Avian collider plus CPU mesh per
+//! chunk. [`MemoryTransactionKernel`] remains the session cache. Durable Save
+//! & Quit activates a sealed [`SealedWorldWriterHost`] only after exact lock,
+//! catalog, world-header, and lease receipts match. It must not be confused
+//! with the `playable` development fixture.
 
 mod catalog;
 #[cfg(feature = "client")]
@@ -16,8 +17,11 @@ mod display;
 mod gameplay;
 #[cfg(feature = "client")]
 mod hud;
+mod layers;
 #[cfg(feature = "client")]
 mod pause;
+mod profile;
+mod session;
 #[cfg(feature = "client")]
 mod shell_view;
 mod spine;
@@ -72,10 +76,18 @@ pub use display::{
 };
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
 pub use latticeaxiom_worldgen::{CaveOccupancyArbitrationV1, ChunkFaceV1};
-pub use spine::{
-    CellOccupancyV1, ProductionSpine, ProductionWorldStorage, WorkingSetDiagnosticsV1,
+pub use profile::{
+    ADR_0026_ACTIVE_COVERAGE_M, ADR_0026_CHUNK_EDGE_VOXELS, ADR_0026_RESIDENT_COVERAGE_M,
+    STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, StreamingProfileCountsV1, StreamingProfileEvidenceV1,
+    coverage_m, radius_for_coverage,
 };
-pub use start::{ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList};
+pub use spine::{
+    CellOccupancyV1, DerivedQueueSnapshotV1, ProductionSpine, ProductionWorldStorage,
+    WorkingSetDiagnosticsV1,
+};
+pub use start::{
+    ChildResultV1, ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList,
+};
 pub use stream::ChunkLifecycle;
 pub use surface::ProductionSurfaceRouter;
 pub use worldgen::RequiredCaveEntranceV1;
@@ -469,8 +481,12 @@ pub(super) fn install_production_host(
     }
     let working_set = spine.working_set_diagnostics();
     #[cfg(feature = "client")]
-    let terrain_palette = (!include_transform)
-        .then(|| chunk_mesh::ProductionTerrainPalette::from_ids(&spine.palette_ids()));
+    let terrain_palette = (!include_transform).then(|| {
+        spine.terrain_layer_table().map_or_else(
+            || chunk_mesh::ProductionTerrainPalette::from_ids(&spine.palette_ids()),
+            chunk_mesh::ProductionTerrainPalette::from_layer_table,
+        )
+    });
     app.insert_resource(product_lock_hash)
         .insert_resource(inspect_surface)
         .insert_resource(spine.storage())
@@ -505,7 +521,7 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
     let Some(spine) = world.get_resource::<ProductionSpine>().cloned() else {
         return;
     };
-    let spawn = spine.spawn_center();
+    let spawn = spine.restored_spawn_translation();
     #[cfg(feature = "client")]
     {
         let client = world.get_resource::<EngineProfile>() == Some(&EngineProfile::Client);
@@ -617,7 +633,7 @@ fn sync_chunk_colliders(
     mut transforms: Query<'_, '_, &mut Transform>,
     mut colliders: Query<'_, '_, &mut avian3d::prelude::Collider>,
     #[cfg(feature = "client")] mut meshes: Option<ResMut<'_, Assets<Mesh>>>,
-    #[cfg(feature = "client")] material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
+    #[cfg(feature = "client")] material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterials>>,
     #[cfg(feature = "client")] palette: Option<Res<'_, chunk_mesh::ProductionTerrainPalette>>,
     #[cfg(feature = "client")] gpu_meshes: Query<'_, '_, &chunk_mesh::ChunkGpuMesh>,
 ) {
@@ -716,10 +732,10 @@ fn apply_collider_update(
 fn attach_chunk_mesh(
     commands: &mut Commands<'_, '_>,
     meshes: Option<&mut ResMut<'_, Assets<Mesh>>>,
-    material: Option<&Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
+    material: Option<&Res<'_, chunk_mesh::ProductionTerrainMaterials>>,
     palette: Option<&Res<'_, chunk_mesh::ProductionTerrainPalette>>,
     entity: Entity,
-    geometry: &latticeaxiom_voxel_mesh::MeshBuffer<u16>,
+    geometry: &latticeaxiom_voxel_mesh::MeshBuffer<latticeaxiom_voxel_mesh::LayerMergeKey>,
     bounds: Option<latticeaxiom_voxel_mesh::Aabb>,
     existing: Option<&chunk_mesh::ChunkGpuMesh>,
 ) {
@@ -744,7 +760,7 @@ fn attach_initial_chunk_meshes(
     spine: Res<'_, ProductionSpine>,
     chunks: Query<'_, '_, (Entity, &ChunkPresentation), Without<chunk_mesh::ChunkGpuMesh>>,
     mut meshes: Option<ResMut<'_, Assets<Mesh>>>,
-    material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterial>>,
+    material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterials>>,
     palette: Option<Res<'_, chunk_mesh::ProductionTerrainPalette>>,
 ) {
     for (entity, presentation) in &chunks {
@@ -990,6 +1006,9 @@ pub enum ProductionHostError {
     /// The local player pose is outside the canonical chunk domain.
     #[error("player pose is outside the canonical chunk domain")]
     InvalidPlayerPose,
+    /// Durable player-session bytes failed schema, decode, or bound checks.
+    #[error("durable player session payload is invalid")]
+    InvalidPlayerSession,
     /// The gameplay kernel rejected a catalog, inventory, or command.
     #[error(transparent)]
     Gameplay(#[from] GameplayReject),
@@ -1024,6 +1043,16 @@ pub enum ProductionHostError {
         /// Compiler diagnostic.
         reason: String,
     },
+    /// Locked terrain layer-table compilation failed.
+    #[error("terrain layer table failed to compile: {reason}")]
+    TerrainLayerTable {
+        /// Compiler diagnostic.
+        reason: String,
+    },
+    /// A bounded derived readiness barrier was exhausted before the required
+    /// mesh or collider jobs were applied.
+    #[error("bounded derived readiness barrier was exhausted")]
+    DerivedReadinessBarrier,
 }
 
 impl From<latticeaxiom_content::ContentError> for ProductionHostError {

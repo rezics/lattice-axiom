@@ -5,13 +5,18 @@
 
 use std::collections::BTreeMap;
 
-use latticeaxiom_core::WorldId;
+use latticeaxiom_core::{CanonicalHash, WorldId};
 use latticeaxiom_world_catalog::{
     CatalogEntry, CatalogEntryState, CatalogProjection, CheckpointId, CheckpointPlan,
-    CheckpointReason, ClonePlan, CreateWorldPlan, DiskAdmission, DiskSample, DisplayNameError, GIB,
-    HeadroomInputs, LowDiskMonitor, ManagedTrashLocation, MoveToTrashPlan, RestoreMode,
-    RestorePlanningOutcome, TrashEntryId, WorldOpenPlan, WorldRootId, WriterBarrier,
-    plan_checkpoint, plan_clone_world, plan_create_world, plan_export_world,
+    CheckpointReason, ClonePlan, CreateWorldPlan, DiskAdmission, DiskSample, DisplayName,
+    DisplayNameError, GIB, HeadroomInputs, LowDiskMonitor, ManagedTrashLocation, MoveToTrashPlan,
+    RecordedCheckpoint, RestoreMode, RestorePlanningOutcome, SealedActivationBindingV1,
+    StaleLeaseRecoveryPlan, TrashEntryId, TrashTombstone, WorldOpenPlan, WorldOpenStatus,
+    WorldRootId, WriterBarrier, WriterLeaseState, plan_checkpoint, plan_clone_world,
+    plan_create_world, plan_export_world, plan_recover_stale_lease,
+};
+use latticeaxiom_world_db::{
+    ActivationPermitV1, StoragePreflightStatusV1, WorldStoragePreflightV1,
 };
 use thiserror::Error;
 
@@ -174,6 +179,57 @@ impl WorldLibraryFlow {
         Ok(())
     }
 
+    /// Binds sealed storage-preflight evidence onto a `ReadyExact` plan.
+    ///
+    /// Missing, impure, or not-ready storage evidence fail closed. This never
+    /// opens a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldLibraryError`] when the world is absent, preflight is not
+    /// pure, identities disagree, or `ReadyExact` lacks an activation permit.
+    pub fn attach_storage_preflight(
+        &mut self,
+        world_id: WorldId,
+        preflight: &WorldStoragePreflightV1,
+    ) -> Result<(), WorldLibraryError> {
+        let instrumentation = preflight.instrumentation();
+        if instrumentation.writer_activations != 0
+            || instrumentation.module_callbacks != 0
+            || instrumentation.bevy_worlds_created != 0
+            || instrumentation.authoritative_commands != 0
+        {
+            return Err(WorldLibraryError::PreflightSideEffect);
+        }
+        if preflight.world() != world_id {
+            return Err(WorldLibraryError::StorageIdentityMismatch);
+        }
+        let record = self
+            .library
+            .live_by_id(world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        let Some(plan) = record.open_plan.clone() else {
+            return Err(WorldLibraryError::MissingActivationEvidence);
+        };
+        if plan.status != WorldOpenStatus::ReadyExact {
+            return Ok(());
+        }
+        if !matches!(
+            preflight.status(),
+            StoragePreflightStatusV1::ReadyForActivation
+        ) {
+            return Err(WorldLibraryError::MissingActivationEvidence);
+        }
+        let permit = preflight
+            .activation_permit()
+            .ok_or(WorldLibraryError::MissingActivationEvidence)?;
+        let mut plan = plan;
+        plan.activation_binding = Some(binding_from_permit(permit));
+        self.library.attach_preflight(world_id, plan)?;
+        self.sync_worlds();
+        Ok(())
+    }
+
     /// Seals a one-shot replacement-process launch without opening a writer.
     ///
     /// # Errors
@@ -188,6 +244,13 @@ impl WorldLibraryFlow {
             .library
             .live_by_id(world_id)
             .ok_or(WorldShellError::MissingLiveWorld)?;
+        let plan = record
+            .open_plan
+            .as_ref()
+            .ok_or(WorldLibraryError::MissingActivationEvidence)?;
+        if plan.activation_binding.is_none() {
+            return Err(WorldLibraryError::MissingActivationEvidence);
+        }
         let context = self
             .launch_context
             .ok_or(WorldLibraryError::MissingLaunchContext)?;
@@ -243,7 +306,18 @@ impl WorldLibraryFlow {
                 Ok(WorldLibraryEffect::Trash(self.plan_trash(world_id)?))
             }
             ShellEffect::RequestRestoreTrash(world_id) => Ok(WorldLibraryEffect::Restore(
-                self.plan_restore_trash(world_id)?,
+                self.plan_restore_trash(world_id, RestoreMode::OriginalIdentity)?,
+            )),
+            ShellEffect::RequestRestoreTrashAsClone(world_id) => {
+                Ok(WorldLibraryEffect::Restore(self.plan_restore_trash(
+                    world_id,
+                    RestoreMode::AsClone {
+                        new_world_id: WorldId::new_v4(),
+                    },
+                )?))
+            }
+            ShellEffect::RequestRecoverStaleLease(world_id) => Ok(WorldLibraryEffect::StaleLease(
+                self.plan_stale_lease(world_id)?,
             )),
             ShellEffect::RequestRunPreflight(world_id)
             | ShellEffect::RequestInspectRecovery(world_id)
@@ -353,6 +427,7 @@ impl WorldLibraryFlow {
     fn plan_restore_trash(
         &self,
         world_id: WorldId,
+        mode: RestoreMode,
     ) -> Result<RestorePlanningOutcome, WorldLibraryError> {
         let (source, _) = self
             .library
@@ -360,9 +435,142 @@ impl WorldLibraryFlow {
             .iter()
             .find(|(location, _)| location.world_id == world_id)
             .ok_or(WorldShellError::MissingTrashEntry)?;
-        Ok(self
+        Ok(self.library.plan_restore(source, self.root, mode)?)
+    }
+
+    fn plan_stale_lease(
+        &self,
+        world_id: WorldId,
+    ) -> Result<StaleLeaseRecoveryPlan, WorldLibraryError> {
+        let record = self
             .library
-            .plan_restore(source, self.root, RestoreMode::OriginalIdentity)?)
+            .live_by_id(world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        let evidence = record
+            .lifecycle
+            .as_ref()
+            .ok_or(WorldLibraryError::MissingLifecycleEvidence)?;
+        Ok(plan_recover_stale_lease(
+            record.entry.location,
+            evidence,
+            self.writer,
+        )?)
+    }
+
+    /// Records a completed checkpoint without opening a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldLibraryError`] when the world or lifecycle evidence is
+    /// absent.
+    pub fn complete_checkpoint(&mut self, plan: &CheckpointPlan) -> Result<(), WorldLibraryError> {
+        let record = self
+            .library
+            .live_by_id(plan.world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        let mut evidence = record
+            .lifecycle
+            .clone()
+            .ok_or(WorldLibraryError::MissingLifecycleEvidence)?;
+        evidence.checkpoints.push(RecordedCheckpoint {
+            id: plan.checkpoint_id.clone(),
+            fingerprint: plan.fingerprint,
+            class: plan.class,
+            restore_verified: true,
+        });
+        self.library.attach_lifecycle(plan.world_id, evidence)?;
+        self.sync_worlds();
+        Ok(())
+    }
+
+    /// Records a completed clone as a scan-only catalog row.
+    ///
+    /// The clone is not `ReadyExact` until metadata-only preflight is attached.
+    /// Process-local leases are never copied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldLibraryError`] when the source is absent or the new
+    /// identity already exists.
+    pub fn complete_clone(
+        &mut self,
+        plan: &ClonePlan,
+        display_name: DisplayName,
+    ) -> Result<(), WorldLibraryError> {
+        if plan.copies_process_local_lease {
+            return Err(WorldLibraryError::LeaseCopied);
+        }
+        let source = self
+            .library
+            .live_by_id(plan.source.world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        let record = unpublished_clone_record(plan, source, display_name, self.now_ms)?;
+        self.library.insert_live(record)?;
+        self.sync_worlds();
+        Ok(())
+    }
+
+    /// Applies a completed managed-trash move without opening a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldLibraryError`] for identity mismatch or a missing source.
+    pub fn complete_trash(
+        &mut self,
+        plan: MoveToTrashPlan,
+        tombstone: TrashTombstone,
+    ) -> Result<(), WorldLibraryError> {
+        self.library.complete_move_to_trash(plan, tombstone)?;
+        self.sync_worlds();
+        self.shell.screen = ShellScreen::Trash;
+        Ok(())
+    }
+
+    /// Applies a completed restore without opening a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldLibraryError`] for missing trash, identity mismatch, or
+    /// a live location conflict.
+    pub fn complete_restore(
+        &mut self,
+        source: &ManagedTrashLocation,
+        restored: WorldShellRecord,
+    ) -> Result<(), WorldLibraryError> {
+        self.library.complete_restore(source, restored)?;
+        self.sync_worlds();
+        self.shell.screen = ShellScreen::Worlds;
+        Ok(())
+    }
+
+    /// Marks a stale exclusive lease recovered without opening a writer.
+    ///
+    /// Crash markers remain until a later clean preflight. Continue stays
+    /// unavailable until a `ReadyExact` plan is attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldLibraryError`] when the world or lifecycle evidence is
+    /// absent, or the plan copies a process-local lease.
+    pub fn complete_stale_lease(
+        &mut self,
+        plan: &StaleLeaseRecoveryPlan,
+    ) -> Result<(), WorldLibraryError> {
+        if plan.copies_process_local_lease {
+            return Err(WorldLibraryError::LeaseCopied);
+        }
+        let record = self
+            .library
+            .live_by_id(plan.world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        let mut evidence = record
+            .lifecycle
+            .clone()
+            .ok_or(WorldLibraryError::MissingLifecycleEvidence)?;
+        evidence.lease = WriterLeaseState::Absent;
+        self.library.attach_lifecycle(plan.world_id, evidence)?;
+        self.sync_worlds();
+        Ok(())
     }
 
     fn sync_worlds(&mut self) {
@@ -393,6 +601,8 @@ pub enum WorldLibraryEffect {
     Trash(MoveToTrashPlan),
     /// Managed-trash restore plan or identity-conflict outcome.
     Restore(RestorePlanningOutcome),
+    /// Stale exclusive-lease recovery plan; no writer is opened.
+    StaleLease(StaleLeaseRecoveryPlan),
     /// Recovery/preflight review selected a world.
     Review(WorldId),
     /// Shell routing that did not produce a catalog plan.
@@ -444,6 +654,21 @@ pub enum WorldLibraryError {
     /// Managed-trash entry token was not a bounded opaque ID.
     #[error("managed-trash entry identity is invalid")]
     InvalidTrashEntryId,
+    /// `ReadyExact` launch requires sealed catalog activation evidence.
+    #[error("sealed activation evidence is missing")]
+    MissingActivationEvidence,
+    /// Storage preflight reported a writer, module, or Bevy side effect.
+    #[error("storage preflight reported a forbidden side effect")]
+    PreflightSideEffect,
+    /// Storage preflight named a different world identity.
+    #[error("storage preflight identity does not match the catalog world")]
+    StorageIdentityMismatch,
+    /// Clone or lease recovery attempted to copy a process-local lease.
+    #[error("process-local writer leases must not be copied")]
+    LeaseCopied,
+    /// Stale-lease recovery planning failed.
+    #[error(transparent)]
+    StaleLease(#[from] latticeaxiom_world_catalog::StaleLeaseRecoveryError),
 }
 
 fn library_list(library: &WorldLibraryState) -> WorldListModel {
@@ -479,6 +704,44 @@ fn unpublished_record(
     )
 }
 
+fn unpublished_clone_record(
+    plan: &ClonePlan,
+    source: &WorldShellRecord,
+    display_name: DisplayName,
+    now_ms: u64,
+) -> Result<WorldShellRecord, WorldShellError> {
+    WorldShellRecord::new(
+        CatalogEntry {
+            location: plan.target,
+            state: CatalogEntryState::Projected(CatalogProjection {
+                world_id: plan.new_world_id,
+                display_name,
+                metadata_epoch: 1,
+                clean_shutdown: true,
+                durable_frontier: 0,
+            }),
+        },
+        WorldCardMetadata {
+            created_at_ms: now_ms,
+            last_played_at_ms: 0,
+            physical_bytes: source.metadata.physical_bytes,
+            game_summary: source.metadata.game_summary.clone(),
+            dimension_summary: source.metadata.dimension_summary.clone(),
+        },
+        None,
+    )
+}
+
+fn binding_from_permit(permit: &ActivationPermitV1) -> SealedActivationBindingV1 {
+    SealedActivationBindingV1 {
+        store_id: permit.store_id().clone(),
+        metadata_epoch: permit.metadata_epoch().get(),
+        metadata_hash: CanonicalHash::from_bytes(*permit.metadata_hash().as_bytes()),
+        projection_hash: CanonicalHash::from_bytes(*permit.projection_hash().as_bytes()),
+        plan_generation: permit.metadata_epoch().get(),
+    }
+}
+
 fn shell_disk_admission() -> DiskAdmission {
     let mut monitor = LowDiskMonitor::new();
     match monitor.evaluate(
@@ -502,8 +765,8 @@ mod tests {
     use latticeaxiom_launcher::{LaunchGeneration, SettingTransactionRevision};
     use latticeaxiom_world_catalog::{
         CheckpointClass, CheckpointFingerprint, CrashMarker, ReconciliationState,
-        RecordedCheckpoint, WorldLifecycleEvidence, WorldOpenAction, WorldOpenRisk,
-        WorldOpenStatus,
+        RecordedCheckpoint, StoreId, WorldLifecycleEvidence, WorldOpenAction, WorldOpenRisk,
+        WorldOpenStatus, WriterLeaseState,
     };
 
     use crate::{
@@ -562,7 +825,13 @@ mod tests {
             next_safe_step: Some(WorldOpenAction::UseFrozenLock),
             actions: vec![WorldOpenAction::UseFrozenLock],
             diagnostics: Vec::new(),
-            activation_binding: None,
+            activation_binding: Some(SealedActivationBindingV1 {
+                store_id: StoreId::new("store-1").unwrap_or_else(|error| panic!("{error}")),
+                metadata_epoch: 1,
+                metadata_hash: CanonicalHash::digest(b"metadata"),
+                projection_hash: CanonicalHash::digest(b"projection"),
+                plan_generation: 1,
+            }),
         }
     }
 
@@ -586,6 +855,7 @@ mod tests {
             header_checksum: CanonicalHash::digest(b"header"),
             metadata_checksum: CanonicalHash::digest(b"metadata"),
             crash_marker: CrashMarker::Absent,
+            lease: WriterLeaseState::Absent,
         }
     }
 
@@ -695,5 +965,121 @@ mod tests {
             })
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(matches!(trash, WorldLibraryEffect::Trash(_)));
+    }
+
+    #[test]
+    fn continue_without_activation_binding_fails_closed() {
+        let mut flow = WorldLibraryFlow::new(graph());
+        flow.set_now_ms(10);
+        flow.set_launch_context(LaunchHandoffContext {
+            generation: LaunchGeneration::FIRST,
+            issued_at_ms: 10,
+            expires_at_ms: 70_000,
+            shell_lock_hash: CanonicalHash::digest(b"shell"),
+            world_lock_hash: CanonicalHash::digest(b"world"),
+            confirmed_setting_transaction_revision: SettingTransactionRevision::new(1),
+        });
+        let world = WorldId::new_v4();
+        flow.create(&intent(), world)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let mut plan = exact_plan(world);
+        plan.activation_binding = None;
+        flow.attach_preflight(world, plan)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let error = flow
+            .inject(&SemanticCommand {
+                target: SemanticNodeId::new("home/continue")
+                    .unwrap_or_else(|error| panic!("{error}")),
+                action: SemanticActionId::ContinueWorld,
+                source: InputSource::Headless,
+            })
+            .expect_err("ReadyExact without sealed evidence must fail closed");
+        assert!(matches!(
+            error,
+            WorldLibraryError::MissingActivationEvidence
+        ));
+        assert!(flow.prepared_launch().is_none());
+    }
+
+    #[test]
+    fn complete_clone_and_trash_never_copy_a_lease() {
+        let mut flow = WorldLibraryFlow::new(graph());
+        flow.set_now_ms(8);
+        let world = WorldId::new_v4();
+        flow.create(&intent(), world)
+            .unwrap_or_else(|error| panic!("{error}"));
+        flow.attach_preflight(world, exact_plan(world))
+            .unwrap_or_else(|error| panic!("{error}"));
+        flow.attach_lifecycle(world, lifecycle())
+            .unwrap_or_else(|error| panic!("{error}"));
+        flow.inject(&SemanticCommand {
+            target: SemanticNodeId::new("home/worlds").unwrap_or_else(|error| panic!("{error}")),
+            action: SemanticActionId::OpenWorlds,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+
+        let clone_target = flow.shell().worlds.records()[0]
+            .action_semantic_id(&crate::WorldCardAction::Duplicate)
+            .unwrap_or_else(|| panic!("clone control"));
+        let WorldLibraryEffect::Clone(plan) = flow
+            .inject(&SemanticCommand {
+                target: clone_target,
+                action: SemanticActionId::CloneWorld,
+                source: InputSource::Headless,
+            })
+            .unwrap_or_else(|error| panic!("{error}"))
+        else {
+            panic!("expected clone plan");
+        };
+        flow.complete_clone(
+            &plan,
+            DisplayName::new("Clone").unwrap_or_else(|error| panic!("{error}")),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        let cloned = flow
+            .library()
+            .live_by_id(plan.new_world_id)
+            .unwrap_or_else(|| panic!("clone row"));
+        assert!(cloned.open_plan.is_none());
+        assert!(
+            cloned
+                .lifecycle
+                .as_ref()
+                .is_none_or(|evidence| { evidence.lease == WriterLeaseState::Absent })
+        );
+
+        let trash_target = flow.shell().worlds.records()[0]
+            .action_semantic_id(&crate::WorldCardAction::MoveToTrash)
+            .unwrap_or_else(|| panic!("trash control"));
+        let WorldLibraryEffect::Trash(trash) = flow
+            .inject(&SemanticCommand {
+                target: trash_target,
+                action: SemanticActionId::MoveToTrash,
+                source: InputSource::Headless,
+            })
+            .unwrap_or_else(|error| panic!("{error}"))
+        else {
+            panic!("expected trash plan");
+        };
+        flow.complete_trash(
+            trash,
+            latticeaxiom_world_catalog::TrashTombstone {
+                original_root: WORLD_LIBRARY_ROOT,
+                world_id: world,
+                display_name: DisplayName::new("Library World")
+                    .unwrap_or_else(|error| panic!("{error}")),
+                deleted_at_ms: 8,
+                header_checksum: CanonicalHash::digest(b"header"),
+                metadata_checksum: CanonicalHash::digest(b"metadata"),
+                physical_bytes: 0,
+                last_checkpoint: None,
+                retention: latticeaxiom_world_catalog::TrashRetentionPolicy::ManualPurgeOnly,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(flow.library().live_by_id(world).is_none());
+        assert_eq!(flow.library().trash().len(), 1);
+        assert_eq!(flow.shell().screen, ShellScreen::Trash);
     }
 }

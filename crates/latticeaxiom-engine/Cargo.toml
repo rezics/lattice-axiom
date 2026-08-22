@@ -52,6 +52,7 @@ latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
 latticeaxiom-packages = { path = "../latticeaxiom-packages" }
 latticeaxiom-player = { path = "../latticeaxiom-player" }
 latticeaxiom-registration = { path = "../latticeaxiom-registration" }
+latticeaxiom-render-contracts = { path = "../latticeaxiom-render-contracts" }
 latticeaxiom-runtime-contracts = { path = "../latticeaxiom-runtime-contracts" }
 latticeaxiom-start-ui = { path = "../latticeaxiom-start-ui" }
 latticeaxiom-storage = { path = "../latticeaxiom-storage" }

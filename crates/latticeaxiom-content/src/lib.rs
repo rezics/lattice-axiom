@@ -1,10 +1,11 @@
 //! Deterministic, engine-independent content-state contracts for D9.
 //!
 //! This crate validates typed block, biome, and fluid definitions, expands
-//! bounded discrete block-state palettes, freezes material Role bindings, and
-//! compiles stable solid and fluid palettes. It owns no renderer, gameplay
-//! rules, package authoring files, persistence backend, scheduler, or Bevy
-//! integration.
+//! bounded discrete block-state palettes, freezes material Role bindings,
+//! compiles stable solid and fluid palettes, and extracts the presentation
+//! binding index consumed by terrain layer compilation. It owns no renderer,
+//! gameplay rules, package authoring files, persistence backend, scheduler, or
+//! Bevy integration.
 //!
 //! Process-local numeric IDs are deliberately absent. Compiled palettes retain
 //! concrete [`latticeaxiom_core::StableId`] values and canonical state, so a
@@ -22,6 +23,7 @@ mod error;
 mod fluid;
 mod header;
 mod palette;
+mod presentation;
 mod state;
 
 pub use biome::{
@@ -49,6 +51,7 @@ pub use palette::{
     CompiledFluidPaletteEntryV1, CompiledFluidPaletteV1, CompiledSolidPaletteEntryV1,
     CompiledSolidPaletteV1, FluidPaletteEntryV1, PaletteLimitsV1, SolidPaletteEntryV1,
 };
+pub use presentation::{ContentPresentationBindingV1, ContentPresentationKindV1};
 pub use state::{
     AXIS_STATE_KEY_V1, AxisV1, BlockHalfV1, BlockStatePropertyV1, BlockStateV1,
     BlockStateValueKindV1, BlockStateValueV1, BlockStateVariantV1, FACING_STATE_KEY_V1, FacingV1,

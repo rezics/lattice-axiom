@@ -16,9 +16,10 @@ use latticeaxiom_storage::{
 };
 use latticeaxiom_voxel_runtime::{
     CellSelection, ColliderSemanticFingerprint, CommittedChunkProjection, DdaOrigin, DdaQuery,
-    DerivedKind, DerivedMemoryBudget, DerivedOwner, DerivedPriority, DerivedQueueLimits,
-    DerivedRequest, DerivedRequestSet, FixedTick, MeshSemanticFingerprint, RuntimeGeneration,
-    RuntimeLimits, VoxelRuntime, WorkingSetScope, WorldEpoch,
+    DerivedApplyBudget, DerivedApplySlice, DerivedKind, DerivedMemoryBudget, DerivedOwner,
+    DerivedPriority, DerivedQueueLimits, DerivedRequest, DerivedRequestSet, FixedTick,
+    MeshSemanticFingerprint, RuntimeGeneration, RuntimeLimits, VoxelRuntime, WallClockNanos,
+    WorkingSetScope, WorldEpoch,
 };
 
 const EDGE: u16 = 32;
@@ -190,6 +191,23 @@ fn runtime_benchmarks(criterion: &mut Criterion) {
             },
             BatchSize::SmallInput,
         );
+    });
+
+    criterion.bench_function("runtime/apply_slice_admission", |bencher| {
+        let budget = DerivedApplyBudget::desktop_reference_v1();
+        bencher.iter(|| {
+            let mut slice = DerivedApplySlice::new();
+            for job in 0..32_u64 {
+                let elapsed = WallClockNanos::new(job.saturating_mul(50_000));
+                slice.set_elapsed(elapsed);
+                let decision = slice.admission(256 * 1024, budget);
+                if decision.is_admit() {
+                    slice.commit_applied(256 * 1024, elapsed);
+                }
+                black_box(decision);
+            }
+            black_box(slice)
+        });
     });
 
     criterion.bench_function("runtime/committed_dda_five_meters", |bencher| {

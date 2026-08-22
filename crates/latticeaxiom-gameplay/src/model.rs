@@ -397,6 +397,12 @@ impl ContainerStateV1 {
         self.slots.len()
     }
 
+    /// Returns every container slot in index order.
+    #[must_use]
+    pub const fn slots(&self) -> &[Option<ItemStackV1>] {
+        &self.slots
+    }
+
     /// Returns whether this container has no slots.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -812,6 +818,18 @@ impl ReferenceGameplayState {
     #[must_use]
     pub fn continuation(&self, id: ContinuationId) -> Option<&FurnaceContinuationV1> {
         self.continuations.get(&id)
+    }
+
+    /// Returns persistent containers in stable identity order.
+    #[must_use]
+    pub const fn containers(&self) -> &BTreeMap<ContainerId, ContainerStateV1> {
+        &self.containers
+    }
+
+    /// Returns scheduled continuations in stable identity order.
+    #[must_use]
+    pub const fn continuations(&self) -> &BTreeMap<ContinuationId, FurnaceContinuationV1> {
+        &self.continuations
     }
 
     /// Returns the canonical gameplay state hash.

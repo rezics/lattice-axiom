@@ -4,10 +4,12 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueueDiagnostics {
     pub(crate) pending: usize,
+    pub(crate) pending_bytes: u64,
     pub(crate) in_flight: usize,
     pub(crate) cancel_requested: usize,
     pub(crate) reserved_bytes: u64,
     pub(crate) pending_high_water: usize,
+    pub(crate) pending_bytes_high_water: u64,
     pub(crate) in_flight_high_water: usize,
     pub(crate) reserved_bytes_high_water: u64,
     pub(crate) enqueued: u64,
@@ -21,6 +23,8 @@ pub struct QueueDiagnostics {
     pub(crate) applied: u64,
     pub(crate) apply_failed: u64,
     pub(crate) apply_panicked: u64,
+    pub(crate) executor_panicked: u64,
+    pub(crate) lost_tickets: u64,
     pub(crate) stale_rejected: u64,
     pub(crate) unknown_completion: u64,
     pub(crate) memory_contract_violations: u64,
@@ -32,10 +36,20 @@ impl QueueDiagnostics {
     pub const fn pending(self) -> usize {
         self.pending
     }
+    /// Combined declared reservations of pending jobs.
+    #[must_use]
+    pub const fn pending_bytes(self) -> u64 {
+        self.pending_bytes
+    }
     /// Current active and cancel-requested job count.
     #[must_use]
     pub const fn in_flight(self) -> usize {
         self.in_flight
+    }
+    /// Combined input, result, and apply reservations still held in flight.
+    #[must_use]
+    pub const fn in_flight_bytes(self) -> u64 {
+        self.reserved_bytes
     }
     /// Jobs whose owners have not yet acknowledged cancellation.
     #[must_use]
@@ -51,6 +65,11 @@ impl QueueDiagnostics {
     #[must_use]
     pub const fn pending_high_water(self) -> usize {
         self.pending_high_water
+    }
+    /// Maximum observed pending reservation.
+    #[must_use]
+    pub const fn pending_bytes_high_water(self) -> u64 {
+        self.pending_bytes_high_water
     }
     /// Maximum observed in-flight count.
     #[must_use]
@@ -117,6 +136,16 @@ impl QueueDiagnostics {
     pub const fn apply_panicked(self) -> u64 {
         self.apply_panicked
     }
+    /// Worker panics that released an owned input without applying.
+    #[must_use]
+    pub const fn executor_panicked(self) -> u64 {
+        self.executor_panicked
+    }
+    /// In-flight tickets recovered after the executor dropped the input.
+    #[must_use]
+    pub const fn lost_tickets(self) -> u64 {
+        self.lost_tickets
+    }
     /// Known completions rejected as stale.
     #[must_use]
     pub const fn stale_rejected(self) -> u64 {
@@ -156,6 +185,11 @@ pub struct RuntimeDiagnostics {
     pub(crate) waiting_to_apply_jobs: usize,
     pub(crate) waiting_to_apply_bytes: u64,
     pub(crate) waiting_to_apply_bytes_high_water: u64,
+    pub(crate) combined_pending_jobs: usize,
+    pub(crate) combined_pending_bytes: u64,
+    pub(crate) apply_stopped_jobs: u64,
+    pub(crate) apply_stopped_bytes: u64,
+    pub(crate) apply_stopped_wall_clock: u64,
     pub(crate) mesh: QueueDiagnostics,
     pub(crate) collider: QueueDiagnostics,
 }
@@ -258,6 +292,31 @@ impl RuntimeDiagnostics {
     #[must_use]
     pub const fn waiting_to_apply_bytes_high_water(self) -> u64 {
         self.waiting_to_apply_bytes_high_water
+    }
+    /// Combined pending mesh and collider jobs.
+    #[must_use]
+    pub const fn combined_pending_jobs(self) -> usize {
+        self.combined_pending_jobs
+    }
+    /// Combined declared reservations of pending mesh and collider jobs.
+    #[must_use]
+    pub const fn combined_pending_bytes(self) -> u64 {
+        self.combined_pending_bytes
+    }
+    /// Apply slices that stopped because the job cap was reached.
+    #[must_use]
+    pub const fn apply_stopped_jobs(self) -> u64 {
+        self.apply_stopped_jobs
+    }
+    /// Apply slices that stopped because another job would exceed the byte cap.
+    #[must_use]
+    pub const fn apply_stopped_bytes(self) -> u64 {
+        self.apply_stopped_bytes
+    }
+    /// Apply slices that stopped because the host wall-clock cap was reached.
+    #[must_use]
+    pub const fn apply_stopped_wall_clock(self) -> u64 {
+        self.apply_stopped_wall_clock
     }
     /// Mesh queue diagnostics.
     #[must_use]

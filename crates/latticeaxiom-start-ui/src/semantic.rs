@@ -137,6 +137,10 @@ pub enum SemanticActionId {
     MoveToTrash,
     /// Restore an entry from managed trash.
     RestoreWorld,
+    /// Restore a managed-trash entry as a clone with a new world identity.
+    RestoreWorldAsClone,
+    /// Clear a crash-abandoned exclusive writer lease without opening a writer.
+    RecoverStaleLease,
 }
 
 /// Accessibility state expressed without renderer-specific types.

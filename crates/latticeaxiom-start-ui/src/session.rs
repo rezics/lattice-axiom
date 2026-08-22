@@ -1,10 +1,9 @@
 //! Process-local in-memory world list for create/list/continue.
 //!
-//! This is the production-client session catalog until a durable writer exists.
-//! Continue resumes the same process-local [`WorldId`]; it does not load a
-//! checkpoint, restore trash, or publish a catalog sidecar. Pause opens an
-//! overlay without mutating world state. Save and Exit are host effects and
-//! are not a physical checkpoint path. An optional shared
+//! This is the production-client session catalog. Continue resumes the same
+//! process-local [`WorldId`]. Pause opens an overlay without mutating world
+//! state. Save and Exit are host effects: the host performs sealed-writer
+//! Durable commits and checkpoints. An optional shared
 //! [`DeterministicWorldStorage`] fills [`WorldOpenPlan::activation_binding`]
 //! from storage preflight. When storage is absent, create stays memory-only.
 
@@ -133,6 +132,28 @@ impl InMemoryWorldList {
             .get_mut(&world_id)
             .ok_or(WorldShellError::MissingLiveWorld)?;
         record.metadata.last_played_at_ms = played_at_ms;
+        Ok(())
+    }
+
+    /// Records a host-proven durable frontier without opening a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldShellError::MissingLiveWorld`] when the identity is absent.
+    pub fn record_durable_frontier(
+        &mut self,
+        world_id: WorldId,
+        durable_frontier: u64,
+        clean_shutdown: bool,
+    ) -> Result<(), WorldShellError> {
+        let record = self
+            .records
+            .get_mut(&world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        if let CatalogEntryState::Projected(projection) = &mut record.entry.state {
+            projection.durable_frontier = durable_frontier;
+            projection.clean_shutdown = clean_shutdown;
+        }
         Ok(())
     }
 
@@ -278,6 +299,23 @@ impl MemoryStartFlow {
         played_at_ms: u64,
     ) -> Result<(), WorldShellError> {
         self.worlds.mark_played(world_id, played_at_ms)?;
+        self.sync_worlds();
+        Ok(())
+    }
+
+    /// Records a host-proven durable frontier and refreshes the shell list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldShellError::MissingLiveWorld`] when the identity is absent.
+    pub fn record_durable_frontier(
+        &mut self,
+        world_id: WorldId,
+        durable_frontier: u64,
+        clean_shutdown: bool,
+    ) -> Result<(), WorldShellError> {
+        self.worlds
+            .record_durable_frontier(world_id, durable_frontier, clean_shutdown)?;
         self.sync_worlds();
         Ok(())
     }

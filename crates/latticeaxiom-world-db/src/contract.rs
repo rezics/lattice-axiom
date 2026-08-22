@@ -6,8 +6,9 @@ use latticeaxiom_storage::ChunkKey;
 use crate::{
     CheckpointId, CheckpointOutcomeV1, CheckpointReceiptV1, CheckpointRequestV1,
     HeaderRepairPermitV1, PersistedChunkV1, StorageDurabilityCapabilityV1, WorldCommitOutcomeV1,
-    WorldCommitRequestV1, WorldCreateOutcomeV1, WorldCreateRequestV1, WorldDbResult,
-    WorldFrontierV1, WorldStorageLimitsV1, WorldStoragePreflightV1, WriterActivationV1,
+    WorldCommitReceiptV1, WorldCommitRequestV1, WorldCreateOutcomeV1, WorldCreateRequestV1,
+    WorldDbResult, WorldFrontierV1, WorldStorageLimitsV1, WorldStoragePreflightV1,
+    WriterActivationV1,
 };
 
 /// Product boundary for authoritative materialized-world persistence.
@@ -89,6 +90,18 @@ pub trait WorldStorage: Send + Sync {
         world: WorldId,
         checkpoint: CheckpointId,
     ) -> WorldDbResult<CheckpointReceiptV1>;
+
+    /// Verifies an unclean durable frontier without opening a writer.
+    ///
+    /// Successful verification does not mark a clean shutdown. It only proves
+    /// that materialized records, frontiers, and the entity index are a
+    /// self-contained recovery image so a later sealed activation may proceed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the world is missing, the frontier is
+    /// inconsistent, or a materialized record cannot be decoded.
+    fn verify_crash_recovery(&self, world: WorldId) -> WorldDbResult<WorldCommitReceiptV1>;
 }
 
 /// Immutable, coherent read snapshot captured at one world revision.

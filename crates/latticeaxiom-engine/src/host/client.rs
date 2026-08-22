@@ -10,7 +10,7 @@ use bevy::{
 use latticeaxiom_player::{LocalPlayerInput, PlayerMovementProfileV1, PlayerViewV1};
 
 use super::chunk_mesh::{
-    ProductionTerrainMaterial, ProductionTerrainPalette, nearest_clamp_sampler,
+    ProductionTerrainMaterials, ProductionTerrainPalette, nearest_clamp_sampler,
 };
 
 use crate::EngineProfile;
@@ -35,13 +35,10 @@ pub(super) fn spawn_production_client_view(
     let mut atlas_image = palette.atlas_image();
     atlas_image.sampler = nearest_clamp_sampler();
     let atlas = images.add(atlas_image);
-    commands.insert_resource(ProductionTerrainMaterial(materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(atlas),
-        perceptual_roughness: 0.95,
-        reflectance: 0.06,
-        ..StandardMaterial::default()
-    })));
+    commands.insert_resource(ProductionTerrainMaterials::from_atlas(
+        &mut materials,
+        atlas,
+    ));
     commands.spawn((
         Name::new("Production Camera"),
         ProductionCamera,

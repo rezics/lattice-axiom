@@ -7,6 +7,7 @@
 //! It is not a persistence authority, renderer facade, task runtime, or physics
 //! backend and cannot author voxel edits or advance authoritative revisions.
 
+mod apply;
 mod dda;
 mod diagnostics;
 mod error;
@@ -14,6 +15,10 @@ mod model;
 mod queue;
 mod working_set;
 
+pub use apply::{
+    ApplyAdmission, DerivedAdmissionSnapshot, DerivedApplyBudget, DerivedApplySlice,
+    ExecutorFinish, ExecutorOutcome, WallClockNanos, WorkerAbortOutcome, WorkerAbortReceipt,
+};
 pub use dda::{CellSelection, DdaCell, DdaOrigin, DdaOutcome, DdaQuery, DdaUnavailable};
 pub use diagnostics::{QueueDiagnostics, RuntimeDiagnostics};
 pub use error::{RuntimeError, RuntimeResult};

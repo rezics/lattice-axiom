@@ -101,6 +101,7 @@ impl DerivedQueue {
                 previous.key.coordinate(),
             ));
             debug_assert!(removed, "pending queue and stable order must agree");
+            self.replace_pending_bytes(previous.reserved_bytes, pending.reserved_bytes);
             self.pending.insert(coordinate, pending.clone());
             let inserted = self
                 .order
@@ -121,6 +122,7 @@ impl DerivedQueue {
             .order
             .insert(QueueOrderKey::new(pending.priority, coordinate));
         debug_assert!(inserted, "new target must have a unique stable order key");
+        self.add_pending_bytes(pending.reserved_bytes);
         self.pending.insert(coordinate, pending);
         self.diagnostics.enqueued = self.diagnostics.enqueued.saturating_add(1);
         self.refresh_current();
@@ -143,6 +145,7 @@ impl DerivedQueue {
             .order
             .remove(&QueueOrderKey::new(pending.priority, coordinate));
         debug_assert!(removed, "pending target index must agree with stable order");
+        self.sub_pending_bytes(pending.reserved_bytes);
         self.mark_memory_contract_violation();
         self.refresh_current();
         true
@@ -216,6 +219,7 @@ impl DerivedQueue {
             .order
             .remove(&QueueOrderKey::new(pending.priority, coordinate));
         debug_assert!(removed_order, "selected order key must remain queued");
+        self.sub_pending_bytes(pending.reserved_bytes);
 
         let ticket = DerivedTicket {
             id,
@@ -272,6 +276,7 @@ impl DerivedQueue {
                 .order
                 .remove(&QueueOrderKey::new(pending.priority, coordinate));
             debug_assert!(removed, "pending target index must agree with stable order");
+            self.sub_pending_bytes(pending.reserved_bytes);
         }
 
         let mut requests = Vec::new();
@@ -336,6 +341,14 @@ impl DerivedQueue {
         self.diagnostics.apply_panicked = self.diagnostics.apply_panicked.saturating_add(1);
     }
 
+    pub(crate) const fn mark_executor_panicked(&mut self) {
+        self.diagnostics.executor_panicked = self.diagnostics.executor_panicked.saturating_add(1);
+    }
+
+    pub(crate) const fn mark_lost_ticket(&mut self) {
+        self.diagnostics.lost_tickets = self.diagnostics.lost_tickets.saturating_add(1);
+    }
+
     pub(crate) const fn mark_stale_rejected(&mut self) {
         self.diagnostics.stale_rejected = self.diagnostics.stale_rejected.saturating_add(1);
     }
@@ -367,6 +380,10 @@ impl DerivedQueue {
             .diagnostics
             .pending_high_water
             .max(self.diagnostics.pending);
+        self.diagnostics.pending_bytes_high_water = self
+            .diagnostics
+            .pending_bytes_high_water
+            .max(self.diagnostics.pending_bytes);
         self.diagnostics.in_flight_high_water = self
             .diagnostics
             .in_flight_high_water
@@ -375,5 +392,26 @@ impl DerivedQueue {
             .diagnostics
             .reserved_bytes_high_water
             .max(self.diagnostics.reserved_bytes);
+    }
+
+    fn add_pending_bytes(&mut self, bytes: u64) {
+        self.diagnostics.pending_bytes = self
+            .diagnostics
+            .pending_bytes
+            .checked_add(bytes)
+            .expect("pending reservation ledger must remain in range");
+    }
+
+    fn sub_pending_bytes(&mut self, bytes: u64) {
+        self.diagnostics.pending_bytes = self
+            .diagnostics
+            .pending_bytes
+            .checked_sub(bytes)
+            .expect("pending reservation ledger must remain balanced");
+    }
+
+    fn replace_pending_bytes(&mut self, previous: u64, next: u64) {
+        self.sub_pending_bytes(previous);
+        self.add_pending_bytes(next);
     }
 }

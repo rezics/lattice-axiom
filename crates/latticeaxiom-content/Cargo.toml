@@ -14,6 +14,8 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+latticeaxiom-render-contracts = { path = "../latticeaxiom-render-contracts" }
+latticeaxiom-voxel-mesh = { path = "../latticeaxiom-voxel-mesh" }
 proptest.workspace = true
 serde_json.workspace = true
 

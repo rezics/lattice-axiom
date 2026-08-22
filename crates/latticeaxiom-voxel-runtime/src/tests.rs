@@ -16,14 +16,16 @@ use latticeaxiom_voxel_mesh::Face;
 use proptest::prelude::*;
 
 use crate::{
-    ApplyByteDeclaration, BackpressureReason, CancellationAckOutcome, CellSelection,
-    ColliderFailure, ColliderSafetyState, ColliderSemanticFingerprint, CommittedChunkProjection,
-    CompletionOutcome, DdaOrigin, DdaOutcome, DdaQuery, DerivedInput, DerivedKind,
-    DerivedMemoryBudget, DerivedOwner, DerivedPriority, DerivedQueueLimits, DerivedRequest,
-    DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, FixedTick, InterestWindow,
-    MemoryStage, MeshSemanticFingerprint, ProjectionDecision, ProjectionEvidence, RetainedBytes,
-    RuntimeError, RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate, VoxelRuntime,
-    WorkingSetScope, WorldEpoch, cpu_heavy_concurrency, host_parallelism,
+    ApplyAdmission, ApplyByteDeclaration, BackpressureReason, CancellationAckOutcome,
+    CellSelection, ColliderFailure, ColliderSafetyState, ColliderSemanticFingerprint,
+    CommittedChunkProjection, CompletionOutcome, DdaOrigin, DdaOutcome, DdaQuery,
+    DerivedApplyBudget, DerivedApplySlice, DerivedInput, DerivedKind, DerivedMemoryBudget,
+    DerivedOwner, DerivedPriority, DerivedQueueLimits, DerivedRequest, DerivedRequestSet,
+    DispatchOutcome, EvictionLeaseGeneration, ExecutorFinish, ExecutorOutcome, FixedTick,
+    InterestWindow, MemoryStage, MeshSemanticFingerprint, ProjectionDecision, ProjectionEvidence,
+    RetainedBytes, RuntimeError, RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate,
+    VoxelRuntime, WallClockNanos, WorkerAbortOutcome, WorkingSetScope, WorldEpoch,
+    cpu_heavy_concurrency, host_parallelism,
 };
 
 const EDGE: u16 = 4;
@@ -1350,6 +1352,11 @@ fn dispatch_is_split_from_apply_and_respects_cpu_heavy_cap() {
     runtime.record_waiting_to_apply(32);
     assert_eq!(runtime.diagnostics().waiting_to_apply_jobs(), 1);
     assert_eq!(runtime.diagnostics().waiting_to_apply_bytes(), 32);
+    let snapshot = runtime.admission_snapshot();
+    assert_eq!(snapshot.in_flight_jobs(), 1);
+    assert_eq!(snapshot.in_flight_bytes(), runtime.in_flight_bytes());
+    assert_eq!(snapshot.waiting_to_apply_bytes(), 32);
+    assert_eq!(snapshot.cpu_heavy_slots_remaining(), 0);
     runtime.consume_waiting_to_apply(32);
     assert_eq!(runtime.diagnostics().waiting_to_apply_jobs(), 0);
     assert_eq!(runtime.diagnostics().waiting_to_apply_bytes(), 0);
@@ -1391,7 +1398,168 @@ fn desktop_reference_queue_caps_and_soft_high_water_match_adr_0026() {
         .expect("accepted combined caps are nonzero");
     assert_eq!(limits.max_combined_in_flight(), 192);
     assert_eq!(limits.max_combined_reserved_bytes(), 384 * 1024 * 1024);
+    assert_eq!(limits.combined_soft_high_water_jobs(), 144);
+    assert_eq!(
+        limits.combined_soft_high_water_bytes(),
+        384 * 1024 * 1024 * 75 / 100
+    );
+    assert_eq!(RuntimeLimits::MAIN_WORLD_APPLY_JOB_CAP, 16);
     assert_eq!(RuntimeLimits::MAIN_WORLD_APPLY_BYTE_CAP, 16 * 1024 * 1024);
+    assert_eq!(RuntimeLimits::MAIN_WORLD_APPLY_WALL_CLOCK_NANOS, 2_000_000);
+    let apply = RuntimeLimits::main_world_apply_budget();
+    assert_eq!(apply, DerivedApplyBudget::desktop_reference_v1());
+    assert_eq!(apply.max_jobs(), 16);
+    assert_eq!(apply.max_bytes(), 16 * 1024 * 1024);
+    assert_eq!(apply.max_wall_clock_nanos(), 2_000_000);
+}
+
+#[test]
+fn pending_and_in_flight_byte_ledgers_are_deterministic() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let first = ChunkCoordinate::new(0, 0, 0);
+    let second = ChunkCoordinate::new(1, 0, 0);
+    let (_, stored_first) = commit_chunk(&storage, &runtime_scope, first, vec![1; CELL_COUNT], 1);
+    let (_, stored_second) = commit_chunk(&storage, &runtime_scope, second, vec![2; CELL_COUNT], 2);
+    let mut runtime = runtime();
+    project_stored(&mut runtime, &stored_first, 0, 1, 1);
+    project_stored(&mut runtime, &stored_second, 1, 1, 1);
+
+    let pending_jobs = runtime.pending_jobs();
+    let pending_bytes = runtime.pending_bytes();
+    assert_eq!(pending_jobs, 4);
+    assert!(pending_bytes > 0);
+    assert_eq!(runtime.in_flight_jobs(), 0);
+    assert_eq!(runtime.in_flight_bytes(), 0);
+    assert_eq!(
+        runtime.diagnostics().combined_pending_bytes(),
+        pending_bytes
+    );
+
+    let mesh = match runtime
+        .dispatch_next(DerivedKind::Mesh)
+        .expect("job identity remains in range")
+    {
+        DispatchOutcome::Started(input) => input,
+        other => panic!("first mesh job must start, got {other:?}"),
+    };
+    assert_eq!(runtime.pending_jobs(), pending_jobs - 1);
+    assert_eq!(
+        runtime.pending_bytes(),
+        pending_bytes.saturating_sub(mesh.ticket().reserved_bytes())
+    );
+    assert_eq!(runtime.in_flight_jobs(), 1);
+    assert_eq!(runtime.in_flight_bytes(), mesh.ticket().reserved_bytes());
+    assert!(!runtime.admission_snapshot().at_soft_high_water());
+
+    assert!(matches!(
+        runtime.complete_derived(
+            mesh,
+            0_u8,
+            ApplyByteDeclaration::new(0),
+            FixedTick::new(2),
+            |_| Ok::<(), ()>(()),
+        ),
+        CompletionOutcome::Applied { .. }
+    ));
+    assert_eq!(runtime.in_flight_jobs(), 0);
+    assert_eq!(runtime.in_flight_bytes(), 0);
+}
+
+#[test]
+fn executor_panic_and_lost_ticket_release_reservations() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let coordinate = ChunkCoordinate::new(0, 0, 0);
+    let (_, stored) = commit_chunk(&storage, &runtime_scope, coordinate, vec![1; CELL_COUNT], 1);
+    let mut runtime = runtime();
+    project_stored(&mut runtime, &stored, 0, 1, 1);
+
+    let panicked = dispatch_target(&mut runtime, DerivedKind::Collider, coordinate);
+    let reserved = panicked.ticket().reserved_bytes();
+    assert_eq!(runtime.in_flight_bytes(), reserved);
+    let abort = runtime.complete_executor::<u8, (), ()>(
+        ExecutorOutcome::Panicked { input: panicked },
+        ApplyByteDeclaration::new(0),
+        FixedTick::new(1),
+        |_| Ok(()),
+    );
+    let ExecutorFinish::Aborted(WorkerAbortOutcome::Panicked(receipt)) = abort else {
+        panic!("executor panic must abort without applying");
+    };
+    assert_eq!(receipt.released_reserved_bytes(), reserved);
+    assert_eq!(runtime.in_flight_bytes(), 0);
+    assert_eq!(runtime.diagnostics().collider().executor_panicked(), 1);
+    assert!(matches!(
+        runtime.collider_safety(coordinate),
+        Some(ColliderSafetyState::FailedConservative {
+            failure: ColliderFailure::ExecutorPanicked,
+            ..
+        })
+    ));
+    assert!(
+        runtime
+            .last_applied_key(coordinate, DerivedKind::Collider)
+            .is_none()
+    );
+
+    runtime
+        .request_derived(
+            coordinate,
+            DerivedKind::Mesh,
+            FixedTick::new(2),
+            request(1, 0, 512, 256),
+        )
+        .expect("retry is queued");
+    let lost = dispatch_target(&mut runtime, DerivedKind::Mesh, coordinate);
+    let ticket = lost.ticket().clone();
+    let lost_bytes = ticket.reserved_bytes();
+    drop(lost);
+    let recovered = runtime.recover_lost_ticket(ticket.clone());
+    assert!(matches!(
+        recovered,
+        WorkerAbortOutcome::Lost(receipt) if receipt.job() == ticket.id()
+            && receipt.released_reserved_bytes() == lost_bytes
+    ));
+    assert_eq!(runtime.in_flight_bytes(), 0);
+    assert_eq!(runtime.diagnostics().mesh().lost_tickets(), 1);
+    assert!(matches!(
+        runtime.recover_lost_ticket(ticket),
+        WorkerAbortOutcome::UnknownTicket { .. }
+    ));
+}
+
+#[test]
+fn apply_slice_wall_clock_and_byte_hooks_stop_later_jobs() {
+    let budget = DerivedApplyBudget::desktop_reference_v1();
+    let mut slice = DerivedApplySlice::new();
+    assert_eq!(
+        slice.admission(budget.max_bytes().saturating_add(1), budget),
+        ApplyAdmission::Admit
+    );
+    slice.commit_applied(budget.max_bytes().saturating_add(1), WallClockNanos::new(0));
+    assert_eq!(slice.admission(1, budget), ApplyAdmission::StopBytes);
+
+    let mut wall = DerivedApplySlice::new();
+    wall.commit_applied(1, WallClockNanos::new(0));
+    wall.set_elapsed(WallClockNanos::main_world_apply_cap());
+    assert_eq!(wall.admission(1, budget), ApplyAdmission::StopWallClock);
+
+    let mut jobs = DerivedApplySlice::new();
+    for _ in 0..budget.max_jobs() {
+        assert_eq!(jobs.admission(1, budget), ApplyAdmission::Admit);
+        jobs.commit_applied(1, WallClockNanos::new(0));
+    }
+    assert_eq!(jobs.admission(1, budget), ApplyAdmission::StopJobs);
+
+    let mut runtime = runtime();
+    runtime.record_apply_budget_stop(ApplyAdmission::StopJobs);
+    runtime.record_apply_budget_stop(ApplyAdmission::StopBytes);
+    runtime.record_apply_budget_stop(ApplyAdmission::StopWallClock);
+    let diagnostics = runtime.diagnostics();
+    assert_eq!(diagnostics.apply_stopped_jobs(), 1);
+    assert_eq!(diagnostics.apply_stopped_bytes(), 1);
+    assert_eq!(diagnostics.apply_stopped_wall_clock(), 1);
 }
 
 proptest! {

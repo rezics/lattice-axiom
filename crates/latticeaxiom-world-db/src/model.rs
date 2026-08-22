@@ -939,6 +939,11 @@ pub enum StoragePreflightStatusV1 {
     ReadyForActivation,
     /// DB metadata is valid but the bounded sidecar needs explicit repair.
     HeaderRepairRequired(HeaderRepairReason),
+    /// Writer activation is unsafe; reads, export, and recovery remain available.
+    RecoverableReadOnly {
+        /// Stable next-safe-step diagnostic.
+        reason: &'static str,
+    },
     /// Identity or authoritative-metadata integrity blocks repair and open.
     Blocked(ReconciliationBlock),
 }

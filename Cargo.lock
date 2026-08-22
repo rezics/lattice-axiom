@@ -4002,6 +4002,8 @@ name = "latticeaxiom-content"
 version = "0.1.0"
 dependencies = [
  "latticeaxiom-core",
+ "latticeaxiom-render-contracts",
+ "latticeaxiom-voxel-mesh",
  "proptest",
  "serde",
  "serde_json",
@@ -4055,6 +4057,7 @@ dependencies = [
  "latticeaxiom-packages",
  "latticeaxiom-player",
  "latticeaxiom-registration",
+ "latticeaxiom-render-contracts",
  "latticeaxiom-runtime-contracts",
  "latticeaxiom-start-ui",
  "latticeaxiom-storage",

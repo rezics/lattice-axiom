@@ -704,6 +704,30 @@ mod tests {
         );
     }
     #[test]
+    fn materialized_chunk_reads_return_committed_state_and_none_when_absent() {
+        let storage = MemoryTransactionKernel::new();
+        let transaction = conformance::sample_create_transaction(93);
+        let world = transaction.world();
+        let present = transaction.mutations[0].key().clone();
+        let absent = conformance::sample_key(world, ChunkCoordinate::new(9, -4, 2));
+        let before = storage
+            .reference_snapshot(world)
+            .expect("an empty world must still produce a snapshot");
+        assert!(before.chunk(&present).is_none());
+        assert!(before.chunk(&absent).is_none());
+
+        storage
+            .commit(transaction)
+            .expect("the sample materialization must commit");
+        let after = storage
+            .reference_snapshot(world)
+            .expect("a committed world must be readable before generation");
+        assert!(after.chunk(&present).is_some());
+        assert!(after.chunk(&absent).is_none());
+        assert_eq!(after.revision(), WorldRevision::new(1));
+    }
+
+    #[test]
     fn memory_receipts_report_only_queued_durability() {
         let receipt = MemoryTransactionKernel::new()
             .commit(conformance::sample_create_transaction(92))

@@ -933,6 +933,240 @@
       "asset_kind": "content-icon",
       "status": "explicit-placeholder",
       "source": "placeholders/icons/items/wooden-shovel"
+    },
+    {
+      "id": "terrenia:asset/layer-cactus-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/cactus-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-cactus-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/cactus-side"
+    },
+    {
+      "id": "terrenia:asset/layer-cactus-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/cactus-top"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-down",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/chest-down"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-east",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/chest-east"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-north",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/chest-north"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-south",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/chest-south"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-up",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/chest-up"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-west",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/chest-west"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-down",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/furnace-down"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-east",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/furnace-east"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-north",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/furnace-north"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-south",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/furnace-south"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-up",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/furnace-up"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-west",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/furnace-west"
+    },
+    {
+      "id": "terrenia:asset/layer-grass-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/grass-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-grass-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/grass-side"
+    },
+    {
+      "id": "terrenia:asset/layer-grass-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/grass-top"
+    },
+    {
+      "id": "terrenia:asset/layer-oak-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/oak-log-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-oak-log-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/oak-log-side"
+    },
+    {
+      "id": "terrenia:asset/layer-oak-log-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/oak-log-top"
+    },
+    {
+      "id": "terrenia:asset/layer-pine-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/pine-log-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-pine-log-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/pine-log-side"
+    },
+    {
+      "id": "terrenia:asset/layer-pine-log-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/pine-log-top"
+    },
+    {
+      "id": "terrenia:asset/layer-red-sandstone-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/red-sandstone-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-red-sandstone-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/red-sandstone-side"
+    },
+    {
+      "id": "terrenia:asset/layer-red-sandstone-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/red-sandstone-top"
+    },
+    {
+      "id": "terrenia:asset/layer-sandstone-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/sandstone-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-sandstone-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/sandstone-side"
+    },
+    {
+      "id": "terrenia:asset/layer-sandstone-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/sandstone-top"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-oak-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/stripped-oak-log-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-oak-log-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/stripped-oak-log-side"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-oak-log-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/stripped-oak-log-top"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-pine-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/stripped-pine-log-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-pine-log-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/stripped-pine-log-side"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-pine-log-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/stripped-pine-log-top"
+    },
+    {
+      "id": "terrenia:asset/layer-workbench-bottom",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/workbench-bottom"
+    },
+    {
+      "id": "terrenia:asset/layer-workbench-side",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/workbench-side"
+    },
+    {
+      "id": "terrenia:asset/layer-workbench-top",
+      "asset_kind": "texture-layer",
+      "status": "explicit-placeholder",
+      "source": "placeholders/layers/workbench-top"
     }
   ]
 }

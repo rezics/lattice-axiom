@@ -12,9 +12,10 @@ The crate provides:
 - immutable chunk-plus-one-voxel-halo inputs;
 - storage world/chunk/voxel revisions and six-neighbor source receipts;
 - separate presentation-mesh and collision-semantic fingerprints;
-- complete input/result/apply reservation ledgers;
+- complete pending/in-flight/waiting input/result/apply reservation ledgers;
 - cancellation tokens retained until executor acknowledgement;
-- stale completion rejection before caller-owned apply;
+- explicit cancelled, stale, apply-panic, and executor-panic/lost-ticket outcomes;
+- host-supplied 16 job / 16 MiB / 2 ms main-world apply-slice admission;
 - conservative projected occupancy while colliders are pending or failed;
 - exact clean-projection eviction permits; and
 - native right-handed Y-up committed-state DDA with a five-meter reach cap.

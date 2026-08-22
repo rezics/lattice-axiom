@@ -7,13 +7,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use latticeaxiom_gameplay::{
     BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1,
-    ContainerId, ContainerOwnerComponentV1, ContainerStateV1, DimensionChunkKey, DimensionId,
-    DropEntityId, FaultInjection, GameplayCatalog, GameplayCommandV1, GameplayEditTarget,
-    GameplayLimits, GameplayReject, GameplayStorageDomain, IngredientV1, InventoryStateV1, ItemId,
-    ItemStackV1, ItemStateV1, MineCommandV1, MoveStackCommandV1, PickupCommandV1, PlaceCommandV1,
-    PlayerId, RecipeCraftCommandV1, RecipeId, RecipePatternV1, ReferenceGameplayState,
-    ReferencePlanApplier, RuntimePlanReceiptV1, SlotIndex, ToolClassId, TransactionId,
-    WorkstationId, WorldId, WorldRevision,
+    ContainerId, ContainerOwnerComponentV1, ContainerStateV1, ContinuationId, DimensionChunkKey,
+    DimensionId, DropEntityId, FaultInjection, FurnaceContinuationV1, GameplayCatalog,
+    GameplayCommandV1, GameplayEditTarget, GameplayLimits, GameplayReject, GameplayStorageDomain,
+    IngredientV1, InventoryStateV1, ItemId, ItemStackV1, ItemStateV1, MineCommandV1,
+    MoveStackCommandV1, PickupCommandV1, PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipeId,
+    RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier, RuntimePlanReceiptV1, SlotIndex,
+    ToolClassId, TransactionId, WorkstationId, WorldId, WorldRevision,
 };
 use latticeaxiom_player::BlockEditRejectV1;
 use latticeaxiom_storage::{ChangedDomains, CommitReceipt};
@@ -146,6 +146,52 @@ impl ProductionGameplay {
             hotbar_slot: self.hotbar_slot,
             slots: inventory.slots().to_vec().into_boxed_slice(),
         })
+    }
+
+    pub(super) fn containers(&self) -> &std::collections::BTreeMap<ContainerId, ContainerStateV1> {
+        self.applier.state().containers()
+    }
+
+    pub(super) fn continuations(
+        &self,
+    ) -> &std::collections::BTreeMap<ContinuationId, FurnaceContinuationV1> {
+        self.applier.state().continuations()
+    }
+
+    pub(super) fn restore_inventory(
+        &mut self,
+        slots: &[Option<ItemStackV1>],
+    ) -> Result<(), GameplayReject> {
+        for (index, stack) in slots.iter().enumerate() {
+            let slot = u16::try_from(index).map_err(|_| GameplayReject::SlotOutOfRange {
+                slot: SlotIndex::new(0),
+                slots: slots.len(),
+            })?;
+            self.seed_slot(SlotIndex::new(slot), stack.clone())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn restore_container(
+        &mut self,
+        id: ContainerId,
+        container: ContainerStateV1,
+    ) -> Result<(), GameplayReject> {
+        if self.applier.state().container(id).is_some() {
+            return Ok(());
+        }
+        self.applier.state_mut().seed_container(id, container)
+    }
+
+    pub(super) fn restore_continuation(
+        &mut self,
+        id: ContinuationId,
+        continuation: FurnaceContinuationV1,
+    ) -> Result<(), GameplayReject> {
+        if self.applier.state().continuation(id).is_some() {
+            return Ok(());
+        }
+        self.applier.state_mut().seed_continuation(id, continuation)
     }
 
     pub(super) fn dropped_items(

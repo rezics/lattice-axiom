@@ -2,6 +2,20 @@
 
 use std::array;
 
+/// Alpha policy implied by a [`MeshGroup`].
+///
+/// These values describe depth and coverage intent for a later material
+/// adapter. This crate never creates GPU pipelines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MeshAlphaMode {
+    /// Fully covered surfaces that write opaque depth.
+    Opaque,
+    /// Alpha-tested coverage that still writes depth when the test passes.
+    Mask,
+    /// Blended coverage that must not pretend to be a full occluder.
+    Blend,
+}
+
 /// Stable render grouping for generated terrain faces.
 ///
 /// The declaration order is part of the deterministic output contract. A
@@ -37,6 +51,75 @@ impl MeshGroup {
             Self::Translucent => 2,
             Self::Emissive => 3,
         }
+    }
+
+    /// Coverage policy for this group.
+    #[must_use]
+    pub const fn alpha_mode(self) -> MeshAlphaMode {
+        match self {
+            Self::Opaque | Self::Emissive => MeshAlphaMode::Opaque,
+            Self::Cutout => MeshAlphaMode::Mask,
+            Self::Translucent => MeshAlphaMode::Blend,
+        }
+    }
+
+    /// Whether a later material adapter should write opaque depth.
+    #[must_use]
+    pub const fn writes_opaque_depth(self) -> bool {
+        !matches!(self, Self::Translucent)
+    }
+
+    /// Whether a later material adapter should keep back-face culling.
+    #[must_use]
+    pub const fn culls_back_faces(self) -> bool {
+        true
+    }
+
+    /// Whether this group is the emissive terrain pass.
+    #[must_use]
+    pub const fn is_emissive(self) -> bool {
+        matches!(self, Self::Emissive)
+    }
+}
+
+/// Merge identity for a terrain face selected from a locked layer table.
+///
+/// `layer_index` is the compiled table row. `face_variant` distinguishes
+/// top/side/bottom or six-face slots that would emit different vertices or
+/// material samples. Callers must include every value that changes those
+/// outputs, including rotation when a consumer applies it.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct LayerMergeKey {
+    layer_index: u16,
+    face_variant: u8,
+}
+
+impl LayerMergeKey {
+    /// Creates a merge key for one compiled layer row and face slot.
+    #[must_use]
+    pub const fn new(layer_index: u16, face_variant: u8) -> Self {
+        Self {
+            layer_index,
+            face_variant,
+        }
+    }
+
+    /// Creates a merge key whose variant follows [`Face`] output order.
+    #[must_use]
+    pub const fn for_face(layer_index: u16, face: Face) -> Self {
+        Self::new(layer_index, face.layer_variant())
+    }
+
+    /// Compiled layer-table row.
+    #[must_use]
+    pub const fn layer_index(self) -> u16 {
+        self.layer_index
+    }
+
+    /// Face-slot discriminant inside that row.
+    #[must_use]
+    pub const fn face_variant(self) -> u8 {
+        self.face_variant
     }
 }
 
@@ -74,6 +157,19 @@ impl Face {
     /// Stable index of this face within [`Self::ALL`].
     #[must_use]
     pub const fn index(self) -> usize {
+        match self {
+            Self::PosX => 0,
+            Self::NegX => 1,
+            Self::PosY => 2,
+            Self::NegY => 3,
+            Self::PosZ => 4,
+            Self::NegZ => 5,
+        }
+    }
+
+    /// Stable [`LayerMergeKey`] discriminant for this face.
+    #[must_use]
+    pub const fn layer_variant(self) -> u8 {
         match self {
             Self::PosX => 0,
             Self::NegX => 1,
@@ -424,6 +520,33 @@ mod tests {
         assert_vector_eq(Face::PosY.normal(), [0.0, 1.0, 0.0]);
         assert_vector_eq(Face::NegY.normal(), [0.0, -1.0, 0.0]);
         assert_vector_eq(Face::NegZ.normal(), [0.0, 0.0, -1.0]);
+    }
+
+    #[test]
+    fn mesh_groups_preserve_depth_alpha_and_culling_policies() {
+        assert_eq!(MeshGroup::ALL.map(MeshGroup::index), [0, 1, 2, 3]);
+        assert_eq!(MeshGroup::Opaque.alpha_mode(), MeshAlphaMode::Opaque);
+        assert_eq!(MeshGroup::Cutout.alpha_mode(), MeshAlphaMode::Mask);
+        assert_eq!(MeshGroup::Translucent.alpha_mode(), MeshAlphaMode::Blend);
+        assert_eq!(MeshGroup::Emissive.alpha_mode(), MeshAlphaMode::Opaque);
+        assert!(MeshGroup::Opaque.writes_opaque_depth());
+        assert!(MeshGroup::Cutout.writes_opaque_depth());
+        assert!(!MeshGroup::Translucent.writes_opaque_depth());
+        assert!(MeshGroup::Emissive.writes_opaque_depth());
+        assert!(MeshGroup::Emissive.is_emissive());
+        for group in MeshGroup::ALL {
+            assert!(group.culls_back_faces());
+        }
+    }
+
+    #[test]
+    fn layer_merge_keys_include_face_specific_slots() {
+        let top = LayerMergeKey::for_face(7, Face::PosY);
+        let side = LayerMergeKey::for_face(7, Face::PosX);
+        assert_eq!(top.layer_index(), 7);
+        assert_ne!(top, side);
+        assert_eq!(top.face_variant(), Face::PosY.layer_variant());
+        assert_eq!(Face::ALL.map(Face::layer_variant), [0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

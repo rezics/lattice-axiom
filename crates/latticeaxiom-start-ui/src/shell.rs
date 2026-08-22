@@ -11,10 +11,10 @@ use latticeaxiom_world_catalog::{WorldOpenAction, WorldOpenStatus};
 use thiserror::Error;
 
 use crate::{
-    ClientShellGraph, HomePrimaryAction, LoadingState, SemanticActionId, SemanticCommand,
-    SemanticCommandError, SemanticNode, SemanticNodeId, SemanticRole, SemanticState,
-    SettingsSurfaceModel, TrashedWorldRecord, WorldCardAction, WorldListModel, WorldShellRecord,
-    validate_semantic_command,
+    ClientShellGraph, HomePrimaryAction, LoadingState, RecoveryCue, SemanticActionId,
+    SemanticCommand, SemanticCommandError, SemanticNode, SemanticNodeId, SemanticRole,
+    SemanticState, SettingsSurfaceModel, TrashedWorldRecord, WorldCardAction, WorldListModel,
+    WorldShellRecord, validate_semantic_command,
 };
 
 /// Package-driven client-shell route.
@@ -110,6 +110,7 @@ impl StartShellModel {
     ///
     /// Returns [`ShellCommandError`] if the current tree rejects the command or
     /// the command does not map to the current route.
+    #[allow(clippy::too_many_lines)]
     pub fn inject(&mut self, command: &SemanticCommand) -> Result<ShellEffect, ShellCommandError> {
         let tree = self.semantic_tree();
         validate_semantic_command(&tree, command)?;
@@ -180,9 +181,20 @@ impl StartShellModel {
             let record = self
                 .trash
                 .iter()
-                .find(|record| trash_semantic_id(record) == command.target)
+                .find(|record| {
+                    let id = trash_semantic_id(record);
+                    id == command.target
+                        || command
+                            .target
+                            .as_str()
+                            .starts_with(&format!("{}/", id.as_str()))
+                })
                 .ok_or(ShellCommandError::UnknownWorld)?;
-            if matches!(
+            if command.target.as_str().ends_with("/clone")
+                || action == SemanticActionId::RestoreWorldAsClone
+            {
+                ShellEffect::RequestRestoreTrashAsClone(record.tombstone.world_id)
+            } else if matches!(
                 action,
                 SemanticActionId::Activate | SemanticActionId::RestoreWorld
             ) {
@@ -229,7 +241,8 @@ impl StartShellModel {
             .as_str()
             .strip_prefix(&format!("{}/", record.semantic_id().as_str()));
         Ok(match (suffix, command.action) {
-            (None, SemanticActionId::Activate | SemanticActionId::ReviewWorld) => {
+            (None, SemanticActionId::Activate | SemanticActionId::ReviewWorld)
+            | (Some("details" | "rename" | "storage"), SemanticActionId::Activate) => {
                 ShellEffect::ReviewWorld(world_id)
             }
             (Some("play"), SemanticActionId::Activate | SemanticActionId::PlayExact)
@@ -251,11 +264,11 @@ impl StartShellModel {
             (Some("restore-checkpoint"), _) | (_, SemanticActionId::RestoreCheckpoint) => {
                 ShellEffect::RequestRestoreCheckpoint(world_id)
             }
+            (Some("lease"), _) | (_, SemanticActionId::RecoverStaleLease) => {
+                ShellEffect::RequestRecoverStaleLease(world_id)
+            }
             (Some("inspect"), _) | (_, SemanticActionId::InspectRecovery) => {
                 ShellEffect::RequestInspectRecovery(world_id)
-            }
-            (Some("details" | "rename" | "storage"), SemanticActionId::Activate) => {
-                ShellEffect::ReviewWorld(world_id)
             }
             _ => return Err(ShellCommandError::UnmappedCommand),
         })
@@ -317,21 +330,41 @@ impl StartShellModel {
             ),
         ];
         nodes.extend(self.worlds.records().iter().map(|record| {
-            let children = record
-                .actions()
+            let cues = record.recovery_cues();
+            let description = if cues.is_empty() {
+                format!(
+                    "Catalog card {:?}; the shell does not open a writer",
+                    record.card_state()
+                )
+            } else {
+                cues.iter()
+                    .map(|cue| format!("{}: {}", cue.title, cue.description))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            let mut children = cues
                 .iter()
-                .filter_map(|action| world_action_node(record, action))
-                .collect();
+                .enumerate()
+                .filter_map(|(index, cue)| recovery_alert_node(record, index, cue))
+                .collect::<Vec<_>>();
+            children.extend(
+                record
+                    .actions()
+                    .iter()
+                    .filter_map(|action| world_action_node(record, action)),
+            );
             SemanticNode {
                 id: record.semantic_id(),
-                role: if matches!(record.health(), crate::WorldHealth::CatalogFailure(_)) {
+                role: if matches!(record.health(), crate::WorldHealth::CatalogFailure(_))
+                    || !cues.is_empty()
+                {
                     SemanticRole::Alert
                 } else {
                     SemanticRole::ListItem
                 },
                 name: record.display_label(),
                 value: Some(format!("{:?}", record.card_state())),
-                description: Some(format!("Available actions: {:?}", record.actions())),
+                description: Some(description),
                 state: SemanticState {
                     focusable: true,
                     focused: self.worlds.focused() == Some(&record.semantic_id()),
@@ -354,20 +387,44 @@ impl StartShellModel {
             "Return to the world library",
             [SemanticActionId::Back],
         )];
-        nodes.extend(self.trash.iter().map(|record| SemanticNode {
-            id: trash_semantic_id(record),
-            role: SemanticRole::ListItem,
-            name: record.tombstone.display_name.as_str().to_owned(),
-            value: Some(record.tombstone.world_id.to_string()),
-            description: Some(
-                "Restore from managed trash without overwriting a live world".to_owned(),
-            ),
-            state: SemanticState {
-                focusable: true,
-                ..SemanticState::default()
-            },
-            actions: BTreeSet::from([SemanticActionId::Activate, SemanticActionId::RestoreWorld]),
-            children: Vec::new(),
+        nodes.extend(self.trash.iter().map(|record| {
+            let id = trash_semantic_id(record);
+            SemanticNode {
+                id: id.clone(),
+                role: SemanticRole::ListItem,
+                name: record.tombstone.display_name.as_str().to_owned(),
+                value: Some(record.tombstone.world_id.to_string()),
+                description: Some(
+                    "Restore original identity or restore-as-clone. Live WorldId overwrite is blocked."
+                        .to_owned(),
+                ),
+                state: SemanticState {
+                    focusable: true,
+                    ..SemanticState::default()
+                },
+                actions: BTreeSet::from([
+                    SemanticActionId::Activate,
+                    SemanticActionId::RestoreWorld,
+                    SemanticActionId::RestoreWorldAsClone,
+                ]),
+                children: vec![
+                    button(
+                        &format!("{}/restore", id.as_str()),
+                        "Restore",
+                        "Restore the original identity when it is not live",
+                        [SemanticActionId::Activate, SemanticActionId::RestoreWorld],
+                    ),
+                    button(
+                        &format!("{}/clone", id.as_str()),
+                        "Restore as clone",
+                        "Publish a new WorldId and re-key; never overwrite a live world",
+                        [
+                            SemanticActionId::Activate,
+                            SemanticActionId::RestoreWorldAsClone,
+                        ],
+                    ),
+                ],
+            }
         }));
         nodes
     }
@@ -531,6 +588,28 @@ fn node_id(value: &str) -> SemanticNodeId {
     }
 }
 
+fn recovery_alert_node(
+    record: &WorldShellRecord,
+    index: usize,
+    cue: &RecoveryCue,
+) -> Option<SemanticNode> {
+    let id = SemanticNodeId::new(format!(
+        "{}/recovery-{index}",
+        record.semantic_id().as_str()
+    ))
+    .ok()?;
+    Some(SemanticNode {
+        id,
+        role: SemanticRole::Alert,
+        name: cue.title.clone(),
+        value: Some(format!("{:?}", cue.code)),
+        description: Some(cue.description.clone()),
+        state: SemanticState::default(),
+        actions: BTreeSet::new(),
+        children: Vec::new(),
+    })
+}
+
 fn world_action_node(record: &WorldShellRecord, action: &WorldCardAction) -> Option<SemanticNode> {
     let id = record.action_semantic_id(action)?;
     let name = match action {
@@ -538,7 +617,9 @@ fn world_action_node(record: &WorldShellRecord, action: &WorldCardAction) -> Opt
         WorldCardAction::RunPreflight => "Run preflight".to_owned(),
         WorldCardAction::CreateCheckpoint => "Create checkpoint".to_owned(),
         WorldCardAction::Duplicate => "Clone".to_owned(),
-        WorldCardAction::Export => "Export".to_owned(),
+        WorldCardAction::Export | WorldCardAction::Preflight(WorldOpenAction::Export) => {
+            "Export".to_owned()
+        }
         WorldCardAction::MoveToTrash => "Move to trash".to_owned(),
         WorldCardAction::InspectRecovery => "Inspect recovery".to_owned(),
         WorldCardAction::Rename => "Rename".to_owned(),
@@ -546,7 +627,6 @@ fn world_action_node(record: &WorldShellRecord, action: &WorldCardAction) -> Opt
         WorldCardAction::Details => "Details".to_owned(),
         WorldCardAction::Preflight(WorldOpenAction::UseFrozenLock) => "Play exact".to_owned(),
         WorldCardAction::Preflight(WorldOpenAction::OpenReadOnly) => "Open read-only".to_owned(),
-        WorldCardAction::Preflight(WorldOpenAction::Export) => "Export".to_owned(),
         WorldCardAction::Preflight(WorldOpenAction::RestoreCheckpoint { .. }) => {
             "Restore checkpoint".to_owned()
         }
@@ -561,6 +641,9 @@ fn world_action_node(record: &WorldShellRecord, action: &WorldCardAction) -> Opt
         }
         WorldCardAction::Preflight(WorldOpenAction::CloneAndMigrate { .. }) => {
             "Clone and migrate".to_owned()
+        }
+        WorldCardAction::Preflight(WorldOpenAction::RecoverStaleLease) => {
+            "Recover stale lease".to_owned()
         }
     };
     Some(button(
@@ -634,6 +717,10 @@ pub enum ShellEffect {
     RequestRestoreCheckpoint(WorldId),
     /// Restore a managed-trash entry without overwriting a live world.
     RequestRestoreTrash(WorldId),
+    /// Restore a managed-trash entry as a clone with a new world identity.
+    RequestRestoreTrashAsClone(WorldId),
+    /// Plan stale exclusive-lease recovery without opening a writer.
+    RequestRecoverStaleLease(WorldId),
 }
 
 /// Invalid shell command injection.

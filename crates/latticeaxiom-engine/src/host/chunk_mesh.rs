@@ -1,17 +1,24 @@
 //! GPU chunk meshes built from halo-aware derived geometry.
 
+use std::collections::BTreeMap;
+
 use bevy::{
     asset::{Assets, Handle, RenderAssetUsages},
     camera::primitives::Aabb as GpuAabb,
     image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::{Indices, Mesh, PrimitiveTopology},
     prelude::{
-        Commands, Component, Entity, Mesh3d, MeshMaterial3d, Resource, StandardMaterial, Vec3,
+        AlphaMode, Commands, Component, Entity, Mesh3d, MeshMaterial3d, Resource, StandardMaterial,
+        Transform, Vec3,
     },
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
+use latticeaxiom_core::StableId;
 use latticeaxiom_gameplay::BlockId;
-use latticeaxiom_voxel_mesh::{Aabb, Face, MeshBuffer, MeshGroup, Quad};
+use latticeaxiom_render_contracts::{CompiledTerrainLayerTableV1, TerrainFaceV1};
+use latticeaxiom_voxel_mesh::{
+    Aabb, Face, LayerMergeKey, MeshAlphaMode, MeshBuffer, MeshGroup, Quad,
+};
 
 /// Pixel edge length of one color-block atlas tile.
 const TILE_PX: u32 = 16;
@@ -19,19 +26,58 @@ const TILE_PX: u32 = 16;
 /// Linear fallback used for an empty palette or an out-of-range index.
 const FALLBACK_COLOR: [f32; 4] = [0.38, 0.41, 0.43, 1.0];
 
-/// Shared PBR material using the color-block atlas; vertex colors can still tint.
+/// One Bevy material per [`MeshGroup`], sharing the nearest color-block atlas.
 #[derive(Clone, Debug, Resource)]
-pub(super) struct ProductionTerrainMaterial(pub(super) Handle<StandardMaterial>);
+pub(super) struct ProductionTerrainMaterials {
+    handles: [Handle<StandardMaterial>; 4],
+}
+
+impl ProductionTerrainMaterials {
+    pub(super) fn from_atlas(
+        materials: &mut Assets<StandardMaterial>,
+        atlas: Handle<Image>,
+    ) -> Self {
+        let handles =
+            MeshGroup::ALL.map(|group| materials.add(group_material(atlas.clone(), group)));
+        Self { handles }
+    }
+
+    fn handle(&self, group: MeshGroup) -> Handle<StandardMaterial> {
+        self.handles[group.index()].clone()
+    }
+}
+
+fn group_material(atlas: Handle<Image>, group: MeshGroup) -> StandardMaterial {
+    let mut material = StandardMaterial {
+        base_color: bevy::prelude::Color::WHITE,
+        base_color_texture: Some(atlas),
+        perceptual_roughness: 0.95,
+        reflectance: 0.06,
+        alpha_mode: match group.alpha_mode() {
+            MeshAlphaMode::Opaque => AlphaMode::Opaque,
+            MeshAlphaMode::Mask => AlphaMode::Mask(0.5),
+            MeshAlphaMode::Blend => AlphaMode::Blend,
+        },
+        ..StandardMaterial::default()
+    };
+    if group.is_emissive() {
+        material.emissive = bevy::color::LinearRgba::rgb(2.0, 1.6, 0.8);
+    }
+    material
+}
 
 /// Palette-index to linear RGBA table and a deterministic color-block atlas.
 #[derive(Clone, Debug, Resource)]
 pub(super) struct ProductionTerrainPalette {
     colors: Vec<[f32; 4]>,
+    #[cfg_attr(not(test), allow(dead_code))]
     tiles: Vec<AtlasTile>,
     fallback_tile: AtlasTile,
     atlas_rgba: Vec<u8>,
     atlas_width: u32,
     atlas_height: u32,
+    layer_table: Option<CompiledTerrainLayerTableV1>,
+    layer_tiles: BTreeMap<StableId, AtlasTile>,
 }
 
 /// One 16×16 atlas tile in UV space, inset by half a texel.
@@ -82,9 +128,81 @@ impl ProductionTerrainPalette {
             atlas_rgba,
             atlas_width,
             atlas_height,
+            layer_table: None,
+            layer_tiles: BTreeMap::new(),
         }
     }
 
+    pub(super) fn from_layer_table(table: CompiledTerrainLayerTableV1) -> Self {
+        let mut layer_ids = BTreeMap::new();
+        for row in table.rows() {
+            for face in TerrainFaceV1::ALL {
+                layer_ids.insert(row.faces().layer(face).clone(), ());
+            }
+        }
+        let unique_layers = layer_ids.into_keys().collect::<Vec<_>>();
+        let colors: Vec<[f32; 4]> = table
+            .rows()
+            .iter()
+            .map(|row| block_color(row.content().as_str()))
+            .collect();
+        let tile_count = unique_layers.len().max(1);
+        let columns = ceil_sqrt(tile_count);
+        let rows = div_ceil_u32(tile_count, columns);
+        let atlas_width = columns.saturating_mul(TILE_PX).max(TILE_PX);
+        let atlas_height = rows.saturating_mul(TILE_PX).max(TILE_PX);
+        let pixel_count =
+            usize::try_from(atlas_width.saturating_mul(atlas_height).saturating_mul(4))
+                .unwrap_or(0);
+        let mut atlas_rgba = vec![0_u8; pixel_count];
+        fill_solid(&mut atlas_rgba, FALLBACK_COLOR);
+
+        let mut layer_tiles = BTreeMap::new();
+        let mut tiles = Vec::with_capacity(unique_layers.len());
+        if unique_layers.is_empty() {
+            blit_tile(
+                &mut atlas_rgba,
+                atlas_width,
+                0,
+                0,
+                &solid_tile(FALLBACK_COLOR),
+            );
+        } else {
+            for (tile_index, layer) in unique_layers.iter().enumerate() {
+                let index = u32::try_from(tile_index).unwrap_or(0);
+                let col = index % columns.max(1);
+                let row = index / columns.max(1);
+                let color = table
+                    .rows()
+                    .iter()
+                    .find(|candidate| {
+                        TerrainFaceV1::ALL
+                            .iter()
+                            .any(|face| candidate.faces().layer(*face) == layer)
+                    })
+                    .map(|row| block_color(row.content().as_str()))
+                    .unwrap_or(FALLBACK_COLOR);
+                blit_tile(&mut atlas_rgba, atlas_width, col, row, &solid_tile(color));
+                let tile = atlas_tile(tile_index, columns, atlas_width, atlas_height);
+                tiles.push(tile);
+                layer_tiles.insert(layer.clone(), tile);
+            }
+        }
+
+        let fallback_tile = atlas_tile(0, columns, atlas_width, atlas_height);
+        Self {
+            colors,
+            tiles,
+            fallback_tile,
+            atlas_rgba,
+            atlas_width,
+            atlas_height,
+            layer_table: Some(table),
+            layer_tiles,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     fn color(&self, palette_index: u16) -> [f32; 4] {
         self.colors
             .get(usize::from(palette_index))
@@ -92,6 +210,7 @@ impl ProductionTerrainPalette {
             .unwrap_or(FALLBACK_COLOR)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn tile(&self, palette_index: u16) -> AtlasTile {
         self.tiles
             .get(usize::from(palette_index))
@@ -111,8 +230,41 @@ impl ProductionTerrainPalette {
         ]
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn vertex_uvs<K>(&self, palette_index: u16, face: Face, quad: &Quad<K>) -> [[f32; 2]; 4] {
-        let tile = self.tile(palette_index);
+        self.map_local_uvs(self.tile(palette_index), face, quad)
+    }
+
+    fn layer_uvs(
+        &self,
+        key: &LayerMergeKey,
+        face: Face,
+        quad: &Quad<LayerMergeKey>,
+    ) -> [[f32; 2]; 4] {
+        let tile = self
+            .layer_table
+            .as_ref()
+            .and_then(|table| table.rows().get(usize::from(key.layer_index())))
+            .and_then(|row| {
+                TerrainFaceV1::ALL
+                    .get(face.index())
+                    .and_then(|terrain_face| self.layer_tiles.get(row.faces().layer(*terrain_face)))
+            })
+            .copied()
+            .unwrap_or(self.fallback_tile);
+        self.map_local_uvs(tile, face, quad)
+    }
+
+    fn layer_color(&self, key: &LayerMergeKey) -> [f32; 4] {
+        self.layer_table
+            .as_ref()
+            .and_then(|table| table.rows().get(usize::from(key.layer_index())))
+            .map(|row| block_color(row.content().as_str()))
+            .or_else(|| self.colors.get(usize::from(key.layer_index())).copied())
+            .unwrap_or(FALLBACK_COLOR)
+    }
+
+    fn map_local_uvs<K>(&self, tile: AtlasTile, face: Face, quad: &Quad<K>) -> [[f32; 2]; 4] {
         let local = quad.uvs(face);
         let width = local[1][0].max(1.0);
         let height = local[3][1].max(1.0);
@@ -160,7 +312,13 @@ pub(super) fn nearest_clamp_sampler() -> ImageSampler {
 
 /// Marker that a chunk entity currently presents a complete GPU mesh.
 #[derive(Clone, Component, Debug)]
-pub(super) struct ChunkGpuMesh;
+pub(super) struct ChunkGpuMesh {
+    groups: [Option<Entity>; 4],
+}
+
+/// Child entity presenting one [`MeshGroup`] of a chunk.
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+pub(super) struct ChunkGroupMesh(MeshGroup);
 
 /// Builds or replaces the visible mesh on a presented chunk entity.
 ///
@@ -171,44 +329,56 @@ pub(super) struct ChunkGpuMesh;
 pub(super) fn apply_chunk_mesh(
     commands: &mut Commands<'_, '_>,
     meshes: &mut Assets<Mesh>,
-    material: &ProductionTerrainMaterial,
+    materials: &ProductionTerrainMaterials,
     palette: &ProductionTerrainPalette,
     entity: Entity,
-    geometry: &MeshBuffer<u16>,
+    geometry: &MeshBuffer<LayerMergeKey>,
     bounds: Option<Aabb>,
     existing: Option<&ChunkGpuMesh>,
 ) {
-    let Some(mesh) = mesh_from_buffer(geometry, palette) else {
-        if existing.is_some() {
-            commands.entity(entity).remove::<(
-                Mesh3d,
-                MeshMaterial3d<StandardMaterial>,
-                ChunkGpuMesh,
-                GpuAabb,
-            )>();
+    if let Some(existing) = existing {
+        for child in existing.groups.into_iter().flatten() {
+            commands.entity(child).despawn();
         }
-        return;
-    };
-    let handle = meshes.add(mesh);
-    let mut entity_commands = commands.entity(entity);
-    entity_commands.insert((
-        Mesh3d(handle),
-        MeshMaterial3d(material.0.clone()),
-        ChunkGpuMesh,
-    ));
-    if let Some(bounds) = bounds.or_else(|| geometry.bounds()) {
-        entity_commands.insert(gpu_aabb(bounds));
     }
+    let mut groups = [None; 4];
+    let mut spawned = 0_usize;
+    for group in MeshGroup::ALL {
+        let Some(mesh) = mesh_from_group(geometry, palette, group) else {
+            continue;
+        };
+        let handle = meshes.add(mesh);
+        let mut child = commands.spawn((
+            Transform::IDENTITY,
+            Mesh3d(handle),
+            MeshMaterial3d(materials.handle(group)),
+            ChunkGroupMesh(group),
+        ));
+        if let Some(bounds) = bounds.or_else(|| geometry.bounds()) {
+            child.insert(gpu_aabb(bounds));
+        }
+        let child_entity = child.id();
+        commands.entity(entity).add_child(child_entity);
+        groups[group.index()] = Some(child_entity);
+        spawned = spawned.saturating_add(1);
+    }
+    if spawned == 0 {
+        commands.entity(entity).remove::<ChunkGpuMesh>();
+        return;
+    }
+    commands.entity(entity).insert(ChunkGpuMesh { groups });
 }
 
-fn mesh_from_buffer(
-    geometry: &MeshBuffer<u16>,
+fn mesh_from_group(
+    geometry: &MeshBuffer<LayerMergeKey>,
     palette: &ProductionTerrainPalette,
+    group: MeshGroup,
 ) -> Option<Mesh> {
-    let cpu = adapter_cpu_mesh_from_buffer(
+    let cpu = adapter_cpu_mesh_from_group(
         geometry,
-        |key| palette.color(*key),
-        |key, face, quad| palette.vertex_uvs(*key, face, quad),
+        group,
+        |key| palette.layer_color(key),
+        |key, face, quad| palette.layer_uvs(key, face, quad),
     )?;
     if cpu.group_count == 0 {
         return None;
@@ -240,8 +410,27 @@ struct AdapterCpuMesh {
     group_count: usize,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn adapter_cpu_mesh_from_buffer<K>(
     geometry: &MeshBuffer<K>,
+    color_of: impl FnMut(&K) -> [f32; 4],
+    uv_of: impl FnMut(&K, Face, &Quad<K>) -> [[f32; 2]; 4],
+) -> Option<AdapterCpuMesh> {
+    emit_adapter_mesh(geometry, MeshGroup::ALL, color_of, uv_of)
+}
+
+fn adapter_cpu_mesh_from_group(
+    geometry: &MeshBuffer<LayerMergeKey>,
+    group: MeshGroup,
+    color_of: impl FnMut(&LayerMergeKey) -> [f32; 4],
+    uv_of: impl FnMut(&LayerMergeKey, Face, &Quad<LayerMergeKey>) -> [[f32; 2]; 4],
+) -> Option<AdapterCpuMesh> {
+    emit_adapter_mesh(geometry, [group], color_of, uv_of)
+}
+
+fn emit_adapter_mesh<K, const N: usize>(
+    geometry: &MeshBuffer<K>,
+    groups: [MeshGroup; N],
     mut color_of: impl FnMut(&K) -> [f32; 4],
     mut uv_of: impl FnMut(&K, Face, &Quad<K>) -> [[f32; 2]; 4],
 ) -> Option<AdapterCpuMesh> {
@@ -255,7 +444,7 @@ fn adapter_cpu_mesh_from_buffer<K>(
     let mut indices = Vec::with_capacity(geometry.index_count());
     let mut group_count = 0_usize;
 
-    for group in MeshGroup::ALL {
+    for group in groups {
         let mut group_has_quads = false;
         for face in Face::ALL {
             for quad in geometry.group(group, face) {

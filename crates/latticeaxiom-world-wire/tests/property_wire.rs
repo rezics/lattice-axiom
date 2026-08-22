@@ -77,4 +77,28 @@ proptest! {
         });
         prop_assert!(outcome.is_ok());
     }
+
+    #[test]
+    fn signed_y_up_keys_keep_recovery_prefix_order(
+        y in any::<i32>(),
+        left_x in any::<i32>(),
+        right_x in any::<i32>(),
+    ) {
+        let left = fixture_key(ChunkCoordinate::new(left_x, y, 0), 1)?;
+        let right = fixture_key(ChunkCoordinate::new(right_x, y, 0), 1)?;
+        let left_bytes = encode_chunk_record_key(&left, WorldWireLimits::default())
+            .map_err(|error| TestCaseError::fail(error.to_string()))?;
+        let right_bytes = encode_chunk_record_key(&right, WorldWireLimits::default())
+            .map_err(|error| TestCaseError::fail(error.to_string()))?;
+        let left_prefix = chunk_key_prefix(left.chunk(), WorldWireLimits::default())
+            .map_err(|error| TestCaseError::fail(error.to_string()))?;
+        let right_prefix = chunk_key_prefix(right.chunk(), WorldWireLimits::default())
+            .map_err(|error| TestCaseError::fail(error.to_string()))?;
+        prop_assert!(left_bytes.starts_with(&left_prefix));
+        prop_assert!(right_bytes.starts_with(&right_prefix));
+        prop_assert_eq!(
+            left_bytes.cmp(&right_bytes),
+            left.chunk().coordinate.cmp(&right.chunk().coordinate)
+        );
+    }
 }

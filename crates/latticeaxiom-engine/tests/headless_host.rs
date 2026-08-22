@@ -38,12 +38,15 @@ use latticeaxiom_engine::{
     ItemStackV1, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, MeshReceipt,
     PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1, PreparationError,
     ProductionInspectSurface, ProductionMemoryStart, ProductionSessionPause, ProductionSpine,
-    ProductionWorldList, ProductionWorldStorage, RecipeId, SealedWorldWriterHost,
-    SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
-    WorkingSetDiagnosticsV1, WorkstationId, authored_gameplay_catalog, empty_gameplay_catalog,
+    ProductionWorldList, ProductionWorldStorage, RecipeId, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1,
+    SealedWorldWriterHost, SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages,
+    VerifiedProductLockHash, WorkingSetDiagnosticsV1, WorkstationId, authored_gameplay_catalog,
+    empty_gameplay_catalog,
 };
 use latticeaxiom_gameplay::BlockId;
-use latticeaxiom_launcher::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
+use latticeaxiom_launcher::{
+    ChildExitKindV1, HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1,
+};
 use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1};
 use latticeaxiom_registration::{
     CallbackDeclaration, CompiledRegistration, PackageRegistrationInput, ReceiptValidationError,
@@ -864,6 +867,190 @@ fn camera_yaw_pitch_only_does_not_change_presentation_state() {
         presentation_invariant_snapshot(&looking, &looking_spine),
         presentation_invariant_snapshot(&idle, &idle_spine),
         "yaw/pitch-only camera motion must not change resident set, lifecycle, mesh receipt, entity count, or queue counters"
+    );
+}
+
+#[test]
+fn streaming_profile_evidence_is_machine_readable_and_does_not_claim_d2() {
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    instance
+        .advance_fixed_ticks(4)
+        .expect("fixed ticks advance");
+    let evidence = spine
+        .streaming_profile_evidence()
+        .expect("live streaming evidence is available");
+    assert_eq!(evidence.schema, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1);
+    assert_eq!(evidence.chunk_edge_voxels, 8);
+    assert_eq!(evidence.equivalent_active_radius_chunks, 16);
+    assert_eq!(evidence.equivalent_resident_radius_chunks, 24);
+    assert!(!evidence.matches_adr_0026_world_space_coverage);
+    assert!(!evidence.claims_d2_working_set_gate);
+    assert_eq!(evidence.p4_choice, "retain-8-cubed-correctness-fixture");
+    assert!(evidence.counts.resident > 0);
+    let encoded = serde_json::to_value(&evidence).expect("evidence serializes");
+    assert_eq!(encoded["schema"], STREAMING_PROFILE_EVIDENCE_SCHEMA_V1);
+    assert_eq!(encoded["claims_d2_working_set_gate"], false);
+}
+
+#[test]
+fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let edited = spine.edited_chunks();
+    let sample = spine
+        .resident_chunks()
+        .into_iter()
+        .find(|chunk| (chunk.x < 0 || chunk.z < 0) && !edited.contains(chunk))
+        .expect("spawn working set includes a clean negative-coordinate chunk");
+    let before = spine.mesh_cursor(sample);
+    assert!(
+        before.is_some(),
+        "negative chunk {sample:?} must have a mesh receipt before leaving"
+    );
+    let generation =
+        enqueue_look_then_walk(&mut instance, 1, std::f32::consts::FRAC_PI_2, 0.0, 1.0, 720);
+    let mut seen = BTreeSet::new();
+    let mut seen_player = BTreeSet::new();
+    let mut min_y = spine.player_pose().translation.y;
+    sample_walk(
+        &mut instance,
+        &spine,
+        720,
+        &mut seen,
+        &mut seen_player,
+        &mut min_y,
+    );
+    assert!(
+        sample.x < 0 || sample.z < 0,
+        "sample must be a negative coordinate, got {sample:?}"
+    );
+    assert!(
+        !spine.resident_chunks().contains(&sample),
+        "clean negative chunk {sample:?} must evict after walking away (pose {:?})",
+        spine.player_pose().translation
+    );
+    enqueue_look_then_walk(
+        &mut instance,
+        generation,
+        -std::f32::consts::PI,
+        0.0,
+        1.0,
+        1_040,
+    );
+    sample_walk(
+        &mut instance,
+        &spine,
+        1_040,
+        &mut seen,
+        &mut seen_player,
+        &mut min_y,
+    );
+    assert!(
+        spine.resident_chunks().contains(&sample),
+        "revisiting {sample:?} must rematerialize the evicted clean chunk (pose {:?})",
+        spine.player_pose().translation
+    );
+    let after = spine.mesh_cursor(sample);
+    let before = before.expect("pre-eviction cursor");
+    let after = after.expect("revisited cursor");
+    assert_eq!(after.coordinate(), before.coordinate());
+    assert_eq!(after.revision(), before.revision());
+    assert_eq!(
+        after.receipt().source().chunk(),
+        before.receipt().source().chunk()
+    );
+    assert_eq!(
+        after.receipt().source().epoch(),
+        before.receipt().source().epoch()
+    );
+    assert_eq!(
+        after.receipt().source().revision(),
+        before.receipt().source().revision()
+    );
+}
+
+#[test]
+fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let limits = spine.hard_limits().expect("host clamps are installed");
+    let max_resident = usize::try_from(limits.max_resident_chunks).expect("resident cap fits");
+    let max_in_flight = usize::try_from(limits.max_in_flight_chunks).expect("in-flight cap fits");
+    let _ = spine
+        .set_requested_view_distance(limits.view_distance_chunks)
+        .expect("view distance clamp");
+    enqueue_look_then_walk(&mut instance, 1, std::f32::consts::FRAC_PI_2, 0.0, 1.0, 480);
+    instance.advance_fixed_ticks(2).expect("look ticks advance");
+    let mut high_resident = 0_usize;
+    let mut remaining = 480_u32;
+    while remaining > 0 {
+        let step = remaining.min(32);
+        instance
+            .advance_fixed_ticks(step)
+            .expect("bounded walk advances");
+        remaining -= step;
+        let diagnostics = spine.working_set_diagnostics();
+        let queues = spine.derived_queue_snapshot();
+        let resident = usize::try_from(diagnostics.resident()).unwrap_or(usize::MAX);
+        high_resident = high_resident.max(resident);
+        assert!(
+            resident <= max_resident,
+            "resident {resident} exceeded cap {max_resident}"
+        );
+        let in_flight = usize::try_from(diagnostics.in_flight()).unwrap_or(usize::MAX);
+        assert!(
+            in_flight <= max_in_flight.saturating_mul(2),
+            "in-flight {in_flight} exceeded derived cap"
+        );
+        assert!(
+            queues.mesh_pending + queues.mesh_in_flight <= 128,
+            "mesh queue {} + {} exceeded ADR 0026 cap",
+            queues.mesh_pending,
+            queues.mesh_in_flight
+        );
+        assert!(
+            queues.collider_pending + queues.collider_in_flight <= 64,
+            "collider queue exceeded ADR 0026 cap"
+        );
+        assert!(
+            queues.reserved_bytes <= diagnostics.byte_budget(),
+            "reserved bytes {} exceeded budget {}",
+            queues.reserved_bytes,
+            diagnostics.byte_budget()
+        );
+    }
+    assert!(high_resident > 0, "traversal must occupy a working set");
+    let queues = spine.derived_queue_snapshot();
+    assert!(
+        queues.cancel_requests > 0
+            || spine.stream_eviction_count() > 0
+            || spine.resident_chunks().len() < high_resident,
+        "eviction or cancellation must keep the working set bounded (cancels {}, evictions {}, resident {})",
+        queues.cancel_requests,
+        spine.stream_eviction_count(),
+        spine.resident_chunks().len()
     );
 }
 
@@ -1692,6 +1879,102 @@ fn home_preflight_game_save_and_quit_returns_home() {
         .expect("Save & Quit");
     assert_eq!(start.flow().shell().screen, ShellScreen::Home);
     assert_eq!(start.continue_world_id(), Some(created));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn durable_save_and_quit_returns_child_result_and_reopens_edits_and_inventory() {
+    let images = lock_boot_fixture().prepared();
+    let record_owner = "latticeaxiom:schema/world-db-chunk@1"
+        .parse()
+        .expect("fixture record owner is canonical");
+    let mut writer_host =
+        SealedWorldWriterHost::durable_reference_with_default_publisher(record_owner);
+    let mut start = ProductionMemoryStart::new(images, start_shell_graph())
+        .with_storage(writer_host.storage().clone());
+    start.set_now_ms(10);
+    let intent = start
+        .quick_create_intent("Durable Loop")
+        .expect("quick-create binds the lock graph root");
+    let created = start
+        .create(&intent, 10)
+        .expect("create provisions durable storage");
+    let mut instance = start
+        .play_headless(created, 20, SPINE_TIMESTEP)
+        .expect("game host starts from the same lock");
+    instance
+        .advance_fixed_ticks(1)
+        .expect("one production tick plays");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    let dirt = parse_block("terrenia:block/dirt");
+    let dirt_item = parse_item("terrenia:item/dirt");
+    let broken_pos = spine
+        .first_resident_block(&dirt)
+        .expect("generated dirt exists in the streamed set");
+    let occupancy_before = spine
+        .inspect_occupancy(broken_pos)
+        .expect("dirt cell is inspectable before the break");
+    assert_eq!(occupancy_before.solid.as_ref(), Some(&dirt));
+    let broken = mine_until_broken(&spine, broken_pos);
+    pickup_remaining(&spine);
+    let occupancy_gone = spine
+        .inspect_occupancy(broken.position)
+        .expect("broken cell remains inspectable");
+    assert_ne!(
+        occupancy_gone.solid.as_ref(),
+        Some(&dirt),
+        "break must clear the dirt cell before save"
+    );
+    select_item_in_hotbar(&spine, &dirt_item);
+    let inventory_before = spine
+        .inventory_view()
+        .expect("playing session exposes inventory");
+    let dirt_count = inventory_before.count_item(&dirt_item);
+    assert!(dirt_count > 0, "gathered dirt must remain in inventory");
+    let selected_slot = inventory_before.hotbar_slot();
+
+    start.pause_session(&mut instance).expect("pause");
+    let result = start
+        .save_and_quit_durable(created, instance, &mut writer_host)
+        .expect("durable Save & Quit");
+    assert_eq!(result.report().exit_kind(), ChildExitKindV1::SaveAndQuit);
+    assert!(result.report().last_durable_world().is_some());
+    assert!(result.checkpoint().restore_verified());
+    assert_eq!(start.flow().shell().screen, ShellScreen::Home);
+    assert_eq!(start.continue_world_id(), Some(created));
+    assert!(
+        !writer_host.is_writer_active(),
+        "Save & Quit must close the sealed writer"
+    );
+
+    let (continued, mut reopened) = start
+        .play_continued_headless(30, SPINE_TIMESTEP)
+        .expect("continue reopens storage-first after durable Save & Quit");
+    assert_eq!(continued, created);
+    reopened
+        .advance_fixed_ticks(1)
+        .expect("continued host advances one tick");
+    let reopened_spine = reopened
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("continued production spine is installed")
+        .clone();
+    let gone = reopened_spine
+        .inspect_occupancy(broken.position)
+        .expect("broken cell is resident after durable continue");
+    assert_eq!(gone.solid, occupancy_gone.solid);
+    let restored_inventory = reopened_spine
+        .inventory_view()
+        .expect("reopened session restores inventory");
+    assert_eq!(restored_inventory.count_item(&dirt_item), dirt_count);
+    assert_eq!(restored_inventory.hotbar_slot(), selected_slot);
 }
 
 fn start_shell_graph() -> ClientShellGraph {

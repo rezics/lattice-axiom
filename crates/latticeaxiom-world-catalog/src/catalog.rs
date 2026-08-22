@@ -381,7 +381,9 @@ fn recoverable_card(plan: &WorldOpenPlan) -> bool {
     plan.actions.iter().any(|action| {
         matches!(
             action,
-            WorldOpenAction::RestoreCheckpoint { .. } | WorldOpenAction::RepairHeader { .. }
+            WorldOpenAction::RestoreCheckpoint { .. }
+                | WorldOpenAction::RepairHeader { .. }
+                | WorldOpenAction::RecoverStaleLease
         )
     }) || plan.diagnostics.iter().any(|diagnostic| {
         matches!(
@@ -389,6 +391,8 @@ fn recoverable_card(plan: &WorldOpenPlan) -> bool {
             WorldDiagnostic::UncleanShutdown
                 | WorldDiagnostic::NonDurableFrontier { .. }
                 | WorldDiagnostic::HeaderRepairRequired { .. }
+                | WorldDiagnostic::StaleWriterLease
+                | WorldDiagnostic::WriterLeaseHeld
         )
     })
 }
