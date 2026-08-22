@@ -1,0 +1,6 @@
+{
+  "authoring_schema": "terrenia:schema/science-recipe-graph@1",
+  "owner_package": "@terrenia/science",
+  "voltage_property": "terrenia:state/voltage",
+  "recipes": []
+}

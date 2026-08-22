@@ -1,0 +1,22 @@
+{
+  "authoring_schema": "terrenia:schema/metallurgy-materials@1",
+  "owner_package": "@terrenia/metallurgy",
+  "materials": [
+    {
+      "id": "terrenia:material/copper",
+      "tags": ["terrenia:tag/conductive", "terrenia:tag/thermal-medium", "terrenia:tag/thaumic-conductor"]
+    },
+    {
+      "id": "terrenia:material/annealed-copper",
+      "tags": ["terrenia:tag/conductive", "terrenia:tag/cable-grade"]
+    },
+    {
+      "id": "terrenia:material/bronze",
+      "tags": ["terrenia:tag/structural-alloy", "terrenia:tag/thaumic-vessel"]
+    },
+    {
+      "id": "terrenia:material/brass",
+      "tags": ["terrenia:tag/thermal-medium", "terrenia:tag/machine-casing"]
+    }
+  ]
+}

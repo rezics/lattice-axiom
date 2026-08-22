@@ -1,0 +1,24 @@
+schema_version = 1
+name = "@latticeaxiom/relations"
+version = "0.1.0"
+domains = ["authoritative"]
+trust = "data-only"
+
+[provides."latticeaxiom:capability/relations-graph@1"]
+capability = "latticeaxiom:capability/relations-graph@1"
+version = "1.0.0"
+cardinality = "exactly-one"
+domains = ["authoritative"]
+
+[realizations.data]
+id = "data"
+kind = "data"
+domains = ["authoritative"]
+artifact = { kind = "data-root", path = "data" }
+trust = "data-only"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = ["package.ncl", "latticeaxiom-package.toml", "data"]

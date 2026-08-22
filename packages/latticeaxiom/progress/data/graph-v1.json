@@ -1,0 +1,6 @@
+{
+  "authoring_schema": "latticeaxiom:schema/progress-graph@1",
+  "owner_package": "@latticeaxiom/progress",
+  "cycle_policy": "compile-fail",
+  "chapters": []
+}

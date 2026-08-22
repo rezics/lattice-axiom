@@ -1,0 +1,7 @@
+{
+  "authoring_schema": "terrenia:schema/thaumaturgy-mana@1",
+  "owner_package": "@terrenia/thaumaturgy",
+  "mana_property": "terrenia:state/mana",
+  "not_voltage_property": "terrenia:state/voltage",
+  "rituals": []
+}
