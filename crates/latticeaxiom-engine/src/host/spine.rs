@@ -4,6 +4,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     mem,
+    num::NonZeroU16,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -19,9 +20,10 @@ use latticeaxiom_content::{
 };
 use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
-    BlockId, BlockPosition, CommandOutcomeV1, ContainerId, DimensionChunkKey, DropEntityId,
-    GameplayCatalog, GameplayReject, InventoryInspectV1, ItemStackV1, PlayerId, RecipeId,
-    RecipeInspectV1, SlotIndex, WorkstationId,
+    AuthorityTick, BlockId, BlockPosition, CommandOutcomeV1, ContainerId, ContainerStateV1,
+    DimensionChunkKey, DropEntityId, GameplayCatalog, GameplayReject, InventoryInspectV1,
+    ItemStackV1, PlayerId, ProcessId, RecipeId, RecipeInspectV1, SlotIndex, TransferCommandV1,
+    WorkstationId,
 };
 use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
@@ -47,10 +49,10 @@ use latticeaxiom_voxel_runtime::{
     ColliderSemanticFingerprint, CollisionSemantics, CommittedChunkProjection, CompletionOutcome,
     DdaOrigin, DdaOutcome, DdaQuery, DerivedApplyBudget, DerivedApplySlice, DerivedInput,
     DerivedKind, DerivedMemoryBudget, DerivedOwner, DerivedPriority, DerivedQueueLimits,
-    DerivedRequest, DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, FixedTick,
-    MeshSemanticFingerprint, RetainedBytes, RuntimeDiagnostics, RuntimeGeneration, RuntimeLimits,
-    VoxelCoordinate, VoxelRuntime, WallClockNanos, WorkingSetScope, WorldEpoch,
-    cpu_heavy_concurrency, host_parallelism,
+    DerivedRequest, DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, ExecutorFinish,
+    ExecutorOutcome, FixedTick, MeshSemanticFingerprint, RetainedBytes, RuntimeDiagnostics,
+    RuntimeGeneration, RuntimeLimits, VoxelCoordinate, VoxelRuntime, WallClockNanos,
+    WorkerAbortOutcome, WorkingSetScope, WorldEpoch, cpu_heavy_concurrency, host_parallelism,
 };
 use latticeaxiom_world_db::{
     AuthoritativeMetadataInputV1, CommitDurabilityV1, DeterministicWorldStorage, PersistedChunkV1,
@@ -1217,6 +1219,49 @@ impl ProductionSpine {
         ))
     }
 
+    /// Completes one derived job as an executor panic without applying results.
+    ///
+    /// Reservations are released. Authoritative voxel state and the
+    /// materialized-chunk world hash are unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when the spine lock is poisoned, no job
+    /// of `kind` is dispatchable, or completion is rejected.
+    pub fn complete_panicked_derived_job(
+        &self,
+        kind: DerivedKind,
+    ) -> Result<WorkerAbortOutcome<()>, ProductionHostError> {
+        let mut inner = self.lock_inner()?;
+        match inner.runtime.dispatch_next(kind)? {
+            DispatchOutcome::Started(input) => {
+                match inner.runtime.complete_executor::<u8, (), ()>(
+                    ExecutorOutcome::Panicked { input },
+                    ApplyByteDeclaration::new(0),
+                    FixedTick::new(0),
+                    |_| Ok(()),
+                ) {
+                    ExecutorFinish::Aborted(WorkerAbortOutcome::Panicked(receipt)) => {
+                        Ok(WorkerAbortOutcome::Panicked(receipt))
+                    }
+                    ExecutorFinish::Aborted(WorkerAbortOutcome::Lost(receipt)) => {
+                        Ok(WorkerAbortOutcome::Lost(receipt))
+                    }
+                    ExecutorFinish::Aborted(WorkerAbortOutcome::UnknownTicket { job, ticket }) => {
+                        Ok(WorkerAbortOutcome::UnknownTicket { job, ticket })
+                    }
+                    ExecutorFinish::Aborted(WorkerAbortOutcome::UnknownInput { .. })
+                    | ExecutorFinish::Completed(_) => Err(ProductionHostError::DerivedRejected),
+                }
+            }
+            DispatchOutcome::Empty => Err(ProductionHostError::DerivedRejected),
+            DispatchOutcome::Backpressured { .. } => Err(ProductionHostError::DerivedBackpressure),
+            DispatchOutcome::MemoryContractViolation { .. } => {
+                Err(ProductionHostError::DerivedMemory)
+            }
+        }
+    }
+
     /// Combined derived-queue occupancy used by backpressure tests.
     #[must_use]
     pub fn derived_queue_snapshot(&self) -> DerivedQueueSnapshotV1 {
@@ -1635,6 +1680,66 @@ impl ProductionSpine {
                 resource: "spine_lock",
             })?;
         inner.move_stack(self.storage.kernel(), from, to)
+    }
+
+    /// Starts a catalog furnace process on a bound container.
+    ///
+    /// Input, fuel, and output use slots `0`, `1`, and `2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the container, process, fuel, or input
+    /// fail closed.
+    pub fn start_process(
+        &self,
+        process: &ProcessId,
+        container: ContainerId,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.start_process(self.storage.kernel(), process, container)
+    }
+
+    /// Completes due scheduled processes through a large authoritative tick.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the scheduler rejects the advance.
+    pub fn advance_scheduled(&self) -> Result<CommandOutcomeV1, GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.advance_scheduled(self.storage.kernel())
+    }
+
+    /// Transfers a quantity between the local player inventory and a container.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when slots, revisions, or quantities fail closed.
+    pub fn transfer(&self, command: TransferCommandV1) -> Result<CommandOutcomeV1, GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.transfer(self.storage.kernel(), command)
+    }
+
+    /// Returns a bound container snapshot, when present.
+    #[must_use]
+    pub fn container(&self, id: ContainerId) -> Option<ContainerStateV1> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .gameplay
+                .as_ref()
+                .and_then(|session| session.containers().get(&id).cloned())
+        })
     }
 
     /// Selects or swaps the stack that places the live DDA target block.
@@ -2418,6 +2523,89 @@ impl ProductionSpineInner {
         commit_gameplay_storage(self, kernel, transaction, None, 0).map_err(|_| {
             GameplayReject::StorageCommitMismatch {
                 resource: "move_stack",
+            }
+        })?;
+        Ok(receipt.outcome)
+    }
+
+    fn start_process(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        process: &ProcessId,
+        container: ContainerId,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        self.sync_gameplay_world(kernel)?;
+        let revision = self
+            .gameplay
+            .as_ref()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .containers()
+            .get(&container)
+            .ok_or(GameplayReject::UnknownContainer)?
+            .revision();
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .start_process(
+                transaction,
+                process,
+                container,
+                revision,
+                AuthorityTick::new(0),
+            )?;
+        commit_gameplay_storage(self, kernel, transaction, None, 0).map_err(|_| {
+            GameplayReject::StorageCommitMismatch {
+                resource: "start_process",
+            }
+        })?;
+        Ok(receipt.outcome)
+    }
+
+    fn advance_scheduled(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        self.sync_gameplay_world(kernel)?;
+        let transaction = next_transaction_id(self);
+        let max_completions = NonZeroU16::new(16).unwrap_or(NonZeroU16::MIN);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .advance_scheduled(transaction, AuthorityTick::new(10_000), max_completions)?;
+        commit_gameplay_storage(self, kernel, transaction, None, 0).map_err(|_| {
+            GameplayReject::StorageCommitMismatch {
+                resource: "advance_scheduled",
+            }
+        })?;
+        Ok(receipt.outcome)
+    }
+
+    fn transfer(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        command: TransferCommandV1,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        self.sync_gameplay_world(kernel)?;
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .transfer(transaction, command)?;
+        commit_gameplay_storage(self, kernel, transaction, None, 0).map_err(|_| {
+            GameplayReject::StorageCommitMismatch {
+                resource: "transfer",
             }
         })?;
         Ok(receipt.outcome)

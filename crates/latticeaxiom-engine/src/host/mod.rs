@@ -152,6 +152,28 @@ pub struct ProductionSessionPause {
     paused: bool,
 }
 
+/// Presentation-only GPU/device-loss latch.
+///
+/// Recording device loss must never change the materialized-chunk world hash.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
+pub struct RenderDeviceLost {
+    lost: bool,
+}
+
+impl RenderDeviceLost {
+    /// Marks that the render device was lost.
+    #[must_use]
+    pub const fn reported() -> Self {
+        Self { lost: true }
+    }
+
+    /// Returns whether device loss has been reported.
+    #[must_use]
+    pub const fn is_lost(self) -> bool {
+        self.lost
+    }
+}
+
 impl ProductionSessionPause {
     /// Creates a latch in the requested state.
     #[must_use]
@@ -350,6 +372,34 @@ impl Plugin for ProductionHostPlugin {
 }
 
 impl EngineInstance {
+    /// Records GPU/device loss without mutating authoritative world state.
+    ///
+    /// Presentation and device failures never change the materialized-chunk
+    /// world hash. Missing spine resources still latch the loss.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when the spine lock is poisoned, a
+    /// snapshot cannot be taken, or device-loss handling mutates world state.
+    pub fn report_render_device_lost(&mut self) -> Result<(), ProductionHostError> {
+        let before = self
+            .app
+            .world()
+            .get_resource::<ProductionSpine>()
+            .map(ProductionSpine::materialized_chunk_state_hash)
+            .transpose()?;
+        self.app
+            .world_mut()
+            .insert_resource(RenderDeviceLost::reported());
+        if let Some(spine) = self.app.world().get_resource::<ProductionSpine>() {
+            let after = spine.materialized_chunk_state_hash()?;
+            if before.is_some_and(|hash| hash != after) {
+                return Err(ProductionHostError::PresentationFailureMutatedWorld);
+            }
+        }
+        Ok(())
+    }
+
     /// Builds a GPU-free production spine from a reopened final product lock.
     ///
     /// The host inserts [`MemoryTransactionKernel`] as the production storage
@@ -1044,6 +1094,9 @@ pub enum ProductionHostError {
         /// Missing identity or path.
         id: String,
     },
+    /// A presentation or device-loss path mutated the materialized-chunk hash.
+    #[error("presentation or device failure mutated the authoritative world hash")]
+    PresentationFailureMutatedWorld,
     /// The registration image named more than one dimension.
     #[error("registration image names more than one dimension")]
     AmbiguousDimension,

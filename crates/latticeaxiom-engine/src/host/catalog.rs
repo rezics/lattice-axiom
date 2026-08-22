@@ -17,10 +17,11 @@ use latticeaxiom_content::{
 use latticeaxiom_core::{CapabilityId, PackageName, SchemaId, StableId};
 use latticeaxiom_gameplay::{
     BlockDefinitionV1, BlockId, BlockSchemaBindingV1, CatalogLimits, FrozenItemRoleBindingV1,
-    GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemId,
-    ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, MiningRuleV1, RecipeDefinitionV1, RecipeId,
-    RecipePatternV1, RoleOutputV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1,
-    WorkstationDefinitionV1, WorkstationId,
+    FuelRuleV1, GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemId,
+    ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, ItemTagDefinitionV1, ItemTagId,
+    MiningRuleV1, ProcessDefinitionV1, ProcessId, RecipeDefinitionV1, RecipeId, RecipePatternV1,
+    RoleOutputV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1, WorkstationDefinitionV1,
+    WorkstationId,
 };
 use latticeaxiom_storage::DimensionId;
 use latticeaxiom_worldgen::{
@@ -901,6 +902,9 @@ fn authored_gameplay_source() -> Result<GameplayCatalogSourceV1, ProductionHostE
         json_array(&rules, "block_schema_bindings")?,
         &mut workstations,
     )?;
+    let processes = ingest_processes(json_array(&rules, "processes")?, &mut workstations)?;
+    let fuel_rules = ingest_fuel_rules(json_array(&rules, "fuel_rules")?)?;
+    let tags = ingest_item_tags(json_array(&rules, "item_tags")?)?;
     let drop_tables = drop_table_map(json_array(&rules, "drop_tables")?)?;
     let tool_requirements = tool_requirement_map(json_array(&rules, "tool_requirements")?)?;
     Ok(GameplayCatalogSourceV1 {
@@ -911,12 +915,14 @@ fn authored_gameplay_source() -> Result<GameplayCatalogSourceV1, ProductionHostE
             &tool_requirements,
         )?,
         tools: compile_tools(json_array(&tools, "tools")?)?,
+        tags,
         roles: item_roles,
         bindings,
         recipes,
         workstations: workstations.into_values().collect(),
+        processes,
+        fuel_rules,
         block_schema_bindings,
-        ..GameplayCatalogSourceV1::default()
     })
 }
 
@@ -1090,6 +1096,80 @@ fn ingest_block_schema_bindings(
         });
     }
     Ok(bindings)
+}
+
+fn ingest_processes(
+    rows: &[Value],
+    workstations: &mut BTreeMap<String, WorkstationDefinitionV1>,
+) -> Result<Vec<ProcessDefinitionV1>, ProductionHostError> {
+    let mut processes = Vec::new();
+    for row in rows {
+        let workstation_id = json_text(row, "workstation")?;
+        let workstation = WorkstationId::parse(workstation_id)?;
+        workstations.insert(
+            workstation_id.to_owned(),
+            WorkstationDefinitionV1 {
+                id: workstation.clone(),
+            },
+        );
+        let input = json_object_field(row, "input")?;
+        processes.push(ProcessDefinitionV1 {
+            id: ProcessId::parse(json_text(row, "id")?)?,
+            workstation,
+            input: IngredientV1 {
+                accepts: ItemPredicateV1::Exact(ItemId::parse(json_text(input, "item")?)?),
+                quantity: json_quantity(input, "quantity")?,
+            },
+            output: RoleOutputV1 {
+                role: ItemRoleId::parse(json_text(row, "output_role")?)?,
+                quantity: json_quantity(&row["output"], "quantity")?,
+            },
+            duration_ticks: json_quantity(row, "duration_ticks")?,
+        });
+    }
+    Ok(processes)
+}
+
+fn ingest_fuel_rules(rows: &[Value]) -> Result<Vec<FuelRuleV1>, ProductionHostError> {
+    let mut rules = Vec::new();
+    for row in rows {
+        let accepts = json_object_field(row, "accepts")?;
+        rules.push(FuelRuleV1 {
+            accepts: ItemPredicateV1::Exact(ItemId::parse(json_text(accepts, "item")?)?),
+            burn_ticks: json_quantity(row, "burn_ticks")?,
+        });
+    }
+    Ok(rules)
+}
+
+fn ingest_item_tags(rows: &[Value]) -> Result<Vec<ItemTagDefinitionV1>, ProductionHostError> {
+    let mut tags = Vec::new();
+    for row in rows {
+        let members = json_array(row, "members")?
+            .iter()
+            .map(|member| {
+                let Some(id) = member.as_str() else {
+                    return Err(ProductionHostError::InvalidCatalogField { field: "members" });
+                };
+                Ok(ItemId::parse(id)?)
+            })
+            .collect::<Result<Vec<_>, ProductionHostError>>()?;
+        tags.push(ItemTagDefinitionV1 {
+            id: ItemTagId::parse(json_text(row, "id")?)?,
+            members: members.into_boxed_slice(),
+        });
+    }
+    Ok(tags)
+}
+
+fn json_object_field<'a>(
+    value: &'a Value,
+    key: &'static str,
+) -> Result<&'a Value, ProductionHostError> {
+    match value.get(key) {
+        Some(field) if field.is_object() => Ok(field),
+        _ => Err(ProductionHostError::InvalidCatalogField { field: key }),
+    }
 }
 
 fn recipe_pattern(

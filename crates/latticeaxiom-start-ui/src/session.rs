@@ -288,6 +288,14 @@ impl MemoryStartFlow {
         self.shell.screen = ShellScreen::Playing;
     }
 
+    /// Returns the shell to Home without opening a writer.
+    ///
+    /// Shutdown-timeout recovery uses this path so a timeout cannot masquerade
+    /// as durable Save & Quit.
+    pub fn enter_home(&mut self) {
+        self.shell.screen = ShellScreen::Home;
+    }
+
     /// Records that an in-memory session was entered.
     ///
     /// # Errors

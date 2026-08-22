@@ -3978,6 +3978,7 @@ name = "latticeaxiom-client-ui"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "unicode-normalization",
 ]
@@ -4028,13 +4029,19 @@ dependencies = [
 name = "latticeaxiom-dual-fixture"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "criterion 0.8.2",
  "latticeaxiom-abi",
  "latticeaxiom-compose",
  "latticeaxiom-core",
+ "latticeaxiom-engine",
+ "latticeaxiom-gameplay",
+ "latticeaxiom-launcher",
+ "latticeaxiom-packages",
  "latticeaxiom-registration",
  "latticeaxiom-runtime-contracts",
  "latticeaxiom-sdk",
+ "latticeaxiom-storage",
  "serde",
  "serde_json",
  "sha2",
@@ -4047,6 +4054,7 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "latticeaxiom-abi",
  "latticeaxiom-client-ui",
  "latticeaxiom-compose",
  "latticeaxiom-content",

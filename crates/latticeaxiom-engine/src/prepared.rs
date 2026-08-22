@@ -290,12 +290,16 @@ fn reconstruct_locked_graph(
             }
         }
     }
-    for (capability, providers) in &lock.portable_resolution.capabilities {
-        for provider in providers {
-            explanation.push(ResolutionStep::Capability {
-                capability: capability.clone(),
-                provider: provider.clone(),
-            });
+    // Capability explanation is package-major, capability-minor so lock_hash
+    // matches the sealing path in `latticeaxiom-compose` `selected_lock_graph`.
+    for name in lock.portable_resolution.packages.keys() {
+        for (capability, providers) in &lock.portable_resolution.capabilities {
+            if providers.iter().any(|provider| provider == name) {
+                explanation.push(ResolutionStep::Capability {
+                    capability: capability.clone(),
+                    provider: name.clone(),
+                });
+            }
         }
     }
 

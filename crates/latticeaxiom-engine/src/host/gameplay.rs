@@ -6,15 +6,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use latticeaxiom_gameplay::{
-    BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1,
-    ContainerId, ContainerOwnerComponentV1, ContainerStateV1, ContinuationId, DimensionChunkKey,
-    DimensionId, DropEntityId, DroppedItemV1, FaultInjection, FurnaceContinuationV1,
-    GameplayCatalog, GameplayCommandV1, GameplayEditTarget, GameplayKernel, GameplayLimits,
-    GameplayReject, GameplayStorageDomain, IngredientV1, InventoryInspectV1, InventoryStateV1,
-    ItemId, ItemStackV1, ItemStateV1, MineCommandV1, MoveStackCommandV1, PickupCommandV1,
-    PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipeId, RecipeInspectV1, RecipePatternV1,
-    ReferenceGameplayState, ReferencePlanApplier, RuntimePlanReceiptV1, SlotIndex, ToolClassId,
-    TransactionId, WorkstationId, WorldId, WorldRevision,
+    AuthorityTick, BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1,
+    CommandOutcomeV1, ContainerId, ContainerOwnerComponentV1, ContainerStateV1, ContinuationId,
+    DimensionChunkKey, DimensionId, DropEntityId, DroppedItemV1, FaultInjection,
+    FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1, GameplayEditTarget, GameplayKernel,
+    GameplayLimits, GameplayReject, GameplayStorageDomain, IngredientV1, InventoryInspectV1,
+    InventoryStateV1, ItemId, ItemStackV1, ItemStateV1, MineCommandV1, MoveStackCommandV1,
+    PickupCommandV1, PlaceCommandV1, PlayerId, ProcessId, RecipeCraftCommandV1, RecipeId,
+    RecipeInspectV1, RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier,
+    RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex, StartProcessCommandV1, ToolClassId,
+    TransactionId, TransferCommandV1, WorkstationId, WorldId, WorldRevision,
 };
 use latticeaxiom_player::BlockEditRejectV1;
 use latticeaxiom_storage::{ChangedDomains, CommitReceipt};
@@ -387,6 +388,51 @@ impl ProductionGameplay {
                 workstation,
             }),
         )
+    }
+
+    pub(super) fn start_process(
+        &mut self,
+        transaction_id: TransactionId,
+        process: &ProcessId,
+        container: ContainerId,
+        expected_container_revision: u64,
+        started_at: AuthorityTick,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        self.execute(
+            transaction_id,
+            GameplayCommandV1::StartProcess(StartProcessCommandV1 {
+                container,
+                process: process.clone(),
+                input_slot: SlotIndex::new(0),
+                fuel_slot: SlotIndex::new(1),
+                output_slot: SlotIndex::new(2),
+                expected_container_revision,
+                started_at,
+            }),
+        )
+    }
+
+    pub(super) fn advance_scheduled(
+        &mut self,
+        transaction_id: TransactionId,
+        through_tick: AuthorityTick,
+        max_completions: std::num::NonZeroU16,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        self.execute(
+            transaction_id,
+            GameplayCommandV1::AdvanceScheduled(ScheduledAdvanceCommandV1 {
+                through_tick,
+                max_completions,
+            }),
+        )
+    }
+
+    pub(super) fn transfer(
+        &mut self,
+        transaction_id: TransactionId,
+        command: TransferCommandV1,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        self.execute(transaction_id, GameplayCommandV1::Transfer(command))
     }
 
     /// Moves or merges the `from` stack onto `to`. `quantity == None` (the full stack).

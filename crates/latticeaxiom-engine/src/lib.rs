@@ -45,12 +45,13 @@ pub use host::{
     DerivedQueueSnapshotV1, HOTBAR_SLOTS, HostFluidTickV1, INVENTORY_SLOTS, ProductionHostError,
     ProductionHostPlugin, ProductionInspectSurface, ProductionInventoryView, ProductionMemoryStart,
     ProductionMemoryStartError, ProductionPlayerPose, ProductionSessionPause, ProductionSpine,
-    ProductionSurfaceRouter, ProductionWorldList, ProductionWorldStorage, RequiredCaveEntranceV1,
-    STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost, SealedWriterHostError,
-    StreamingProfileCountsV1, StreamingProfileEvidenceV1, WorkingSetDiagnosticsV1,
-    WorldgenInspectReportV1, authored_content_catalog, authored_content_display_catalog,
-    authored_gameplay_catalog, coverage_m, empty_gameplay_catalog, lock_selected_gameplay_catalog,
-    radius_for_coverage, sealed_activation_binding,
+    ProductionSurfaceRouter, ProductionWorldList, ProductionWorldStorage, RenderDeviceLost,
+    RequiredCaveEntranceV1, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost,
+    SealedWriterHostError, StreamingProfileCountsV1, StreamingProfileEvidenceV1,
+    WorkingSetDiagnosticsV1, WorldgenInspectReportV1, authored_content_catalog,
+    authored_content_display_catalog, authored_gameplay_catalog, coverage_m,
+    empty_gameplay_catalog, lock_selected_gameplay_catalog, radius_for_coverage,
+    sealed_activation_binding,
 };
 pub use input::{HostInputError, compile_lock_selected_input, graph_selects_input_actions};
 pub use instance::{
@@ -59,9 +60,10 @@ pub use instance::{
 };
 pub use latticeaxiom_content::{FluidFlowV1, FluidLevelV1, FluidStateV1};
 pub use latticeaxiom_gameplay::{
-    CommandOutcomeV1, ContainerId, DropEntityId, GameplayCatalog, GameplayReject,
-    InventoryInspectV1, ItemId, ItemStackV1, ItemStateV1, MiningInspectV1, RecipeId,
-    RecipeInspectV1, SlotIndex, WorkstationId,
+    AuthorityTick, CommandOutcomeV1, ContainerId, ContainerStateV1, DropEntityId, GameplayCatalog,
+    GameplayReject, InventoryInspectV1, ItemId, ItemStackV1, ItemStateV1, MiningInspectV1,
+    PlayerId, ProcessId, RecipeId, RecipeInspectV1, SlotIndex, TransferCommandV1,
+    TransferDirectionV1, WorkstationId,
 };
 pub use latticeaxiom_player::{
     ActionAxis2V1, ActionFrameInbox, ActionFrameInboxError, BlockEditReceiptV1, BlockEditSuccessV1,

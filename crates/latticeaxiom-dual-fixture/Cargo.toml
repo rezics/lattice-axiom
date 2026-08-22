@@ -21,7 +21,13 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+bevy = { workspace = true, default-features = false }
 criterion.workspace = true
+latticeaxiom-engine = { path = "../latticeaxiom-engine", default-features = false }
+latticeaxiom-gameplay = { path = "../latticeaxiom-gameplay" }
+latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
+latticeaxiom-packages = { path = "../latticeaxiom-packages" }
+latticeaxiom-storage = { path = "../latticeaxiom-storage" }
 
 [[bench]]
 name = "ffi_batch_calls"

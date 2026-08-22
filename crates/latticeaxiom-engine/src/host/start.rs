@@ -636,6 +636,75 @@ impl ProductionMemoryStart {
         Ok(())
     }
 
+    /// Recovers the latest durable world after a shutdown timeout.
+    ///
+    /// Canonical reopen discards written-but-not-durable mutations. The sealed
+    /// child report uses [`ChildExitKindV1::ShutdownTimeout`] and cannot
+    /// masquerade as Save & Quit. No writer is left active.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the world is absent, the
+    /// store is not durable, reopen fails, or the timeout envelope is invalid.
+    pub fn on_shutdown_timeout(
+        &mut self,
+        world_id: WorldId,
+        writer: &mut SealedWorldWriterHost,
+    ) -> Result<ChildExitReportV1, ProductionMemoryStartError> {
+        if writer.durability_capability() != StorageDurabilityCapabilityV1::WalSyncCheckpoint {
+            return Err(ProductionMemoryStartError::DurableCapabilityRequired);
+        }
+        writer.canonical_reopen()?;
+        self.set_storage(writer.storage().clone());
+        self.spines.remove(&world_id);
+        if writer.is_writer_active() {
+            writer.close()?;
+        }
+        writer.verify_crash_recovery(world_id)?;
+        let ready = writer.preflight(world_id)?;
+        if matches!(
+            ready.status(),
+            StoragePreflightStatusV1::RecoverableReadOnly { .. }
+        ) {
+            return Err(ProductionMemoryStartError::RecoverableReadOnly { world: world_id });
+        }
+        let plan_hash = {
+            let record = self
+                .flow
+                .worlds()
+                .get(world_id)
+                .ok_or(WorldShellError::MissingLiveWorld)?;
+            let plan = record.open_plan.as_ref().ok_or(
+                ProductionMemoryStartError::StorageActivationUnavailable { world: world_id },
+            )?;
+            canonical_json_hash(plan)?
+        };
+        let frontier = writer.begin_read(world_id)?.frontier();
+        let durable = DurableWorldRevisionV1::new(
+            world_id,
+            LauncherWorldRevision::new(frontier.durable().get()),
+        );
+        let report = ChildExitReportV1::seal(ChildExitReportDraftV1 {
+            child_generation: current_launch_generation(),
+            process_epoch: current_process_epoch(),
+            role: ChildRoleV1::World { world_id },
+            exit_kind: ChildExitKindV1::ShutdownTimeout,
+            intent_generation: None,
+            intent_checksum: None,
+            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+            last_written_world: Some(durable),
+            last_durable_world: Some(durable),
+            shell_lock_hash: self.images.product_lock_hash(),
+            world_lock_hash: Some(self.images.product_lock_hash()),
+            world_open_plan_hash: Some(plan_hash),
+            diagnostic_ref: None,
+        })?;
+        self.flow
+            .record_durable_frontier(world_id, frontier.durable().get(), false)?;
+        self.flow.enter_home();
+        Ok(report)
+    }
+
     fn seal_child_result(
         &self,
         world_id: WorldId,

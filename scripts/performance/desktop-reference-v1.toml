@@ -1,0 +1,122 @@
+# ADR 0026 `desktop-reference-v1` performance profile.
+#
+# This is the normative product/test performance policy, not a composition
+# bootstrap. Composition bootstraps remain `profiles/dev.toml`,
+# `profiles/headless.toml`, `profiles/shell.toml`, and `profiles/test.toml`.
+# Numbers are the accepted first-version budgets. Changing a threshold,
+# percentile, endpoint, or hard-cap failure semantic requires the ADR 0026
+# adjustment process. Do not invent easier gates.
+
+schema = 1
+profile = "desktop-reference-v1"
+document_id = "decision.0026-freeze-first-demo-performance-budgets"
+histogram_version = "nearest-rank-v1"
+measurement_tool = "latticeaxiom-performance-evidence/v1"
+lifecycle_until_reference_host_freeze = "d2-provisional"
+
+[hardware_class]
+cpu_physical_cores = 6
+cpu_hardware_threads = 12
+cpu_isa = "x86-64-avx2"
+system_memory_gib = 16
+gpu_vram_gib = 6
+storage = "local-ssd"
+display_width = 1920
+display_height = 1080
+display_hz = 60
+presentation_preset = "medium"
+
+[protocol]
+fixed_hz = 60
+# 16.67 ms as written in ADR 0026.
+fixed_tick_interval_ns = 16670000
+warmup_seconds = 120
+measure_seconds = 600
+warmup_ticks = 7200
+measure_ticks = 36000
+smoke_warmup_ticks = 16
+smoke_measure_ticks = 128
+smoke_max_wall_seconds = 90
+traversal_max_wall_seconds = 3600
+edit_mesh_collider_load_sample_min = 1000
+world_activation_save_checkpoint_runs_min = 30
+normative_run_count = 3
+hard_threshold_overrun_ratio_numer = 6
+hard_threshold_overrun_ratio_denom = 5
+long_frame_ns = 50000000
+long_frame_count_max = 3
+
+[budgets.render]
+presented_frame_p95_ns = 16670000
+presented_frame_p99_ns = 25000000
+headless_may_declare_pass = false
+
+[budgets.fixed]
+cpu_p95_ns = 8000000
+cpu_p99_ns = 12000000
+catch_up_ticks_per_frame_max = 2
+physics_p95_ns = 3000000
+physics_p99_ns = 5000000
+
+[budgets.memory]
+client_ram_high_water_bytes = 4294967296
+gpu_memory_high_water_bytes = 3221225472
+
+[budgets.working_set]
+chunk_edge_voxels = 32
+active_horizontal_radius_chunks = 4
+active_vertical_radius_chunks = 2
+active_chunks_max = 405
+resident_horizontal_radius_chunks = 6
+resident_vertical_radius_chunks = 3
+resident_chunks_max = 1183
+visible_chunks_max = 512
+requested_prefetch_chunks_max = 1536
+active_coverage_m = 128
+resident_coverage_m = 192
+
+[budgets.latency]
+edit_to_visible_p95_ns = 100000000
+edit_to_visible_p99_ns = 200000000
+collider_rebuild_p95_ns = 150000000
+collider_rebuild_p99_ns = 300000000
+warm_chunk_load_p95_ns = 50000000
+warm_chunk_load_p99_ns = 100000000
+cold_chunk_load_p95_ns = 250000000
+cold_chunk_load_p99_ns = 500000000
+world_activation_p95_ns = 2000000000
+world_activation_p99_ns = 3000000000
+save_written_p95_ns = 250000000
+save_written_p99_ns = 500000000
+save_durable_p95_ns = 1000000000
+save_durable_p99_ns = 2000000000
+checkpoint_p95_ns = 5000000000
+checkpoint_p99_ns = 10000000000
+
+[budgets.queues]
+worldgen_jobs = 128
+worldgen_bytes = 134217728
+mesh_jobs = 128
+mesh_bytes = 134217728
+collider_jobs = 64
+collider_bytes = 67108864
+persistence_jobs = 64
+persistence_bytes = 67108864
+other_jobs = 128
+other_bytes = 67108864
+combined_jobs = 512
+combined_bytes = 402653184
+apply_wall_ns = 2000000
+apply_bytes = 16777216
+soft_high_water_percent = 75
+
+[budgets.dynamic]
+host_module_callbacks_soft = 64
+host_module_callbacks_hard = 128
+indirect_calls_soft = 256
+indirect_calls_hard = 512
+command_count_soft = 4096
+command_count_hard = 16384
+command_bytes_soft = 262144
+command_bytes_hard = 1048576
+bridge_cpu_p95_ns = 1000000

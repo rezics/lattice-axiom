@@ -9,12 +9,12 @@ use std::{fmt, sync::Arc};
 
 use latticeaxiom_core::{CanonicalHash, StableId, WorldId};
 use latticeaxiom_world_catalog::{
-    AcceptedWorldOpenPlan, PlanAcceptanceError, SealedActivationBindingV1, WorldOpenAction,
-    WorldOpenPlan,
+    AcceptedWorldOpenPlan, DirtyDrainState, DiskAdmission, DiskSample, HeadroomInputs,
+    PlanAcceptanceError, SealedActivationBindingV1, StorageFailure, WorldOpenAction, WorldOpenPlan,
 };
 use latticeaxiom_world_db::{
-    ActivationPermitV1, CheckpointOutcomeV1, CheckpointRequestV1, DeterministicHeaderPublisher,
-    DeterministicWorldStorage, HeaderPublisher, HeaderRepairPermitV1,
+    ActivationPermitV1, CheckpointOutcomeV1, CheckpointRequestV1, DatabaseFaultPointV1,
+    DeterministicHeaderPublisher, DeterministicWorldStorage, HeaderPublisher, HeaderRepairPermitV1,
     StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitReceiptV1,
     WorldCommitRequestV1, WorldCreateOutcomeV1, WorldCreateRequestV1, WorldDbError, WorldReadView,
     WorldStorage, WorldStorageLimitsV1, WorldStoragePreflightV1, WorldWriter, WriterActivationV1,
@@ -112,6 +112,41 @@ impl SealedWorldWriterHost {
     #[must_use]
     pub const fn storage(&self) -> &DeterministicWorldStorage {
         &self.storage
+    }
+
+    /// Observes one filesystem sample or write failure for low-disk admission.
+    ///
+    /// Low-disk admission pauses new mutation. Recoverable read-only never
+    /// yields a writer permit. Presentation is not involved.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when threshold arithmetic overflows or the
+    /// store lock is poisoned.
+    pub fn observe_disk(
+        &self,
+        sample: DiskSample,
+        inputs: HeadroomInputs,
+        failure: Option<StorageFailure>,
+        dirty: DirtyDrainState,
+    ) -> Result<DiskAdmission, SealedWriterHostError> {
+        Ok(self.storage.observe_disk(sample, inputs, failure, dirty)?)
+    }
+
+    /// Installs one crash-before-publication database fault on this host.
+    ///
+    /// The next commit that reaches the failpoint is rejected without publishing
+    /// a newer durable frontier. The previous recoverable world remains readable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when a prior fault remains pending or the
+    /// store lock is poisoned.
+    pub fn inject_database_fault_once(
+        &self,
+        point: DatabaseFaultPointV1,
+    ) -> Result<(), SealedWriterHostError> {
+        Ok(self.storage.inject_database_fault_once(point)?)
     }
 
     /// Provisions revision-zero authoritative metadata before a writer exists.
@@ -569,5 +604,37 @@ mod tests {
         host.reactivate(&reopen_plan, reopened)
             .expect("sealed reactivation succeeds after close");
         host.close().expect("reactivated writer closes");
+    }
+
+    #[test]
+    fn observe_disk_and_inject_fault_are_public_host_hooks() {
+        use latticeaxiom_world_catalog::{
+            DirtyDrainState, DiskSample, HeadroomInputs, StorageFailure,
+        };
+        use latticeaxiom_world_db::DatabaseFaultPointV1;
+
+        let (host, _, _) = fixture_host();
+        host.observe_disk(
+            DiskSample {
+                usable_free_bytes: 4 * 1024 * 1024 * 1024,
+                capacity_bytes: 100 * 1024 * 1024 * 1024,
+            },
+            HeadroomInputs::default(),
+            None,
+            DirtyDrainState::Clean,
+        )
+        .expect("low-disk sample is admitted on the sealed host");
+        host.observe_disk(
+            DiskSample {
+                usable_free_bytes: 0,
+                capacity_bytes: 100 * 1024 * 1024 * 1024,
+            },
+            HeadroomInputs::default(),
+            Some(StorageFailure::NoSpace),
+            DirtyDrainState::FailedReadOnlyAvailable,
+        )
+        .expect("failed drain is admitted on the sealed host");
+        host.inject_database_fault_once(DatabaseFaultPointV1::BeforeBatchPublication)
+            .expect("database failpoint installs on the sealed host");
     }
 }
