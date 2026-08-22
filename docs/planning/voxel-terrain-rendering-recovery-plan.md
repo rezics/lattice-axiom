@@ -31,8 +31,10 @@ decision:
 | P1／P2 | `b686d3f` `fix(engine): present halo meshes and reconcile interest once` | adapter 只做 `MeshBuffer → Mesh`；`mesh_from_occupied`／`FACES` 已刪；`FixedUpdate` 只做 collider safety；`FixedPostUpdate` 以最終 pose reconcile 一次；headless：yaw／pitch 不變、每 tick 一次 reconcile、chunk 內移動不 distance-evict、折返 retain、sticky look-ahead |
 | P3（部分） | `72ba55f` dispatch／apply 分離；`0c5e883` Bevy `AsyncComputeTaskPool` | spine mutex 在 meshing 前釋放；lane-local `GreedyMesher`；completion 仍走 `complete_derived` 拒絕 stale。**未關閉：** 每 frame 仍 join 整批 derived work（headless 確定性）；每 render frame `<= 2 ms / 16 MiB` apply 上限尚未夾緊 |
 | P5 | `5dca840` `perf(voxel-collider): merge occupied cells into bounded boxes` | greedy cuboid 合併；`8³` 實心 chunk 1 個 shape；occupancy property corpus |
+| P3 apply bound | `dada50a` | 每 tick 最多 16 jobs / 16 MiB apply；startup／collider safety 仍 drain until idle |
+| P6 baseline | `5203601` UV；`2dfcd11` nearest color atlas | `MeshBuffer` 發 UV0；palette 按 stable index 編成 16×16 色塊 atlas；缺 PNG 用該 fallback，不讀 `placeholders/` |
 
-診斷基線 `9e1fc9d` 的三個畫面缺陷因此在 production host 上關閉。下一步：P3 剩餘的每 frame apply bound，然後 P6 deterministic terrain materials。P7 仍禁止提前。
+診斷基線 `9e1fc9d` 的三個畫面缺陷因此在 production host 上關閉。P7 仍禁止提前。
 
 ## 結論
 
