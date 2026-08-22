@@ -234,7 +234,10 @@ impl Plugin for ProductionHostPlugin {
         app.add_message::<TargetInspectReceiptV1>()
             .add_systems(
                 FixedUpdate,
-                sync_collider_safety.before(PlayerSystemSet::ProbeGround),
+                (
+                    sync_collider_safety.before(PlayerSystemSet::ProbeGround),
+                    evaluate_pick_block,
+                ),
             )
             .add_systems(
                 FixedPostUpdate,
@@ -276,8 +279,22 @@ impl Plugin for ProductionHostPlugin {
             Update,
             (
                 hud::toggle_inventory,
+                hud::toggle_workbench,
+                hud::activate_workbench_from_target,
                 hud::select_hotbar_from_keys,
+                hud::inventory_slot_buttons,
+                hud::recipe_buttons,
                 hud::sync_inventory_overlay,
+                hud::sync_workbench_overlay,
+            )
+                .run_if(is_interactive_client),
+        )
+        .add_systems(
+            Update,
+            (
+                hud::sync_slot_pickable,
+                hud::sync_hand_recipe_list,
+                hud::sync_workbench_recipe_list,
             )
                 .run_if(is_interactive_client),
         )
@@ -793,6 +810,38 @@ fn refresh_crosshair_target(
         return;
     };
     spine.refresh_target(local_eye_pose(transform, profile, *view));
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::type_complexity)] // Local pick-block query is one bounded origin.
+fn evaluate_pick_block(
+    spine: Res<'_, ProductionSpine>,
+    pause: Option<Res<'_, ProductionSessionPause>>,
+    players: Query<
+        '_,
+        '_,
+        &CurrentPlayerActionFrame,
+        (
+            With<D2Player>,
+            With<LocalPlayerInput>,
+            Without<ChunkPresentation>,
+        ),
+    >,
+) {
+    if pause.is_some_and(|pause| pause.is_paused()) {
+        return;
+    }
+    let mut local_players = players.iter();
+    let Some(frame) = local_players.next() else {
+        return;
+    };
+    if local_players.next().is_some() {
+        return;
+    }
+    if !frame.0.started.contains(PlayerActionV1::PickBlock) {
+        return;
+    }
+    let _ = spine.pick_aimed_block();
 }
 
 fn local_eye_pose(

@@ -3,17 +3,17 @@
 //! Package-authored catalogs are supplied by the caller. This module does not
 //! embed Terrenia item, recipe, or block identifiers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use latticeaxiom_gameplay::{
     BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1,
     ContainerId, ContainerOwnerComponentV1, ContainerStateV1, DimensionChunkKey, DimensionId,
     DropEntityId, FaultInjection, GameplayCatalog, GameplayCommandV1, GameplayEditTarget,
     GameplayLimits, GameplayReject, GameplayStorageDomain, IngredientV1, InventoryStateV1, ItemId,
-    ItemStackV1, ItemStateV1, MineCommandV1, PickupCommandV1, PlaceCommandV1, PlayerId,
-    RecipeCraftCommandV1, RecipeId, RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier,
-    RuntimePlanReceiptV1, SlotIndex, ToolClassId, TransactionId, WorkstationId, WorldId,
-    WorldRevision,
+    ItemStackV1, ItemStateV1, MineCommandV1, MoveStackCommandV1, PickupCommandV1, PlaceCommandV1,
+    PlayerId, RecipeCraftCommandV1, RecipeId, RecipePatternV1, ReferenceGameplayState,
+    ReferencePlanApplier, RuntimePlanReceiptV1, SlotIndex, ToolClassId, TransactionId,
+    WorkstationId, WorldId, WorldRevision,
 };
 use latticeaxiom_player::BlockEditRejectV1;
 use latticeaxiom_storage::{ChangedDomains, CommitReceipt};
@@ -34,6 +34,7 @@ pub(super) struct ProductionGameplay {
     next_drop: u64,
     last_outcome: Option<CommandOutcomeV1>,
     last_reject: Option<GameplayReject>,
+    bound_workstations: BTreeSet<WorkstationId>,
 }
 
 /// Snapshot of the local inventory and selected hotbar slot.
@@ -120,6 +121,7 @@ impl ProductionGameplay {
             next_drop: 10_000,
             last_outcome: None,
             last_reject: None,
+            bound_workstations: BTreeSet::new(),
         })
     }
 
@@ -308,6 +310,92 @@ impl ProductionGameplay {
         )
     }
 
+    /// Moves or merges the `from` stack onto `to`. `quantity == None` (the full stack).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the source is empty, the slots are out of
+    /// range, or the observed inventory revision is stale.
+    pub(super) fn move_stack(
+        &mut self,
+        transaction_id: TransactionId,
+        from: SlotIndex,
+        to: SlotIndex,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        let inventory =
+            self.applier
+                .state()
+                .inventory(self.player)
+                .ok_or(GameplayReject::UnknownPlayer {
+                    player: self.player.as_bytes(),
+                })?;
+        let expected_inventory_revision = inventory.revision();
+        self.execute(
+            transaction_id,
+            GameplayCommandV1::MoveStack(MoveStackCommandV1 {
+                player: self.player,
+                from,
+                to,
+                quantity: None,
+                expected_inventory_revision,
+            }),
+        )
+    }
+
+    /// Selects or swaps the inventory stack whose placement block equals `aimed`.
+    ///
+    /// Hotbar hits only change the selected slot. Body-inventory hits
+    /// [`Self::move_stack`] onto the selected hotbar slot. Missing stacks fail
+    /// closed as [`GameplayReject::EmptySlot`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when no matching stack exists or the move fails.
+    pub(super) fn pick_aimed_block(
+        &mut self,
+        transaction_id: TransactionId,
+        aimed: &BlockId,
+    ) -> Result<Option<RuntimePlanReceiptV1>, GameplayReject> {
+        let source = self.placing_slot(aimed)?;
+        if source.get() < HOTBAR_SLOTS {
+            self.select_hotbar_slot(source.get())?;
+            return Ok(None);
+        }
+        let destination = SlotIndex::new(self.hotbar_slot);
+        self.move_stack(transaction_id, source, destination)
+            .map(Some)
+    }
+
+    /// Recipe identities whose workstation matches and whose inputs are currently owned.
+    ///
+    /// Workstation recipes stay empty until [`Self::bind_workstation`] (or a
+    /// block-container bind) has seeded that contract. Identity order follows
+    /// [`GameplayCatalog::recipes`].
+    #[must_use]
+    pub(super) fn craftable_recipe_ids(
+        &self,
+        workstation: Option<&WorkstationId>,
+    ) -> Vec<RecipeId> {
+        if let Some(required) = workstation
+            && !self.bound_workstations.contains(required)
+        {
+            return Vec::new();
+        }
+        self.catalog()
+            .recipes()
+            .iter()
+            .filter_map(|(id, recipe)| {
+                if recipe.workstation.as_ref() != workstation {
+                    return None;
+                }
+                match self.recipe_matches(id) {
+                    Ok(()) => Some(id.clone()),
+                    Err(_) => None,
+                }
+            })
+            .collect()
+    }
+
     pub(super) fn bind_workstation(
         &mut self,
         workstation: WorkstationId,
@@ -327,7 +415,9 @@ impl ProductionGameplay {
                 kind: "workstation_schema_binding",
                 id: workstation.as_str().to_owned(),
             })?;
-        self.seed_container(owner_chunk, entity, Some(workstation), slots)
+        self.seed_container(owner_chunk, entity, Some(workstation.clone()), slots)?;
+        self.bound_workstations.insert(workstation);
+        Ok(())
     }
 
     pub(super) fn bind_block_container(
@@ -355,7 +445,12 @@ impl ProductionGameplay {
                     block: block.clone(),
                     reason: "container schema requires a non-zero slot count",
                 })?;
-        self.seed_container(owner_chunk, entity, binding.workstation.clone(), slots)
+        let workstation = binding.workstation.clone();
+        self.seed_container(owner_chunk, entity, workstation.clone(), slots)?;
+        if let Some(workstation) = workstation {
+            self.bound_workstations.insert(workstation);
+        }
+        Ok(())
     }
 
     fn seed_container(
@@ -399,6 +494,102 @@ impl ProductionGameplay {
         let stack = inventory.slot(slot).ok().flatten()?;
         self.catalog().tool(stack.item())?;
         Some(slot)
+    }
+
+    fn placing_slot(&self, aimed: &BlockId) -> Result<SlotIndex, GameplayReject> {
+        let inventory =
+            self.applier
+                .state()
+                .inventory(self.player)
+                .ok_or(GameplayReject::UnknownPlayer {
+                    player: self.player.as_bytes(),
+                })?;
+        for (index, stack) in inventory.slots().iter().enumerate() {
+            let Some(stack) = stack else {
+                continue;
+            };
+            if self
+                .catalog()
+                .item(stack.item())
+                .and_then(|item| item.placement_block.as_ref())
+                == Some(aimed)
+            {
+                let slot = u16::try_from(index).map_err(|_| GameplayReject::LimitExceeded {
+                    resource: "inventory_slots",
+                    limit: usize::from(u16::MAX),
+                    actual: index,
+                })?;
+                return Ok(SlotIndex::new(slot));
+            }
+        }
+        Err(GameplayReject::EmptySlot)
+    }
+
+    fn recipe_matches(&self, recipe: &RecipeId) -> Result<(), GameplayReject> {
+        let pattern = self
+            .catalog()
+            .recipe(recipe)
+            .ok_or_else(|| GameplayReject::UnknownReference {
+                kind: "recipe",
+                id: recipe.as_str().to_owned(),
+            })?
+            .pattern
+            .clone();
+        match pattern {
+            RecipePatternV1::Shapeless { ingredients } => self
+                .shapeless_slots(recipe, ingredients.as_ref())
+                .map(|_| ()),
+            RecipePatternV1::Shaped { cells, .. } => {
+                let ingredients: Vec<IngredientV1> =
+                    cells.iter().filter_map(Clone::clone).collect();
+                self.cover_ingredients(recipe, &ingredients)
+            }
+        }
+    }
+
+    fn cover_ingredients(
+        &self,
+        recipe: &RecipeId,
+        ingredients: &[IngredientV1],
+    ) -> Result<(), GameplayReject> {
+        if ingredients.is_empty() {
+            return Err(GameplayReject::RecipeMismatch {
+                recipe: recipe.clone(),
+            });
+        }
+        let inventory =
+            self.applier
+                .state()
+                .inventory(self.player)
+                .ok_or(GameplayReject::UnknownPlayer {
+                    player: self.player.as_bytes(),
+                })?;
+        let mut available: Vec<(ItemId, u32)> = inventory
+            .slots()
+            .iter()
+            .flatten()
+            .map(|stack| (stack.item().clone(), stack.quantity()))
+            .collect();
+        for ingredient in ingredients {
+            let mut remaining = ingredient.quantity.get();
+            for (item, quantity) in &mut available {
+                if remaining == 0 {
+                    break;
+                }
+                if !self.catalog().matches(&ingredient.accepts, item) {
+                    continue;
+                }
+                let take = remaining.min(*quantity);
+                *quantity -= take;
+                remaining -= take;
+            }
+            if remaining > 0 {
+                return Err(GameplayReject::RecipeMismatch {
+                    recipe: recipe.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn placement_slot(

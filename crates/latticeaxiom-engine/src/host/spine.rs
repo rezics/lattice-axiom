@@ -1259,6 +1259,75 @@ impl ProductionSpine {
         inner.craft_recipe(self.storage.kernel(), recipe, workstation)
     }
 
+    /// Moves the full `from` stack onto `to` through the gameplay kernel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the spine lock is poisoned, the source
+    /// is empty, or the inventory revision is stale.
+    pub fn move_stack(
+        &self,
+        from: SlotIndex,
+        to: SlotIndex,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.move_stack(self.storage.kernel(), from, to)
+    }
+
+    /// Selects or swaps the stack that places the live DDA target block.
+    ///
+    /// Reuses the latest crosshair hit. Missing stacks fail closed as
+    /// [`GameplayReject::EmptySlot`]. This is survival pick, not creative give.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when no target is aimed, no matching stack
+    /// exists, or the inventory move fails.
+    pub fn pick_aimed_block(&self) -> Result<(), GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.pick_aimed_block(self.storage.kernel())
+    }
+
+    /// Recipe identities currently craftable at `workstation`.
+    ///
+    /// `None` is hand crafting. Workstation recipes stay empty until that
+    /// contract is bound. Order follows the catalog identity map.
+    #[must_use]
+    pub fn craftable_recipe_ids(&self, workstation: Option<&WorkstationId>) -> Vec<RecipeId> {
+        self.lock_inner().map_or_else(
+            |_| Vec::new(),
+            |inner| {
+                inner
+                    .gameplay
+                    .as_ref()
+                    .map(|session| session.craftable_recipe_ids(workstation))
+                    .unwrap_or_default()
+            },
+        )
+    }
+
+    /// Catalog workstation contract realized by `block`, when bound.
+    #[must_use]
+    pub fn block_workstation(&self, block: &BlockId) -> Option<WorkstationId> {
+        self.lock_inner().ok().and_then(|inner| {
+            inner
+                .gameplay
+                .as_ref()?
+                .catalog()
+                .block_schema_binding(block)?
+                .workstation
+                .clone()
+        })
+    }
+
     /// Binds a workstation container on the player inventory chunk.
     ///
     /// # Errors
@@ -1902,6 +1971,54 @@ impl ProductionSpineInner {
         Ok(receipt.outcome)
     }
 
+    fn move_stack(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        from: SlotIndex,
+        to: SlotIndex,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        self.sync_gameplay_world(kernel)?;
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .move_stack(transaction, from, to)?;
+        commit_gameplay_storage(self, kernel, transaction, None, 0).map_err(|_| {
+            GameplayReject::StorageCommitMismatch {
+                resource: "move_stack",
+            }
+        })?;
+        Ok(receipt.outcome)
+    }
+
+    fn pick_aimed_block(&mut self, kernel: &MemoryTransactionKernel) -> Result<(), GameplayReject> {
+        let aimed = self
+            .current_target
+            .as_ref()
+            .map(|target| target.block_id.clone())
+            .ok_or(GameplayReject::EmptySlot)?;
+        self.sync_gameplay_world(kernel)?;
+        let transaction = next_transaction_id(self);
+        let moved = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .pick_aimed_block(transaction, &aimed)?;
+        if moved.is_some() {
+            commit_gameplay_storage(self, kernel, transaction, None, 0).map_err(|_| {
+                GameplayReject::StorageCommitMismatch {
+                    resource: "pick_block",
+                }
+            })?;
+        }
+        Ok(())
+    }
+
     fn sync_gameplay_world(
         &mut self,
         kernel: &MemoryTransactionKernel,
@@ -2144,6 +2261,16 @@ impl ProductionSpineInner {
         );
         inspect.block_display_name = label.name;
         inspect.block_display_icon = label.icon;
+        inspect.declared_by = inspect.block_id.namespace().to_owned();
+        if let Some(gameplay) = &self.gameplay
+            && let Some(definition) = gameplay.catalog().block(&inspect.block_id)
+        {
+            inspect.hardness_ticks = definition.mining.hardness.get();
+            if let Some(tool) = &definition.mining.tool {
+                inspect.harvest_tool = Some(tool.class.as_str().to_owned());
+                inspect.harvest_tier = Some(tool.minimum_tier);
+            }
+        }
         Ok(inspect)
     }
 

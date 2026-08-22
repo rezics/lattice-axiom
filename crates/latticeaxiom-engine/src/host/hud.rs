@@ -1,37 +1,101 @@
 //! Production HUD: crosshair, inspect, status, hotbar, and inventory.
 
 use bevy::{
+    ecs::query::QueryFilter,
     input::{ButtonInput, keyboard::KeyCode},
     prelude::{
-        AlignItems, BackgroundColor, Children, Color, Commands, Component, Display, FlexDirection,
-        FlexWrap, GlobalZIndex, JustifyContent, Name, Node, Pickable, PositionType, Query, Res,
-        ResMut, Resource, Text, TextColor, TextFont, UiRect, Val, With,
+        AlignItems, BackgroundColor, Button, Changed, Children, Color, Commands, Component,
+        Display, FlexDirection, FlexWrap, GlobalZIndex, Interaction, JustifyContent, Name, Node,
+        Overflow, Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, TextFont,
+        UiRect, Val, With, Without,
     },
     ui::FocusPolicy,
 };
-use latticeaxiom_player::{BlockEditRejectV1, HeadlessTargetInspectV1};
+use latticeaxiom_gameplay::{ContainerId, RecipeId, SlotIndex, WorkstationId};
+use latticeaxiom_player::{
+    ActionState, BlockEditRejectV1, HeadlessTargetInspectV1, LeafwingPlayerAction, LocalPlayerInput,
+};
 
 use super::{
     HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionSessionPause, ProductionSpine,
     WorkingSetDiagnosticsV1, gameplay::ProductionInventoryView,
 };
 
-/// Latch for the in-session inventory overlay.
+const RECIPE_LIST_CAPACITY: usize = 24;
+const HOST_WORKBENCH_CONTAINER: ContainerId = ContainerId::new(1);
+
+/// Latch for the in-session inventory and workbench overlays.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
 pub(super) struct ProductionHudSurfaces {
     inventory_open: bool,
+    workbench_open: bool,
+    cursor_slot: Option<u16>,
 }
 
 impl ProductionHudSurfaces {
-    /// Returns whether the inventory overlay is open.
+    /// Returns whether a blocking inventory or workbench overlay is open.
     #[must_use]
     pub const fn inventory_open(self) -> bool {
+        self.inventory_open || self.workbench_open
+    }
+
+    /// Returns whether the inventory panel itself is open.
+    #[must_use]
+    pub const fn inventory_panel_open(self) -> bool {
         self.inventory_open
     }
 
-    /// Opens or closes the inventory overlay.
+    /// Returns whether the workbench overlay is open.
+    #[must_use]
+    pub const fn workbench_open(self) -> bool {
+        self.workbench_open
+    }
+
+    /// Returns the latched click-to-swap source slot.
+    #[must_use]
+    pub const fn cursor_slot(self) -> Option<u16> {
+        self.cursor_slot
+    }
+
+    /// Opens or closes the inventory panel. Closing also dismisses the workbench.
     pub const fn set_inventory_open(&mut self, open: bool) {
         self.inventory_open = open;
+        if open {
+            self.workbench_open = false;
+        } else {
+            self.workbench_open = false;
+            self.cursor_slot = None;
+        }
+    }
+
+    /// Opens or closes the workbench overlay. Opening dismisses the inventory panel.
+    pub const fn set_workbench_open(&mut self, open: bool) {
+        self.workbench_open = open;
+        if open {
+            self.inventory_open = false;
+            self.cursor_slot = None;
+        }
+    }
+
+    /// Latches a click-to-swap slot. Returns a completed `(from, to)` move.
+    ///
+    /// The first click stores `slot`. A second click on a different slot
+    /// submits that pair. Clicking the same slot clears the latch.
+    pub const fn click_slot(&mut self, slot: u16) -> Option<(u16, u16)> {
+        match self.cursor_slot {
+            None => {
+                self.cursor_slot = Some(slot);
+                None
+            }
+            Some(from) if from == slot => {
+                self.cursor_slot = None;
+                None
+            }
+            Some(from) => {
+                self.cursor_slot = None;
+                Some((from, slot))
+            }
+        }
     }
 }
 
@@ -63,6 +127,25 @@ pub(super) struct ProductionInventoryOverlay;
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 pub(super) struct ProductionInventorySlot(u16);
 
+/// Marker on the workbench overlay root.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionWorkbenchOverlay;
+
+/// Marker on the inventory-panel hand-recipe list.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionHandRecipeList;
+
+/// Marker on the workbench recipe list.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionWorkbenchRecipeList;
+
+/// Clickable catalog recipe row.
+#[derive(Clone, Component, Debug, Eq, PartialEq)]
+pub(super) struct ProductionRecipeButton {
+    recipe: String,
+    workbench: bool,
+}
+
 /// Spawns a non-interactive crosshair, inspect, status, hotbar, and inventory.
 ///
 /// Overlay nodes ignore picking except the inventory grid, which is display-only
@@ -89,6 +172,7 @@ pub(super) fn spawn_production_hud(mut commands: Commands<'_, '_>) {
             spawn_working_set_readout(hud);
             spawn_hotbar(hud);
             spawn_inventory_overlay(hud);
+            spawn_workbench_overlay(hud);
         });
 }
 
@@ -281,7 +365,7 @@ fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                 ))
                 .with_children(|panel| {
                     panel.spawn((
-                        Text::new("Inventory — E closes · 1-9 select hotbar"),
+                        Text::new("Inventory — E closes · click slots to swap · 1-9 select hotbar"),
                         TextFont::from_font_size(16.0),
                         TextColor(Color::srgb(0.92, 0.93, 0.88)),
                     ));
@@ -307,7 +391,111 @@ fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                                 );
                             }
                         });
+                    panel.spawn((
+                        Text::new("Hand recipes"),
+                        TextFont::from_font_size(14.0),
+                        TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                    ));
+                    spawn_recipe_list(panel, ProductionHandRecipeList, "Hand recipe list", false);
                 });
+        });
+}
+
+fn spawn_workbench_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
+    parent
+        .spawn((
+            ProductionWorkbenchOverlay,
+            Name::new("Workbench overlay"),
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                display: Display::None,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..Node::default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.03, 0.55)),
+            GlobalZIndex(81),
+            FocusPolicy::Pass,
+            Pickable::IGNORE,
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn((
+                    Name::new("Workbench panel"),
+                    Node {
+                        width: Val::Px(420.0),
+                        max_height: Val::Px(520.0),
+                        padding: UiRect::all(Val::Px(12.0)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(8.0),
+                        overflow: Overflow::scroll(),
+                        ..Node::default()
+                    },
+                    BackgroundColor(Color::srgba(0.07, 0.09, 0.08, 0.94)),
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        Text::new("Workbench — C closes · click a recipe to craft"),
+                        TextFont::from_font_size(16.0),
+                        TextColor(Color::srgb(0.92, 0.93, 0.88)),
+                    ));
+                    spawn_recipe_list(
+                        panel,
+                        ProductionWorkbenchRecipeList,
+                        "Workbench recipe list",
+                        true,
+                    );
+                });
+        });
+}
+
+fn spawn_recipe_list<M: Component>(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    marker: M,
+    name: &'static str,
+    workbench: bool,
+) {
+    parent
+        .spawn((
+            marker,
+            Name::new(name),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                width: Val::Px(396.0),
+                ..Node::default()
+            },
+        ))
+        .with_children(|list| {
+            for index in 0..RECIPE_LIST_CAPACITY {
+                list.spawn((
+                    Button,
+                    ProductionRecipeButton {
+                        recipe: String::new(),
+                        workbench,
+                    },
+                    Name::new(format!("{name} {index}")),
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(28.0),
+                        display: Display::None,
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        align_items: AlignItems::Center,
+                        ..Node::default()
+                    },
+                    BackgroundColor(Color::srgb(0.12, 0.16, 0.14)),
+                    Pickable::IGNORE,
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new(""),
+                        TextFont::from_font_size(14.0),
+                        TextColor(Color::srgb(0.92, 0.93, 0.88)),
+                    ));
+                });
+            }
         });
 }
 
@@ -320,6 +508,7 @@ fn spawn_item_slot<M: Component>(
     parent
         .spawn((
             marker,
+            Button,
             Name::new(name),
             Node {
                 width: Val::Px(size),
@@ -352,8 +541,74 @@ pub(super) fn toggle_inventory(
         return;
     }
     if keyboard.just_pressed(KeyCode::KeyE) {
-        let open = !surfaces.inventory_open();
+        let open = !surfaces.inventory_panel_open();
         surfaces.set_inventory_open(open);
+    }
+}
+
+/// Toggles the workbench overlay on C while the pause menu is closed.
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn toggle_workbench(
+    keyboard: Res<'_, ButtonInput<KeyCode>>,
+    pause: Res<'_, ProductionSessionPause>,
+    spine: Res<'_, ProductionSpine>,
+    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+) {
+    if pause.is_paused() {
+        return;
+    }
+    if !keyboard.just_pressed(KeyCode::KeyC) {
+        return;
+    }
+    let open = !surfaces.workbench_open();
+    if open {
+        bind_host_workbench(&spine);
+    }
+    surfaces.set_workbench_open(open);
+}
+
+/// Opens the workbench when `SurfaceActivate` aims at a crafting workstation block.
+///
+/// Does not consume [`PlayerActionV1::PlaceBlock`].
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn activate_workbench_from_target(
+    pause: Res<'_, ProductionSessionPause>,
+    action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
+    spine: Res<'_, ProductionSpine>,
+    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+) {
+    if pause.is_paused() {
+        return;
+    }
+    if !action_states
+        .iter()
+        .any(|state| state.just_pressed(&LeafwingPlayerAction::SurfaceActivate))
+    {
+        return;
+    }
+    let Some(target) = spine.current_target() else {
+        return;
+    };
+    let Some(workstation) = spine.block_workstation(&target.block_id) else {
+        return;
+    };
+    if workstation != crafting_workstation() {
+        return;
+    }
+    bind_host_workbench(&spine);
+    surfaces.set_workbench_open(true);
+}
+
+fn bind_host_workbench(spine: &ProductionSpine) {
+    let _ = spine.bind_workstation(crafting_workstation(), HOST_WORKBENCH_CONTAINER);
+}
+
+fn crafting_workstation() -> WorkstationId {
+    match WorkstationId::parse("latticeaxiom:workstation/crafting@1") {
+        Ok(workstation) => workstation,
+        Err(error) => {
+            panic!("crafting workstation is a platform contract: {error}")
+        }
     }
 }
 
@@ -406,11 +661,268 @@ pub(super) fn sync_inventory_overlay(
     let Ok(mut node) = overlay.single_mut() else {
         return;
     };
-    node.display = if surfaces.inventory_open() {
+    node.display = if surfaces.inventory_panel_open() {
         Display::Flex
     } else {
         Display::None
     };
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn sync_workbench_overlay(
+    surfaces: Res<'_, ProductionHudSurfaces>,
+    mut overlay: Query<'_, '_, &mut Node, With<ProductionWorkbenchOverlay>>,
+) {
+    let Ok(mut node) = overlay.single_mut() else {
+        return;
+    };
+    node.display = if surfaces.workbench_open() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::type_complexity)] // Slot pickable queries are one overlay mapping.
+pub(super) fn sync_slot_pickable(
+    pause: Res<'_, ProductionSessionPause>,
+    surfaces: Res<'_, ProductionHudSurfaces>,
+    mut inventory_slots: Query<
+        '_,
+        '_,
+        &mut Pickable,
+        (
+            With<ProductionInventorySlot>,
+            Without<ProductionHotbarSlot>,
+            Without<ProductionRecipeButton>,
+        ),
+    >,
+    mut hotbar_slots: Query<
+        '_,
+        '_,
+        &mut Pickable,
+        (
+            With<ProductionHotbarSlot>,
+            Without<ProductionInventorySlot>,
+            Without<ProductionRecipeButton>,
+        ),
+    >,
+    mut recipes: Query<
+        '_,
+        '_,
+        &mut Pickable,
+        (
+            With<ProductionRecipeButton>,
+            Without<ProductionInventorySlot>,
+            Without<ProductionHotbarSlot>,
+        ),
+    >,
+) {
+    let inventory_interactive = !pause.is_paused() && surfaces.inventory_panel_open();
+    let workbench_interactive = !pause.is_paused() && surfaces.workbench_open();
+    let slot_pickable = if inventory_interactive {
+        Pickable::default()
+    } else {
+        Pickable::IGNORE
+    };
+    for mut pickable in &mut inventory_slots {
+        *pickable = slot_pickable;
+    }
+    for mut pickable in &mut hotbar_slots {
+        *pickable = slot_pickable;
+    }
+    for mut pickable in &mut recipes {
+        *pickable = if inventory_interactive || workbench_interactive {
+            Pickable::default()
+        } else {
+            Pickable::IGNORE
+        };
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::type_complexity)] // Slot button queries are one click-to-swap mapping.
+pub(super) fn inventory_slot_buttons(
+    pause: Res<'_, ProductionSessionPause>,
+    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+    spine: Res<'_, ProductionSpine>,
+    inventory: Query<
+        '_,
+        '_,
+        (&Interaction, &ProductionInventorySlot),
+        (
+            Changed<Interaction>,
+            With<Button>,
+            Without<ProductionHotbarSlot>,
+        ),
+    >,
+    hotbar: Query<
+        '_,
+        '_,
+        (&Interaction, &ProductionHotbarSlot),
+        (
+            Changed<Interaction>,
+            With<Button>,
+            Without<ProductionInventorySlot>,
+        ),
+    >,
+) {
+    if pause.is_paused() || !surfaces.inventory_panel_open() {
+        return;
+    }
+    for (interaction, slot) in &inventory {
+        if *interaction == Interaction::Pressed
+            && let Some((from, to)) = surfaces.click_slot(slot.0)
+        {
+            let _ = spine.move_stack(SlotIndex::new(from), SlotIndex::new(to));
+        }
+    }
+    for (interaction, slot) in &hotbar {
+        if *interaction == Interaction::Pressed
+            && let Some((from, to)) = surfaces.click_slot(slot.0)
+        {
+            let _ = spine.move_stack(SlotIndex::new(from), SlotIndex::new(to));
+        }
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn recipe_buttons(
+    pause: Res<'_, ProductionSessionPause>,
+    surfaces: Res<'_, ProductionHudSurfaces>,
+    spine: Res<'_, ProductionSpine>,
+    buttons: Query<'_, '_, (&Interaction, &ProductionRecipeButton), Changed<Interaction>>,
+) {
+    if pause.is_paused() || !surfaces.inventory_open() {
+        return;
+    }
+    for (interaction, button) in &buttons {
+        if *interaction != Interaction::Pressed || button.recipe.is_empty() {
+            continue;
+        }
+        let Ok(recipe) = RecipeId::parse(&button.recipe) else {
+            continue;
+        };
+        let workstation = button.workbench.then_some(HOST_WORKBENCH_CONTAINER);
+        let _ = spine.craft_recipe(&recipe, workstation);
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn sync_hand_recipe_list(
+    spine: Res<'_, ProductionSpine>,
+    surfaces: Res<'_, ProductionHudSurfaces>,
+    lists: Query<
+        '_,
+        '_,
+        &Children,
+        (
+            With<ProductionHandRecipeList>,
+            Without<ProductionRecipeButton>,
+        ),
+    >,
+    mut buttons: Query<
+        '_,
+        '_,
+        (&mut ProductionRecipeButton, &mut Node, &Children),
+        Without<ProductionHandRecipeList>,
+    >,
+    mut labels: Query<'_, '_, &mut Text>,
+) {
+    if !surfaces.inventory_panel_open() {
+        return;
+    }
+    let recipes = spine.craftable_recipe_ids(None);
+    let Some(children) = lists.iter().next() else {
+        return;
+    };
+    sync_recipe_buttons(children, &mut buttons, &mut labels, &recipes, false);
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn sync_workbench_recipe_list(
+    spine: Res<'_, ProductionSpine>,
+    surfaces: Res<'_, ProductionHudSurfaces>,
+    lists: Query<
+        '_,
+        '_,
+        &Children,
+        (
+            With<ProductionWorkbenchRecipeList>,
+            Without<ProductionRecipeButton>,
+        ),
+    >,
+    mut buttons: Query<
+        '_,
+        '_,
+        (&mut ProductionRecipeButton, &mut Node, &Children),
+        Without<ProductionWorkbenchRecipeList>,
+    >,
+    mut labels: Query<'_, '_, &mut Text>,
+) {
+    if !surfaces.workbench_open() {
+        return;
+    }
+    let recipes = spine.craftable_recipe_ids(Some(&crafting_workstation()));
+    let Some(children) = lists.iter().next() else {
+        return;
+    };
+    sync_recipe_buttons(children, &mut buttons, &mut labels, &recipes, true);
+}
+
+fn sync_recipe_buttons<F: QueryFilter>(
+    children: &Children,
+    buttons: &mut Query<'_, '_, (&mut ProductionRecipeButton, &mut Node, &Children), F>,
+    labels: &mut Query<'_, '_, &mut Text>,
+    recipes: &[RecipeId],
+    workbench: bool,
+) {
+    for (index, child) in children.iter().enumerate() {
+        let Ok((mut button, mut node, row_children)) = buttons.get_mut(*child) else {
+            continue;
+        };
+        if let Some(recipe) = recipes.get(index) {
+            let id = recipe.as_str().to_owned();
+            let label = recipe_row_label(recipe);
+            button.recipe = id;
+            button.workbench = workbench;
+            node.display = Display::Flex;
+            if let Some(label_entity) = row_children.first()
+                && let Ok(mut text) = labels.get_mut(*label_entity)
+                && text.0 != label
+            {
+                *text = Text::new(label);
+            }
+        } else {
+            button.recipe.clear();
+            node.display = Display::None;
+        }
+    }
+}
+
+fn recipe_row_label(recipe: &RecipeId) -> String {
+    let path = recipe
+        .as_str()
+        .rsplit_once('/')
+        .map_or(recipe.as_str(), |(_, path)| path);
+    let path = path.rsplit_once('@').map_or(path, |(path, _)| path);
+    let mut display = String::new();
+    for segment in path.split('-').filter(|part| !part.is_empty()) {
+        if !display.is_empty() {
+            display.push(' ');
+        }
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            display.extend(first.to_uppercase());
+            display.push_str(chars.as_str());
+        }
+    }
+    if display.is_empty() {
+        recipe.as_str().to_owned()
+    } else {
+        display
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
@@ -440,7 +952,7 @@ pub(super) fn sync_production_inspect_hud(
 
 fn inspect_overlay_label(target: Option<&HeadlessTargetInspectV1>) -> String {
     match target {
-        Some(hit) => format!("{}\n{}", hit.block_display_name, hit.chunk_line()),
+        Some(hit) => hit.overlay_lines(),
         None => "Inspect — no target".to_owned(),
     }
 }
@@ -507,6 +1019,7 @@ fn status_line(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_hotbar_hud(
     spine: Res<'_, ProductionSpine>,
+    surfaces: Res<'_, ProductionHudSurfaces>,
     mut slots: Query<'_, '_, (&ProductionHotbarSlot, &mut BackgroundColor, &mut Children)>,
     mut labels: Query<'_, '_, &mut Text>,
 ) {
@@ -516,11 +1029,14 @@ pub(super) fn sync_production_hotbar_hud(
         .map_or(0, ProductionInventoryView::hotbar_slot);
     for (slot, mut background, children) in &mut slots {
         let selected_slot = slot.0 == selected;
+        let latched = surfaces.cursor_slot() == Some(slot.0);
         let stack = view
             .as_ref()
             .and_then(|view| view.slots().get(usize::from(slot.0))?.as_ref());
         let (label, swatch) = slot_visual(spine.as_ref(), stack, slot.0);
-        background.0 = if selected_slot {
+        background.0 = if latched {
+            latched_slot_color()
+        } else if selected_slot {
             selected_slot_color(swatch)
         } else {
             swatch
@@ -537,6 +1053,7 @@ pub(super) fn sync_production_hotbar_hud(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_inventory_hud(
     spine: Res<'_, ProductionSpine>,
+    surfaces: Res<'_, ProductionHudSurfaces>,
     mut slots: Query<
         '_,
         '_,
@@ -558,7 +1075,10 @@ pub(super) fn sync_production_inventory_hud(
             .and_then(|view| view.slots().get(usize::from(slot.0))?.as_ref());
         let (label, swatch) = slot_visual(spine.as_ref(), stack, slot.0);
         let selected_hotbar = slot.0 < HOTBAR_SLOTS && slot.0 == selected;
-        background.0 = if selected_hotbar {
+        let latched = surfaces.cursor_slot() == Some(slot.0);
+        background.0 = if latched {
+            latched_slot_color()
+        } else if selected_hotbar {
             selected_slot_color(swatch)
         } else {
             swatch
@@ -602,6 +1122,10 @@ fn selected_slot_color(fill: Color) -> Color {
     Color::srgb(0.42, 0.62, 0.38)
 }
 
+fn latched_slot_color() -> Color {
+    Color::srgb(0.62, 0.52, 0.28)
+}
+
 fn icon_swatch_color(icon: &str) -> Color {
     if icon.is_empty() {
         return Color::srgba(0.18, 0.20, 0.18, 0.85);
@@ -632,8 +1156,21 @@ fn hotbar_key_slot(code: KeyCode) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HOTBAR_SLOTS, hotbar_key_slot, status_line};
+    use super::{HOTBAR_SLOTS, ProductionHudSurfaces, hotbar_key_slot, status_line};
     use bevy::input::keyboard::KeyCode;
+
+    #[test]
+    fn inventory_click_latches_then_submits_move_and_same_slot_clears() {
+        let mut surfaces = ProductionHudSurfaces::default();
+        assert_eq!(surfaces.cursor_slot(), None);
+        assert_eq!(surfaces.click_slot(3), None);
+        assert_eq!(surfaces.cursor_slot(), Some(3));
+        assert_eq!(surfaces.click_slot(3), None);
+        assert_eq!(surfaces.cursor_slot(), None);
+        assert_eq!(surfaces.click_slot(1), None);
+        assert_eq!(surfaces.click_slot(4), Some((1, 4)));
+        assert_eq!(surfaces.cursor_slot(), None);
+    }
 
     #[test]
     fn digit_and_numpad_keys_select_hotbar_slots() {

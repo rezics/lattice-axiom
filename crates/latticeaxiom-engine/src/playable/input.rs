@@ -86,6 +86,9 @@ fn sample_keyboard_and_mouse(
     if mouse.just_pressed(MouseButton::Right) {
         started.insert(PlayerActionV1::PlaceBlock);
     }
+    if mouse.just_pressed(MouseButton::Middle) {
+        started.insert(PlayerActionV1::PickBlock);
+    }
 
     inbox.publish_live(PlayerActionFrameV1 {
         generation: state.generation,

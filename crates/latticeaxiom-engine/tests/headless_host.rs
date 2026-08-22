@@ -32,12 +32,13 @@ use latticeaxiom_core::{
 };
 use latticeaxiom_engine::{
     ActionAxis2V1, AuthoritativeTransactionKernel, CellOccupancyV1, ChunkCoordinate, ChunkFaceV1,
-    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ChunkRevision, ContainerId, DropEntityId,
-    EngineInstance, EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayReject,
-    HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1, LockVerifiedComposeImages,
-    MAX_TICKS_PER_ADVANCE, MeshReceipt, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
-    PreparationError, ProductionInspectSurface, ProductionMemoryStart, ProductionSessionPause,
-    ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId, SealedWorldWriterHost,
+    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ChunkRevision, CommandOutcomeV1,
+    ContainerId, DropEntityId, EngineInstance, EngineInstanceError, FluidFlowV1, FluidLevelV1,
+    FluidStateV1, GameplayReject, HOTBAR_SLOTS, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId,
+    ItemStackV1, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, MeshReceipt,
+    PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1, PreparationError,
+    ProductionInspectSurface, ProductionMemoryStart, ProductionSessionPause, ProductionSpine,
+    ProductionWorldList, ProductionWorldStorage, RecipeId, SealedWorldWriterHost,
     SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
     WorkingSetDiagnosticsV1, WorkstationId, authored_gameplay_catalog, empty_gameplay_catalog,
 };
@@ -1715,6 +1716,27 @@ fn assert_inspect_dto_overlay_fields(inspect: &HeadlessTargetInspectV1, spine: &
             inspect.resident, inspect.active, inspect.in_flight, inspect.dirty
         )
     );
+    let overlay = inspect.overlay_lines();
+    assert!(
+        overlay.contains(&inspect.block_display_name),
+        "player overlay must include the display name, got {overlay}"
+    );
+    assert!(
+        overlay.contains(&inspect.declared_by),
+        "player overlay must include declared-by, got {overlay}"
+    );
+    assert!(
+        overlay.contains(inspect.block_id.as_str()),
+        "player overlay must include the stable block id, got {overlay}"
+    );
+    assert!(
+        !overlay.contains(&inspect.occupancy_line()),
+        "player overlay must omit occupancy, got {overlay}"
+    );
+    assert!(
+        !overlay.contains(&inspect.chunk_line()),
+        "player overlay must omit chunk coordinates, got {overlay}"
+    );
 }
 
 fn assert_working_set_diagnostics(
@@ -1795,6 +1817,16 @@ fn break_frame(generation: u64) -> PlayerActionFrameV1 {
 fn inspect_frame(generation: u64) -> PlayerActionFrameV1 {
     let mut started = PlayerActionButtonsV1::empty();
     started.insert(PlayerActionV1::Inspect);
+    PlayerActionFrameV1 {
+        generation,
+        started,
+        ..PlayerActionFrameV1::default()
+    }
+}
+
+fn pick_block_frame(generation: u64) -> PlayerActionFrameV1 {
+    let mut started = PlayerActionButtonsV1::empty();
+    started.insert(PlayerActionV1::PickBlock);
     PlayerActionFrameV1 {
         generation,
         started,
@@ -3051,6 +3083,341 @@ fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
 }
 
 #[test]
+fn production_host_inspect_overlay_fills_harvest_and_omits_occupancy() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog.clone(),
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    instance
+        .enqueue_headless_actions([
+            look_frame(1, -std::f32::consts::FRAC_PI_2, 0.7),
+            idle_frame(2),
+        ])
+        .expect("look frames enqueue");
+    instance.advance_fixed_ticks(3).expect("look ticks advance");
+
+    let inspect = spine
+        .current_target()
+        .expect("crosshair DDA must hit after look");
+    assert_inspect_dto_overlay_fields(&inspect, &spine);
+    assert_eq!(inspect.declared_by, inspect.block_id.namespace());
+    let definition = catalog
+        .block(&inspect.block_id)
+        .expect("aimed block is in the gameplay catalog");
+    assert_eq!(inspect.hardness_ticks, definition.mining.hardness.get());
+    if let Some(tool) = &definition.mining.tool {
+        assert_eq!(
+            inspect.harvest_tool.as_deref(),
+            Some(tool.class.as_str()),
+            "harvest tool must come from catalog mining"
+        );
+        assert_eq!(inspect.harvest_tier, Some(tool.minimum_tier));
+    } else {
+        assert_eq!(inspect.harvest_tool, None);
+        assert_eq!(inspect.harvest_tier, None);
+    }
+    let overlay = inspect.overlay_lines();
+    assert!(
+        overlay.contains("Hand") || inspect.harvest_tool.is_some(),
+        "harvest fragment must appear on the player overlay, got {overlay}"
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn production_host_pick_block_selects_swaps_and_rejects_when_absent() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog.clone(),
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+
+    instance
+        .enqueue_headless_actions([
+            look_frame(1, -std::f32::consts::FRAC_PI_2, 0.7),
+            idle_frame(2),
+        ])
+        .expect("look frames enqueue");
+    instance.advance_fixed_ticks(3).expect("look ticks advance");
+    let aimed = spine
+        .current_target()
+        .expect("pick-block needs a live DDA target")
+        .block_id;
+    let placement_item = catalog
+        .items()
+        .values()
+        .find(|item| item.placement_block.as_ref() == Some(&aimed))
+        .map_or_else(
+            || panic!("{aimed} must have a placement item in the catalog"),
+            |item| item.id.clone(),
+        );
+    let other_item = parse_item("terrenia:item/dirt");
+    let other_item = if other_item == placement_item {
+        parse_item("terrenia:item/oak-log")
+    } else {
+        other_item
+    };
+
+    clear_inventory(&spine);
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(3),
+            Some(ItemStackV1::plain(placement_item.clone(), 4).expect("placement stack")),
+        )
+        .expect("hotbar placement stack is seeded");
+    spine
+        .select_hotbar_slot(0)
+        .expect("unrelated hotbar slot is selected");
+    instance
+        .enqueue_headless_actions([pick_block_frame(3)])
+        .expect("pick-block frame enqueues");
+    instance
+        .advance_fixed_ticks(2)
+        .expect("pick-block ticks advance");
+    let after_select = spine.inventory_view().expect("inventory after pick-select");
+    assert_eq!(
+        after_select.hotbar_slot(),
+        3,
+        "pick-block must select the hotbar stack that places the aimed block"
+    );
+    assert_eq!(
+        after_select
+            .selected()
+            .map(latticeaxiom_gameplay::ItemStackV1::item),
+        Some(&placement_item)
+    );
+
+    clear_inventory(&spine);
+    spine
+        .select_hotbar_slot(0)
+        .expect("destination hotbar is selected");
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(0),
+            Some(ItemStackV1::plain(other_item.clone(), 2).expect("hotbar occupant")),
+        )
+        .expect("selected hotbar is occupied");
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(HOTBAR_SLOTS + 3),
+            Some(ItemStackV1::plain(placement_item.clone(), 4).expect("body placement stack")),
+        )
+        .expect("body inventory holds the placement stack");
+    spine
+        .pick_aimed_block()
+        .expect("pick-block swaps a body stack onto the selected hotbar");
+    let after_swap = spine.inventory_view().expect("inventory after pick-swap");
+    assert_eq!(after_swap.hotbar_slot(), 0);
+    assert_eq!(
+        after_swap
+            .slots()
+            .first()
+            .and_then(Option::as_ref)
+            .map(latticeaxiom_gameplay::ItemStackV1::item),
+        Some(&placement_item),
+        "aimed placement stack must land on the selected hotbar"
+    );
+    assert_eq!(
+        after_swap
+            .slots()
+            .get(usize::from(HOTBAR_SLOTS) + 3)
+            .and_then(Option::as_ref)
+            .map(latticeaxiom_gameplay::ItemStackV1::item),
+        Some(&other_item),
+        "previous hotbar stack must swap into the body slot"
+    );
+
+    clear_inventory(&spine);
+    let rejected = spine.pick_aimed_block();
+    assert!(
+        matches!(rejected, Err(GameplayReject::EmptySlot)),
+        "pick-block must fail closed when the placement item is absent, got {rejected:?}"
+    );
+}
+
+#[test]
+fn production_host_move_stack_merges_swaps_and_rejects_empty() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let log = parse_item("terrenia:item/oak-log");
+    let dirt = parse_item("terrenia:item/dirt");
+    clear_inventory(&spine);
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(0),
+            Some(ItemStackV1::plain(log.clone(), 40).expect("log stack")),
+        )
+        .expect("from stack is seeded");
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(1),
+            Some(ItemStackV1::plain(log.clone(), 40).expect("merge destination")),
+        )
+        .expect("to stack is seeded");
+    let merged = spine
+        .move_stack(SlotIndex::new(0), SlotIndex::new(1))
+        .expect("matching stacks merge");
+    assert!(matches!(
+        merged,
+        CommandOutcomeV1::StackMoved { from, to }
+            if from == SlotIndex::new(0) && to == SlotIndex::new(1)
+    ));
+    let after_merge = spine.inventory_view().expect("inventory after merge");
+    assert_eq!(
+        after_merge
+            .slots()
+            .get(1)
+            .and_then(Option::as_ref)
+            .map(ItemStackV1::quantity),
+        Some(64)
+    );
+    assert_eq!(
+        after_merge
+            .slots()
+            .first()
+            .and_then(Option::as_ref)
+            .map(ItemStackV1::quantity),
+        Some(16)
+    );
+
+    clear_inventory(&spine);
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(0),
+            Some(ItemStackV1::plain(log.clone(), 8).expect("swap from")),
+        )
+        .expect("from stack is seeded");
+    spine
+        .seed_inventory_slot(
+            SlotIndex::new(1),
+            Some(ItemStackV1::plain(dirt, 4).expect("swap to")),
+        )
+        .expect("to stack is seeded");
+    spine
+        .move_stack(SlotIndex::new(0), SlotIndex::new(1))
+        .expect("different items swap");
+    let after_swap = spine.inventory_view().expect("inventory after swap");
+    assert_eq!(
+        after_swap
+            .slots()
+            .first()
+            .and_then(Option::as_ref)
+            .map(ItemStackV1::item)
+            .map(ItemId::as_str),
+        Some("terrenia:item/dirt")
+    );
+    assert_eq!(
+        after_swap
+            .slots()
+            .get(1)
+            .and_then(Option::as_ref)
+            .map(ItemStackV1::item)
+            .map(ItemId::as_str),
+        Some("terrenia:item/oak-log")
+    );
+
+    let empty = spine.move_stack(SlotIndex::new(2), SlotIndex::new(0));
+    assert!(
+        matches!(empty, Err(GameplayReject::EmptySlot)),
+        "empty from must fail closed, got {empty:?}"
+    );
+}
+
+#[test]
+fn production_host_lists_craftable_hand_and_workbench_recipes() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let log_block = parse_block("terrenia:block/oak-log");
+    let log_item = parse_item("terrenia:item/oak-log");
+    let plank_item = parse_item("terrenia:item/oak-planks");
+    let stick_item = parse_item("terrenia:item/stick");
+    let planks = parse_recipe("terrenia:recipe/oak-planks@1");
+    let pickaxe = parse_recipe("terrenia:recipe/wooden-pickaxe@1");
+    let crafting = WorkstationId::parse("latticeaxiom:workstation/crafting@1")
+        .expect("crafting workstation is a platform contract");
+
+    let log_pos = spine
+        .first_resident_block(&log_block)
+        .expect("generated wood exists in the streamed set");
+    gather_until_inventory_has(&spine, log_pos, &log_item, 1);
+    let hand = spine.craftable_recipe_ids(None);
+    assert!(
+        hand.contains(&planks),
+        "oak-planks must be craftable by hand after wood is gathered, got {hand:?}"
+    );
+    assert!(
+        !hand.contains(&pickaxe),
+        "workbench recipes must not appear in the hand list, got {hand:?}"
+    );
+    assert!(
+        spine.craftable_recipe_ids(Some(&crafting)).is_empty(),
+        "workbench recipes must stay hidden until the workstation is bound"
+    );
+
+    spine
+        .craft_recipe(&planks, None)
+        .expect("oak planks craft from gathered wood");
+    top_up_item(&spine, &plank_item, 3);
+    top_up_item(&spine, &stick_item, 2);
+    assert!(
+        spine.craftable_recipe_ids(Some(&crafting)).is_empty(),
+        "matching workbench inputs still require a bound workstation"
+    );
+    spine
+        .bind_workstation(crafting.clone(), ContainerId::new(2))
+        .expect("workbench path binds a crafting workstation");
+    let bench = spine.craftable_recipe_ids(Some(&crafting));
+    assert!(
+        bench.contains(&pickaxe),
+        "wooden-pickaxe must appear after bind once inputs are owned, got {bench:?}"
+    );
+}
+
+#[test]
 fn production_host_places_torch_and_opens_chest_container_schema() {
     let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
     let torch_block = parse_block("terrenia:block/torch");
@@ -3187,6 +3554,17 @@ fn mine_until_broken(
         }
     }
     panic!("mining {position:?} did not complete")
+}
+
+fn clear_inventory(spine: &ProductionSpine) {
+    for slot in 0..INVENTORY_SLOTS {
+        spine
+            .seed_inventory_slot(
+                SlotIndex::new(u16::try_from(slot).expect("slot fits")),
+                None,
+            )
+            .expect("inventory slot clears");
+    }
 }
 
 fn pickup_remaining(spine: &ProductionSpine) {
