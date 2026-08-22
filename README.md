@@ -1,10 +1,15 @@
 # Lattice Axiom
 
-Lattice Axiom（晶格公理）是建在 [Bevy](https://github.com/bevyengine/bevy) 上、以 Nickel／SemVer package graph 與靜態／動態雙 realization 為核心的體素世界遊戲。這個倉庫採取「文件先行」：保存產品架構、決策、技術基線與第一個可玩 demo 的驗收路線。
+Lattice Axiom（晶格公理）是建立在 [Bevy](https://github.com/bevyengine/bevy) 上、以
+Nickel／SemVer package graph 与静态／动态双 realization 为核心的体素世界游戏。
 
-目前尚無程式實作。專案預設完整採用 Bevy 與成熟 upstream；只有真實可玩原型證明其無法滿足不可妥協需求時，才允許最小自研替代。Nickel 套件內核、統一 package graph、版本化 semantic registration 與原生 ABI 是產品組合語義，從第一個垂直切片即開始；它們不取代 Bevy 的 ECS、排程器或 renderer。已接受的 ADR 是實作基線，其餘 proposed／exploration 文件會依原型與量測修正。
+本仓库是产品规范与决策仓；Rust、Nickel packages 和可运行 vertical slice 位于
+[`rezics/lattice-axiom-demo`](https://github.com/rezics/lattice-axiom-demo)。规范成熟度与实现
+进度严格分离：accepted ADR 是兼容性边界，只有绑定实现 commit、production path 和可复现
+checks 的 evidence 才能把 requirement 标为已实现。
 
-從[文件入口](docs/README.md)開始閱讀。
+从[文档入口](docs/README.md)开始，或直接浏览 [logical packages](docs/packages/README.md)、
+[platform contracts](docs/platform/README.md) 与 [delivery](docs/delivery/README.md)。
 
 ## License
 

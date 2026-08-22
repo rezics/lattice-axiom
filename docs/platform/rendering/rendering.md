@@ -9,10 +9,10 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0014-adopt-bevy-upstream-first.md
-  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
-  - ../decisions/0017-versioned-native-module-abi.md
-  - ../decisions/0029-freeze-render-capability-and-provider-contract.md
+  - ../../decisions/0014-adopt-bevy-upstream-first.md
+  - ../../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../../decisions/0017-versioned-native-module-abi.md
+  - ../../decisions/0029-freeze-render-capability-and-provider-contract.md
 ---
 
 # Bevy 渲染能力、Pass 與 Provider 組合

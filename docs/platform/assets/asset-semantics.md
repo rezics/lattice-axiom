@@ -9,10 +9,10 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0014-adopt-bevy-upstream-first.md
-  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
-  - ../decisions/0020-semantic-registration-and-content-selection.md
-  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../../decisions/0014-adopt-bevy-upstream-first.md
+  - ../../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../../decisions/0020-semantic-registration-and-content-selection.md
+  - ../../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # Bevy 資產管線與模型語義

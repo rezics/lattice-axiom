@@ -9,9 +9,9 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-19
 decision:
-  - ../decisions/0002-hybrid-cave-generation-composition.md
-  - ../decisions/0004-territorial-delegation-for-spatial-generation.md
-  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../../decisions/0002-hybrid-cave-generation-composition.md
+  - ../../decisions/0004-territorial-delegation-for-spatial-generation.md
+  - ../../decisions/0015-bevy-native-y-up-world-coordinates.md
 ---
 
 # 可組合洞穴生成架構

@@ -9,13 +9,13 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0001-territory-first-biome-driven-world-generation.md
-  - ../decisions/0002-hybrid-cave-generation-composition.md
-  - ../decisions/0003-no-global-version-switch.md
-  - ../decisions/0004-territorial-delegation-for-spatial-generation.md
-  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
-  - ../decisions/0020-semantic-registration-and-content-selection.md
-  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../../decisions/0001-territory-first-biome-driven-world-generation.md
+  - ../../decisions/0002-hybrid-cave-generation-composition.md
+  - ../../decisions/0003-no-global-version-switch.md
+  - ../../decisions/0004-territorial-delegation-for-spatial-generation.md
+  - ../../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../../decisions/0020-semantic-registration-and-content-selection.md
+  - ../../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # 可組合世界生成架構

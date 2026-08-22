@@ -2,23 +2,24 @@
 title: First-playable player surfaces (inspect, pick-block, inventory, craft)
 document_id: package.latticeaxiom.front-end.player-surfaces
 document_status: active
-document_type: package-spec
+document_type: plan
 owners:
-  - "@latticeaxiom/front-end"
+  - "platform:gameplay"
+  - "@latticeaxiom/inspect"
 tracks_implementation: true
 requirements: []
 updated: 2026-08-22
 decision:
-  - ../decisions/0014-adopt-bevy-upstream-first.md
-  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
-  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../../decisions/0014-adopt-bevy-upstream-first.md
+  - ../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
 ---
 
 # First-playable player surfaces
 
-This page is the implementation contract for the remaining player loop after
+This page is the integration plan for the remaining player loop after
 HUD overlay, hotbar digits, mining, and view-distance exist. It does not
-rewrite [roadmap-first-demo.md](../../../delivery/roadmaps/first-demo.md) D0–D10, does not
+rewrite [roadmap-first-demo.md](../roadmaps/first-demo.md) D0–D10, does not
 authorize a same-App start-then-Playing transition, and does not copy
 Minecraft or Jade source.
 
@@ -42,7 +43,7 @@ Minecraft registry names.
 
 ### Inspect is a typed overlay, not a HUD grab-bag
 
-[`diagnostics-inspection-and-debug-visualization.md`](../../../platform/observability/diagnostics-inspection-and-debug-visualization.md)
+[`diagnostics-inspection-and-debug-visualization.md`](../../platform/observability/diagnostics-inspection-and-debug-visualization.md)
 already splits three surfaces. Player inspect is **Target Inspect**:
 
 - Overlay is **always on** from the live DDA hit (`refresh_target`). Occupancy

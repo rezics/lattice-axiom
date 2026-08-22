@@ -1,5 +1,5 @@
 ---
-title: Package 可注入的設定與配置架構
+title: Package settings registry 与 transaction
 document_id: package.latticeaxiom.settings.settings-and-configuration
 document_status: proposed
 document_type: package-spec
@@ -7,213 +7,96 @@ owners:
   - "@latticeaxiom/settings"
 tracks_implementation: true
 requirements: []
-updated: 2026-08-20
+updated: 2026-08-22
 decision:
-  - ../decisions/0010-nickel-driven-package-system.md
-  - ../decisions/0018-package-kernel-from-first-vertical-slice.md
-  - ../decisions/0019-separate-package-and-registration-identities.md
-  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../../../decisions/0010-nickel-driven-package-system.md
+  - ../../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
 ---
 
-# Package 可注入的設定與配置架構
+# Package settings registry 与 transaction
 
-## 結論
+## 结论
 
-所有 package 都可以通过 `RegistrationManifest.settings` 注册结构化 `SettingSpec`，由
-`@latticeaxiom/settings` 提供 exactly-one settings registry／transaction capability。
-client 使用 `@latticeaxiom/settings-ui` 渲染同一 registry，headless／tool 使用 CLI 或 API；
-package 不需要、也不能各自注入任意 widget tree 才能被配置。
+所有 package 通过 `RegistrationManifest.settings` 贡献 typed `SettingSpec`；locked graph 必须
+选择恰好一个 `@latticeaxiom/settings` provider，编译 deterministic catalog，并在任何 client、
+headless 或 tool surface 之前解析 effective values。
 
-Bevy 0.19 app settings负责 machine-local持久化与 ECS resource integration；Lattice Axiom
-只增加产品必需的 stable ID、package ownership、scope、authority、apply impact、migration、
-world transaction 与跨 realization contract。它不是第二套通用配置语言。
+本 package 拥有 registry、scope、authority、validation、transaction、event 与 persistence
+contract。UI 由 [`@latticeaxiom/settings-ui`](../settings-ui/README.md) 拥有。
 
-## 為何必須是基礎 Package
+## Composition parameter 与 runtime setting
 
-如果设置页只是一个可选生态模组，会形成三种失败：作者退回手写 JSON／TOML、不同 loader／
-profile入口不一致、headless无法验证同一配置。首阶段明确提供：
+二者不得混用：
 
-| Logical package | 责任 | Profile |
-| --- | --- | --- |
-| `@latticeaxiom/settings` | registry、schema validation、value resolution、transaction、events | client／headless／test |
-| `@latticeaxiom/settings-ui` | 搜索、分类、preview、draft／apply／reset 与无障碍 UI | client／tool |
+- composition parameter 影响 package resolution、features、provider、realization、schema 或
+  lock fingerprint，只能通过 profile draft → resolve → candidate lock 改变；
+- runtime setting 在已锁定 graph 内改变获授权行为，通过 settings transaction 生效。
 
-`@latticeaxiom/settings` 提供
-`latticeaxiom:capability/settings-registry@1 exactly-one`。默认 profile template必须显式请求它，
-不能由 host hidden plugin list偷偷安装；需要设置的 package依赖 capability range，而不是依赖
-某个 UI realization。若 provider缺失，closure在code activation前失败。
-
-## 兩種不可混合的輸入
-
-### Composition parameter
-
-会改变 dependency、feature、realization、provider、registration或schema的值属于
-`CompositionSpec`／profile parameter。它在 resolve／lock 前生效；UI只能编辑一个 draft
-profile，然后明确执行 recompose、显示graph diff并生成新 lock。
-
-### Runtime setting
-
-只改变已锁定closure内行为或表现的值使用 `SettingSpec`。runtime setting不能新增package、
-替换provider或改变registration image；若 package把graph选择伪装成runtime bool，manifest
-validation必须拒绝。
-
-这条边界避免「世界用什么package」同时存在于lock与一个可变配置文件中。
+任何会改变 authoritative package closure 的值都不是“实时设置”。UI 可以在同一 Settings
+信息架构中链接 package/profile editor，但必须展示 lock diff 与 world compatibility impact。
 
 ## `SettingSpec`
 
-首版字段：
+每项至少包含稳定 setting ID、owner package、versioned value type、default、constraints、scope、
+authority、category/order、apply impact、visibility、sensitivity 和 optional fallback。稳定 DTO 不
+直接序列化 Bevy/Leafwing/widget 类型。
 
-| 字段 | 语义 |
-| --- | --- |
-| `id` | 完整stable ID，例如`terrenia:setting/gameplay/instant-break` |
-| `declared_by` | owner `PackageName`，由kernel写入provenance |
-| `schema_version` | value schema／migration owner版本，不等同package SemVer |
-| `value_type` | bool、integer、number、string、enum、color、key binding等有限类型 |
-| `default`／`constraints` | typed默认值、min／max／step／allowed values／长度 |
-| `allowed_scopes`／`default_scope` | 哪些store可保存该值 |
-| `authority` | local user、world owner／server、admin-only或fixed-by-profile |
-| `apply_impact` | runtime setting只允许preview、immediate、world-reactivate、process-restart |
-| `category`／`order` | stable语义分类与owner内顺序；不使用load order |
-| `label_key`／`description_key` | localization key；缺失时回退ID和诊断 |
-| `visibility`／`enabled_when` | 只允许已验证声明式predicate；隐藏不等于无权限 |
-| `sensitivity` | ordinary／private-path；secret不进入普通setting store |
-| `deprecated`／`replacement` | 可诊断迁移，不把旧键悄悄复用 |
+首版 value vocabulary 包含 boolean、bounded integer/float、enum、string、path、color、
+`InputBindingV1`、read-only value 与 command。unknown required type major 在 activation 前失败；
+optional unsupported row 产生明确诊断。
 
-概念示例：
+registry 对整个 closure 验证 ID/owner、default、constraints、scope/authority 与 category，按稳定
+规则生成密集 runtime index；热路径不查找字符串。
 
-```text
-id             = latticeaxiom:setting/debug/chunk-visualizer-radius
-value_type     = integer(min=1, max=32, step=1)
-allowed_scopes = [user, session]
-authority      = local-user
-apply_impact   = immediate-presentation
-default        = 8
-```
+## Scope 与 authority
 
-这是typed manifest schema示例，不冻结最终Nickel／Rust语法。
+scope 至少区分 device、user、world、player-world 与 session。effective value 以明确 precedence
+计算，但 higher-precedence layer 只有在 authority 允许时才可覆盖。
 
-`graph-recompose`属于settings surface同时显示的**composition draft impact**，不是runtime
-`SettingSpec.apply_impact`的合法值。它来自profile parameter／`CompositionSpec` descriptor；Apply
-只会产生draft、graph diff与新lock，再经world preflight建立新EngineInstance。若共用schema内部以
-同一个impact enum编码两类UI row，manifest validation仍必须拒绝runtime `SettingSpec`携带
-`graph-recompose`，避免已锁定registration被设置值暗改。
+- client-local presentation/input 可由 device/user/session 修改；
+- world-authoritative gameplay 值必须进入 world snapshot/hash，并由 writer/server 授权；
+- locked composition values 不允许通过 runtime setting 覆盖；
+- headless 与 client 对 authoritative effective snapshot 必须一致。
 
-## Scope 與 Authority
+## Apply transaction
 
-scope回答「值保存在哪里」，authority回答「谁能改变它」，两者不得合并成`client/server`字串：
+draft 先完成 typed validation、authority check 与 cross-setting constraint，再形成 deterministic
+change set。每项声明 live-reversible、live-irreversible、restart-client、restart-world 或
+new-world-only impact。
 
-| Scope | 保存位置 | 适合 | 不允许 |
-| --- | --- | --- | --- |
-| `device` | Bevy app settings／平台资料目录 | GPU、window、audio device | 影响权威world |
-| `user` | 用户设置store | accessibility、HUD、input、debug layout | server gameplay rule |
-| `profile` | Nickel profile／lock intent | graph／provider／startup参数 | 作为runtime `SettingSpec`层、gameplay中暗改 |
-| `world` | world metadata／RocksDB transaction | seed后规则、难度、authoritative开关 | client单方面override |
-| `player-world` | world或server的per-player schema | 个人但跟world相关的规则 | 泄漏给其他world |
-| `session` | memory only | 临时diagnostic／preview | 被UI误称已保存 |
+transaction 要么完整成功，要么恢复所有已 preview 的 reversible values；失败返回稳定、可定位
+到 setting ID 的诊断。UI、CLI 与 API 消费同一 transaction path，不分别实现 apply 语义。
 
-`profile`列在这里是因为设置页可以同时编辑composition draft；它不属于runtime
-`SettingSpec.allowed_scopes`。提交profile change必须重新resolve、显示graph diff并生成新lock。
+## Persistence、migration 与 orphan
 
-同一个runtime spec可以允许多个scope，但每个effective value必须显示provenance。值优先级不是任意
-last-writer-wins；registry按spec定义的允许链解析，例如`default → user → session`。world或
-server-authoritative值不会被user层盖掉。
+device/user values 使用版本化 canonical 文件和原子 replace；world/player-world values 进入
+authoritative storage transaction。读回时先验证 schema/version，migration 产生 receipt；未知或
+暂时缺失 package 的 user values 保留为 orphan，不能静默删除。
 
-## 註冊與啟動
+secret/credential setting 不进入普通 export、diagnostic report 或 log。world setting 保存前仍须
+通过 sealed writer authority。
 
-1. package kernel在不执行module code时收集全部`SettingSpec`。
-2. 验证namespace grant、owner、ID唯一性、type、scope／authority与condition dependency。
-3. 编译`SettingsCatalog`进`RegistrationImage`，产生canonical fingerprint。
-4. settings provider载入device／user store；world scope只读取header作preflight，不写world。
-5. module activation后把typed effective values映射为static Bevy resource或dynamic ABI view。
-6. world通过兼容预检后，world／player-world值才随world activation transaction载入。
+## 首个 consumers
 
-unknown setting不会在runtime以字符串随意查询。static path使用generated typed handle；dynamic
-path使用numeric `SettingKey`与ABI-POD value，numeric mapping只在当前registration image有效。
+- `@latticeaxiom/settings-ui` 的 UI scale 与 Controls rows；
+- `@latticeaxiom/dev-tools` 的 session/user visualizer settings；
+- view distance 与性能 preset 的 host-clamped setting；
+- `@terrenia/gameplay` 的明确 world-authoritative rules。
 
-## Draft、Preview 與 Apply Transaction
+这些例子不表示对应实现已完成；状态由 requirements/evidence 计算。
 
-设置UI不直接边输入边覆盖权威状态：
+## 验收方向
 
-```text
-effective values
-      ↓ edit
-typed draft ── validate all dependencies ── impact summary
-      ├─ reversible presentation preview ── confirm / timed rollback
-      └─ apply transaction ── persist ── SettingChanged batch
-```
+- 同一 locked registration image 在 client/headless 产生相同 authoritative catalog/fingerprint；
+- duplicate provider、invalid default、unknown required type 与 unauthorized override fail closed；
+- preview/apply/rollback 在故障注入下无半应用；
+- user values 重启保留，world values 只经 writer transaction；
+- package 移除/恢复不会丢失 orphan values；
+- UI、CLI、headless API 不产生平行设置语义。
 
-- video mode、UI scale等可能让画面不可用的设置必须有倒计时rollback；
-- slider可实时preview，但写盘使用debounce；退出时再做sync-if-changed；
-- world-authoritative设置在fixed-tick barrier以一个batch验证／提交／revision；
-- runtime `world-reactivate`／`process-restart`与独立composition draft的`graph-recompose`都必须在
-  Apply前列出影响；后者不进入`SettingChanged` batch；
-- package callback只能在transaction提交后收到typed batch，不能在validation中产生副作用；
-- 多个字段的cross-setting constraint失败时，整个draft不部分写入。
+## 相关文件
 
-## UI 組合
-
-`@latticeaxiom/settings-ui`从catalog机械生成可用界面：
-
-- 顶层按玩家任务分类：Accessibility、Controls、Audio、Video、Interface、Gameplay、World、
-  Packages、Developer；package只是secondary filter；
-- 搜索匹配label、description、package与stable ID；
-- 每项显示当前值、default、来源scope、authority、apply impact与validation error；
-- 支持`Reset item`、`Reset category`、`Reset package`与`Reset all in scope`，并先显示diff；
-- world／server值在无权限时保持可见但read-only，并解释由谁控制；
-- advanced／technical项默认折叠，不用“隐藏”掩盖重要风险；
-- mouse、keyboard、controller navigation与screen narration使用相同语义树。
-
-首阶段不允许custom arbitrary editor。有限value type无法表达真实设置时，先扩充versioned
-`SettingSpec` widget vocabulary；只有出现不可机械表达的真实consumer，才设计受限
-`settings-editor` capability，且必须保留generic fallback。
-
-## 保存、迁移與 Orphan
-
-- device／user store采用Bevy app settings的crash-resistant write作为上游基础；
-- world setting与其他world metadata使用RocksDB atomic batch和checkpoint策略；
-- store保存stable setting ID、schema version、typed value、scope与last-writer provenance；
-- owner package负责同一ID的schema migration；更换ID需显式replacement mapping；
-- package缺失时值成为orphan，默认保留并在管理页显示，不激活、不丢弃；
-- re-install compatible owner后才可恢复；purge orphan是独立可审查动作；
-- secret／credential／token不进入普通settings或world backup，未来使用平台secret store contract。
-
-## Multiplayer 與安全
-
-- join／load preflight比较server／world authoritative setting fingerprint与本地closure；
-- client UI可以显示server值，但只有授权command能提交修改；
-- server发送spec允许公开的label／value，不发送private path或secret；
-- presentation-only user设置无需进入authoritative state hash；
-- authoritative world setting必须进入replay／save fixture与state hash；
-- trusted native package仍可绕过进程边界，settings validation不是sandbox。
-
-## 首個 Demo Consumer
-
-至少同时实现：
-
-1. `@latticeaxiom/settings-ui`自己的user-scope HUD scale；
-2. `@latticeaxiom/dev-tools`的session／user-scope chunk visualizer radius；
-3. `@terrenia/gameplay`的world-authoritative break cooldown；
-4. 一个profile parameter修改realization preference，并明确走recompose而非runtime setting。
-
-这四项覆盖不同owner、scope、authority与apply impact，能证明「所有package可注入」不是只有
-core settings的硬编码表。
-
-## 驗收
-
-- 随机化package discovery／manifest顺序不改变catalog、UI order或effective values。
-- 两个package注册同一SettingId在code load前失败并列出namespace／owner。
-- client／headless验证相同authoritative specs；headless可经CLI读取／修改授权值。
-- static／portable dynamic读取相同typed value并产生相同authoritative结果。
-- graph-affecting值只能生成draft profile + lock diff，不能热改registration。
-- invalid cross-setting draft不部分apply；crash during user／world save恢复旧或完整新batch。
-- missing package留下可见orphan；reinstall compatible owner可恢复；purge需明确动作。
-- world／server setting没有权限时UI可解释，不以disabled-unlabeled control表示。
-- 关键设置可由keyboard／controller完整操作，screen narration读出label、value、scope与impact。
-
-## 相關文件
-
-- [套件內核](../../../platform/package-kernel/package-management.md)
-- [模組與註冊組合](../../../platform/composition/module-composition.md)
-- [套件驅動的 Bevy runtime](../../../platform/runtime/game-engine-runtime.md)
-- [World 目錄、開始頁與安全生命週期](../front-end/world-lifecycle-and-start-ui.md)
-- [外部調查](../../../research/debug-settings-and-world-ux-lessons.md)
+- [Settings UI surface](../settings-ui/settings-surface.md)
+- [Input binding proposal](../../../platform/input/input-binding-and-contexts.md)
+- [World persistence](../../../platform/world-storage/world-persistence.md)
+- [Versioning and compatibility](../../../platform/compatibility/versioning-and-compatibility.md)

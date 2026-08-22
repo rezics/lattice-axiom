@@ -9,7 +9,7 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../../../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # Terrenia 方块内容规划

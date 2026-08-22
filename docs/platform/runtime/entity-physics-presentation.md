@@ -9,7 +9,7 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-19
 decision:
-  - ../decisions/0014-adopt-bevy-upstream-first.md
+  - ../../decisions/0014-adopt-bevy-upstream-first.md
 ---
 
 # Bevy 實體、物理與表現層

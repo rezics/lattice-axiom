@@ -1,125 +1,92 @@
 ---
-title: Lattice Axiom 文件
+title: Lattice Axiom 文档
 document_id: docs.index
 document_status: active
 document_type: index
 tracks_implementation: false
-updated: 2026-08-20
+updated: 2026-08-22
 ---
 
-# Lattice Axiom 文件
+# Lattice Axiom 文档
 
-Lattice Axiom 是建立在 Bevy 上、以 Nickel／SemVer package graph 与静态／动态双 realization 为核心的体素世界游戏。文档保存产品架构、accepted decisions、外部研究与第一个可玩 vertical slice 的验收。
+Lattice Axiom 的规范按 logical package 组织；不属于某个 package 的 kernel、host、wire、
+storage 与 rendering 契约按 platform system 组织。ADR 保存“为什么这样决定”，delivery
+保存“先做什么”，两者都不替代实现证据。
 
-## 当前基线
+## 先看哪里
 
-> 默认使用完整上游能力；只有当一个真实可玩的原型证明现有方案无法满足不可妥协的产品需求时，才允许自研替代。
+1. [项目愿景](project/project-vision.md)与 [package-first 开发策略](project/development-strategy.md)
+2. [Logical package 索引](packages/README.md)
+3. [Platform contract 索引](platform/README.md)
+4. [Delivery 路线与计划](delivery/README.md)
+5. [文档组织与追踪契约](meta/documentation-organization.md)
+6. [需求与实现证据规则](meta/traceability.md)
 
-- Bevy `0.19.x` 是 architecture baseline，首个实现精确锁定 `0.19.1`；manifests／`Cargo.lock`记录version、source与checksum，manifests／profile／build receipt记录feature selection。
+## 当前产品边界
+
+- Bevy `0.19.x` 是 architecture baseline，首个实现精确锁定 `0.19.1`。
 - runtime 使用一个正常 Bevy App；不重做 ECS、scheduler、renderer、assets、input 或 tasks。
-- 非可执行`latticeaxiom.toml`／`latticeaxiom-package.toml`先授权root、source与graph inputs；Rust package kernel把local path／catalog source快照进CAS并解析exact graph。
-- Nickel `package.ncl`／`game.ncl`随后从locked package-local alias／source table产生typed `CompositionSpec`，不得在求值期发现或取得package。
-- `latticeaxiom.lock`封印source／manifest／toolchain／`EngineBuildId`／registration／artifact receipts，原子写入并reopen验证后才可由launcher消费。
-- 每次游戏由 `LockedGameGraph`／`RegistrationImage` 建立；第一方 package 与 Terrenia 维度不能绕过。
-- Logical package 使用 root `name` 或 scoped `@scope/name`；stable registration 使用独立的 `<namespace>:<kind>/<path>`，两者不得互相推导。
-- 精确 StableId、SemanticTag／Map、StateProperty、Affordance、Predicate、Role 与 fallback bundle 分层；Nickel 组合语义，Rust 验证并编译进 `RegistrationImage`。
-- `terrenia` 只是当前选择的普通维度聚合模组；平台 `latticeaxiom:*` contract 与 host 不以 Terrenia 作为固定基础设施。
-- Terrenia 内容按 6 → 18 → 40 → 72 个方块定义分阶段交付；第一完整内容基线另含 water／lava 两个独立流体定义，状态与几何变体不复制 StableId。
-- 同一业务 package可生成 `NativeStatic`与`PortableNative`：static直接Bevy／LTO，dynamic经versioned C ABI／batch ECS。
-- dynamic另有诚实的`EngineCoupledNative`等级，以精确`EngineBuildId`换取低层host能力。
-- Bevy是core package内部tool；若外部contract真的因升级破坏，相关package／capability／schema仍按自己的版本规则升级。
-- 所有package可经`RegistrationManifest.settings`注入typed settings；基础settings package统一处理scope、authority、apply与GUI／CLI surface。
-- 玩家inspect与dev diagnostics共用结构化observability资料，但使用不同surface；package不能各自占用HUD角落。
-- 世界坐标采用Bevy原生右手Y-up。
-- RocksDB保存完整已物化world snapshots；process-local Bevy／ABI handles不进入存档。
-- package-driven client shell在world写入前完成catalog、frozen-lock preflight、checkpoint／migration与恢复选择。
-- 首阶段包含本地package check／pack／publish／acquire、immutable CAS、package-aware Nickel import、产品lock与ABI `0.x`；延后的是public registry、marketplace、general resolver规模、hot unload与WASM ecosystem。
+- package manifest、Nickel composition、lock、registration image 与 runtime image 构成产品启动
+  链，第一方 package 和 Terrenia 都不得绕过。
+- logical `PackageName` 与 stable registration identity 相互独立，目录路径不承担任何一个身份。
+- client shell graph 与 locked world graph 使用同一 resolver／lock／registration pipeline，但拥有
+  不同 world-write 权限。
+- RocksDB 保存完整已物化 world snapshots；process-local Bevy／ABI handles 不进入存档。
+- static 与 portable native realization 共用同一 locked graph 和 authoritative contract。
 
-## 建议阅读顺序
+这些是 accepted baseline，不表示对应实现已经完成。实际完成情况只看生成的
+`delivery/status.md`；没有 evidence 的页面默认为 `not-started` 或 `in-progress`。
 
-1. [专案愿景与设计支柱](project/project-vision.md)
-2. [Package-first／Bevy-first 开发策略](project/development-strategy.md)
-3. [技术栈与边界](project/technology-stack.md)
-4. [套件内核](platform/package-kernel/package-management.md)
-5. [模组、注册清单与双实现](platform/composition/module-composition.md)
-6. [语义注册、内容判定与候选选择](platform/registration/semantic-registration.md)
-7. [Demo workspace 与 Terrenia package 组织](meta/repository-and-package-layout.md)
-8. [原生模组 ABI](platform/native-abi/native-module-abi.md)
-9. [套件驱动的 Bevy runtime](platform/runtime/game-engine-runtime.md)
-10. [Package 设置与配置](packages/latticeaxiom/settings/settings-and-configuration.md)
-11. [诊断、检查与除错可视化](platform/observability/diagnostics-inspection-and-debug-visualization.md)
-12. [渲染 capability／pass／provider](platform/rendering/rendering.md)
-13. [版本与相容性](platform/compatibility/versioning-and-compatibility.md)
-14. [World 目录、开始页与安全生命周期](packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)
-15. [世界持久化](platform/world-storage/world-persistence.md)
-16. [Terrenia 方块内容规划](packages/terrenia/blocks/catalog.md)
-17. [第一个可玩 demo 路线图](delivery/roadmaps/first-demo.md)
-18. [执行期整合路线](delivery/roadmaps/game-engine.md)
-19. [可组合世界生成](platform/world-generation/world-generation.md)
-20. [可组合洞穴生成](platform/world-generation/cave-generation.md)
-21. [实体、物理与表现](platform/runtime/entity-physics-presentation.md)
-22. [资产语义](platform/assets/asset-semantics.md)
-23. [问题决议索引](delivery/open-questions.md)
+## Package 导航
 
-## 文件地图
+### Lattice Axiom 平台 packages
 
-| 分类 | 用途 | 入口 |
-| --- | --- | --- |
-| 基础 | 愿景、策略、技术与共同词汇 | [愿景](project/project-vision.md)、[策略](project/development-strategy.md)、[技术栈](project/technology-stack.md)、[词汇表](project/glossary.md) |
-| Package／ABI | 游戏如何组合、锁定、生成与加载 | [套件内核](platform/package-kernel/package-management.md)、[模组组合](platform/composition/module-composition.md)、[语义注册](platform/registration/semantic-registration.md)、[设置](packages/latticeaxiom/settings/settings-and-configuration.md)、[demo组织](meta/repository-and-package-layout.md)、[原生 ABI](platform/native-abi/native-module-abi.md)、[版本相容](platform/compatibility/versioning-and-compatibility.md) |
-| Bevy runtime／前端 | package closure如何成为一个Bevy App并提供一致surface | [执行期](platform/runtime/game-engine-runtime.md)、[诊断／检查／可视化](platform/observability/diagnostics-inspection-and-debug-visualization.md)、[渲染](platform/rendering/rendering.md)、[开始页／world lifecycle](packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)、[实体／物理／表现](platform/runtime/entity-physics-presentation.md)、[资产](platform/assets/asset-semantics.md) |
-| 世界 | Lattice Axiom的权威资料与生成差异层 | [持久化](platform/world-storage/world-persistence.md)、[world lifecycle](packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)、[世界生成](platform/world-generation/world-generation.md)、[洞穴](platform/world-generation/cave-generation.md)、[物理创作](platform/content/physical-authoring.md) |
-| 研究 | 外部证据、候选与失败模式，不自动成为承诺 | [信息／设置／存档UX](research/debug-settings-and-world-ux-lessons.md)、[引擎采用](research/open-source-game-engine-adoption.md)、[原生外挂机制／渲染模组](research/native-plugin-and-render-mod-lessons.md)、[Bevy生态](research/renderer-physics-landscape.md)、[Godot工具对照](research/godot-toolchain-comparison.md)、[Minecraft注册语义](research/minecraft-registration-semantics.md)、[Minecraft世界生成](research/minecraft-world-generation-lessons.md)、[现代地形／洞穴](research/modern-terrain-and-cave-generation.md) |
-| 规划 | 内容范围、依赖顺序、可玩验收、问题决议 | [Terrenia方块](packages/terrenia/blocks/catalog.md)、[第一个demo](delivery/roadmaps/first-demo.md)、[runtime路线](delivery/roadmaps/game-engine.md)、[问题决议](delivery/open-questions.md) |
-| 元文件 | 文档维护规则 | [组织方式](meta/documentation-organization.md) |
+- [front-end](packages/latticeaxiom/front-end/README.md)：client shell 与 world launch routing
+- [world-library](packages/latticeaxiom/world-library/README.md)：world catalog、preflight 与恢复操作
+- [settings](packages/latticeaxiom/settings/README.md)：typed registry、scope 与 apply transaction
+- [settings-ui](packages/latticeaxiom/settings-ui/README.md)：client/tool settings surface
+- [observability](packages/latticeaxiom/observability/README.md)：diagnostic registry 与 report
+- [inspect](packages/latticeaxiom/inspect/README.md)：玩家 target inspect surface
+- [dev-tools](packages/latticeaxiom/dev-tools/README.md)：开发者诊断 workbench
+- [input](packages/latticeaxiom/input/README.md)：提议中的动作注册与绑定 package
+- [progress](packages/latticeaxiom/progress/README.md)：提议后期使用的进度图 package
+- [relations](packages/latticeaxiom/relations/README.md)：提议后期使用的关系图 package
 
-## Accepted Decisions
+### Terrenia packages
 
-| ADR | 决策 |
-| --- | --- |
-| [0001](decisions/0001-territory-first-biome-driven-world-generation.md) | 领地优先／群系驱动世界生成 |
-| [0002](decisions/0002-hybrid-cave-generation-composition.md) | 混合洞穴组合 |
-| [0003](decisions/0003-no-global-version-switch.md) | 不以全域版本代理相容性 |
-| [0004](decisions/0004-territorial-delegation-for-spatial-generation.md) | 领地委派空间生成能力 |
-| [0008](decisions/0008-static-and-dynamic-realizations-share-one-graph.md) | 静态／动态 realization共用同一package graph |
-| [0009](decisions/0009-rocksdb-authoritative-world-snapshots.md) | RocksDB权威完整snapshot |
-| [0010](decisions/0010-nickel-driven-package-system.md) | Nickel驱动package system，Rust执行 |
-| [0014](decisions/0014-adopt-bevy-upstream-first.md) | 采用Bevy／上游优先原则 |
-| [0015](decisions/0015-bevy-native-y-up-world-coordinates.md) | Bevy原生右手Y-up |
-| [0017](decisions/0017-versioned-native-module-abi.md) | Versioned C ABI／capability tables |
-| [0018](decisions/0018-package-kernel-from-first-vertical-slice.md) | 首个vertical slice交付package kernel与双实现 |
-| [0019](decisions/0019-separate-package-and-registration-identities.md) | Root／scoped package 与 stable registration identity 分离；Terrenia 为第一维度 |
-| [0020](decisions/0020-semantic-registration-and-content-selection.md) | 精确注册身份、内容语义、判定、候选选择与 fallback 分层 |
-| [0021](decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md) | 冻结首个package／Nickel contract与resolution policy |
-| [0022](decisions/0022-freeze-controlled-nickel-evaluation-metering-and-worker-protocol.md) | 受控Nickel evaluation、metering与worker protocol |
-| [0023](decisions/0023-freeze-sdk-registration-and-semantic-compilation.md) | SDK、registration与semantic compilation contract |
-| [0024](decisions/0024-freeze-portable-native-abi-0x.md) | Portable native ABI 0.x wire与lifecycle contract |
-| [0025](decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md) | Client shell、settings、observability与player contract |
-| [0026](decisions/0026-freeze-first-demo-performance-budgets.md) | First-demo performance profile与budget |
-| [0027](decisions/0027-freeze-authoritative-world-and-persistence-contract.md) | Authoritative world、persistence与recovery contract |
-| [0028](decisions/0028-freeze-worldgen-content-and-asset-contract.md) | Worldgen、content与asset contract |
-| [0029](decisions/0029-freeze-render-capability-and-provider-contract.md) | Render capability、resource graph与provider contract |
-| [0030](decisions/0030-freeze-governance-distribution-and-security-triggers.md) | Governance、distribution与security trigger |
-| [0031](decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md) | Bevy upgrade、dependency与supply-chain policy |
-| [0032](decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md) | Local package acquisition、Nickel package import与产品lock |
+- [terrenia](packages/terrenia/main/README.md)：当前维度聚合 root
+- [blocks](packages/terrenia/blocks/README.md)：方块、流体、物品与相邻内容定义
+- [worldgen](packages/terrenia/worldgen/README.md)：Terrenia terrain provider
+- [gameplay](packages/terrenia/gameplay/README.md)：Terrenia 掉落、配方与内容规则
+- [tools](packages/terrenia/tools/README.md)：基础工具内容
+- [presentation](packages/terrenia/presentation/README.md)：client-only 表现资料
+- [metallurgy](packages/terrenia/metallurgy/README.md)、[science](packages/terrenia/science/README.md)、
+  [thaumaturgy](packages/terrenia/thaumaturgy/README.md)、[journey](packages/terrenia/journey/README.md)：
+  已声明但不在当前产品 lock 的后续 skeletons
 
-### Superseded Decisions
+## Platform 导航
 
-| ADR | 已被取代的范围 |
-| --- | --- |
-| [0012](decisions/0012-latticeaxiom-naming-convention.md) | logical package 与 stable ID 共用 `latticeaxiom` 前缀；Rust crate／ABI 命名由 0019 保留 |
+- [Package kernel](platform/package-kernel/package-management.md)
+- [Composition](platform/composition/module-composition.md)
+- [Semantic registration](platform/registration/semantic-registration.md)
+- [Runtime host](platform/runtime/game-engine-runtime.md)
+- [Native ABI](platform/native-abi/native-module-abi.md)
+- [World storage](platform/world-storage/world-persistence.md)
+- [World generation](platform/world-generation/world-generation.md)
+- [Rendering](platform/rendering/rendering.md)
+- [Input runtime](platform/input/input-binding-and-contexts.md)
+- [Client UI](platform/client-ui/ui-system.md)
+- [Launcher supervisor](platform/launcher/supervisor-loop.md)
 
-编号空缺表示错误方案已从当前文档树删除；需要追溯时使用 Git 历史，不在有效文档中并列互斥架构。
+## 决策、研究与交付
 
-## 文档成熟度
+- [Accepted Decisions](decisions/README.md)
+- [研究](research/README.md)
+- [Delivery](delivery/README.md)
+- [问题决议索引](delivery/open-questions.md)
 
-- `exploration`：调查或仍未由prototype验证。
-- `proposed`：可实施架构，具体layout／API仍需证据。
-- `accepted`：已明确采用的decision／strategy。
-- `active`：当前有效index／roadmap／reference。
+## 状态读法
 
-实现仓已进入active roadmap；实际交付状态由demo仓的自动证据与两条roadmap追踪。accepted ADR 是兼容性边界；architecture中的具体API名称仍可由第一个vertical slice修正，但不能绕过accepted package／ABI／Bevy原则。
-
-## 当前刻意没有
-
-仓库尚未建立tutorial、操作指南或API reference。等第一个可重复build、SDK与ABI inspector存在后，再按真实player／package author／maintainer任务增加。
+`document_status` 表示规范成熟度；`implemented` 只可能由 requirements/evidence 聚合产生。
+manifest、crate、DTO、fixture 或 roadmap checkbox 的存在都不等于实现。详细门槛见
+[需求与实现证据](meta/traceability.md)。

@@ -9,11 +9,11 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0010-nickel-driven-package-system.md
-  - ../decisions/0019-separate-package-and-registration-identities.md
-  - ../decisions/0020-semantic-registration-and-content-selection.md
-  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
-  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../../decisions/0010-nickel-driven-package-system.md
+  - ../../decisions/0019-separate-package-and-registration-identities.md
+  - ../../decisions/0020-semantic-registration-and-content-selection.md
+  - ../../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # 語義註冊、內容判定與候選選擇

@@ -9,13 +9,13 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0003-no-global-version-switch.md
-  - ../decisions/0009-rocksdb-authoritative-world-snapshots.md
-  - ../decisions/0010-nickel-driven-package-system.md
-  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
-  - ../decisions/0020-semantic-registration-and-content-selection.md
-  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
-  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../../decisions/0003-no-global-version-switch.md
+  - ../../decisions/0009-rocksdb-authoritative-world-snapshots.md
+  - ../../decisions/0010-nickel-driven-package-system.md
+  - ../../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../../decisions/0020-semantic-registration-and-content-selection.md
+  - ../../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # Bevy 世界持久化與 RocksDB World Store

@@ -7,11 +7,11 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-22
 decision:
-  - ../decisions/0018-package-kernel-from-first-vertical-slice.md
-  - ../decisions/0019-separate-package-and-registration-identities.md
-  - ../decisions/0020-semantic-registration-and-content-selection.md
-  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
-  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../../decisions/0019-separate-package-and-registration-identities.md
+  - ../../decisions/0020-semantic-registration-and-content-selection.md
+  - ../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../../decisions/0028-freeze-worldgen-content-and-asset-contract.md
 ---
 
 # Terrenia 科学／魔法双轨与关系包规划
@@ -43,7 +43,7 @@ decision:
 3. 挖掘／破坏／放置走既有权威 DDA 与 gameplay catalog，不是 client 预测改世界。
 4. Pause 打开设定：至少 **渲染距离**（chunk 半径）可调，且被 `PlayableWorldHardLimitsV1` 夹紧。
 5. 地形：P6 baseline 已适用——palette 色块 atlas、nearest clamp；缺 PNG 走 fallback，engine 不读 `placeholders/`。P3 每 tick apply 上限 16 jobs／16 MiB 已适用；无 2 ms 墙钟；startup／edit／collider safety 仍 drain until idle。
-6. 准星 inspect 是 **Target Inspect** 叠加层：名称、icon、可挖掘性、包命名空间、`BlockId`。对照 Jade 只吸收 fragment 组合，不搬 provider／NBT／mixin。F 仍是 inspect receipt，不是唯一显示途径。细节见 [first-playable-player-surfaces.md](../../packages/latticeaxiom/front-end/player-surfaces.md)。
+6. 准星 inspect 是 **Target Inspect** 叠加层：名称、icon、可挖掘性、包命名空间、`BlockId`。对照 Jade 只吸收 fragment 组合，不搬 provider／NBT／mixin。F 仍是 inspect receipt，不是唯一显示途径。细节见 [first-playable-player-surfaces.md](first-playable-player-surfaces.md)。
 7. 中键 **pick-block**：选中／换入能放置准星方块的已有堆叠；背包没有则失败，不创造物品。
 8. 背包内手搓（`workstation == None` 的 catalog 配方列表）与合成台（瞄准绑定 `latticeaxiom:workstation/crafting@1` 的方块，或 C）走已有 `craft_recipe`。
 

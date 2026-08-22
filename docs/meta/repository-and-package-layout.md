@@ -1,364 +1,97 @@
 ---
-title: Demo workspace 與 Terrenia 維度套件組織
+title: Implementation workspace 与 package layout
 document_id: meta.repository-and-package-layout
-document_status: proposed
+document_status: active
 document_type: meta
 tracks_implementation: false
-updated: 2026-08-20
+updated: 2026-08-22
 decision:
   - ../decisions/0010-nickel-driven-package-system.md
   - ../decisions/0019-separate-package-and-registration-identities.md
   - ../decisions/0020-semantic-registration-and-content-selection.md
 ---
 
-# Demo workspace 與 Terrenia 維度套件組織
+# Implementation workspace 与 package layout
 
-## 結論
+## 事实基线
 
-`lattice-axiom-demo` 继续是 Lattice Axiom 的 Rust 实作 workspace。Rust crates、
-logical packages、profiles、Nickel contracts、测试 fixtures 与 generated artifacts
-分开组织，任何目录名称都不承担 package 或 stable registration 身份。
-
-生命周期阶段与兼容版本同样不构成目录身份。测试资料以被验证的职责组织，例如
-`fixtures/composition`，不得建立 `fixtures/r0`、`fixtures/r1` 等随阶段永久累积的路径。
-真正进入 wire／hash／policy contract 的 `R0`、`r0@1` 等版本坐标不受此目录规则影响。
-
-Terrenia 是第一个维度的 package closure。`terrenia` 是聚合 package，
-不是产品 package；它让 Lattice Axiom profile 得到一个完整可运行的维度，并在
-package graph 中选择方块、世界生成、玩法与表现实现。
-
-开始页、settings、observability、target inspect与dev tools同样是第一方logical packages。
-它们组成独立`ClientShellGraph`，不能退回host hand-written UI／plugin list；Terrenia不依赖、
-也不拥有这些平台surface。
-
-## `packages/` 目錄契約
-
-`packages/` 只保存会进入 package manager 所锁定 closure、由其解析／锁定／构建／
-注册的 shipped logical package sources。开始页使用 `ClientShellGraph` 角色，选定世界后使用
-`LockedGameGraph`；两者共用同一 resolver、lock schema 与 registration pipeline。这里不保存
-package manager 自己的实现。
-
-| 位置 | 角色 | 是否为 logical package |
-| --- | --- | --- |
-| `crates/latticeaxiom-packages` | resolver／lock／build／registration kernel 的 Rust 实现 | 否 |
-| `nickel/latticeaxiom` | package／profile authoring contracts | 否 |
-| `fixtures/composition/*` | composition／authoring／worker conformance corpus；目录不携带阶段版本 | 否 |
-| `packages/**/package.ncl` 所在目录 | 随 demo 交付并由 package manager 管理的非重叠 package source root | 是 |
-| `fixtures/packages/*` | 只用于 conformance／failure tests 的 package source | 是，但不随正常 profile 交付 |
-| `profiles/*` | 选择 root packages、source universe 与 policy | 否 |
-| `run/packages/*` | package manager 在本机扫描／安装的开发期外部 package source／artifact | 对应 logical package，但不是仓库内建 source |
-| `target/latticeaxiom/*` | 从 lock 生成的可删除 artifacts | 否 |
-
-对每个 logical package，package manager 负责发现 manifest、验证 `PackageName`、解析
-dependency／capability、锁定 version／source、选择 realization、取得或构建 artifact、
-验证 `RegistrationManifest`，再把 stable registrations 合并进 closure-wide
-`RegistrationImage`。它管理的是 package 及其声明，不会把 resolver、renderer backend
-或任意 Cargo crate 自动注册为 package。
-
-因此不建立抽象的 backend logical package。host／renderer／storage backend 目前是
-Cargo／Rust 实作边界；只有未来出现真实可替换、可独立版本化、由 profile 选择的
-package contract 与至少两个 provider 时，才把具体能力提升为 logical package。
-
-Rust crate名称也不得暗示第二套renderer。若render registration model需要独立crate，使用
-`latticeaxiom-render-contracts`保存纯资料schema／validation；真正的window、render world、wgpu
-device与submission仍由Bevy host adapter拥有。headless profile省略Bevy render／window plugins，
-不建立`render-headless`或null renderer crate。只有ADR 0014的upstream偏离gate通过后，才能提议
-新的backend实现边界与名称。
-
-`packages/terrenia` 只是 package family container，本身不是 source root。每个
-`package.ncl` 所在目录才是独立 source root；source roots 不得互相包含，避免递归
-content hash、资产扫描与发布边界把兄弟 package 意外算进主包。
-
-## 建議目錄
+本页对照 implementation commit `653556ba7df5c5993f300bd40c1393c8221abafe`。实现仓当前有
+25 个 Cargo workspace crates 与 19 个 logical package source roots；它们不是一一对应关系。
 
 ```text
 lattice-axiom-demo/
-├── Cargo.toml
-├── Cargo.lock
-├── latticeaxiom.lock
-├── latticeaxiom-shell.lock
-├── crates/
-│   ├── latticeaxiom-core/
-│   ├── latticeaxiom-compose/
-│   ├── latticeaxiom-packages/
-│   ├── latticeaxiom-modules/
-│   ├── latticeaxiom-render-contracts/
-│   ├── latticeaxiom-storage/
-│   ├── latticeaxiom-storage-rocksdb/
-│   ├── latticeaxiom-voxel-mesh/
-│   ├── latticeaxiom-cli/
-│   └── latticeaxiom-demo/
-├── nickel/
-│   └── latticeaxiom/
-│       ├── common.ncl
-│       ├── package.ncl
-│       ├── game.ncl
-│       └── registration.ncl
-├── packages/
+├── Cargo.toml                 Rust workspace；crate graph
+├── latticeaxiom.toml          非可执行 root/source/profile inputs
+├── latticeaxiom.lock          当前生成的 client-world product lock
+├── crates/                    Rust implementation components
+├── nickel/latticeaxiom/       versioned authoring contracts
+├── packages/                  shipped/declared logical package sources
 │   ├── latticeaxiom/
-│   │   ├── settings/
-│   │   │   └── package.ncl
-│   │   ├── settings-ui/
-│   │   │   └── package.ncl
-│   │   ├── observability/
-│   │   │   └── package.ncl
-│   │   ├── inspect/
-│   │   │   └── package.ncl
-│   │   ├── dev-tools/
-│   │   │   └── package.ncl
-│   │   ├── front-end/
-│   │   │   └── package.ncl
-│   │   └── world-library/
-│   │       └── package.ncl
 │   └── terrenia/
-│       ├── main/
-│       │   └── package.ncl
-│       ├── blocks/
-│       │   ├── package.ncl
-│       │   └── assets/
-│       ├── worldgen/
-│       │   └── package.ncl
-│       ├── gameplay/
-│       │   └── package.ncl
-│       └── presentation/
-│           ├── package.ncl
-│           └── assets/
-├── profiles/
-│   ├── shell.ncl
-│   ├── dev.ncl
-│   ├── headless.ncl
-│   └── test.ncl
-├── fixtures/
-│   ├── composition/
-│   │   ├── controlled/
-│   │   ├── negative/
-│   │   ├── positive/
-│   │   ├── support/
-│   │   └── typed-negative/
-│   ├── packages/
-│   │   ├── marker/
-│   │   └── dual-gameplay/
-│   └── locks/
-├── tools/
-│   └── xtask/
-├── run/
-│   ├── worlds/
-│   └── packages/
-└── target/
-    └── latticeaxiom/
-        └── <graph-sha256>/
-            ├── build-plan.json
-            ├── registration-image.json
-            ├── static-glue/
-            ├── shared-schemas/
-            └── abi-bindings/
+├── profiles/                  roots、source universe、policy 与 projection
+├── catalog/                   local package release/CAS inputs
+├── fixtures/                  conformance/fault corpus
+├── run/                       untracked runtime state
+└── target/                    generated/compiled artifacts
 ```
 
-目录表达维护关系，不表达身份。例如：
+## 身份规则
 
-| Source path | `PackageName` | 可注册的 stable ID 示例 |
-| --- | --- | --- |
-| `packages/terrenia/main` | `terrenia` | `terrenia:dimension/terrenia` |
-| `packages/terrenia/blocks` | `@terrenia/blocks` | `terrenia:block/stone` |
-| `packages/latticeaxiom/settings` | `@latticeaxiom/settings` | `latticeaxiom:capability/settings-registry@1` |
-| `packages/latticeaxiom/dev-tools` | `@latticeaxiom/dev-tools` | `latticeaxiom:debug-visualizer/chunks@1` |
-| `fixtures/packages/marker` | `@example/marker` | `example:component/marked` |
+- Cargo crate identity 来自 workspace `Cargo.toml`；
+- logical `PackageName` 来自每个 source root 的 `latticeaxiom-package.toml`；
+- stable registration identity 来自 manifest/registration rows；
+- source directory 只表达维护关系，移动目录不自动改另外三个身份。
 
-这张表是显式 manifest 关系，不是转换规则。把 source directory 移走不改变另外两列；
-改 package name 也不会自动改 stable ID。
+`packages/latticeaxiom` 和 `packages/terrenia` 是 family containers，不是 source roots。每个包含
+manifest 的子目录是独立、非重叠 source root，避免递归 hash 或资产扫描把兄弟 package 算入。
 
-## 平台基礎 Package Closure
+## 当前 logical packages
 
-```text
-ClientShellGraph
-├── @latticeaxiom/front-end
-├── @latticeaxiom/world-library
-├── @latticeaxiom/settings
-├── @latticeaxiom/settings-ui
-├── @latticeaxiom/observability
-├── @latticeaxiom/inspect
-└── @latticeaxiom/dev-tools       optional outside dev profile
+当前 lock 包含 settings、settings-ui、observability、inspect、dev-tools、Terrenia root、blocks、
+worldgen、gameplay、tools 与 presentation。front-end、world-library、progress、relations、journey、
+metallurgy、science 与 thaumaturgy 已有 source manifest，但不在这份 lock。完整导航见
+[logical package index](../packages/README.md)。
 
-Headless foundation
-├── @latticeaxiom/settings
-└── @latticeaxiom/observability
-```
+“在 lock”只证明 source/manifest/graph/realization 被选择，不证明 capability consumer 或完整产品
+journey 已实现。
 
-这些package使用`latticeaxiom:*` registrations的authority来自受信任platform source policy，
-不是因为package scope名称相同就自动取得。settings／observability registry在client与headless
-都有exactly-one provider；settings UI、inspect与dev tools是presentation packages，不进入
-authoritative world hash。
+## Crate 组织
 
-任一gameplay／content package都可在自己的namespace声明`SettingSpec`、diagnostic item或
-inspect fragment，并依赖对应versioned capability。平台package负责统一surface，不因此取得
-其他package setting／content ID的ownership。
+现有 crates 按职责覆盖：
 
-## Terrenia package closure
+- composition/package/registration：core、compose、packages、registration；
+- SDK/ABI/runtime contracts：sdk、sdk-macros、abi、runtime-contracts、dual-fixture；
+- world/storage/generation：storage、world-wire、world-db、world-catalog、worldgen、territory；
+- gameplay/player/content：gameplay、player、content；
+- voxel/render：voxel-mesh、voxel-runtime、voxel-playground、render-contracts；
+- product host：launcher、start-ui、engine。
 
-```text
-terrenia
-├── @terrenia/blocks
-├── @terrenia/worldgen
-├── @terrenia/gameplay
-└── @terrenia/presentation   optional in headless
-```
+这些是 implementation boundaries，不应为每个 crate 建立平行产品规范树。package README 显式
+列出 many-to-many implementation mapping；内部 API reference 应与代码同仓、从真实 public API
+生成。
 
-### `terrenia`
+## Profile 与 source universe
 
-这是维度聚合 package，负责：
+profile 的 root requests 与可用 local sources 必须分开。source universe 中存在某个 package 不
+表示它是 root 或进入 closure。shell graph 和 per-world graph 各自产生精确 lock，使用同一
+resolver、registration compiler 与 artifact verification。
 
-- 注册 `terrenia:dimension/terrenia`；
-- 接受 source policy／registry 对 `terrenia` namespace 的 authority，并声明对子 package 的精确 grants；
-- 声明维度依赖的 package／capability closure；
-- 绑定 primary terrain／worldgen／spawn policy 等维度级语义角色；
-- 提供 client 与 headless 都能验证的权威部分边界。
+当前 `client-world` lock 仍是开发投影；accepted product model 还要求独立 shell lock 与
+replacement-process launch loop。状态由 evidence 看板而不是本页 prose 追踪。
 
-它不复制所有方块、system 或 asset 注册。各子 package 产生自己的
-`RegistrationManifest`，package kernel 再合并 closure-wide `RegistrationImage`。
+## Generated 与 runtime state
 
-`terrenia` **不是** Lattice Axiom 的固定基础设施、平台默认或第二个 core。它只是在当前
-profile 中被请求的普通模组：
+CAS、build plan、registration image、static glue、shared schema、ABI bindings 和 compiled artifacts
+按输入 hash 生成，可删除后从 lock/source 重建，不进入 `packages/`，也不取得 `PackageName`。
 
-- host 与 `latticeaxiom.lib` 不引用任何 `terrenia:*` concrete content；
-- `latticeaxiom:*` 平台 semantic contracts 不由 Terrenia 定义或偷偷绑定到 Terrenia ID；
-- Terrenia 可以像第三方 package 一样贡献自己的对象到公开 extensible Tag／Map；
-- 另一个 root dimension package 必须能在不修改 host 的情况下替换整个 closure。
+world、checkpoint、crash marker、external acquired package 与本地 lease 属于 `run/` 或用户资料
+目录，不得提交为规范或 fixture。fixture 必须按被验证职责命名，不能用 R0/R1 milestone 创建
+永久目录身份。
 
-概念上的主 package：
+## 新增边界的规则
 
-```nickel
-{
-  package = { name = "terrenia", version = "0.1.0" },
-
-  dependencies = [
-    { name = "@terrenia/blocks", version = "0.1.0" },
-    { name = "@terrenia/worldgen", version = "0.1.0" },
-    { name = "@terrenia/gameplay", version = "0.1.0" },
-    { name = "@terrenia/presentation", version = "0.1.0", optional = true },
-  ],
-
-  namespaces = {
-    authority = "terrenia",
-    grants = [
-      { package = "@terrenia/blocks", patterns = ["terrenia:block/**", "terrenia:fluid/**", "terrenia:item/**", "terrenia:block-tag/**", "terrenia:block-role/**"] },
-      { package = "@terrenia/worldgen", patterns = ["terrenia:worldgen/**", "terrenia:biome/**"] },
-      { package = "@terrenia/gameplay", patterns = ["terrenia:system/**", "terrenia:schema/**"] },
-      { package = "@terrenia/presentation", patterns = ["terrenia:asset/**", "terrenia:render-feature/**"] },
-    ],
-  },
-
-  registrations = {
-    dimensions = [{ id = "terrenia:dimension/terrenia" }],
-  },
-
-  semantic.bindings = {
-    "terrenia:block-role/empty@1" = "terrenia:block/air",
-    "terrenia:block-role/terrain-surface@1" = "terrenia:block/grass",
-    "terrenia:block-role/terrain-subsurface@1" = "terrenia:block/dirt",
-    "terrenia:block-role/terrain-stone@1" = "terrenia:block/stone",
-  },
-}
-```
-
-这只是字段责任示例；semantic constructors／contracts由`latticeaxiom.lib`提供，Role定义
-与binding按[语义注册架构](../platform/registration/semantic-registration.md)验证。`authority` 必须由 profile 的受信任 local source policy 或未来
-registry 证明，不能靠 package 自我声明取得。最终 Nickel contract 仍由 schema 与
-conformance fixture 冻结。
-
-这里的 air／grass／dirt／stone 是维度级 fallback Role 的最小示例，不是 Terrenia 的
-完整 shipped content 表。内容按 6 → 18 → 40 → 72 个 block definitions 分阶段交付，
-清单与不展开状态变体的规则见[Terrenia 方块内容规划](../packages/terrenia/blocks/catalog.md)。
-
-### 子 package
-
-- `@terrenia/blocks`：方块、流体、物品与相邻内容资料；直接声明完整
-  `terrenia:block/*` ID，并可贡献自身对象到`latticeaxiom:*`公开Tag／Map。它不能因为属于
-  Terrenia而取得平台semantic contract的定义权。
-- `@terrenia/worldgen`：Terrenia generator、biome／terrain provider 与
-  generation revision。
-- `@terrenia/gameplay`：只属于该维度的玩法规则。跨维度通用规则应进入
-  独立 package，不因目前只有一个维度就放进 Terrenia。
-- `@terrenia/presentation`：材质、音效、天空与其他可选表现；headless
-  profile 可以省略，但不能因此改变权威注册与 world hash。
-
-初期不建立 `@terrenia/registry`。namespace grants 与维度级 bindings 数量很少，
-由聚合 package 持有更直接；只有它们出现独立版本、消费者或发布生命周期时才拆包。
-
-## Profile 與 source universe
-
-Profile 的「根 package」与「可用 source」必须分开。shell closure与所选world closure各有
-精确lock：
-
-```text
-root requests                         local source universe
-@latticeaxiom/front-end          ←→  packages/latticeaxiom/*
-terrenia                         ←→  packages/terrenia/main
-                                    packages/terrenia/blocks
-                                    packages/terrenia/worldgen
-                                    packages/terrenia/gameplay
-                                    packages/terrenia/presentation
-```
-
-Lattice Axiom 的shell profile请求`@latticeaxiom/front-end`，开发game profile请求
-`terrenia`；resolver分别根据dependencies建立shell与维度closure。host、renderer 与 storage backend 由 Cargo workspace／host profile
-提供，不伪装成 package roots。profile 列出本地 source 只是在尚无 registry 时提供候选，
-不表示每个 source 都是 root dependency。
-
-`shell.ncl`只读取world header／package metadata；`dev.ncl` 与 `headless.ncl` 可选择不同 presentation realization，但必须解析出相同
-Terrenia 维度身份、权威 package、schema 与 semantic bindings。
-
-## Generated artifacts
-
-`RegistrationImage`、static glue、shared-schema crates 与 ABI bindings 都以精确
-`graph-sha256` 为输入，写入 `target/latticeaxiom/<graph-sha256>/`。它们：
-
-- 不放进 `packages/`；
-- 不取得 `PackageName`；
-- 不参与产生自己的 source graph；
-- 记录 producer、schema version、target、toolchain 与 input hash；
-- 可以删除并由 lock／source 重建。
-
-生成的 Rust crate 仍可命名为 `latticeaxiom-static-glue`、
-`latticeaxiom-terrenia-shared-schema` 等，因为它们属于 Rust build 层，而不是
-logical package 层。
-
-## 從目前 demo 遷移
-
-1. 保留现有 `crates/latticeaxiom-*` 结构。
-2. 将 `PackageId` 改为 `PackageName`，验证 root `name` 或 scoped `@scope/name`；lock schema major 升级。
-3. 新增独立 `StableId`／`NamespaceGrant` 型别；注册声明改为完整 ID。
-4. 删除 package kernel 中 `<package>:<local-id>` 的 key 拼接，lock 同时保存
-   stable ID 与 `declared_by`。
-5. 用 `packages/terrenia/main` 与并列子目录取代 `packages/official`，并建立 `terrenia` 聚合 package
-   与 `@terrenia/*` 子包。
-6. 把 Rust host 对 stone／dirt／grass 的硬编码查找改为读取当前 profile 已解析的
-   `ContentRole` bindings；Terrenia 只是该 profile 的普通 provider。
-7. 将 profile 的 root requests 与 source universe 分开，再生成新的
-   `latticeaxiom.lock`、registration golden 与存档迁移 fixture。
-8. 建立`latticeaxiom-shell.lock`与平台基础packages；删除host内硬编码settings／overlay／world
-   menu plugin list，让client shell和headless registry都经capability graph选择。
-
-## 驗收
-
-- 只请求 `terrenia` 即可解析完整 playable dimension closure。
-- 删除 `terrenia` 后，host 不会暗中建立默认维度。
-- 测试 profile 可用另一个 dimension package 取代 Terrenia而无需修改 Rust host。
-- package、source path 与 stable ID 任意一项改变时，另外两项不会被隐式改写。
-- client／headless 对 Terrenia 的权威 registration hash 与 bindings 相同。
-- 以另一个root dimension package替换`terrenia`时，host与平台semantic schema无需修改。
-- generated directory 全部删除后可从 lock 与 source 确定性重建。
-- shell与world使用独立lock；shell无法读取chunk或绕过world preflight，world缺失时仍可进入settings／recovery UI。
-- 任一fixture package可注入setting／metric／inspect fragment，而不修改platform UI source。
-- fixture物理目录按被验证的职责命名；contract／corpus major升级不新建`fixtures/rN`层级。
-
-## 相關文件
-
-- [决策 0019：Package 与 registration identity 分离](../decisions/0019-separate-package-and-registration-identities.md)
-- [套件内核](../platform/package-kernel/package-management.md)
-- [模组与注册组合](../platform/composition/module-composition.md)
-- [语义注册、内容判定与选择](../platform/registration/semantic-registration.md)
-- [Terrenia 方块内容规划](../packages/terrenia/blocks/catalog.md)
-- [第一个 demo 路线图](../delivery/roadmaps/first-demo.md)
-- [Package 设置与配置](../packages/latticeaxiom/settings/settings-and-configuration.md)
-- [诊断、检查与除错可视化](../platform/observability/diagnostics-inspection-and-debug-visualization.md)
-- [World目录、开始页与安全生命周期](../packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)
+- 新 logical package：先有 package contract/ADR、独立 source root 与 namespace/capability 责任；
+- 新 crate：必须对应真实 implementation cohesion，不因“未来也许可替换”创造 backend；
+- 新 generated crate：记录 producer/input/toolchain receipt，不成为 logical package；
+- 新 docs package 目录：可以先于 manifest 表达 proposal，但必须明确 `proposed`、无 manifest、
+  无 implementation evidence。

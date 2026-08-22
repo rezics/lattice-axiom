@@ -7,25 +7,25 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
-  - ../decisions/0010-nickel-driven-package-system.md
-  - ../decisions/0014-adopt-bevy-upstream-first.md
-  - ../decisions/0017-versioned-native-module-abi.md
-  - ../decisions/0018-package-kernel-from-first-vertical-slice.md
-  - ../decisions/0019-separate-package-and-registration-identities.md
-  - ../decisions/0020-semantic-registration-and-content-selection.md
-  - ../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md
-  - ../decisions/0022-freeze-controlled-nickel-evaluation-metering-and-worker-protocol.md
-  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
-  - ../decisions/0024-freeze-portable-native-abi-0x.md
-  - ../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
-  - ../decisions/0026-freeze-first-demo-performance-budgets.md
-  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
-  - ../decisions/0028-freeze-worldgen-content-and-asset-contract.md
-  - ../decisions/0029-freeze-render-capability-and-provider-contract.md
-  - ../decisions/0030-freeze-governance-distribution-and-security-triggers.md
-  - ../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
-  - ../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
+  - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
+  - ../../decisions/0010-nickel-driven-package-system.md
+  - ../../decisions/0014-adopt-bevy-upstream-first.md
+  - ../../decisions/0017-versioned-native-module-abi.md
+  - ../../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../../decisions/0019-separate-package-and-registration-identities.md
+  - ../../decisions/0020-semantic-registration-and-content-selection.md
+  - ../../decisions/0021-freeze-r0-r1-package-nickel-contract-and-resolution-policy.md
+  - ../../decisions/0022-freeze-controlled-nickel-evaluation-metering-and-worker-protocol.md
+  - ../../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../../decisions/0024-freeze-portable-native-abi-0x.md
+  - ../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../../decisions/0026-freeze-first-demo-performance-budgets.md
+  - ../../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../../decisions/0028-freeze-worldgen-content-and-asset-contract.md
+  - ../../decisions/0029-freeze-render-capability-and-provider-contract.md
+  - ../../decisions/0030-freeze-governance-distribution-and-security-triggers.md
+  - ../../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
+  - ../../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
 ---
 
 # 套件驅動的 Bevy 執行期整合路線

@@ -7,11 +7,11 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-22
 decision:
-  - ../decisions/0014-adopt-bevy-upstream-first.md
-  - ../decisions/0015-bevy-native-y-up-world-coordinates.md
-  - ../decisions/0026-freeze-first-demo-performance-budgets.md
-  - ../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
-  - ../decisions/0029-freeze-render-capability-and-provider-contract.md
+  - ../../decisions/0014-adopt-bevy-upstream-first.md
+  - ../../decisions/0015-bevy-native-y-up-world-coordinates.md
+  - ../../decisions/0026-freeze-first-demo-performance-budgets.md
+  - ../../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../../decisions/0029-freeze-render-capability-and-provider-contract.md
 ---
 
 # 體素地形渲染與區塊流送修復計畫

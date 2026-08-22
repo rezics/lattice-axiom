@@ -9,14 +9,14 @@ tracks_implementation: true
 requirements: []
 updated: 2026-08-20
 decision:
-  - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
-  - ../decisions/0010-nickel-driven-package-system.md
-  - ../decisions/0017-versioned-native-module-abi.md
-  - ../decisions/0018-package-kernel-from-first-vertical-slice.md
-  - ../decisions/0019-separate-package-and-registration-identities.md
-  - ../decisions/0020-semantic-registration-and-content-selection.md
-  - ../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
-  - ../decisions/0024-freeze-portable-native-abi-0x.md
+  - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
+  - ../../decisions/0010-nickel-driven-package-system.md
+  - ../../decisions/0017-versioned-native-module-abi.md
+  - ../../decisions/0018-package-kernel-from-first-vertical-slice.md
+  - ../../decisions/0019-separate-package-and-registration-identities.md
+  - ../../decisions/0020-semantic-registration-and-content-selection.md
+  - ../../decisions/0023-freeze-sdk-registration-and-semantic-compilation.md
+  - ../../decisions/0024-freeze-portable-native-abi-0x.md
 ---
 
 # 套件模組、註冊清單與靜動雙實現
