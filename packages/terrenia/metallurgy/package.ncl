@@ -46,6 +46,7 @@ package.make {
   },
   domains = ["authoritative"],
   namespace_requests = [
+    "terrenia:capability/metallurgy",
     "terrenia:material/copper",
     "terrenia:material/annealed-copper",
     "terrenia:material/bronze",

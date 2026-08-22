@@ -4,19 +4,29 @@
   "materials": [
     {
       "id": "terrenia:material/copper",
-      "tags": ["terrenia:tag/conductive", "terrenia:tag/thermal-medium", "terrenia:tag/thaumic-conductor"]
+      "tags": [
+        "terrenia:tag/conductive",
+        "terrenia:tag/thermal"
+      ]
     },
     {
       "id": "terrenia:material/annealed-copper",
-      "tags": ["terrenia:tag/conductive", "terrenia:tag/cable-grade"]
+      "tags": [
+        "terrenia:tag/conductive"
+      ]
     },
     {
       "id": "terrenia:material/bronze",
-      "tags": ["terrenia:tag/structural-alloy", "terrenia:tag/thaumic-vessel"]
+      "tags": [
+        "terrenia:tag/thermal"
+      ]
     },
     {
       "id": "terrenia:material/brass",
-      "tags": ["terrenia:tag/thermal-medium", "terrenia:tag/machine-casing"]
+      "tags": [
+        "terrenia:tag/conductive",
+        "terrenia:tag/thermal"
+      ]
     }
   ]
 }

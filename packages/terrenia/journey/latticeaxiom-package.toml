@@ -8,14 +8,14 @@ trust = "data-only"
 package = "@latticeaxiom/progress"
 version = "~0.1.0"
 optional = false
-domains = ["authoritative"]
+domains = ["authoritative", "client"]
 
 [requires."latticeaxiom:capability/progress-graph@1"]
 capability = "latticeaxiom:capability/progress-graph@1"
 version = "^1.0.0"
 provider = "@latticeaxiom/progress"
 cardinality = "exactly-one"
-domains = ["authoritative"]
+domains = ["authoritative", "client"]
 
 [realizations.data]
 id = "data"

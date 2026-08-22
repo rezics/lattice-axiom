@@ -25,10 +25,17 @@ package.make {
     documentation = null,
     license = "MIT OR Apache-2.0",
   },
+  features = {
+    metallurgy = {
+      default = true,
+      domains = ["authoritative"],
+    },
+  },
   dependencies = {
     "@terrenia/metallurgy" = {
       version = "~0.1.0",
-      optional = false,
+      optional = true,
+      when_features = ["metallurgy"],
       domains = ["authoritative"],
     },
   },
@@ -37,7 +44,7 @@ package.make {
       capability = metallurgy_capability,
       version = "^1.0.0",
       provider = "@terrenia/metallurgy",
-      cardinality = "exactly-one",
+      cardinality = "zero-or-more",
       domains = ["authoritative"],
     },
   },
@@ -62,7 +69,10 @@ package.make {
     },
   },
   domains = ["authoritative"],
-  namespace_requests = ["terrenia:capability/science-processing"],
+  namespace_requests = [
+    "terrenia:capability/science-processing",
+    "terrenia:state/voltage",
+  ],
   trust = "data-only",
   registration = fragment,
   provenance = package_provenance,

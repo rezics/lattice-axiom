@@ -46,6 +46,7 @@ package.make {
   },
   domains = ["authoritative"],
   namespace_requests = [
+    "latticeaxiom:capability/relations-graph",
     "latticeaxiom:relation/pet",
     "latticeaxiom:relation/friend",
     "latticeaxiom:relation/subject",

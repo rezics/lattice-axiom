@@ -20,7 +20,7 @@ package.make {
     "@latticeaxiom/progress" = {
       version = "~0.1.0",
       optional = false,
-      domains = ["authoritative"],
+      domains = ["authoritative", "client"],
     },
   },
   requires = {
@@ -29,7 +29,7 @@ package.make {
       version = "^1.0.0",
       provider = "@latticeaxiom/progress",
       cardinality = "exactly-one",
-      domains = ["authoritative"],
+      domains = ["authoritative", "client"],
     },
   },
   realizations = {
@@ -45,7 +45,7 @@ package.make {
     },
   },
   domains = ["authoritative", "client"],
-  namespace_requests = ["terrenia:quest"],
+  namespace_requests = ["terrenia:chapter/**", "terrenia:quest/**"],
   trust = "data-only",
   registration = fragment,
   provenance = package_provenance,

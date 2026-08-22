@@ -45,7 +45,10 @@ package.make {
     },
   },
   domains = ["authoritative"],
-  namespace_requests = ["terrenia:state/mana"],
+  namespace_requests = [
+    "terrenia:capability/thaumaturgy",
+    "terrenia:state/mana",
+  ],
   trust = "data-only",
   registration = fragment,
   provenance = package_provenance,
