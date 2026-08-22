@@ -1,0 +1,30 @@
+version: "3"
+
+vars:
+  BOOTSTRAP: profiles/dev.toml
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  lock:
+    desc: Write latticeaxiom.lock and catalog/cas from a composition bootstrap
+    cmds:
+      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap {{.BOOTSTRAP}}
+
+  verify:
+    desc: Freeze-verify latticeaxiom.lock against catalog/cas
+    cmds:
+      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- verify --offline --frozen
+
+  dev:
+    desc: Relock the client-world bootstrap, then launch the interactive client
+    deps:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/dev.toml
+    cmds:
+      - cargo run -p latticeaxiom-engine

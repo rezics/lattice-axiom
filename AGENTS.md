@@ -12,6 +12,13 @@ repository. Accepted ADRs there override older implementation assumptions.
   `latticeaxiom-<component>`, and workspace folders match crate names.
 - Do not create grab-bag modules such as `utils`, `helpers`, or `misc`.
 
+## Local development
+
+- Daily interactive launch is `task dev` from the workspace root. It relocks
+  `profiles/dev.toml` and then starts the client with development features.
+  The engine still fail-closes if lock or CAS is missing; Task does not
+  replace that invariant. CI continues to invoke cargo directly.
+
 ## Bevy boundary
 
 - Bevy is the game engine and the only App, ECS, scheduler, renderer, asset,

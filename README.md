@@ -60,20 +60,36 @@ Ordinary launch reopens `latticeaxiom.lock` and freeze-verifies `catalog/cas`.
 Those files are generated locally and are not committed. The production client
 does not create them.
 
-From the workspace root, lock the client-world bootstrap, then launch:
+With [Task](https://taskfile.dev/) installed, the daily loop from the workspace
+root is:
+
+```powershell
+task dev
+```
+
+That always relocks the `client-world` bootstrap (`profiles/dev.toml`) and then
+launches the interactive client with development features, including Bevy
+dynamic linking. `task lock` only writes the lock and CAS.
+`task verify` freeze-verifies an existing lock. `task --list` prints the
+available tasks. On Windows, `winget install Task.Task` provides the `task`
+binary.
+
+Without Task, the same loop is:
 
 ```powershell
 cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap profiles/dev.toml
-cargo run -p latticeaxiom-engine --no-default-features --features client
+cargo run -p latticeaxiom-engine
 ```
 
 `profiles/dev.toml` is the `client-world` projection. Workspace-root
 `latticeaxiom.toml` is the dedicated-server projection and is not the
 interactive client lock. After a lock exists, `cargo run` from the workspace
-root is the same production client (default members and default features).
+root is the same client (default members and default features). CI continues
+to invoke cargo directly and does not require Task.
 
 The first Bevy build can take several minutes. Missing lock or CAS fails
-closed. Relock after changing shipped packages.
+closed. `task dev` relocks every launch; without Task, relock after changing
+shipped packages.
 
 A lock-free development slice remains available as an extra binary; it is not
 ordinary launch:
