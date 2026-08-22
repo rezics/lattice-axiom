@@ -9,6 +9,9 @@ tracks_implementation: true
 requirements:
   - SETTINGS-SURFACE-001
 updated: 2026-08-22
+decision:
+  - ../../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
 ---
 
 # Typed settings surface
@@ -49,8 +52,9 @@ Controls 分类消费 input package 产生的 rebindable action rows。key-captu
 状态，接收一个稳定 `InputBindingV1`，运行同 context 冲突检查，然后确认、取消或清除。
 物理输入仍来自 Bevy／Leafwing；UI 不建立第二个 input backend。
 
-在 `@latticeaxiom/input` ADR 与 package 尚未接受前，Controls rows 保持 proposed，不能因
-`SettingValueV1::key-binding` DTO 已存在就宣称改键已实现。
+`@latticeaxiom/input` 与 binding/context contract 已由 ADR 0033 接受；Controls rows 因而是首版
+required surface。规范 accepted 仍不表示改键已实现，状态必须由 input/settings/UI 的 product-entry
+evidence 共同证明。
 
 ## 可访问性与输入
 
@@ -64,4 +68,3 @@ surface 必须使用 Bevy UI、官方 focus/editable text 和 AccessKit 语义�
 - 不让 package 注入任意 Bevy systems/widgets。
 - 不把 Feathers 或 developer-only widgets 引入玩家 surface。
 - 不用硬编码页面替代 typed catalog。
-

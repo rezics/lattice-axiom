@@ -8,6 +8,8 @@ owners:
 tracks_implementation: true
 requirements:
   - SETTINGS-REGISTRY-001
+  - SETTINGS-TRANSACTION-001
+  - SETTINGS-PERSISTENCE-001
 updated: 2026-08-22
 ---
 
@@ -33,4 +35,3 @@ setting ID。
 主要候选 crates 为 `latticeaxiom-runtime-contracts`、`latticeaxiom-compose`、
 `latticeaxiom-start-ui` 与 host integration。当前 lock 中的 data package 和 DTO 只证明 source/
 registration surface 存在，不自动证明 user-scope 持久化或完整 transaction 已接入。
-

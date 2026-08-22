@@ -26,10 +26,10 @@ surface。它不重新定义 setting scope、authority、validation 或 persiste
 ## 规范
 
 - [Settings surface](settings-surface.md)
-- [Client UI system proposal](../../../platform/client-ui/ui-system.md)
+- [Client UI system](../../../platform/client-ui/ui-system.md)
+- [Client surface routing](../../../platform/client-ui/game-surface-state.md)
 
 ## Implementation mapping
 
-主要候选 crates 为 `latticeaxiom-start-ui` 与未来共享的 `latticeaxiom-ui` client crate。当前
+主要候选 crates 为 `latticeaxiom-start-ui` 与共享的 `latticeaxiom-ui` client crate。当前
 暂停菜单中的 View± 不是完整 settings surface，也不能证明设置持久化或 Controls 改键已实现。
-

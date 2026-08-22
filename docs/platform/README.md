@@ -24,9 +24,8 @@ logical package，也不让 Rust crate 取得产品 identity。
 | Assets/render graph | [Asset semantics](assets/asset-semantics.md)、[rendering](rendering/rendering.md) |
 | Generic gameplay transactions | [Player surfaces](gameplay/player-surfaces.md) |
 | Diagnostic host adapter | [Observability adapter](observability/diagnostics-inspection-and-debug-visualization.md) |
-| Input runtime proposal | [Bindings and contexts](input/input-binding-and-contexts.md) |
-| Shared client UI proposal | [UI system](client-ui/ui-system.md) |
-| Product process loop proposal | [Launcher supervisor](launcher/supervisor-loop.md) |
+| Input runtime | [Bindings and contexts](input/input-binding-and-contexts.md) |
+| Shared client UI | [UI system](client-ui/ui-system.md)、[surface routing](client-ui/game-surface-state.md) |
+| Product process loop | [Launcher supervisor](launcher/supervisor-loop.md) |
 
 每个 system 的实现状态由 requirements/evidence 计算；crate 已存在只说明有候选 mapping。
-

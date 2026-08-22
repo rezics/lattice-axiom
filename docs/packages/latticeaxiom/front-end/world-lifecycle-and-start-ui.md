@@ -1,7 +1,7 @@
 ---
 title: Client shell 与安全 world launch
 document_id: package.latticeaxiom.front-end.world-lifecycle-and-start-ui
-document_status: proposed
+document_status: accepted
 document_type: package-spec
 owners:
   - "@latticeaxiom/front-end"
@@ -56,11 +56,12 @@ fragments，不能占据绝对屏幕坐标或替换安全操作。
 
 shell 完成 catalog selection 和 preflight 后写入一次性、原子、带 shell/world lock fingerprint 的
 `LaunchIntentV1`，完成自己的 durable shutdown 再退出。supervisor 验证并消费 intent，启动
-game；game Save & Quit 完成 world durability barrier 后退出，supervisor 再启动 shell。
+game；game Save & Quit 完成 world durability barrier、发布匹配的 Shell intent/child result 后退出，
+supervisor 再启动 shell。
 
 没有 intent 的 shell exit 结束产品；stale/tampered intent、child crash 或 shutdown timeout 进入
 结构化诊断/recovery，不复用旧 intent。详细循环见
-[supervisor proposal](../../../platform/launcher/supervisor-loop.md)。
+[supervisor contract](../../../platform/launcher/supervisor-loop.md)。
 
 ## Loading 与取消
 
@@ -77,9 +78,13 @@ surface 显示 checking → resolving → acquiring/building → validating → 
 - mouse、keyboard、gamepad 与 AccessKit 语义完成全程；
 - 开发直进世界不能成为 release smoke 的唯一入口。
 
+shell 与 game 内部 surface transition 使用统一
+[client surface router](../../../platform/client-ui/game-surface-state.md)，不能以 host boolean/latch
+替代 route、focus 与 input context contract。
+
 ## 相关文件
 
 - [World catalog 与 preflight](../world-library/catalog-and-preflight.md)
 - [Settings UI](../settings-ui/settings-surface.md)
 - [World persistence](../../../platform/world-storage/world-persistence.md)
-- [Client UI proposal](../../../platform/client-ui/ui-system.md)
+- [Client UI system](../../../platform/client-ui/ui-system.md)

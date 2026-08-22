@@ -14,6 +14,7 @@ decision:
   - ../../decisions/0014-adopt-bevy-upstream-first.md
   - ../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
   - ../../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
 ---
 
 # First-playable player surfaces
@@ -23,6 +24,12 @@ HUD overlay, hotbar digits, mining, and view-distance exist. It does not
 rewrite [roadmap-first-demo.md](../roadmaps/first-demo.md) D0–D10, does not
 authorize a same-App start-then-Playing transition, and does not copy
 Minecraft or Jade source.
+
+This plan consumes the accepted [input](../../platform/input/input-binding-and-contexts.md),
+[shared UI](../../platform/client-ui/ui-system.md) and
+[surface router](../../platform/client-ui/game-surface-state.md) contracts. It may add authoritative
+inventory/crafting commands and typed presentation fragments, but it may not add physical-key business logic,
+a screen-local focus manager, gameplay-suppression latch or another UI root.
 
 External reference under the demo repo `.temp/reference/Jade` is **study
 only**. Absorb the *problem* (the player must understand the aimed target)
@@ -111,11 +118,13 @@ sprite:
 - Clicking the same slot clears the latch.
 - Empty `from` rejects `EmptySlot`.
 
-Bevy: inventory and hotbar slot nodes are `Button` + `Interaction` while
+Bevy: inventory and hotbar slot nodes use shared typed button/list widgets while
 the overlay is open. Overlay root still ignores world picking except those
-buttons. Pause and closed inventory keep `Pickable::IGNORE` on slots.
+buttons. Pause and closed inventory keep `Pickable::IGNORE` on slots. The typed route owns visibility/focus;
+the inventory system does not toggle nodes or cursor state directly.
 
-E still toggles the overlay. 1–9 still select hotbar when the overlay is
+`ClientSurfaceActionV1::ToggleInventory` still toggles the overlay (default E). Hotbar actions 1–9 still select
+hotbar when the overlay is
 closed; while open, 1–9 still select hotbar (do not steal digits for
 crafting grid coordinates).
 
@@ -179,20 +188,24 @@ Host helpers (no new thread runtime):
   body-inventory stack onto the selected hotbar; rejects when the item is
   absent.
 - `MoveStack` merge / swap / empty / stale revision.
-- Inventory click latch is unit-tested on the surface resource (no GPU).
+- Inventory cursor-slot selection is unit-tested as presentation draft state; it is not an input/context latch
+  and cannot mutate authoritative inventory without `MoveStack` receipt.
 - Crafting: existing gather-and-craft journey still passes; add a host
   test that `craftable_recipe_ids(None)` lists oak-planks after wood is
   gathered, and workbench recipes appear only after bind.
 
 ## Out of scope
 
-- Jade plugin API, NBT, mixins, pin-on-screen, themes.
+- Jade plugin API, NBT, mixins, pin-on-screen or package-defined arbitrary themes/widgets.
 - Creative infinite pick, JEI recipe lookup, floating dragged item mesh.
 - Same-App title + world. GregTech / TLM / Botania ids in the engine.
-- Changing mesh topology, P7 renderer work, or `LaunchIntent` process spawn.
+- Changing mesh topology or P7 renderer work. `LaunchIntent` process spawn is owned by the supervisor milestone,
+  but its `task play` product smoke is required before this surface work can count as v1 production evidence.
 
 ## Implementation sequence
 
 Kernel (player + gameplay crates) can land in parallel: they do not share
 files. Host HUD / spine wiring is one sequential pass after both land,
-because `hud.rs` is a single module. Verify with headless tests only.
+because `hud.rs` is a single module. Verify authoritative mechanics headlessly, then verify route/context,
+focus, AccessKit and 800×600 scale fixtures through the shared client UI test harness. Component-only or
+old-playable-fixture evidence cannot close the plan.

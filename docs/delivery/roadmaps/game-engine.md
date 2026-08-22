@@ -6,7 +6,7 @@ document_type: roadmap
 tracks_implementation: true
 requirements:
   - DELIVERY-ENGINE-001
-updated: 2026-08-20
+updated: 2026-08-22
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../../decisions/0010-nickel-driven-package-system.md
@@ -27,6 +27,7 @@ decision:
   - ../../decisions/0030-freeze-governance-distribution-and-security-triggers.md
   - ../../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
   - ../../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
+  - ../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
 ---
 
 # 套件驅動的 Bevy 執行期整合路線
@@ -161,15 +162,20 @@ static bootstrap/package manifests
 ### 交付
 
 - shell／client／headless／test Nickel profiles与独立shell lock；
-- launcher／`LaunchIntentV1`／recovery shell process-transition state machine；
+- non-Bevy supervisor／`task play`／`LaunchIntentV1`／child result／recovery shell process-transition
+  state machine；
 - `RegistrationImage`／`RuntimeImage` → Bevy host adapter；
 - `DefaultPlugins`／headless standard plugin mapping；
 - static system／dynamic bridge 安装；
 - semantic system stages → Bevy `SystemSet`；
 - multi-EngineInstance test；
 - package activation transaction／rollback；
-- `@latticeaxiom/settings`／settings-ui／observability／inspect／dev-tools／front-end／world-library基础packages；
+- `@latticeaxiom/settings`／input／settings-ui／observability／inspect／dev-tools／front-end／world-library
+  基础packages；
 - SettingsCatalog transaction、package-injected设置页与CLI fallback；
+- user-scope UI scale、view distance与binding profile canonical atomic persistence；
+- lock-selected action catalog、compiled Leafwing/client maps与唯一input context stack；
+- shared `latticeaxiom-ui` theme/widgets/focus/semantic projection与typed shell/game surface router；
 - subscription-driven diagnostics workbench skeleton；
 - WorldHeader catalog、开始页与write-before `WorldOpenPlan` preflight。
 
@@ -179,9 +185,15 @@ static bootstrap/package manifests
 - 任一fixture package可注入setting／metric／inspect fragment而不修改surface package source；
 - client process一次只建立一个`EventLoop`／fresh `DefaultPlugins` App；intent只在durability／shutdown barrier成功后发布；
 - LaunchIntent fault corpus覆盖atomic write、stale／corrupt intent、spawn／boot失败、attempt-loop prevention与recovery shell；
+- `task play`从reopened locks完成shell→world→durable Save & Quit→shell；Written-only、crash与timeout
+  只能进入bounded recovery；
 - shell在world缺失／损坏时仍可进入settings与recovery，不执行world module code；
 - client／headless 使用相同权威 package closure；
 - package error 在 `Playing` 前失败；
+- input-actions provider exactly-one，HUD/shell/gameplay无私有physical-key业务mapping，所有surface
+  route机械派生context/cursor/focus且无leakage/stuck input；
+- settings/rebind在replacement-process restart后保留；800×600、scale 1.0/2.0、IME/CJK、
+  keyboard/mouse/gamepad与AccessKit gates通过；
 - dynamic module 不取得 Bevy World；
 - Bevy 是唯一 runner／ECS／scheduler／task runtime；
 - multi-instance 不共享隐式 module／world global state。
@@ -342,5 +354,9 @@ package／ABI 核心不需要通过此 gate证明「Bevy 做不到」，但其�
 - [語義註冊、內容判定與選擇](../../platform/registration/semantic-registration.md)
 - [待決問題](../open-questions.md)
 - [Package 設定與配置](../../packages/latticeaxiom/settings/settings-and-configuration.md)
+- [Input binding 与 context stack](../../platform/input/input-binding-and-contexts.md)
+- [Shared client UI system](../../platform/client-ui/ui-system.md)
+- [Client surface routing](../../platform/client-ui/game-surface-state.md)
+- [Launcher supervisor](../../platform/launcher/supervisor-loop.md)
 - [診斷、檢查與除錯可視化](../../platform/observability/diagnostics-inspection-and-debug-visualization.md)
 - [World 目錄、開始頁與安全生命週期](../../packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)

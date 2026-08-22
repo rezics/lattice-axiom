@@ -10,7 +10,7 @@
       "statement": "The first-playable inspect, pick-block, inventory move and catalog crafting integration plan closes through production and headless paths.",
       "acceptance": [
         "All listed headless tests and production interactions pass through shared public commands.",
-        "No remaining surface uses a test-only authority."
+        "No remaining surface uses a test-only authority, physical-key business mapping, private focus/context latch or parallel UI root."
       ]
     },
     {
@@ -31,6 +31,16 @@
       "acceptance": [
         "Every V0-V9 exit gate is backed by production evidence.",
         "The release journey explores, gathers, crafts, builds, checkpoints, exits and reopens exactly."
+      ]
+    },
+    {
+      "id": "DELIVERY-PLAYABILITY-CLOSURE-001",
+      "document_id": "delivery.plan.v1-playable",
+      "level": "must",
+      "statement": "The v1 product closes its launcher, persistence, input, UI, settings, surface-state and legacy-path gaps through the mapped production milestones.",
+      "acceptance": [
+        "The supervisor product entry, durable world/settings paths, compiled input catalog and shared accessible surface route pass one end-to-end replacement-process journey.",
+        "No old playable authority, orphan world directory, host-included catalog, physical-key business path, private suppression latch or parallel UI root remains in production."
       ]
     },
     {

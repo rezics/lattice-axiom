@@ -6,7 +6,7 @@ document_type: roadmap
 tracks_implementation: true
 requirements:
   - DELIVERY-FIRST-DEMO-001
-updated: 2026-08-21
+updated: 2026-08-22
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../../decisions/0014-adopt-bevy-upstream-first.md
@@ -26,6 +26,7 @@ decision:
   - ../../decisions/0030-freeze-governance-distribution-and-security-triggers.md
   - ../../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
   - ../../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
+  - ../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
 ---
 
 # 第一個套件驅動的 Bevy 可玩 demo 路線圖
@@ -51,18 +52,21 @@ V0–V9 are the implementation sequence for those existing gates. They do not
 rewrite D0–D10, skip D1–D6, or pull D11 into v1:
 
 - **V0** freezes the playable fixture, world-session contract, journey fixture,
-  crate/package reuse-adapt-replace inventory, and this mapping. It is not a
-  D-phase delivery.
-- **V1** closes **D0** lock and launcher execution.
+  crate/package reuse-adapt-replace inventory, ADR 0033 input boundary, orphan
+  runtime-path cleanup, and this mapping. It is not a D-phase delivery.
+- **V1** closes **D0** lock and supervisor-driven `task play` launcher execution.
 - **V2** is the production spine: **D1** dual-realization gameplay and **D2**
-  voxel playground, replacing the in-memory fixture as the playable path.
+  voxel playground, replacing the in-memory fixture as the playable path. It
+  also lands the lock-selected input catalog, context stack, shared UI
+  foundation, typed surface router and user settings persistence.
 - **V4** closes sparse **D4** streaming / operationally unbounded generation
   *before* durable save. Content stays thin; dirty chunks stay resident.
 - **V3** closes **D3** durable world lifecycle on that already-streaming world.
   Writer activation remains unauthorized until a sealed receipt exists.
 - **V5–V6** close **D7** complete terrain and caves on the V4 coordinator.
 - **V7** closes **D8** tools and gameplay.
-- **V8** closes **D9** content and UX.
+- **V8** closes **D9** content and UX, including the full typed settings,
+  Controls, shell/pause/inventory/workbench migration and accessibility gates.
 - **V9** closes **D6** delivery/regression and **D10** budgets and release.
   **D5** render composition remains a D0–D6 gate and is accepted with D6 at V9.
 
@@ -80,6 +84,7 @@ D11 remains a post-baseline biome expansion track after V9.
 - `RegistrationManifest`／`RegistrationImage`；
 - Nickel-authored SemanticTag／Map／Predicate／Role 与 locked fallback ContentBundle；
 - package-injected `SettingSpec`、observability items与统一settings／inspect／dev-tools surfaces；
+- graph-selected `@latticeaxiom/input` action catalog、user binding profile与统一input context stack；
 - `NativeStatic` 与 `PortableNative` ABI `0.x`；
 - Bevy `0.19.x` architecture baseline与精确 `0.19.1` first implementation；manifests／Cargo lock记录version、source、checksum，manifests／profile／build receipt记录features；
 - client `DefaultPlugins`，headless 使用必要标准 profile；
@@ -130,7 +135,8 @@ D11 remains a post-baseline biome expansion track after V9.
 - deterministic SemVer／capability resolution与`ResolutionReceiptV1`；
 - portable resolution／target realization分层的产品lock、atomic read／write及locked／offline／frozen modes；
 - shell／client／headless profile与同schema的独立shell lock；
-- launcher／`LaunchIntentV1`／recovery shell process-transition state machine；
+- non-Bevy supervisor／`task play`／`LaunchIntentV1`／child result／recovery shell process-transition
+  state machine；
 - package-driven Bevy App；
 - package-driven开始页／设置页smoke、placeholder camera／light／cube；
 - Y-up orientation、manual fixed-time、diagnostics／CI。
@@ -179,7 +185,10 @@ D1 不是空 `hello_plugin`；system 必须读写 gameplay-shaped data并发 com
 
 - `bevy_voxel_world` 优先 spike；
 - Avian 优先 physics spike；
-- Leafwing `0.21`作为adoption-gated首版action／input mapping；headless注入相同Lattice `PlayerActionV1`／authoritative command DTO，失败回退Bevy native input；
+- Leafwing `0.21`作为adoption-gated physical adapter；`@latticeaxiom/input` defaults + user profile编译
+  gameplay/client surface maps，headless注入相同Lattice `PlayerActionV1`／authoritative command DTO；
+- `latticeaxiom-ui` shared theme/widgets/focus/semantic projection与typed shell/game surface router；
+- user-scope UI scale、view distance与binding profile canonical atomic persistence；
 - walk／look／jump、raycast、break／place；
 - `@latticeaxiom/inspect`显示target block名称、icon、owner与technical StableId；
 - Performance preset与chunk Grid／Lifecycle／Mesh／Collision visualizers；
@@ -192,9 +201,13 @@ D1 不是空 `hello_plugin`；system 必须读写 gameplay-shaped data并发 com
 - chunk boundary／six Y-up faces正确；
 - edit-to-visible、frame、fixed tick、memory、queues 已量测；
 - 关闭／未订阅panel不执行昂贵target／chunk／contact采集，overlay overhead已量测；
+- client／headless从final lock选择exactly-one input-actions provider；catalog/client adapter不一致时
+  在App建立前失败；
 - 800×600／高UI scale无overflow，visualizer有legend、radius与primitive budget；
 - 每个 upstream缺口有 reproduction／adoption结论；
 - static／dynamic切换仍完成同一操作。
+- HUD/shell/gameplay没有私有physical-key业务mapping；inventory/pause/settings无input leakage或stuck key；
+- 800×600、scale 1.0/2.0、IME/CJK、keyboard/mouse/gamepad与AccessKit基础route gates通过。
 
 D2 前不自写 voxel renderer／physics solver。局部缺口依决策 0014 走 upstream gate。
 
@@ -306,6 +319,8 @@ D3／D4的精确内容与后续40／72方块范围见[Terrenia 方块内容规�
 - checkpoint restore；
 - recoverable read-only open／export bundle checksum与headless preflight；
 - setting catalog order／scope／transaction／orphan golden；
+- binding profile/conflict/context propagation、surface transition table与replacement-process restart保留；
+- `task play` shell→world→durable Save & Quit→shell及stale intent/crash/timeout recovery；
 - WorldHeader损坏、catalog scan、preflight、clone-migration、trash／restore；
 - inspect permission／fragment conflict、subscription-off与visualizer budget；
 
@@ -485,6 +500,8 @@ D10之后继续使用同一territory／boundary／cave／semantic公开契约扩
 14. D8的inventory／drop／tool／recipe／workstation／furnace／container形成可持久化、跨维度机制闭环。
 15. D9精确交付72方块与2种独立流体，所有有限变化使用state而非复制StableId。
 16. D10自动旅程与10分钟traversal证明探索、采集、制作、建造、保存和恢复在冻结预算内完整成立。
+17. supervisor产品入口、统一input/UI/state/settings闭环通过；旧playable、孤儿world目录与平行
+    physical-key/UI latch不在production path。
 
 D0–D6完成第一個package-driven playable vertical slice；只有D0–D10全部完成才达到Terrenia
 第一内容基线的可玩sandbox完成定义。D11是完成后的群系扩充轨，不阻塞D10发布。
@@ -503,5 +520,9 @@ D0–D6完成第一個package-driven playable vertical slice；只有D0–D10全
 - [Terrenia 方块内容规划](../../packages/terrenia/blocks/catalog.md)
 - [Terrenia 科学／魔法双轨与关系包](../plans/terrenia-science-magic-and-relations.md)
 - [Package 设置与配置](../../packages/latticeaxiom/settings/settings-and-configuration.md)
+- [Input binding 与 context stack](../../platform/input/input-binding-and-contexts.md)
+- [Shared client UI system](../../platform/client-ui/ui-system.md)
+- [Client surface routing](../../platform/client-ui/game-surface-state.md)
+- [Launcher supervisor](../../platform/launcher/supervisor-loop.md)
 - [诊断、检查与除错可视化](../../platform/observability/diagnostics-inspection-and-debug-visualization.md)
 - [World目录、开始页与安全生命周期](../../packages/latticeaxiom/front-end/world-lifecycle-and-start-ui.md)

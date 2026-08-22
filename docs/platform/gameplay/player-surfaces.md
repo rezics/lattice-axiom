@@ -9,6 +9,10 @@ tracks_implementation: true
 requirements:
   - PLAYER-MECHANICS-001
 updated: 2026-08-22
+decision:
+  - ../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
+  - ../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
 ---
 
 # Inventory、hotbar、crafting 与 player commands
@@ -32,6 +36,10 @@ client UI 只发送带 expected revision 的 typed commands，并投影 authorit
 
 打开 inventory/workbench 时由 input context stack 抑制 live gameplay；允许的 hotbar selection
 必须作为显式 context rule，而不是 HUD 私有 `ButtonInput<KeyCode>`。
+
+overlay 的互斥、Pause 嵌套、Back unwind、focus/cursor 与关闭后的 pressed-state cleanup 由统一
+[client surface router](../client-ui/game-surface-state.md)拥有。inventory/workbench system 不能用
+boolean 或 latch 直接修改 UI/gameplay state。
 
 ## 持久化与守恒
 

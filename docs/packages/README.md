@@ -25,7 +25,7 @@ manifest 尚不存在。
 | [`@latticeaxiom/observability`](latticeaxiom/observability/README.md) | 当前 lock | diagnostic registry |
 | [`@latticeaxiom/inspect`](latticeaxiom/inspect/README.md) | 当前 lock | target inspect surface |
 | [`@latticeaxiom/dev-tools`](latticeaxiom/dev-tools/README.md) | 当前 lock | debug workbench |
-| [`@latticeaxiom/input`](latticeaxiom/input/README.md) | 提议 | action catalog 与 binding profile |
+| [`@latticeaxiom/input`](latticeaxiom/input/README.md) | 已接受，待 manifest/lock | action catalog 与 binding profile |
 | [`@latticeaxiom/progress`](latticeaxiom/progress/README.md) | 已声明 | progress graph skeleton |
 | [`@latticeaxiom/relations`](latticeaxiom/relations/README.md) | 已声明 | relations graph skeleton |
 | [`terrenia`](terrenia/main/README.md) | 当前 lock | Terrenia dimension root |

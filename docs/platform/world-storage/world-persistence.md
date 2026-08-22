@@ -1,14 +1,14 @@
 ---
 title: Bevy 世界持久化與 RocksDB World Store
 document_id: platform.world-storage.world-persistence
-document_status: proposed
+document_status: accepted
 document_type: platform-spec
 owners:
   - "platform:world-storage"
 tracks_implementation: true
 requirements:
   - WORLD-STORAGE-001
-updated: 2026-08-20
+updated: 2026-08-22
 decision:
   - ../../decisions/0003-no-global-version-switch.md
   - ../../decisions/0009-rocksdb-authoritative-world-snapshots.md

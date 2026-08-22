@@ -48,7 +48,7 @@ storage 与 rendering 契约按 platform system 组织。ADR 保存“为什么�
 - [observability](packages/latticeaxiom/observability/README.md)：diagnostic registry 与 report
 - [inspect](packages/latticeaxiom/inspect/README.md)：玩家 target inspect surface
 - [dev-tools](packages/latticeaxiom/dev-tools/README.md)：开发者诊断 workbench
-- [input](packages/latticeaxiom/input/README.md)：提议中的动作注册与绑定 package
+- [input](packages/latticeaxiom/input/README.md)：已接受、待实现的动作注册与绑定 package
 - [progress](packages/latticeaxiom/progress/README.md)：提议后期使用的进度图 package
 - [relations](packages/latticeaxiom/relations/README.md)：提议后期使用的关系图 package
 
@@ -75,7 +75,7 @@ storage 与 rendering 契约按 platform system 组织。ADR 保存“为什么�
 - [World generation](platform/world-generation/world-generation.md)
 - [Rendering](platform/rendering/rendering.md)
 - [Input runtime](platform/input/input-binding-and-contexts.md)
-- [Client UI](platform/client-ui/ui-system.md)
+- [Client UI](platform/client-ui/ui-system.md) 与 [surface routing](platform/client-ui/game-surface-state.md)
 - [Launcher supervisor](platform/launcher/supervisor-loop.md)
 
 ## 决策、研究与交付

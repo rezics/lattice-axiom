@@ -29,9 +29,10 @@ updated: 2026-08-22
 - [玩家 surface 原始整合计划](../../../delivery/plans/first-playable-player-surfaces.md)；其通用 gameplay 部分由 platform contract
   承担，front-end 只保留 shell 责任。
 - [Launcher supervisor](../../../platform/launcher/supervisor-loop.md)
+- [Client surface routing](../../../platform/client-ui/game-surface-state.md)
 
 ## Implementation mapping
 
 主要候选 crates 为 `latticeaxiom-start-ui`、`latticeaxiom-launcher` 与
-`latticeaxiom-engine` 的 client shell adapter。crate 存在不代表本 package 已实现；当前 report
-确认 shell 与 game 仍缺少监督者闭环。
+`latticeaxiom-engine` 的 client shell adapter。crate 存在不代表本 package 已实现；当前 evidence
+确认 shell 与 game 仍缺少监督者 executable 与 `task play` 产品闭环。

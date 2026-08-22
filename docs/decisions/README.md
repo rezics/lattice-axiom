@@ -38,5 +38,6 @@ compliance 由 package/platform requirements 与 evidence 证明。
 - [0030 Governance, distribution and security triggers](0030-freeze-governance-distribution-and-security-triggers.md)
 - [0031 Bevy upgrade and supply chain](0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md)
 - [0032 Local package acquisition and product lock](0032-freeze-local-package-acquisition-imports-and-product-lock.md)
+- [0033 Input actions, bindings and contexts](0033-freeze-input-actions-bindings-and-contexts.md)
 
 编号空缺只通过 Git history 追溯，不在 active tree 保留互斥方案。

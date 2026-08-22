@@ -6,7 +6,8 @@ document_type: plan
 tracks_implementation: true
 requirements:
   - DELIVERY-V1-001
-updated: 2026-08-21
+  - DELIVERY-PLAYABILITY-CLOSURE-001
+updated: 2026-08-22
 ---
 
 # Lattice Axiom v1 Playable Delivery Plan
@@ -150,22 +151,39 @@ the final lock. The host must not contain a hidden Terrenia plugin list or
 fallback dimension.
 
 ```text
-terrenia
-├── @terrenia/blocks
-├── @terrenia/worldgen
-├── @terrenia/gameplay
-│   └── @terrenia/tools
-└── @terrenia/presentation       # client projection only
-
-client/headless profile
+LockedGameGraph authoritative roots
 ├── terrenia
+│   ├── @terrenia/blocks
+│   ├── @terrenia/worldgen
+│   └── @terrenia/gameplay
+│       └── @terrenia/tools
 ├── @latticeaxiom/settings
-├── @latticeaxiom/observability
-└── client-only inspect/settings/dev surfaces as selected by the graph
+├── @latticeaxiom/input
+└── @latticeaxiom/observability
+
+ClientShellGraph
+├── @latticeaxiom/front-end
+├── @latticeaxiom/world-library
+├── @latticeaxiom/settings
+├── @latticeaxiom/settings-ui
+├── @latticeaxiom/input
+└── @latticeaxiom/observability
+
+LockedGameGraph client projection
+├── @terrenia/presentation
+├── @latticeaxiom/settings-ui
+├── @latticeaxiom/inspect
+└── selected presentation/dev surfaces
 ```
 
 | Package | v1 responsibility | Required relationship |
 | --- | --- | --- |
+| `@latticeaxiom/front-end` | Shell route, loading/recovery and launch intent | Client-shell only; never opens a world writer |
+| `@latticeaxiom/world-library` | Bounded catalog, preflight and recovery actions | Reads headers first; package/world code stays unopened during listing |
+| `@latticeaxiom/settings` | Typed effective values, transaction and owning-scope persistence | Exactly-one in shell/game graphs; authoritative settings remain identical in client/headless |
+| `@latticeaxiom/settings-ui` | Accessible mechanical settings projection | Client/tool only; no parallel validation or persistence semantics |
+| `@latticeaxiom/input` | Stable action catalog, default bindings and user binding profile | Exactly-one in shell/game graphs; physical adapters do not own defaults |
+| `@latticeaxiom/observability` | Typed diagnostic registry and reports | Exactly-one; collection remains subscription/budget controlled |
 | `terrenia` | Replaceable dimension root and namespace owner | Aggregates the authoritative closure; no concrete Terrenia fallback in the host |
 | `@terrenia/blocks` | Block/fluid definitions, block-item mappings, physical/selection/collision semantics, worldgen roles | Provides the content catalog; contains no generic inventory or mining implementation |
 | `@terrenia/worldgen` | Terrenia generation configuration, providers, territories, cave domains, hydrology, geology, resources, vegetation, and role bindings | Requires the block catalog; provides the exactly-one terrain provider for Terrenia |
@@ -347,6 +365,30 @@ after streaming so eviction can become durable without blocking the first
 unbounded traversal. Milestone numbers stay aligned with D0–D10; do not read
 V3 as a prerequisite of V4.
 
+### Cross-cutting playability closure
+
+The following work is part of v1, not an optional polish track. The owning specifications remain the
+single source of contract truth; this table owns only delivery order and exit evidence.
+
+| Work | Required result | Milestone | Requirement evidence |
+| --- | --- | --- | --- |
+| A1 input contract | ADR 0033, accepted `@latticeaxiom/input`, stable binding/profile/conflict core | V0/V2 | `INPUT-PACKAGE-001`, `INPUT-BINDING-001` |
+| A2 action adapters | catalog-compiled Leafwing gameplay map and `ClientSurfaceActionV1`; HUD/shell physical-key paths removed | V2 | `INPUT-ADAPTER-001` |
+| A3 context arbitration | one stack owns suppression, cursor, focus and pressed-state cleanup | V2 | `INPUT-CONTEXT-001` |
+| A4 locked registration | exactly-one input-actions provider from reopened product lock; no `include_str!` production catalog | V2 | `INPUT-PACKAGE-001` |
+| B1 UI foundation | shared theme, widgets, focus, a11y and semantic projection crate | V2 | `CLIENT-UI-001` |
+| B2 route migration | shell, pause, inventory and workbench consume one typed surface router | V2/V8 | `CLIENT-SURFACE-STATE-001` |
+| B3 settings surface | typed categories, Controls capture/conflicts and apply/preview/rollback | V8 | `SETTINGS-SURFACE-001`, `SETTINGS-TRANSACTION-001` |
+| B4 UI gates | scale, IME/CJK, keyboard, mouse, gamepad and AccessKit automation | V8/V9 | `CLIENT-UI-001` |
+| C1 product loop | non-Bevy supervisor and `task play` shell→world→shell smoke | V1 | `LAUNCHER-SUPERVISOR-001`, `LAUNCHER-RESULT-001` |
+| C2 user durability | UI scale, view distance and bindings survive replacement-process restart | V2 | `SETTINGS-PERSISTENCE-001` |
+| C3 world durability | RocksDB writer, checkpoint, crash recovery and durable Save & Quit | V3 | `WORLD-STORAGE-001` |
+| D cleanup | fixture frozen, orphan runtime path removed, no parallel UI/input/catalog path | V0/V2/V8 | `DELIVERY-PLAYABILITY-CLOSURE-001` |
+
+V1 cannot be released by deferring B1–B4 as cosmetic work: without a shared focus/context/state route, the
+required shell/settings/recovery/controller journey is not reproducible. V2 may use intentionally plain theme
+tokens, but it must already use the final ownership boundaries.
+
 ### V0 — Freeze scope and preserve the current fixture
 
 **Goal:** establish the v1 contract and a reproducible baseline without adding
@@ -355,11 +397,17 @@ more disconnected foundation surface.
 Deliverables:
 
 - Record the current finite playable fixture behavior as a smoke test.
+- Freeze it as test-only: no new product feature, binding default, HUD route or storage authority may be added
+  under the old playable module.
 - Define the v1 world header fields: vertical range, chunk edge, seed,
   generation epoch, required package closure, semantic image, and hard limits.
 - Define the automated v1 journey assertions before production integration.
 - Inventory every existing crate/package contract as reuse, adaptation, or
   replacement; do not create parallel abstractions.
+- Adopt ADR 0033 and assign every current HUD/shell/gameplay physical mapping to the V2 migration inventory.
+- Verify whether `run/world/` is referenced by any profile/test. If unowned, remove it; if a fixture still needs
+  it, relocate it under the repository temporary-fixture convention and name the owner. It cannot be a product
+  save path.
 - Freeze explicit non-goals and the D0-D10 mapping in the active roadmap.
 
 Exit gate:
@@ -368,6 +416,7 @@ Exit gate:
   gather, craft, mine, place, checkpoint, exit, and reopen expectations.
 - No v1 feature relies on the in-memory fixture authority as a production
   dependency.
+- The old fixture and runtime-directory inventory has no unowned path or ambiguous production entry.
 
 ### V1 — Close D0 package, lock, Nickel, and launcher execution
 
@@ -386,6 +435,8 @@ Deliverables:
   validation.
 - Launcher drives profile acquisition, resolution, registration compilation,
   `RuntimeImage`, and either client or headless App.
+- A non-Bevy supervisor is the `task play`/release entry. It launches the shell, atomically consumes one-shot
+  intents and child reports, launches the selected game, and returns to normal or recovery shell after exit.
 - Settings and observability are selected exactly once by the graph.
 
 Exit gate:
@@ -395,6 +446,8 @@ Exit gate:
 - Missing/tampered source, manifest, toolchain, engine build, artifact, alias,
   or registration evidence fails before native loading or world access.
 - The entire shipped local-package flow succeeds offline from a clean checkout.
+- `task play` completes Home → preflight → game → durable Save & Quit → Home from reopened locks; stale intent,
+  crash, lease conflict and shutdown timeout enter bounded recovery without replay loops.
 
 ### V2 — Replace the fixture with a package-driven minimal playable spine
 
@@ -407,6 +460,14 @@ Deliverables:
 - Integrate player movement, input, authoritative target DDA, break/place
   commands, block receipts, chunk revisions, voxel projection, chunk meshing,
   and colliders.
+- Add the headless-first input crate and lock-selected `@latticeaxiom/input` catalog; compile gameplay and client
+  surface maps from effective bindings. Remove business-action `ButtonInput<KeyCode>` and private shell maps.
+- Add `ActiveInputContextStack` and the typed game surface router. Playing, inventory/workbench, pause and the
+  minimal settings route must derive suppression, cursor and focus mechanically.
+- Add the shared client UI foundation (theme tokens, focus, typed button/list/modal primitives, semantic
+  projection and AccessKit helpers). V2 visuals may remain plain, but no production surface may add another
+  widget/focus root.
+- Persist user UI scale, clamped view distance and `BindingProfileV1` through canonical atomic user settings.
 - Use `MemoryWorldStorage` behind the production storage interfaces for this
   milestone; do not claim durability.
 - Materialize a small deterministic generated region through the real
@@ -424,6 +485,12 @@ Exit gate:
   stale-result rejection, and chunk revision behavior pass.
 - No package, worldgen, gameplay, or presentation path contains a hidden
   Terrenia fallback.
+- Rebind → apply → immediate action → replacement-process restart preserves the binding; same-context conflicts
+  are rejected with the occupying action.
+- Inventory/workbench/pause/settings have no movement/break/place leakage, hotbar allowlist behavior is exact,
+  and closing a surface leaves no stuck input.
+- The product lock has exactly one input-actions provider; catalog/enum mismatch and unknown required binding
+  major fail before the client App starts.
 
 ### V4 — Sparse unbounded chunk streaming
 
@@ -596,6 +663,10 @@ Deliverables:
   presentation.
 - Start page, create/continue, loading stages, health/lock/durability summaries,
   pause/save/exit, recovery actions, settings, inspect, and performance presets.
+- Migrate shell, pause, inventory/workbench and settings to the shared UI system and typed route; remove private
+  focus managers, pause/input latches and hand-built settings pages.
+- Complete all fixed settings categories, Controls key capture/conflict UI, preview/apply/rollback, restart impact
+  and in-game scope filtering.
 - Client-only presentation package remains removable in headless mode.
 
 Exit gate:
@@ -607,6 +678,11 @@ Exit gate:
   chunk boundaries.
 - Headless omission of presentation does not change authoritative registration,
   action receipts, snapshot bytes, or world hash.
+- Keyboard-only, mouse and gamepad-only flows complete Home → create/continue → inventory/workbench → pause →
+  settings/rebind → durable Save & Quit → Home at 800×600 and UI scale 1.0/2.0 with AccessKit semantics and
+  IME/CJK fixtures.
+- Every modal/overlay transition has one focus owner and one input context derivation; stale async epochs cannot
+  reopen a closed surface.
 
 ### V9 — Freeze budgets, harden faults, and release v1
 
@@ -743,6 +819,10 @@ v1 is complete only when all of the following are true:
 - The same lock drives the production client and headless authoritative closure.
 - The launcher and start UI create, preflight, open, save, close, recover, and
   reopen a real world.
+- The distributed product entry is `task play`/supervisor, and its smoke proves shell → world → shell with
+  one-shot intent and child-result recovery semantics.
+- One lock-selected input catalog, binding profile, context stack, client UI system and surface router own all
+  production input/UI behavior; user controls and view settings survive process replacement.
 - Horizontal exploration is operationally unbounded and all live work remains
   bounded.
 - Terrenia provides coherent surface terrain, underground territories,
@@ -756,6 +836,8 @@ v1 is complete only when all of the following are true:
   client, and headless gates pass from a clean checkout.
 - No host/platform/foundation package contains Terrenia-specific defaults.
 - The old finite in-memory playable fixture is no longer the product entry path.
+- No orphan `run/world/`, private binding catalog, screen-local suppression latch or unowned UI root remains in
+  the product path.
 
 Anything less is a useful component or intermediate playable slice, but not the
 Lattice Axiom v1 game.

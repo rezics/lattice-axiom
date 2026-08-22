@@ -1,17 +1,20 @@
 ---
 title: Package settings registry 与 transaction
 document_id: package.latticeaxiom.settings.settings-and-configuration
-document_status: proposed
+document_status: accepted
 document_type: package-spec
 owners:
   - "@latticeaxiom/settings"
 tracks_implementation: true
 requirements:
   - SETTINGS-REGISTRY-001
+  - SETTINGS-TRANSACTION-001
+  - SETTINGS-PERSISTENCE-001
 updated: 2026-08-22
 decision:
   - ../../../decisions/0010-nickel-driven-package-system.md
   - ../../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
+  - ../../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
 ---
 
 # Package settings registry 与 transaction
@@ -74,6 +77,11 @@ device/user values 使用版本化 canonical 文件和原子 replace；world/pla
 authoritative storage transaction。读回时先验证 schema/version，migration 产生 receipt；未知或
 暂时缺失 package 的 user values 保留为 orphan，不能静默删除。
 
+user/device file 的 publish protocol 固定为 write sibling temp → flush file → atomic replace → 按平台
+能力 flush parent directory；启动只接受 old-complete 或 new-complete。corrupt/newer-required 文件原样
+隔离并产生 recovery diagnostic，不能用 defaults 覆写原文件。UI scale、view distance 与
+`BindingProfileV1` 是首批必须走该路径的 consumers。
+
 secret/credential setting 不进入普通 export、diagnostic report 或 log。world setting 保存前仍须
 通过 sealed writer authority。
 
@@ -98,6 +106,6 @@ secret/credential setting 不进入普通 export、diagnostic report 或 log。w
 ## 相关文件
 
 - [Settings UI surface](../settings-ui/settings-surface.md)
-- [Input binding proposal](../../../platform/input/input-binding-and-contexts.md)
+- [Input binding contract](../../../platform/input/input-binding-and-contexts.md)
 - [World persistence](../../../platform/world-storage/world-persistence.md)
 - [Versioning and compatibility](../../../platform/compatibility/versioning-and-compatibility.md)

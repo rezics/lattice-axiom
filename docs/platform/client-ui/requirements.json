@@ -12,6 +12,16 @@
         "Required shell and in-game flows pass keyboard, mouse, gamepad, AccessKit, CJK and scale gates.",
         "Headless omits the UI crate without authoritative differences."
       ]
+    },
+    {
+      "id": "CLIENT-SURFACE-STATE-001",
+      "document_id": "platform.client-ui.game-surface-state",
+      "level": "must",
+      "statement": "One typed client surface router owns every shell/game screen, overlay, modal and lifecycle transition.",
+      "acceptance": [
+        "Route transitions mechanically derive input context, cursor, focus and gameplay suppression without private latches or booleans.",
+        "Nested inventory, pause, settings, binding capture and durable Save & Quit flows pass transition, stale-epoch and accessibility gates."
+      ]
     }
   ]
 }

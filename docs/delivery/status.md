@@ -26,7 +26,7 @@ path, product entry and reproducible checks. All other states remain conservativ
 | --- | --- | --- | ---: | --- |
 | [First-playable player surfaces (inspect, pick-block, inventory, craft)](plans/first-playable-player-surfaces.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
 | [Terrenia 科学／魔法双轨与关系包规划](plans/terrenia-science-magic-and-relations.md) | `delivery` | `scaffolded` | 0/1 | `653556ba7df5` |
-| [Lattice Axiom v1 Playable Delivery Plan](plans/v1-playable.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
+| [Lattice Axiom v1 Playable Delivery Plan](plans/v1-playable.md) | `delivery` | `in-progress` | 0/2 | `653556ba7df5` |
 | [體素地形渲染與區塊流送修復計畫](plans/voxel-terrain-rendering-recovery.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
 | [第一個套件驅動的 Bevy 可玩 demo 路線圖](roadmaps/first-demo.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
 | [套件驅動的 Bevy 執行期整合路線](roadmaps/game-engine.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
@@ -43,8 +43,8 @@ path, product entry and reproducible checks. All other states remain conservativ
 | [@latticeaxiom/relations](../packages/latticeaxiom/relations/README.md) | `@latticeaxiom/relations` | `scaffolded` | 0/1 | `653556ba7df5` |
 | [@latticeaxiom/settings-ui](../packages/latticeaxiom/settings-ui/README.md) | `@latticeaxiom/settings-ui` | `scaffolded` | 0/1 | `653556ba7df5` |
 | [Typed settings surface](../packages/latticeaxiom/settings-ui/settings-surface.md) | `@latticeaxiom/settings-ui` | `scaffolded` | 0/1 | `653556ba7df5` |
-| [@latticeaxiom/settings](../packages/latticeaxiom/settings/README.md) | `@latticeaxiom/settings` | `in-progress` | 0/1 | `653556ba7df5` |
-| [Package settings registry 与 transaction](../packages/latticeaxiom/settings/settings-and-configuration.md) | `@latticeaxiom/settings` | `in-progress` | 0/1 | `653556ba7df5` |
+| [@latticeaxiom/settings](../packages/latticeaxiom/settings/README.md) | `@latticeaxiom/settings` | `in-progress` | 0/3 | `653556ba7df5` |
+| [Package settings registry 与 transaction](../packages/latticeaxiom/settings/settings-and-configuration.md) | `@latticeaxiom/settings` | `in-progress` | 0/3 | `653556ba7df5` |
 | [@latticeaxiom/world-library](../packages/latticeaxiom/world-library/README.md) | `@latticeaxiom/world-library` | `in-progress` | 0/1 | `653556ba7df5` |
 | [World catalog、preflight 与恢复](../packages/latticeaxiom/world-library/catalog-and-preflight.md) | `@latticeaxiom/world-library` | `in-progress` | 0/1 | `653556ba7df5` |
 | [@terrenia/blocks](../packages/terrenia/blocks/README.md) | `@terrenia/blocks` | `in-progress` | 0/1 | `653556ba7df5` |
@@ -59,13 +59,14 @@ path, product entry and reproducible checks. All other states remain conservativ
 | [@terrenia/tools](../packages/terrenia/tools/README.md) | `@terrenia/tools` | `in-progress` | 0/1 | `653556ba7df5` |
 | [@terrenia/worldgen](../packages/terrenia/worldgen/README.md) | `@terrenia/worldgen` | `in-progress` | 0/1 | `653556ba7df5` |
 | [Bevy 資產管線與模型語義](../platform/assets/asset-semantics.md) | `platform:assets` | `in-progress` | 0/1 | `653556ba7df5` |
-| [Shared client UI system 提案](../platform/client-ui/ui-system.md) | `platform:client-ui` | `not-started` | 0/1 | — |
+| [Client surface routing 与游戏内状态机](../platform/client-ui/game-surface-state.md) | `platform:client-ui` | `not-started` | 0/1 | — |
+| [Shared client UI system](../platform/client-ui/ui-system.md) | `platform:client-ui` | `not-started` | 0/1 | — |
 | [套件、ABI、Bevy 與持久化的相容性](../platform/compatibility/versioning-and-compatibility.md) | `platform:compatibility` | `in-progress` | 0/1 | `653556ba7df5` |
 | [套件模組、註冊清單與靜動雙實現](../platform/composition/module-composition.md) | `platform:composition` | `in-progress` | 0/1 | `653556ba7df5` |
 | [物理資產與局部形變創作](../platform/content/physical-authoring.md) | `platform:content` | `scaffolded` | 0/1 | `653556ba7df5` |
 | [Inventory、hotbar、crafting 与 player commands](../platform/gameplay/player-surfaces.md) | `platform:gameplay` | `in-progress` | 0/1 | `653556ba7df5` |
-| [Input binding 与 context stack 提案](../platform/input/input-binding-and-contexts.md) | `platform:input` | `not-started` | 0/1 | — |
-| [Shell 与 game supervisor 提案](../platform/launcher/supervisor-loop.md) | `platform:launcher` | `in-progress` | 0/1 | `653556ba7df5` |
+| [Input binding 与 context stack](../platform/input/input-binding-and-contexts.md) | `platform:input` | `not-started` | 0/4 | — |
+| [Shell 与 game supervisor](../platform/launcher/supervisor-loop.md) | `platform:launcher` | `in-progress` | 0/2 | `653556ba7df5` |
 | [原生模組 ABI、批次資料與生命週期](../platform/native-abi/native-module-abi.md) | `platform:native-abi` | `in-progress` | 0/1 | `653556ba7df5` |
 | [Observability host adapter](../platform/observability/diagnostics-inspection-and-debug-visualization.md) | `platform:observability` | `in-progress` | 0/1 | `653556ba7df5` |
 | [Nickel 驅動的套件內核與分發邊界](../platform/package-kernel/package-management.md) | `platform:package-kernel` | `in-progress` | 0/1 | `653556ba7df5` |
@@ -108,6 +109,7 @@ path, product entry and reproducible checks. All other states remain conservativ
 | [冻结治理、分发与安全触发条件](../decisions/0030-freeze-governance-distribution-and-security-triggers.md) | `decision` | `not-applicable` |
 | [冻结 Bevy 升级、依赖与供应链政策](../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md) | `decision` | `not-applicable` |
 | [冻结本地包取得、Nickel package import 与产品 lock](../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md) | `decision` | `not-applicable` |
+| [冻结输入动作、绑定档案与 surface context 契约](../decisions/0033-freeze-input-actions-bindings-and-contexts.md) | `decision` | `not-applicable` |
 | [Architecture Decision Records](../decisions/README.md) | `index` | `not-applicable` |
 | [Delivery](README.md) | `index` | `not-applicable` |
 | [待決問題決議索引](open-questions.md) | `reference` | `not-applicable` |

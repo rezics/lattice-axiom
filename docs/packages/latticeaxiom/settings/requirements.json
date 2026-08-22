@@ -12,6 +12,26 @@
         "Client and headless derive the same authoritative effective settings snapshot.",
         "Preview failure rolls back and user/world values survive through their authorized persistence paths."
       ]
+    },
+    {
+      "id": "SETTINGS-TRANSACTION-001",
+      "document_id": "package.latticeaxiom.settings.settings-and-configuration",
+      "level": "must",
+      "statement": "Every UI, CLI and API setting change uses one typed prepare, preview, apply and rollback transaction.",
+      "acceptance": [
+        "Validation, authority, callback failure, cancel and preview timeout leave either the complete old or complete new effective snapshot.",
+        "Restart and world-reactivation impacts are reported without applying unauthorized partial changes."
+      ]
+    },
+    {
+      "id": "SETTINGS-PERSISTENCE-001",
+      "document_id": "package.latticeaxiom.settings.settings-and-configuration",
+      "level": "must",
+      "statement": "Device and user settings persist through a versioned canonical old-or-complete-new file protocol.",
+      "acceptance": [
+        "UI scale, view distance and binding profiles survive process restart after successful apply.",
+        "Corrupt, newer and orphan values are diagnosed and preserved without silently overwriting user data."
+      ]
     }
   ]
 }
