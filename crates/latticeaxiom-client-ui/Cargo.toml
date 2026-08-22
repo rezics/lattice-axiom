@@ -1,0 +1,17 @@
+[package]
+name = "latticeaxiom-client-ui"
+description = "Shared headless-first client UI foundation for Lattice Axiom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[lints]
+workspace = true

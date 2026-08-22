@@ -1,0 +1,54 @@
+{
+  "schema": "latticeaxiom:schema/settings-catalog-fragment@1",
+  "owner": "@latticeaxiom/settings",
+  "settings": [
+    {
+      "id": "latticeaxiom:setting/ui-scale",
+      "declared_by": "@latticeaxiom/settings",
+      "schema_version": 1,
+      "value_type": {
+        "type": "number",
+        "min": 1.0,
+        "max": 2.0,
+        "step": 1.0
+      },
+      "default": 1.0,
+      "allowed_scopes": ["session", "user"],
+      "default_scope": "user",
+      "authority": "local-user",
+      "apply_impact": "immediate",
+      "category": "latticeaxiom:setting-category/accessibility",
+      "order": 10,
+      "label_key": "latticeaxiom.settings.ui-scale.label",
+      "description_key": "latticeaxiom.settings.ui-scale.description",
+      "visibility": null,
+      "enabled_when": null,
+      "sensitivity": "ordinary",
+      "replacement": null
+    },
+    {
+      "id": "latticeaxiom:setting/view-distance",
+      "declared_by": "@latticeaxiom/settings",
+      "schema_version": 1,
+      "value_type": {
+        "type": "integer",
+        "min": 1,
+        "max": 32,
+        "step": 1
+      },
+      "default": 8,
+      "allowed_scopes": ["session", "user"],
+      "default_scope": "user",
+      "authority": "local-user",
+      "apply_impact": "immediate",
+      "category": "latticeaxiom:setting-category/video",
+      "order": 20,
+      "label_key": "latticeaxiom.settings.view-distance.label",
+      "description_key": "latticeaxiom.settings.view-distance.description",
+      "visibility": null,
+      "enabled_when": null,
+      "sensitivity": "ordinary",
+      "replacement": null
+    }
+  ]
+}

@@ -30,6 +30,10 @@ game.make {
       version = "=0.1.0",
       realization = auto_data,
     },
+    "@latticeaxiom/input" = {
+      version = "=0.1.0",
+      realization = auto_data,
+    },
     "@latticeaxiom/observability" = {
       version = "=0.1.0",
       realization = auto_data,
@@ -40,6 +44,13 @@ game.make {
       capability = "latticeaxiom:capability/settings-registry@1",
       version = "^1.0.0",
       provider = "@latticeaxiom/settings",
+      cardinality = "exactly-one",
+      domains = ["server"],
+    },
+    "latticeaxiom:capability/input-actions@1" = {
+      capability = "latticeaxiom:capability/input-actions@1",
+      version = "^1.0.0",
+      provider = "@latticeaxiom/input",
       cardinality = "exactly-one",
       domains = ["server"],
     },
@@ -71,6 +82,10 @@ game.make {
       "@latticeaxiom/settings"
       "packages/latticeaxiom/settings",
     source_candidate
+      "latticeaxiom:source/input"
+      "@latticeaxiom/input"
+      "packages/latticeaxiom/input",
+    source_candidate
       "latticeaxiom:source/observability"
       "@latticeaxiom/observability"
       "packages/latticeaxiom/observability",
@@ -97,6 +112,11 @@ game.make {
   policy = {
     namespace_grants = {
       "@latticeaxiom/settings" = [
+        "latticeaxiom:capability/settings-registry",
+      ],
+      "@latticeaxiom/input" = [
+        "latticeaxiom:capability/input-actions",
+        "latticeaxiom:action/**",
         "latticeaxiom:capability/settings-registry",
       ],
       "@latticeaxiom/observability" = [

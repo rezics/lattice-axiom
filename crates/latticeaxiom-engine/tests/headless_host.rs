@@ -1645,6 +1645,55 @@ fn start_ui_pause_save_exit_continue_reopens_sealed_world_from_storage() {
     assert_eq!(restored_place.solid, occupancy_placed.solid);
 }
 
+#[test]
+fn home_preflight_game_save_and_quit_returns_home() {
+    let images = lock_boot_fixture().prepared();
+    let record_owner = "latticeaxiom:schema/world-db-chunk@1"
+        .parse()
+        .expect("fixture record owner is canonical");
+    let mut writer_host =
+        SealedWorldWriterHost::volatile_reference_with_default_publisher(record_owner);
+    let mut start = ProductionMemoryStart::new(images, start_shell_graph())
+        .with_storage(writer_host.storage().clone());
+    start.set_now_ms(10);
+    let intent = start
+        .quick_create_intent("Product Loop")
+        .expect("quick-create binds the lock graph root");
+    start.set_draft(intent);
+    let created = match start
+        .inject(&SemanticCommand {
+            target: semantic_id("home/new-world"),
+            action: SemanticActionId::QuickCreate,
+            source: InputSource::Headless,
+        })
+        .expect("home navigates to new-world")
+    {
+        MemoryStartEffect::Shell(ShellEffect::Navigate(ShellScreen::NewWorld)) => start
+            .inject(&SemanticCommand {
+                target: semantic_id("new-world/quick-create"),
+                action: SemanticActionId::Activate,
+                source: InputSource::Headless,
+            })
+            .expect("preflight publishes a world"),
+        MemoryStartEffect::Created(_) | MemoryStartEffect::Shell(_) => {
+            panic!("expected new-world navigation")
+        }
+    };
+    let created = match created {
+        MemoryStartEffect::Created(world_id) => world_id,
+        MemoryStartEffect::Shell(effect) => panic!("expected created world, got {effect:?}"),
+    };
+    let mut instance = start
+        .play_headless(created, 20, SPINE_TIMESTEP)
+        .expect("game host starts from the same lock");
+    start.pause_session(&mut instance).expect("pause");
+    start
+        .save_and_quit(created, instance, &mut writer_host)
+        .expect("Save & Quit");
+    assert_eq!(start.flow().shell().screen, ShellScreen::Home);
+    assert_eq!(start.continue_world_id(), Some(created));
+}
+
 fn start_shell_graph() -> ClientShellGraph {
     ClientShellGraph::resolve([
         ShellPackageProvider {

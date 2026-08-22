@@ -4,15 +4,15 @@ use std::{cmp::Ordering, collections::BTreeMap};
 
 use latticeaxiom_core::{CanonicalHash, PackageName, StableId, WorldId};
 use latticeaxiom_world_catalog::{
-    CatalogDiagnosticCode, CatalogEntry, CatalogEntryFailure, CatalogEntryState, DisplayName,
-    LiveWorldLocation, ManagedTrashLocation, MoveToTrashPlan, RestoreMode, RestorePlanningOutcome,
-    TrashTombstone, WorldOpenAction, WorldOpenPlan, WorldOpenStatus, WorldRootId, WriterBarrier,
-    plan_restore,
+    CatalogCardState, CatalogDiagnosticCode, CatalogEntry, CatalogEntryFailure, CatalogEntryState,
+    DisplayName, LiveWorldLocation, ManagedTrashLocation, MoveToTrashPlan, RestoreMode,
+    RestorePlanningOutcome, TrashTombstone, WorldLifecycleEvidence, WorldOpenAction, WorldOpenPlan,
+    WorldOpenStatus, WorldRootId, WriterBarrier, classify_catalog_card, plan_restore,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::SemanticNodeId;
+use crate::{SemanticActionId, SemanticNodeId};
 
 /// Optional presentation metadata loaded independently from the bounded header.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -39,6 +39,8 @@ pub struct WorldShellRecord {
     pub metadata: WorldCardMetadata,
     /// Read-only preflight result, when available.
     pub open_plan: Option<WorldOpenPlan>,
+    /// Checkpoint/clone/export evidence captured without a writer.
+    pub lifecycle: Option<WorldLifecycleEvidence>,
 }
 
 impl WorldShellRecord {
@@ -62,6 +64,7 @@ impl WorldShellRecord {
             entry,
             metadata,
             open_plan,
+            lifecycle: None,
         })
     }
 
@@ -110,6 +113,12 @@ impl WorldShellRecord {
         }
     }
 
+    /// Player-facing catalog card state, including scan-only recovery.
+    #[must_use]
+    pub fn card_state(&self) -> CatalogCardState {
+        classify_catalog_card(&self.entry.state, self.open_plan.as_ref())
+    }
+
     /// Actions mechanically derived from health and immutable plan actions.
     #[must_use]
     pub fn actions(&self) -> Vec<WorldCardAction> {
@@ -139,6 +148,13 @@ impl WorldShellRecord {
         }
         actions.push(WorldCardAction::Details);
         actions
+    }
+
+    /// Stable child semantic ID for one card action.
+    #[must_use]
+    pub fn action_semantic_id(&self, action: &WorldCardAction) -> Option<SemanticNodeId> {
+        let suffix = action.semantic_suffix()?;
+        SemanticNodeId::new(format!("{}/{suffix}", self.semantic_id().as_str())).ok()
     }
 }
 
@@ -212,6 +228,64 @@ pub enum WorldCardAction {
     OpenStorageLocation,
     /// Open world/package/schema details.
     Details,
+}
+
+impl WorldCardAction {
+    /// Path suffix used under the parent world row.
+    #[must_use]
+    pub fn semantic_suffix(&self) -> Option<&'static str> {
+        match self {
+            Self::PlayExact => Some("play"),
+            Self::RunPreflight => Some("preflight"),
+            Self::Preflight(WorldOpenAction::UseFrozenLock) => Some("play"),
+            Self::Preflight(WorldOpenAction::ResolveCompatibleGraph) => Some("compatible"),
+            Self::Preflight(WorldOpenAction::PreparePackage { .. }) => Some("prepare"),
+            Self::Preflight(WorldOpenAction::OpenReadOnly) => Some("read-only"),
+            Self::Preflight(WorldOpenAction::Export) | Self::Export => Some("export"),
+            Self::Preflight(WorldOpenAction::RestoreCheckpoint { .. }) => {
+                Some("restore-checkpoint")
+            }
+            Self::Preflight(WorldOpenAction::RepairHeader { .. }) => Some("repair"),
+            Self::Preflight(WorldOpenAction::CloneAndMigrate { .. }) => Some("migrate"),
+            Self::InspectRecovery => Some("inspect"),
+            Self::CreateCheckpoint => Some("checkpoint"),
+            Self::Duplicate => Some("clone"),
+            Self::Rename => Some("rename"),
+            Self::MoveToTrash => Some("trash"),
+            Self::OpenStorageLocation => Some("storage"),
+            Self::Details => Some("details"),
+        }
+    }
+
+    /// Logical action advertised on the corresponding semantic child.
+    #[must_use]
+    pub const fn semantic_action(&self) -> SemanticActionId {
+        match self {
+            Self::PlayExact | Self::Preflight(WorldOpenAction::UseFrozenLock) => {
+                SemanticActionId::PlayExact
+            }
+            Self::RunPreflight => SemanticActionId::RunPreflight,
+            Self::CreateCheckpoint => SemanticActionId::CreateCheckpoint,
+            Self::Duplicate | Self::Preflight(WorldOpenAction::CloneAndMigrate { .. }) => {
+                SemanticActionId::CloneWorld
+            }
+            Self::Export | Self::Preflight(WorldOpenAction::Export) => {
+                SemanticActionId::ExportWorld
+            }
+            Self::MoveToTrash => SemanticActionId::MoveToTrash,
+            Self::InspectRecovery => SemanticActionId::InspectRecovery,
+            Self::Preflight(WorldOpenAction::RestoreCheckpoint { .. }) => {
+                SemanticActionId::RestoreCheckpoint
+            }
+            Self::Preflight(WorldOpenAction::OpenReadOnly)
+            | Self::Preflight(WorldOpenAction::PreparePackage { .. })
+            | Self::Preflight(WorldOpenAction::ResolveCompatibleGraph)
+            | Self::Preflight(WorldOpenAction::RepairHeader { .. }) => {
+                SemanticActionId::RunPreflight
+            }
+            Self::Rename | Self::OpenStorageLocation | Self::Details => SemanticActionId::Activate,
+        }
+    }
 }
 
 /// Stable world-list sort modes.
@@ -430,6 +504,70 @@ impl WorldLibraryState {
                 .collect(),
             trash: BTreeMap::new(),
         }
+    }
+
+    /// Inserts a published live record without opening a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldShellError::LiveLocationConflict`] when the structural
+    /// location is already occupied.
+    pub fn insert_live(&mut self, record: WorldShellRecord) -> Result<(), WorldShellError> {
+        if self.live.contains_key(&record.entry.location) {
+            return Err(WorldShellError::LiveLocationConflict);
+        }
+        self.live.insert(record.entry.location, record);
+        Ok(())
+    }
+
+    /// Attaches a metadata-only preflight plan to a live world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldShellError`] when the world is absent or the plan belongs
+    /// to another identity.
+    pub fn attach_preflight(
+        &mut self,
+        world_id: WorldId,
+        plan: WorldOpenPlan,
+    ) -> Result<(), WorldShellError> {
+        if plan.world_id != world_id {
+            return Err(WorldShellError::PlanIdentityMismatch);
+        }
+        let record = self
+            .live
+            .values_mut()
+            .find(|record| record.world_id() == world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        record.open_plan = Some(plan);
+        Ok(())
+    }
+
+    /// Attaches checkpoint/clone/export evidence without opening a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldShellError::MissingLiveWorld`] when the identity is absent.
+    pub fn attach_lifecycle(
+        &mut self,
+        world_id: WorldId,
+        evidence: WorldLifecycleEvidence,
+    ) -> Result<(), WorldShellError> {
+        let record = self
+            .live
+            .values_mut()
+            .find(|record| record.world_id() == world_id)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        record.lifecycle = Some(evidence);
+        Ok(())
+    }
+
+    /// Returns one live record by immutable world identity.
+    #[must_use]
+    pub fn live_by_id(&self, world_id: WorldId) -> Option<&WorldShellRecord> {
+        self.live
+            .values()
+            .find(|record| record.world_id() == world_id)
     }
 
     /// Returns live entries in structural stable order.

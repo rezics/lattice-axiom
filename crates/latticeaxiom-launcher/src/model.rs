@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::process::{PriorChildStatusV1, SpawnFailureV1, TerminationFailureV1};
+use crate::process::{PriorChildStatusV1, SpawnFailureV1, SpawnedProcess, TerminationFailureV1};
 
 use crate::{
     LaunchIntentError, LaunchModelError, MAX_LAUNCH_CLOCK_SKEW_MS, MAX_LAUNCH_INTENT_BYTES,
@@ -700,6 +700,50 @@ impl TransitionValidationPolicy {
     ) -> SettingTransactionRevision {
         self.expected_confirmed_setting_transaction_revision
     }
+
+    /// Builds policy from a trusted shell lock and an already-authenticated intent.
+    ///
+    /// World lock and open-plan hashes are taken from `intent` after the
+    /// supervisor has cross-checked generation, role, and the child-exit
+    /// report. The shell lock must still match the supervisor-selected lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchIntentError::ShellLockMismatch`] when the intent names
+    /// another shell lock, or [`LaunchIntentError::InvalidTargetHashes`] when a
+    /// world intent is missing preflight hashes.
+    pub fn for_authenticated_intent(
+        now_ms: u64,
+        trusted_shell_lock_hash: CanonicalHash,
+        intent: &LaunchIntentV1,
+    ) -> Result<Self, LaunchIntentError> {
+        if intent.shell_lock_hash() != trusted_shell_lock_hash {
+            return Err(LaunchIntentError::ShellLockMismatch);
+        }
+        match intent.target() {
+            LaunchTargetV1::Shell => Ok(Self::for_shell(
+                now_ms,
+                trusted_shell_lock_hash,
+                intent.confirmed_setting_transaction_revision(),
+            )),
+            LaunchTargetV1::World { world_id } => {
+                let Some(world_lock_hash) = intent.world_lock_hash() else {
+                    return Err(LaunchIntentError::InvalidTargetHashes);
+                };
+                let Some(world_open_plan_hash) = intent.world_open_plan_hash() else {
+                    return Err(LaunchIntentError::InvalidTargetHashes);
+                };
+                Ok(Self::for_world(
+                    now_ms,
+                    world_id,
+                    trusted_shell_lock_hash,
+                    world_lock_hash,
+                    world_open_plan_hash,
+                    intent.confirmed_setting_transaction_revision(),
+                ))
+            }
+        }
+    }
 }
 
 /// Stable current-process role tracked by the transition publisher.
@@ -930,6 +974,10 @@ pub enum LaunchPhaseV1 {
     RecoveryBoot,
     /// Recovery shell safe-bootstrap acknowledgement.
     RecoveryAck,
+    /// Child-exit report authentication and one-shot consume.
+    ChildExit,
+    /// Bounded wait for a supervised child to exit.
+    ChildShutdown,
 }
 
 /// Stable failure code used without unbounded process or filesystem strings.
@@ -982,6 +1030,16 @@ pub enum LaunchFailureCodeV1 {
     RecoveryClaimFailed,
     /// Recovery was already attempted and was suppressed.
     RecoveryLoopSuppressed,
+    /// No authentic child-exit report was present.
+    ChildReportMissing,
+    /// The child-exit report did not match the supervised child or intent.
+    ChildReportMismatch,
+    /// Child-exit bytes were malformed or non-canonical.
+    ChildReportCorrupt,
+    /// The bounded child shutdown wait elapsed.
+    ShutdownTimedOut,
+    /// The writer returned Written without Durable.
+    WrittenOnly,
 }
 
 /// Stable reason presented by the recovery shell.
@@ -1479,6 +1537,13 @@ pub enum ProcessLaunchRequestV1 {
     Intent(LaunchIntentV1),
     /// Boot one exact package-minimal recovery request.
     RecoveryShell(RecoveryLaunchRequestV1),
+    /// Boot the first product shell without a pending launch intent.
+    InitialShell {
+        /// First valid launch generation.
+        generation: LaunchGeneration,
+        /// Exact reopened shell lock.
+        shell_lock_hash: CanonicalHash,
+    },
 }
 
 /// Result observed while waiting for a child bootstrap acknowledgement.
@@ -1488,6 +1553,11 @@ pub enum BootObservationV1 {
     Acknowledged(BootstrapAckV1),
     /// A recovery child acknowledged its exact versioned request.
     RecoveryAcknowledged(RecoveryBootstrapAckV1),
+    /// The first product shell reached its safe bootstrap state.
+    InitialShellAcknowledged {
+        /// Child process epoch bound to the single-client-App lease.
+        process_epoch: ProcessEpoch,
+    },
     /// The child rejected its locks or bootstrap inputs.
     BootFailed,
     /// The child exited before acknowledgement.
@@ -1548,6 +1618,8 @@ pub struct BootstrapReportV1 {
     schema_version: u32,
     outcome: TransitionOutcomeV1,
     failures: Vec<LaunchFailureReceiptV1>,
+    #[serde(skip)]
+    child: Option<SpawnedProcess>,
 }
 
 impl BootstrapReportV1 {
@@ -1560,7 +1632,13 @@ impl BootstrapReportV1 {
             schema_version: LAUNCH_RECEIPT_SCHEMA_VERSION,
             outcome,
             failures,
+            child: None,
         }
+    }
+
+    pub(crate) fn with_child(mut self, child: SpawnedProcess) -> Self {
+        self.child = Some(child);
+        self
     }
 
     /// Returns the terminal outcome.
@@ -1573,6 +1651,12 @@ impl BootstrapReportV1 {
     #[must_use]
     pub fn failures(&self) -> &[LaunchFailureReceiptV1] {
         &self.failures
+    }
+
+    /// Returns the supervised child when bootstrap left a live process.
+    #[must_use]
+    pub const fn child(&self) -> Option<SpawnedProcess> {
+        self.child
     }
 }
 

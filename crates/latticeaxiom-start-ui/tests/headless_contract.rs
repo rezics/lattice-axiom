@@ -14,11 +14,11 @@ use latticeaxiom_runtime_contracts::{
 };
 use latticeaxiom_start_ui::*;
 use latticeaxiom_world_catalog::{
-    CatalogDiagnosticCode, CatalogEntry, CatalogEntryFailure, CatalogEntryState, CatalogProjection,
-    DiagnosticCode, DisplayName, LiveWorldLocation, ManagedTrashLocation, PackagePreparation,
-    ReconciliationState, RestoreMode, RestorePlanningOutcome, StoragePressureState, TrashEntryId,
-    TrashRetentionPolicy, TrashTombstone, WorldDiagnostic, WorldOpenAction, WorldOpenPlan,
-    WorldOpenRisk, WorldOpenStatus, WorldRootId, WriterBarrier,
+    CatalogCardState, CatalogDiagnosticCode, CatalogEntry, CatalogEntryFailure, CatalogEntryState,
+    CatalogProjection, DiagnosticCode, DisplayName, LiveWorldLocation, ManagedTrashLocation,
+    PackagePreparation, ReconciliationState, RestoreMode, RestorePlanningOutcome,
+    StoragePressureState, TrashEntryId, TrashRetentionPolicy, TrashTombstone, WorldDiagnostic,
+    WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus, WorldRootId, WriterBarrier,
 };
 use serde_json::json;
 
@@ -171,6 +171,8 @@ fn corrupt_header_remains_visible_and_does_not_block_healthy_world() {
             .actions()
             .contains(&WorldCardAction::InspectRecovery)
     );
+    assert_eq!(list.records()[0].card_state(), CatalogCardState::ReadyExact);
+    assert_eq!(list.records()[1].card_state(), CatalogCardState::Corrupt);
 }
 
 #[test]
@@ -769,5 +771,51 @@ fn memory_pause_save_exit_continue_semantic_flow_does_not_checkpoint() {
     assert_eq!(
         continued,
         MemoryStartEffect::Shell(ShellEffect::RequestExactWorldLaunch(created))
+    );
+}
+
+#[test]
+fn world_library_create_continue_prepares_launch_without_a_writer() {
+    let mut flow = WorldLibraryFlow::new(shell_graph());
+    flow.set_now_ms(10);
+    flow.set_launch_context(LaunchHandoffContext {
+        generation: LaunchGeneration::FIRST,
+        issued_at_ms: 10,
+        expires_at_ms: 70_000,
+        shell_lock_hash: CanonicalHash::digest(b"shell"),
+        world_lock_hash: CanonicalHash::digest(b"world"),
+        confirmed_setting_transaction_revision: LaunchSettingRevision::new(1),
+    });
+    let world = WorldId::new_v4();
+    flow.create(
+        &QuickCreateIntent::new(
+            "Library",
+            memory_session_template(),
+            package("@example/game"),
+            CanonicalHash::digest(b"profile"),
+        )
+        .unwrap_or_else(|error| panic!("quick create: {error}")),
+        world,
+    )
+    .unwrap_or_else(|error| panic!("create: {error}"));
+    assert!(flow.continue_world_id().is_none());
+    flow.attach_preflight(world, plan(world, WorldOpenStatus::ReadyExact))
+        .unwrap_or_else(|error| panic!("preflight: {error}"));
+    let effect = flow
+        .inject(&SemanticCommand {
+            target: SemanticNodeId::new("home/continue")
+                .unwrap_or_else(|error| panic!("target fixture: {error}")),
+            action: SemanticActionId::ContinueWorld,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("continue: {error}"));
+    assert!(matches!(effect, WorldLibraryEffect::PreparedLaunch(_)));
+    assert_eq!(flow.shell().screen, ShellScreen::Loading);
+    assert_eq!(
+        flow.shell()
+            .loading
+            .as_ref()
+            .map(LoadingState::cancel_disposition),
+        Some(LoadingCancelDisposition::CancelBeforeWriter)
     );
 }

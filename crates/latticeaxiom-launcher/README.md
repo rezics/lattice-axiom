@@ -9,13 +9,22 @@ The V1 flow is deliberately fail-closed:
 1. the current shell or world completes a typed shutdown barrier;
 2. a canonical, checksummed `LaunchIntentV1` is written to a confined
    temporary file, synchronized, and atomically published;
-3. the external launcher validates exact target/lock receipts and atomically
+3. the child atomically publishes a `ChildExitReportV1` that distinguishes
+   shell Quit, Save & Quit, OS close, crash, timeout, and written-only exits;
+4. the non-Bevy `SupervisorMachine` validates generation, role, lock hashes,
+   and open-plan hash, then atomically consumes the report and optional intent;
+5. the external launcher validates exact target/lock receipts and atomically
    changes the slot from `pending` to `claimed` before spawning;
-4. a matching safe-bootstrap acknowledgement changes `claimed` to `consumed`;
-5. any invalid intent or target failure is quarantined and may publish one
-   canonical, checksummed recovery request, never the failed target again;
-6. the process supervisor atomically acquires that exact recovery request and
+6. a matching safe-bootstrap acknowledgement changes `claimed` to `consumed`;
+7. any invalid intent, missing report, crash, timeout, or target failure is
+   quarantined and may publish one canonical recovery request, never the failed
+   target again;
+8. the process supervisor atomically acquires that exact recovery request and
    reconciles it after restart without creating a second physical child.
+
+The supervisor loop is shell → optional world → shell. A shell exit with no
+intent ends the product. Written-only, shutdown timeout, stale intent, and
+lease conflict enter bounded recovery; a failed generation is never replayed.
 
 The store remains bounded to fixed literal slots and capped blobs. Publishing a
 strictly newer generation makes the new `pending` bytes observable before
@@ -50,5 +59,6 @@ for retry/spawn suppression rather than as permission to create another child.
 The automated corpus covers barrier, temporary write, file sync, atomic move,
 spawn, boot, acknowledgement, child crash, claimed-intent launcher crash,
 stale/corrupt/expired input, canonical byte and checksum validation,
-idempotency, input bounds, quarantine, consumption, and recovery-loop
-suppression.
+idempotency, input bounds, quarantine, consumption, recovery-loop
+suppression, one-shot child-exit consumption, and supervisor product-loop
+routing.

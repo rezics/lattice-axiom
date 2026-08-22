@@ -39,11 +39,16 @@ struct PackageSource {
     package_name: &'static str,
 }
 
-const PACKAGE_SOURCES: [PackageSource; 13] = [
+const PACKAGE_SOURCES: [PackageSource; 14] = [
     PackageSource {
         logical_dir: "packages/latticeaxiom/settings",
         source_id: "latticeaxiom:source/settings",
         package_name: "@latticeaxiom/settings",
+    },
+    PackageSource {
+        logical_dir: "packages/latticeaxiom/input",
+        source_id: "latticeaxiom:source/input",
+        package_name: "@latticeaxiom/input",
     },
     PackageSource {
         logical_dir: "packages/latticeaxiom/settings-ui",
@@ -465,6 +470,10 @@ fn validate_shipped_package_delegations(packages: &BTreeMap<PackageName, Package
         ),
         (
             package_name("@latticeaxiom/settings-ui"),
+            BTreeSet::from([package_name("@latticeaxiom/settings")]),
+        ),
+        (
+            package_name("@latticeaxiom/input"),
             BTreeSet::from([package_name("@latticeaxiom/settings")]),
         ),
         (

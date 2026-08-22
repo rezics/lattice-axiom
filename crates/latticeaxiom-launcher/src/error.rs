@@ -66,6 +66,9 @@ pub enum LaunchModelError {
         /// Bounded upstream diagnostic.
         reason: String,
     },
+    /// A child-exit draft mixed incompatible role, kind, intent, or revision fields.
+    #[error("child-exit report role, exit kind, and revision shape is invalid")]
+    InvalidChildExitShape,
 }
 
 /// Rejection while decoding or validating an untrusted launch intent.
@@ -167,6 +170,53 @@ pub enum LaunchIntentError {
     /// The world-open plan differs from the read-only preflight result.
     #[error("launch intent open-plan hash does not match the selected preflight plan")]
     WorldOpenPlanMismatch,
+}
+
+/// Rejection while decoding or validating an untrusted child-exit report.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum ChildExitError {
+    /// The envelope exceeded the fixed input ceiling.
+    #[error("child-exit report has {actual_bytes} bytes; maximum is {maximum_bytes}")]
+    InputTooLarge {
+        /// Actual byte length.
+        actual_bytes: usize,
+        /// Maximum accepted byte length.
+        maximum_bytes: usize,
+    },
+    /// The bytes were not a strict V1 JSON envelope.
+    #[error("child-exit report JSON is invalid: {reason}")]
+    InvalidJson {
+        /// Bounded parser diagnostic.
+        reason: String,
+    },
+    /// The envelope was valid JSON but not canonical JSON bytes.
+    #[error("child-exit report bytes are not the canonical JSON encoding")]
+    NonCanonicalBytes,
+    /// The schema version is not supported.
+    #[error("unsupported child-exit report schema version {actual}; expected {expected}")]
+    UnsupportedSchema {
+        /// Encountered schema version.
+        actual: u32,
+        /// Supported schema version.
+        expected: u32,
+    },
+    /// The checksum did not authenticate the normalized body.
+    #[error("child-exit report checksum mismatch: expected {expected}, recomputed {actual}")]
+    ChecksumMismatch {
+        /// Claimed checksum.
+        expected: CanonicalHash,
+        /// Recomputed checksum.
+        actual: CanonicalHash,
+    },
+    /// Role, exit kind, intent binding, or world-revision shape was invalid.
+    #[error("child-exit report role, exit kind, and revision shape is invalid")]
+    InvalidShape,
+    /// The report named a different child generation, epoch, or role.
+    #[error("child-exit report does not match the supervised child")]
+    SupervisedChildMismatch,
+    /// The report selected another shell lock.
+    #[error("child-exit report shell lock does not match the selected shell lock")]
+    ShellLockMismatch,
 }
 
 /// Stable operation category for atomic intent storage.

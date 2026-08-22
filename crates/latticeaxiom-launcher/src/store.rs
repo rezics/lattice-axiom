@@ -266,6 +266,140 @@ impl RecoveryClaimOutcome {
     }
 }
 
+/// Durable disposition of the single bounded child-exit slot.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ChildExitDisposition {
+    /// Canonical bytes are published but have not been consumed.
+    Pending,
+    /// The supervisor atomically consumed the one-shot report.
+    Consumed,
+    /// Invalid or mismatched bytes were isolated from automatic replay.
+    Quarantined,
+}
+
+impl ChildExitDisposition {
+    /// Returns the stable diagnostic label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Consumed => "consumed",
+            Self::Quarantined => "quarantined",
+        }
+    }
+}
+
+/// One bounded durable child-exit observation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ChildExitSlot {
+    /// No child-exit report exists.
+    #[default]
+    Empty,
+    /// Exact bytes and their durable disposition.
+    Occupied {
+        /// Durable state of the bytes.
+        disposition: ChildExitDisposition,
+        /// Exact canonical or quarantined bytes, bounded by the read policy.
+        bytes: Vec<u8>,
+        /// SHA-256 of the exact bytes used for compare-before-move.
+        blob_hash: CanonicalHash,
+    },
+}
+
+impl ChildExitSlot {
+    /// Creates a bounded occupied observation and computes its exact-byte hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntentStoreError::SlotTooLarge`] when the byte ceiling is
+    /// exceeded.
+    pub fn occupied(
+        disposition: ChildExitDisposition,
+        bytes: Vec<u8>,
+    ) -> Result<Self, IntentStoreError> {
+        check_bound(bytes.len())?;
+        let blob_hash = CanonicalHash::digest(&bytes);
+        Ok(Self::Occupied {
+            disposition,
+            bytes,
+            blob_hash,
+        })
+    }
+
+    /// Returns the slot disposition, if occupied.
+    #[must_use]
+    pub const fn disposition(&self) -> Option<ChildExitDisposition> {
+        match self {
+            Self::Empty => None,
+            Self::Occupied { disposition, .. } => Some(*disposition),
+        }
+    }
+
+    /// Returns the exact bytes, if occupied.
+    #[must_use]
+    pub fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Empty => None,
+            Self::Occupied { bytes, .. } => Some(bytes),
+        }
+    }
+
+    /// Returns the exact-byte digest, if occupied.
+    #[must_use]
+    pub const fn blob_hash(&self) -> Option<CanonicalHash> {
+        match self {
+            Self::Empty => None,
+            Self::Occupied { blob_hash, .. } => Some(*blob_hash),
+        }
+    }
+}
+
+/// Durable single-slot operations for one-shot [`crate::ChildExitReportV1`] bytes.
+///
+/// `Pending -> Consumed` is the durable one-shot gate that prevents a crash
+/// from replaying the same child result. Publishing over `consumed` or
+/// `quarantined` is the next child's report, never a second report for the
+/// same generation.
+pub trait AtomicChildExitStore {
+    /// Reads at most [`MAX_LAUNCH_INTENT_BYTES`] from the durable slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntentStoreError`] for I/O, confinement, layout, or bound
+    /// failures.
+    fn read(&mut self) -> Result<ChildExitSlot, IntentStoreError>;
+
+    /// Atomically publishes exact canonical child-exit bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntentStoreError`] if another pending blob occupies the slot
+    /// or an atomic storage step fails before the destination is observable.
+    fn publish(&mut self, canonical_bytes: &[u8]) -> Result<PublishDisposition, IntentStoreError>;
+
+    /// Atomically records successful supervisor consumption.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntentStoreError`] if the slot is not pending, changed, or
+    /// fails before the consumed destination is observable.
+    fn consume(
+        &mut self,
+        expected_blob_hash: CanonicalHash,
+    ) -> Result<MutationDurability, IntentStoreError>;
+
+    /// Atomically isolates pending child-exit bytes from automatic replay.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntentStoreError`] if the slot is not pending, changed, or
+    /// fails before the quarantine destination is observable.
+    fn quarantine(
+        &mut self,
+        expected_blob_hash: CanonicalHash,
+    ) -> Result<MutationDurability, IntentStoreError>;
+}
+
 /// Durable single-slot operations required by the launcher state machine.
 ///
 /// Implementations must make each state change atomic. In particular,

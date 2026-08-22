@@ -1,16 +1,17 @@
 //! External process-control boundary used by the pure launcher state machine.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
 use crate::{
-    BootObservationV1, LaunchIntentV1, ProcessLaunchRequestV1, ProcessSupervisorIdentityV1,
-    RecoveryLaunchRequestV1,
+    BootObservationV1, LaunchIntentV1, ProcessEpoch, ProcessLaunchRequestV1,
+    ProcessSupervisorIdentityV1, RecoveryLaunchRequestV1,
 };
 
 /// Opaque non-zero identifier for a process owned by a [`ProcessControl`].
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct SpawnedProcess(u64);
 
 impl SpawnedProcess {
@@ -31,6 +32,15 @@ impl SpawnedProcess {
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for SpawnedProcess {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u64::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
 
@@ -66,13 +76,32 @@ pub enum TerminationFailureV1 {
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "status")]
 pub enum PriorChildStatusV1 {
     /// The exact intent child is still supervised and may remain active.
-    Running,
+    Running {
+        /// Adapter handle for the still-owned child.
+        process: SpawnedProcess,
+        /// Process epoch bound to the child's single-client-App lease.
+        process_epoch: ProcessEpoch,
+    },
     /// The supervisor proves the exact intent child exited.
     Exited {
         /// Platform exit code when one was supplied.
         exit_code: Option<i32>,
     },
     /// The adapter cannot prove whether the exact intent child still exists.
+    Unknown,
+}
+
+/// Result observed while waiting for a supervised child to exit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChildObservationV1 {
+    /// The adapter proved the exact child exited.
+    Exited {
+        /// Platform exit code when one was supplied.
+        exit_code: Option<i32>,
+    },
+    /// The bounded shutdown wait elapsed while the child still existed.
+    TimedOut,
+    /// The adapter cannot prove whether the exact child still exists.
     Unknown,
 }
 
@@ -158,4 +187,10 @@ pub trait ProcessControl {
     /// termination. The bootstrap machine then fails closed and does not spawn
     /// recovery beside a possibly live target process.
     fn terminate(&mut self, process: SpawnedProcess) -> Result<(), TerminationFailureV1>;
+
+    /// Waits until the exact supervised child exits or the deadline elapses.
+    ///
+    /// Implementations must not kill an unknown owner. [`ChildObservationV1::Unknown`]
+    /// suppresses another window App. A timeout is not proof of crash.
+    fn await_exit(&mut self, process: SpawnedProcess, deadline_ms: u64) -> ChildObservationV1;
 }

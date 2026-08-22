@@ -15,9 +15,9 @@ use std::cell::Cell;
 use latticeaxiom_core::CanonicalHash;
 
 use crate::{
-    AtomicLaunchIntentStore, IntentSlot, IntentStoreError, MAX_LAUNCH_INTENT_BYTES,
-    MutationDurability, PublishDisposition, RecoveryClaimOutcome, SlotDisposition, StoreOperation,
-    TerminalPredecessor,
+    AtomicChildExitStore, AtomicLaunchIntentStore, ChildExitDisposition, ChildExitSlot, IntentSlot,
+    IntentStoreError, MAX_LAUNCH_INTENT_BYTES, MutationDurability, PublishDisposition,
+    RecoveryClaimOutcome, SlotDisposition, StoreOperation, TerminalPredecessor,
 };
 
 const TEMPORARY_FILE: &str = ".launch-intent.tmp";
@@ -29,6 +29,10 @@ const RECOVERY_CLAIMED_FILE: &str = "launch-intent.recovery-claimed";
 const PREDECESSOR_CONSUMED_FILE: &str = "launch-intent.predecessor.consumed";
 const PREDECESSOR_QUARANTINED_FILE: &str = "launch-intent.predecessor.quarantined";
 const PREDECESSOR_RECOVERY_FILE: &str = "launch-intent.predecessor.recovery-claimed";
+const CHILD_EXIT_TEMPORARY_FILE: &str = ".child-exit.tmp";
+const CHILD_EXIT_PENDING_FILE: &str = "child-exit.pending";
+const CHILD_EXIT_CONSUMED_FILE: &str = "child-exit.consumed";
+const CHILD_EXIT_QUARANTINED_FILE: &str = "child-exit.quarantined";
 
 type LocatedSlot = (SlotDisposition, &'static str, PathBuf);
 
@@ -65,29 +69,8 @@ impl FileLaunchIntentStore {
     /// symlinked, non-directory, or non-canonical roots; returns an I/O error
     /// if metadata cannot be inspected.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, IntentStoreError> {
-        let root = root.as_ref();
-        if !root.is_absolute()
-            || contains_literal_dot_segment(root)
-            || root.components().any(|component| {
-                matches!(component, Component::CurDir | Component::ParentDir)
-                    || matches!(component.as_os_str().to_str(), Some("." | ".."))
-            })
-        {
-            return Err(IntentStoreError::UnsafeRoot);
-        }
-        reject_symlinked_components(root)?;
-        let metadata = fs::symlink_metadata(root)
-            .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(IntentStoreError::UnsafeRoot);
-        }
-        let canonical = fs::canonicalize(root)
-            .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
-        if canonical != root {
-            return Err(IntentStoreError::UnsafeRoot);
-        }
         Ok(Self {
-            root: canonical,
+            root: open_confined_root(root)?,
             #[cfg(test)]
             directory_syncs_until_fault: Cell::new(None),
         })
@@ -773,6 +756,376 @@ impl AtomicLaunchIntentStore for FileLaunchIntentStore {
     }
 }
 
+/// Atomic child-exit store rooted at one literal, already-created directory.
+///
+/// Slot names are compile-time literals distinct from the launch-intent files,
+/// so both stores may share one launcher-owned private root.
+#[derive(Debug)]
+pub struct FileChildExitStore {
+    root: PathBuf,
+}
+
+impl FileChildExitStore {
+    /// Opens a store in a literal absolute directory without creating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntentStoreError::UnsafeRoot`] for relative, dot-segment,
+    /// symlinked, non-directory, or non-canonical roots.
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, IntentStoreError> {
+        Ok(Self {
+            root: open_confined_root(root)?,
+        })
+    }
+
+    /// Returns the canonical confined root.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn path(&self, name: &'static str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    fn inspect_regular_slot(
+        &self,
+        path: &Path,
+        label: &'static str,
+    ) -> Result<bool, IntentStoreError> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(source) => return Err(IntentStoreError::io(StoreOperation::Read, source)),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(IntentStoreError::UnsafeSlot { slot: label });
+        }
+        let canonical = fs::canonicalize(path)
+            .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
+        if canonical != path || canonical.parent() != Some(self.root.as_path()) {
+            return Err(IntentStoreError::UnsafeSlot { slot: label });
+        }
+        Ok(true)
+    }
+
+    fn read_path(&self, path: &Path, label: &'static str) -> Result<Vec<u8>, IntentStoreError> {
+        if !self.inspect_regular_slot(path, label)? {
+            return Err(IntentStoreError::UnexpectedState {
+                expected: label,
+                actual: "empty",
+            });
+        }
+        let file = File::open(path)
+            .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
+        let maximum = MAX_LAUNCH_INTENT_BYTES as u64;
+        if metadata.len() > maximum {
+            return Err(IntentStoreError::SlotTooLarge {
+                actual_bytes: metadata.len(),
+                maximum_bytes: maximum,
+            });
+        }
+        let mut bytes =
+            Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(MAX_LAUNCH_INTENT_BYTES));
+        file.take(maximum.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
+        if bytes.len() > MAX_LAUNCH_INTENT_BYTES {
+            return Err(IntentStoreError::SlotTooLarge {
+                actual_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                maximum_bytes: maximum,
+            });
+        }
+        Ok(bytes)
+    }
+
+    fn present(
+        &self,
+    ) -> Result<Option<(ChildExitDisposition, &'static str, PathBuf)>, IntentStoreError> {
+        let mut present = Vec::with_capacity(3);
+        for (disposition, name) in child_exit_files() {
+            let path = self.path(name);
+            if self.inspect_regular_slot(&path, name)? {
+                present.push((disposition, name, path));
+            }
+        }
+        match present.len() {
+            0 => Ok(None),
+            1 => Ok(present.pop()),
+            _ => Err(IntentStoreError::ConflictingSlots),
+        }
+    }
+
+    fn write_temporary(&self, bytes: &[u8]) -> Result<PathBuf, IntentStoreError> {
+        if bytes.len() > MAX_LAUNCH_INTENT_BYTES {
+            return Err(IntentStoreError::SlotTooLarge {
+                actual_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                maximum_bytes: MAX_LAUNCH_INTENT_BYTES as u64,
+            });
+        }
+        let temporary = self.path(CHILD_EXIT_TEMPORARY_FILE);
+        match fs::symlink_metadata(&temporary) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(IntentStoreError::UnsafeSlot {
+                        slot: CHILD_EXIT_TEMPORARY_FILE,
+                    });
+                }
+                fs::remove_file(&temporary).map_err(|source| {
+                    IntentStoreError::io(StoreOperation::WriteTemporary, source)
+                })?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(IntentStoreError::io(StoreOperation::WriteTemporary, source));
+            }
+        }
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|source| IntentStoreError::io(StoreOperation::WriteTemporary, source))?;
+        file.write_all(bytes)
+            .map_err(|source| IntentStoreError::io(StoreOperation::WriteTemporary, source))?;
+        file.sync_all()
+            .map_err(|source| IntentStoreError::io(StoreOperation::SyncTemporary, source))?;
+        Ok(temporary)
+    }
+
+    fn observes_exact(
+        &self,
+        state: ChildExitDisposition,
+        expected_hash: CanonicalHash,
+    ) -> Result<bool, IntentStoreError> {
+        let Some((actual, label, path)) = self.present()? else {
+            return Ok(false);
+        };
+        Ok(
+            actual == state
+                && CanonicalHash::digest(self.read_path(&path, label)?) == expected_hash,
+        )
+    }
+
+    fn sync_directory(&self) -> Result<(), IntentStoreError> {
+        sync_confined_directory(&self.root)
+    }
+
+    fn sync_visible(
+        &self,
+        state: ChildExitDisposition,
+        expected_hash: CanonicalHash,
+    ) -> Result<MutationDurability, IntentStoreError> {
+        match self.sync_directory() {
+            Ok(()) => Ok(MutationDurability::Durable),
+            Err(_error) if self.observes_exact(state, expected_hash)? => {
+                Ok(MutationDurability::Indeterminate)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn move_exact(
+        &self,
+        from_state: ChildExitDisposition,
+        to_state: ChildExitDisposition,
+        expected_hash: CanonicalHash,
+    ) -> Result<MutationDurability, IntentStoreError> {
+        let Some((actual, from_label, from)) = self.present()? else {
+            return Err(IntentStoreError::UnexpectedState {
+                expected: from_state.as_str(),
+                actual: "empty",
+            });
+        };
+        if actual != from_state {
+            return Err(IntentStoreError::UnexpectedState {
+                expected: from_state.as_str(),
+                actual: actual.as_str(),
+            });
+        }
+        if CanonicalHash::digest(self.read_path(&from, from_label)?) != expected_hash {
+            return Err(IntentStoreError::BlobMismatch);
+        }
+        let to_label = child_exit_file_for(to_state);
+        let to = self.path(to_label);
+        if self.inspect_regular_slot(&to, to_label)? {
+            return Err(IntentStoreError::ConflictingSlots);
+        }
+        fs::rename(from, &to)
+            .map_err(|source| IntentStoreError::io(StoreOperation::Replace, source))?;
+        self.sync_visible(to_state, expected_hash)
+    }
+}
+
+impl AtomicChildExitStore for FileChildExitStore {
+    fn read(&mut self) -> Result<ChildExitSlot, IntentStoreError> {
+        let Some((disposition, label, path)) = self.present()? else {
+            return Ok(ChildExitSlot::Empty);
+        };
+        ChildExitSlot::occupied(disposition, self.read_path(&path, label)?)
+    }
+
+    fn publish(&mut self, canonical_bytes: &[u8]) -> Result<PublishDisposition, IntentStoreError> {
+        match self.read()? {
+            ChildExitSlot::Empty => {}
+            ChildExitSlot::Occupied {
+                disposition: ChildExitDisposition::Pending,
+                bytes,
+                ..
+            } if bytes == canonical_bytes => {
+                return Ok(PublishDisposition::AlreadyPublished);
+            }
+            ChildExitSlot::Occupied {
+                disposition: ChildExitDisposition::Pending,
+                ..
+            } => return Err(IntentStoreError::Occupied),
+            ChildExitSlot::Occupied {
+                disposition: ChildExitDisposition::Consumed,
+                bytes,
+                ..
+            } if bytes == canonical_bytes => {
+                return Ok(PublishDisposition::AlreadyHandled(
+                    SlotDisposition::Consumed,
+                ));
+            }
+            ChildExitSlot::Occupied {
+                disposition: ChildExitDisposition::Quarantined,
+                bytes,
+                ..
+            } if bytes == canonical_bytes => {
+                return Ok(PublishDisposition::AlreadyHandled(
+                    SlotDisposition::Quarantined,
+                ));
+            }
+            ChildExitSlot::Occupied { .. } => {
+                let Some((_, _label, path)) = self.present()? else {
+                    return Err(IntentStoreError::UnexpectedState {
+                        expected: "consumed or quarantined",
+                        actual: "empty",
+                    });
+                };
+                fs::remove_file(path)
+                    .map_err(|source| IntentStoreError::io(StoreOperation::Retire, source))?;
+            }
+        }
+        let temporary = self.write_temporary(canonical_bytes)?;
+        let pending = self.path(CHILD_EXIT_PENDING_FILE);
+        if self.inspect_regular_slot(&pending, CHILD_EXIT_PENDING_FILE)? {
+            return Err(IntentStoreError::ConflictingSlots);
+        }
+        fs::rename(temporary, &pending)
+            .map_err(|source| IntentStoreError::io(StoreOperation::Replace, source))?;
+        Ok(publish_result(self.sync_visible(
+            ChildExitDisposition::Pending,
+            CanonicalHash::digest(canonical_bytes),
+        )?))
+    }
+
+    fn consume(
+        &mut self,
+        expected_blob_hash: CanonicalHash,
+    ) -> Result<MutationDurability, IntentStoreError> {
+        self.move_exact(
+            ChildExitDisposition::Pending,
+            ChildExitDisposition::Consumed,
+            expected_blob_hash,
+        )
+    }
+
+    fn quarantine(
+        &mut self,
+        expected_blob_hash: CanonicalHash,
+    ) -> Result<MutationDurability, IntentStoreError> {
+        self.move_exact(
+            ChildExitDisposition::Pending,
+            ChildExitDisposition::Quarantined,
+            expected_blob_hash,
+        )
+    }
+}
+
+fn child_exit_files() -> [(ChildExitDisposition, &'static str); 3] {
+    [
+        (ChildExitDisposition::Pending, CHILD_EXIT_PENDING_FILE),
+        (ChildExitDisposition::Consumed, CHILD_EXIT_CONSUMED_FILE),
+        (
+            ChildExitDisposition::Quarantined,
+            CHILD_EXIT_QUARANTINED_FILE,
+        ),
+    ]
+}
+
+fn child_exit_file_for(state: ChildExitDisposition) -> &'static str {
+    match state {
+        ChildExitDisposition::Pending => CHILD_EXIT_PENDING_FILE,
+        ChildExitDisposition::Consumed => CHILD_EXIT_CONSUMED_FILE,
+        ChildExitDisposition::Quarantined => CHILD_EXIT_QUARANTINED_FILE,
+    }
+}
+
+fn open_confined_root(root: impl AsRef<Path>) -> Result<PathBuf, IntentStoreError> {
+    let root = root.as_ref();
+    if !root.is_absolute()
+        || contains_literal_dot_segment(root)
+        || root.components().any(|component| {
+            matches!(component, Component::CurDir | Component::ParentDir)
+                || matches!(component.as_os_str().to_str(), Some("." | ".."))
+        })
+    {
+        return Err(IntentStoreError::UnsafeRoot);
+    }
+    reject_symlinked_components(root)?;
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(IntentStoreError::UnsafeRoot);
+    }
+    let canonical = fs::canonicalize(root)
+        .map_err(|source| IntentStoreError::io(StoreOperation::Read, source))?;
+    if canonical != root {
+        return Err(IntentStoreError::UnsafeRoot);
+    }
+    Ok(canonical)
+}
+
+fn sync_confined_directory(root: &Path) -> Result<(), IntentStoreError> {
+    #[cfg(unix)]
+    {
+        File::open(root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| IntentStoreError::io(StoreOperation::SyncDirectory, source))
+    }
+    #[cfg(windows)]
+    {
+        const FILE_WRITE_DATA: u32 = 0x0000_0002;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+        OpenOptions::new()
+            .access_mode(FILE_WRITE_DATA)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| IntentStoreError::io(StoreOperation::SyncDirectory, source))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = root;
+        Err(IntentStoreError::io(
+            StoreOperation::SyncDirectory,
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "directory flush semantics are unsupported on this platform",
+            ),
+        ))
+    }
+}
+
 fn publish_result(durability: MutationDurability) -> PublishDisposition {
     match durability {
         MutationDurability::Durable => PublishDisposition::Published,
@@ -1167,6 +1520,31 @@ mod tests {
             RECOVERY,
         );
         assert!(recovered.predecessor().is_none());
+    }
+
+    #[test]
+    fn child_exit_publish_consume_and_quarantine_are_one_shot() {
+        let directory = TestDirectory::create();
+        let mut store = FileChildExitStore::open(&directory.0)
+            .unwrap_or_else(|error| panic!("child-exit store did not open: {error}"));
+        let hash = CanonicalHash::digest(INTENT);
+        assert_published(&store.publish(INTENT));
+        assert_eq!(
+            store.publish(INTENT).ok(),
+            Some(PublishDisposition::AlreadyPublished)
+        );
+        assert!(store.consume(hash).is_ok());
+        assert_eq!(
+            store.read().ok().and_then(|slot| slot.disposition()),
+            Some(ChildExitDisposition::Consumed)
+        );
+        assert_published(&store.publish(NEXT_INTENT));
+        let next_hash = CanonicalHash::digest(NEXT_INTENT);
+        assert!(store.quarantine(next_hash).is_ok());
+        assert_eq!(
+            store.read().ok().and_then(|slot| slot.disposition()),
+            Some(ChildExitDisposition::Quarantined)
+        );
     }
 
     #[test]

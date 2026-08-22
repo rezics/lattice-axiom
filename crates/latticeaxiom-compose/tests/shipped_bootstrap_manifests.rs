@@ -19,7 +19,7 @@ fn shipped_bootstrap_and_package_manifests_parse() {
 
     assert_eq!(
         package_manifests.len(),
-        19,
+        20,
         "every shipped package.ncl must have a sibling {PACKAGE_SOURCE_MANIFEST_FILE_NAME}"
     );
     assert!(

@@ -113,6 +113,20 @@ pub enum SemanticActionId {
     ExitWorld,
     /// Review a recent world that is not exact-ready.
     ReviewWorld,
+    /// Play an exact-ready catalog world.
+    PlayExact,
+    /// Run metadata-only preflight.
+    RunPreflight,
+    /// Plan a durable checkpoint without opening a writer.
+    CreateCheckpoint,
+    /// Plan a clone with a new world identity.
+    CloneWorld,
+    /// Plan a bounded export that excludes secrets.
+    ExportWorld,
+    /// Restore a verified checkpoint as the next safe step.
+    RestoreCheckpoint,
+    /// Inspect a corrupt catalog entry.
+    InspectRecovery,
     /// Cancel a loading stage at a safe boundary.
     CancelLoading,
     /// Apply a validated settings draft.

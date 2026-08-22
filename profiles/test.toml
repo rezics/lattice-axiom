@@ -13,6 +13,10 @@ realization = { mode = "exact", kind = "data" }
 version = "=0.1.0"
 realization = { mode = "exact", kind = "data" }
 
+[roots."@latticeaxiom/input"]
+version = "=0.1.0"
+realization = { mode = "exact", kind = "data" }
+
 [roots."@latticeaxiom/observability"]
 version = "=0.1.0"
 realization = { mode = "exact", kind = "data" }
@@ -21,6 +25,11 @@ realization = { mode = "exact", kind = "data" }
 kind = "path"
 package = "@latticeaxiom/settings"
 path = "packages/latticeaxiom/settings"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/input"
+path = "packages/latticeaxiom/input"
 
 [[sources]]
 kind = "path"

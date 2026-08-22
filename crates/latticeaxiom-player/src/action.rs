@@ -5,6 +5,7 @@ use latticeaxiom_gameplay::BlockId;
 use thiserror::Error;
 
 use crate::ClientTargetObservationV1;
+use latticeaxiom_input::AuthoritativePlayerActionV1;
 
 /// Maximum number of fixed-tick frames accepted by the headless queue.
 pub const MAX_HEADLESS_ACTION_FRAMES: usize = 4_096;
@@ -34,6 +35,21 @@ pub enum PlayerActionV1 {
     SurfaceActivate = 8,
     /// Select or swap the inventory stack that places the aimed block.
     PickBlock = 9,
+}
+
+impl From<AuthoritativePlayerActionV1> for PlayerActionV1 {
+    fn from(action: AuthoritativePlayerActionV1) -> Self {
+        match action {
+            AuthoritativePlayerActionV1::Move => Self::Move,
+            AuthoritativePlayerActionV1::Look => Self::Look,
+            AuthoritativePlayerActionV1::Jump => Self::Jump,
+            AuthoritativePlayerActionV1::BreakBlock => Self::BreakBlock,
+            AuthoritativePlayerActionV1::PlaceBlock => Self::PlaceBlock,
+            AuthoritativePlayerActionV1::Inspect => Self::Inspect,
+            AuthoritativePlayerActionV1::Pause => Self::Pause,
+            AuthoritativePlayerActionV1::PickBlock => Self::PickBlock,
+        }
+    }
 }
 
 /// Portable finite two-axis action value.

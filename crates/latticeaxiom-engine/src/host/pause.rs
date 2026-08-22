@@ -3,7 +3,6 @@
 use avian3d::prelude::LinearVelocity;
 use bevy::{
     app::AppExit,
-    input::{ButtonInput, keyboard::KeyCode},
     prelude::{
         AlignItems, BackgroundColor, Button, Changed, Color, Commands, Component, Display,
         FlexDirection, GlobalZIndex, Interaction, JustifyContent, MessageWriter, Name, Node,
@@ -13,8 +12,10 @@ use bevy::{
     ui::FocusPolicy,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
 };
+use latticeaxiom_input::ClientSurfaceActionV1;
 use latticeaxiom_player::{
     ActionFrameInbox, ActionState, D2Player, LeafwingPlayerAction, LocalPlayerInput,
+    SurfaceActionFrame,
 };
 
 use super::{ProductionSessionPause, ProductionSpine, hud::ProductionHudSurfaces};
@@ -156,17 +157,34 @@ fn spawn_pause_button(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn toggle_pause(
     action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
-    keyboard: Res<'_, ButtonInput<KeyCode>>,
+    surface: Option<Res<'_, SurfaceActionFrame>>,
     mut pause: ResMut<'_, ProductionSessionPause>,
     mut surfaces: ResMut<'_, ProductionHudSurfaces>,
     mut page: ResMut<'_, PauseMenuPage>,
+    mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
 ) {
+    if surface.is_some_and(|frame| frame.just_started(ClientSurfaceActionV1::Pause)) {
+        return;
+    }
     let from_action = action_states
         .iter()
         .any(|state| state.just_pressed(&LeafwingPlayerAction::Pause));
-    let from_keyboard = action_states.is_empty() && keyboard.just_pressed(KeyCode::Escape);
-    if !(from_action || from_keyboard) {
+    if !from_action {
         return;
+    }
+    if let Some(router) = router.as_mut() {
+        let command = if pause.is_paused() {
+            latticeaxiom_client_ui::SurfaceCommandV1::Back
+        } else {
+            latticeaxiom_client_ui::SurfaceCommandV1::Pause
+        };
+        if router.apply(&command).is_ok() {
+            pause.set(router.inner().route().modal() == latticeaxiom_client_ui::GameModalV1::Pause);
+            if !pause.is_paused() {
+                page.set_settings(false);
+            }
+            return;
+        }
     }
     if surfaces.inventory_open() {
         surfaces.set_inventory_open(false);
@@ -206,6 +224,7 @@ pub(super) fn sync_pause_overlay(
 pub(super) fn sync_cursor_capture(
     pause: Res<'_, ProductionSessionPause>,
     surfaces: Option<Res<'_, ProductionHudSurfaces>>,
+    router: Option<Res<'_, super::ProductionSurfaceRouter>>,
     windows: Query<'_, '_, &Window, With<PrimaryWindow>>,
     mut cursors: Query<'_, '_, &mut CursorOptions, With<PrimaryWindow>>,
 ) {
@@ -215,7 +234,11 @@ pub(super) fn sync_cursor_capture(
     let Ok(mut cursor) = cursors.single_mut() else {
         return;
     };
-    let blocked = pause.is_paused() || surfaces.is_some_and(|surfaces| surfaces.inventory_open());
+    let blocked = if let Some(router) = router.as_ref() {
+        !super::surface::cursor_locked(router)
+    } else {
+        pause.is_paused() || surfaces.is_some_and(|surfaces| surfaces.inventory_open())
+    };
     let capture = window.focused && !blocked;
     cursor.grab_mode = if capture {
         CursorGrabMode::Locked
@@ -265,6 +288,7 @@ pub(super) fn pause_menu_buttons(
     mut pause: ResMut<'_, ProductionSessionPause>,
     mut page: ResMut<'_, PauseMenuPage>,
     spine: Option<Res<'_, ProductionSpine>>,
+    mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
     mut exits: MessageWriter<'_, AppExit>,
 ) {
     for (interaction, action, mut background) in &mut interactions {
@@ -292,6 +316,11 @@ pub(super) fn pause_menu_buttons(
                 }
             }
             PauseMenuAction::Quit => {
+                if let Some(router) = router.as_mut() {
+                    let _ =
+                        router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::RequestSaveQuit);
+                    let _ = router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::Confirm);
+                }
                 exits.write(AppExit::Success);
             }
         }

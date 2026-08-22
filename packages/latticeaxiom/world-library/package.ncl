@@ -1,4 +1,4 @@
-# D0 pure-data skeleton for the world catalog and recovery surface.
+# Catalog states, preflight, and recovery operations for the world library.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in

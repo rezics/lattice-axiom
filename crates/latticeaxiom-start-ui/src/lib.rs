@@ -7,6 +7,7 @@
 //! process.
 
 mod capability;
+mod library;
 mod loading;
 mod package;
 mod semantic;
@@ -16,6 +17,7 @@ mod shell;
 mod world;
 
 pub use capability::*;
+pub use library::*;
 pub use loading::*;
 pub use package::*;
 pub use semantic::*;

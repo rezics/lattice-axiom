@@ -13,7 +13,8 @@ use thiserror::Error;
 use crate::{
     ClientShellGraph, HomePrimaryAction, LoadingState, SemanticActionId, SemanticCommand,
     SemanticCommandError, SemanticNode, SemanticNodeId, SemanticRole, SemanticState,
-    SettingsSurfaceModel, WorldListModel, WorldShellRecord, validate_semantic_command,
+    SettingsSurfaceModel, TrashedWorldRecord, WorldCardAction, WorldListModel, WorldShellRecord,
+    validate_semantic_command,
 };
 
 /// Package-driven client-shell route.
@@ -29,6 +30,8 @@ pub enum ShellScreen {
     Settings,
     /// World activation progress.
     Loading,
+    /// Managed-trash recovery list.
+    Trash,
     /// Live world session; the start library is not the front surface.
     Playing,
     /// In-session pause overlay. Save and Exit are explicit; this is not a checkpoint.
@@ -43,6 +46,10 @@ pub struct StartShellModel {
     pub screen: ShellScreen,
     /// Visible world library.
     pub worlds: WorldListModel,
+    /// Managed-trash records in structural order.
+    pub trash: Vec<TrashedWorldRecord>,
+    /// World selected for recovery review.
+    pub selected: Option<WorldId>,
     /// Current loading state when routed to Loading.
     pub loading: Option<LoadingState>,
     /// Generic settings rows.
@@ -57,6 +64,8 @@ impl StartShellModel {
             graph,
             screen: ShellScreen::Home,
             worlds,
+            trash: Vec::new(),
+            selected: None,
             loading: None,
             settings: None,
         }
@@ -78,6 +87,7 @@ impl StartShellModel {
             ShellScreen::NewWorld => Self::new_world_nodes(),
             ShellScreen::Settings => self.settings_nodes(),
             ShellScreen::Loading => self.loading_nodes(),
+            ShellScreen::Trash => self.trash_nodes(),
             ShellScreen::Playing => Self::playing_nodes(),
             ShellScreen::Pause => Self::pause_nodes(),
         };
@@ -155,16 +165,31 @@ impl StartShellModel {
             else {
                 return Err(ShellCommandError::NoReviewTarget);
             };
+            self.selected = Some(world_id);
             self.screen = ShellScreen::Worlds;
             ShellEffect::ReviewWorld(world_id)
-        } else if target.starts_with("world:") && action == SemanticActionId::Activate {
+        } else if target == "worlds/trash" {
+            self.screen = ShellScreen::Trash;
+            ShellEffect::Navigate(ShellScreen::Trash)
+        } else if target == "trash/back" {
+            self.screen = ShellScreen::Worlds;
+            ShellEffect::Navigate(ShellScreen::Worlds)
+        } else if target.starts_with("world:") {
+            self.world_command_effect(command)?
+        } else if target.starts_with("trash:") {
             let record = self
-                .worlds
-                .records()
+                .trash
                 .iter()
-                .find(|record| record.semantic_id() == command.target)
+                .find(|record| trash_semantic_id(record) == command.target)
                 .ok_or(ShellCommandError::UnknownWorld)?;
-            ShellEffect::ReviewWorld(record.world_id())
+            if matches!(
+                action,
+                SemanticActionId::Activate | SemanticActionId::RestoreWorld
+            ) {
+                ShellEffect::RequestRestoreTrash(record.tombstone.world_id)
+            } else {
+                return Err(ShellCommandError::UnmappedCommand);
+            }
         } else if target == "loading/cancel" {
             let loading = self
                 .loading
@@ -179,6 +204,61 @@ impl StartShellModel {
             return Err(ShellCommandError::UnmappedCommand);
         };
         Ok(effect)
+    }
+
+    fn world_command_effect(
+        &mut self,
+        command: &SemanticCommand,
+    ) -> Result<ShellEffect, ShellCommandError> {
+        let record = self
+            .worlds
+            .records()
+            .iter()
+            .find(|record| {
+                record.semantic_id() == command.target
+                    || command
+                        .target
+                        .as_str()
+                        .starts_with(&format!("{}/", record.semantic_id().as_str()))
+            })
+            .ok_or(ShellCommandError::UnknownWorld)?;
+        let world_id = record.world_id();
+        self.selected = Some(world_id);
+        let suffix = command
+            .target
+            .as_str()
+            .strip_prefix(&format!("{}/", record.semantic_id().as_str()));
+        Ok(match (suffix, command.action) {
+            (None, SemanticActionId::Activate | SemanticActionId::ReviewWorld) => {
+                ShellEffect::ReviewWorld(world_id)
+            }
+            (Some("play"), SemanticActionId::Activate | SemanticActionId::PlayExact)
+            | (None, SemanticActionId::PlayExact) => ShellEffect::RequestExactWorldLaunch(world_id),
+            (Some("preflight" | "prepare" | "compatible" | "repair" | "read-only"), _)
+            | (_, SemanticActionId::RunPreflight) => ShellEffect::RequestRunPreflight(world_id),
+            (Some("checkpoint"), _) | (_, SemanticActionId::CreateCheckpoint) => {
+                ShellEffect::RequestCheckpoint(world_id)
+            }
+            (Some("clone" | "migrate"), _) | (_, SemanticActionId::CloneWorld) => {
+                ShellEffect::RequestClone(world_id)
+            }
+            (Some("export"), _) | (_, SemanticActionId::ExportWorld) => {
+                ShellEffect::RequestExport(world_id)
+            }
+            (Some("trash"), _) | (_, SemanticActionId::MoveToTrash) => {
+                ShellEffect::RequestMoveToTrash(world_id)
+            }
+            (Some("restore-checkpoint"), _) | (_, SemanticActionId::RestoreCheckpoint) => {
+                ShellEffect::RequestRestoreCheckpoint(world_id)
+            }
+            (Some("inspect"), _) | (_, SemanticActionId::InspectRecovery) => {
+                ShellEffect::RequestInspectRecovery(world_id)
+            }
+            (Some("details" | "rename" | "storage"), SemanticActionId::Activate) => {
+                ShellEffect::ReviewWorld(world_id)
+            }
+            _ => return Err(ShellCommandError::UnmappedCommand),
+        })
     }
 
     fn home_nodes(&self) -> Vec<SemanticNode> {
@@ -222,28 +302,71 @@ impl StartShellModel {
     }
 
     fn world_nodes(&self) -> Vec<SemanticNode> {
+        let mut nodes = vec![
+            button(
+                "worlds/back",
+                "Back",
+                "Return to home",
+                [SemanticActionId::Back],
+            ),
+            button(
+                "worlds/trash",
+                "Trash",
+                "Review managed-trash restore actions",
+                [SemanticActionId::Activate],
+            ),
+        ];
+        nodes.extend(self.worlds.records().iter().map(|record| {
+            let children = record
+                .actions()
+                .iter()
+                .filter_map(|action| world_action_node(record, action))
+                .collect();
+            SemanticNode {
+                id: record.semantic_id(),
+                role: if matches!(record.health(), crate::WorldHealth::CatalogFailure(_)) {
+                    SemanticRole::Alert
+                } else {
+                    SemanticRole::ListItem
+                },
+                name: record.display_label(),
+                value: Some(format!("{:?}", record.card_state())),
+                description: Some(format!("Available actions: {:?}", record.actions())),
+                state: SemanticState {
+                    focusable: true,
+                    focused: self.worlds.focused() == Some(&record.semantic_id()),
+                    ..SemanticState::default()
+                },
+                actions: BTreeSet::from([
+                    SemanticActionId::Activate,
+                    SemanticActionId::ReviewWorld,
+                ]),
+                children,
+            }
+        }));
+        nodes
+    }
+
+    fn trash_nodes(&self) -> Vec<SemanticNode> {
         let mut nodes = vec![button(
-            "worlds/back",
+            "trash/back",
             "Back",
-            "Return to home",
+            "Return to the world library",
             [SemanticActionId::Back],
         )];
-        nodes.extend(self.worlds.records().iter().map(|record| SemanticNode {
-            id: record.semantic_id(),
-            role: if matches!(record.health(), crate::WorldHealth::CatalogFailure(_)) {
-                SemanticRole::Alert
-            } else {
-                SemanticRole::ListItem
-            },
-            name: record.display_label(),
-            value: Some(format!("{:?}", record.health())),
-            description: Some(format!("Available actions: {:?}", record.actions())),
+        nodes.extend(self.trash.iter().map(|record| SemanticNode {
+            id: trash_semantic_id(record),
+            role: SemanticRole::ListItem,
+            name: record.tombstone.display_name.as_str().to_owned(),
+            value: Some(record.tombstone.world_id.to_string()),
+            description: Some(
+                "Restore from managed trash without overwriting a live world".to_owned(),
+            ),
             state: SemanticState {
                 focusable: true,
-                focused: self.worlds.focused() == Some(&record.semantic_id()),
                 ..SemanticState::default()
             },
-            actions: BTreeSet::from([SemanticActionId::Activate]),
+            actions: BTreeSet::from([SemanticActionId::Activate, SemanticActionId::RestoreWorld]),
             children: Vec::new(),
         }));
         nodes
@@ -408,6 +531,56 @@ fn node_id(value: &str) -> SemanticNodeId {
     }
 }
 
+fn world_action_node(record: &WorldShellRecord, action: &WorldCardAction) -> Option<SemanticNode> {
+    let id = record.action_semantic_id(action)?;
+    let name = match action {
+        WorldCardAction::PlayExact => "Play".to_owned(),
+        WorldCardAction::RunPreflight => "Run preflight".to_owned(),
+        WorldCardAction::CreateCheckpoint => "Create checkpoint".to_owned(),
+        WorldCardAction::Duplicate => "Clone".to_owned(),
+        WorldCardAction::Export => "Export".to_owned(),
+        WorldCardAction::MoveToTrash => "Move to trash".to_owned(),
+        WorldCardAction::InspectRecovery => "Inspect recovery".to_owned(),
+        WorldCardAction::Rename => "Rename".to_owned(),
+        WorldCardAction::OpenStorageLocation => "Open storage location".to_owned(),
+        WorldCardAction::Details => "Details".to_owned(),
+        WorldCardAction::Preflight(WorldOpenAction::UseFrozenLock) => "Play exact".to_owned(),
+        WorldCardAction::Preflight(WorldOpenAction::OpenReadOnly) => "Open read-only".to_owned(),
+        WorldCardAction::Preflight(WorldOpenAction::Export) => "Export".to_owned(),
+        WorldCardAction::Preflight(WorldOpenAction::RestoreCheckpoint { .. }) => {
+            "Restore checkpoint".to_owned()
+        }
+        WorldCardAction::Preflight(WorldOpenAction::RepairHeader { .. }) => {
+            "Repair header".to_owned()
+        }
+        WorldCardAction::Preflight(WorldOpenAction::PreparePackage { .. }) => {
+            "Prepare package".to_owned()
+        }
+        WorldCardAction::Preflight(WorldOpenAction::ResolveCompatibleGraph) => {
+            "Resolve compatible graph".to_owned()
+        }
+        WorldCardAction::Preflight(WorldOpenAction::CloneAndMigrate { .. }) => {
+            "Clone and migrate".to_owned()
+        }
+    };
+    Some(button(
+        id.as_str(),
+        name,
+        format!("Catalog action {action:?}; the shell does not open a writer"),
+        [SemanticActionId::Activate, action.semantic_action()],
+    ))
+}
+
+fn trash_semantic_id(record: &TrashedWorldRecord) -> SemanticNodeId {
+    match SemanticNodeId::new(format!(
+        "trash:{}/{}/{}",
+        record.location.root.0, record.location.world_id, record.location.entry_id
+    )) {
+        Ok(id) => id,
+        Err(error) => unreachable!("validated trash semantic ID: {error}"),
+    }
+}
+
 fn sanitize_id(value: &str) -> String {
     value
         .chars()
@@ -445,6 +618,22 @@ pub enum ShellEffect {
     RequestSaveWorld,
     /// Host should drop the live world session and return to the start shell.
     RequestExitWorld,
+    /// Plan a catalog checkpoint without opening a writer.
+    RequestCheckpoint(WorldId),
+    /// Plan a clone with a new world identity.
+    RequestClone(WorldId),
+    /// Plan a move into managed trash.
+    RequestMoveToTrash(WorldId),
+    /// Plan a bounded export that excludes secrets.
+    RequestExport(WorldId),
+    /// Run metadata-only preflight for the selected world.
+    RequestRunPreflight(WorldId),
+    /// Inspect a corrupt catalog row.
+    RequestInspectRecovery(WorldId),
+    /// Restore a verified checkpoint as the next safe step.
+    RequestRestoreCheckpoint(WorldId),
+    /// Restore a managed-trash entry without overwriting a live world.
+    RequestRestoreTrash(WorldId),
 }
 
 /// Invalid shell command injection.

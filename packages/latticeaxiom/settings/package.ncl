@@ -1,4 +1,5 @@
-# D0 pure-data skeleton for the platform settings registry.
+# Platform settings registry. First-consumer SettingSpec rows live in
+# data/user-catalog-v1.json and are compiled by runtime-contracts.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in

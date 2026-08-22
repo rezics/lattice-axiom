@@ -23,6 +23,7 @@ mod shell_view;
 mod spine;
 mod start;
 mod stream;
+mod surface;
 mod worldgen;
 mod writer;
 
@@ -54,7 +55,9 @@ use latticeaxiom_player::{
     PlayerSystemSet, PlayerViewV1, TargetEyePoseV1, TargetInspectReceiptV1,
 };
 #[cfg(feature = "client")]
-use latticeaxiom_player::{LeafwingInputAdapterPlugin, LocalPlayerClientInputBundle};
+use latticeaxiom_player::{
+    CompiledClientInputMaps, LeafwingInputAdapterPlugin, LocalPlayerClientInputBundle,
+};
 use latticeaxiom_registration::CompiledRegistration;
 use latticeaxiom_storage::{ChunkCoordinate, ChunkRevision, StorageError};
 use latticeaxiom_voxel_mesh::{MeshError, MeshReceipt};
@@ -74,6 +77,7 @@ pub use spine::{
 };
 pub use start::{ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList};
 pub use stream::ChunkLifecycle;
+pub use surface::ProductionSurfaceRouter;
 pub use worldgen::RequiredCaveEntranceV1;
 pub use writer::{SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding};
 
@@ -278,10 +282,9 @@ impl Plugin for ProductionHostPlugin {
         .add_systems(
             Update,
             (
-                hud::toggle_inventory,
-                hud::toggle_workbench,
+                surface::apply_surface_actions,
                 hud::activate_workbench_from_target,
-                hud::select_hotbar_from_keys,
+                surface::select_hotbar_from_surface,
                 hud::inventory_slot_buttons,
                 hud::recipe_buttons,
                 hud::sync_inventory_overlay,
@@ -346,7 +349,15 @@ impl EngineInstance {
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
         let spine = ProductionSpine::materialize(&images)?;
         Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
-            install_production_host(app, product_lock_hash, spine, inspect_surface, true);
+            install_production_host(
+                app,
+                product_lock_hash,
+                spine,
+                inspect_surface,
+                true,
+                #[cfg(feature = "client")]
+                None,
+            );
         })
         .map_err(ProductionHostError::from)
     }
@@ -369,7 +380,15 @@ impl EngineInstance {
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
         let spine = ProductionSpine::materialize_with_catalog(&images, catalog)?;
         Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
-            install_production_host(app, product_lock_hash, spine, inspect_surface, true);
+            install_production_host(
+                app,
+                product_lock_hash,
+                spine,
+                inspect_surface,
+                true,
+                #[cfg(feature = "client")]
+                None,
+            );
         })
         .map_err(ProductionHostError::from)
     }
@@ -385,11 +404,26 @@ impl EngineInstance {
         images: LockVerifiedComposeImages,
         lease: latticeaxiom_launcher::FreshClientAppLeaseToken,
     ) -> Result<(Self, latticeaxiom_launcher::FreshClientAppLeaseProof), ProductionHostError> {
+        Self::new_client_host_from_lock_with_maps(images, lease, None)
+    }
+
+    /// Builds the process's sole interactive client with lock-compiled input maps.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when the event loop is reserved or spine
+    /// materialization fails.
+    #[cfg(feature = "client")]
+    pub fn new_client_host_from_lock_with_maps(
+        images: LockVerifiedComposeImages,
+        lease: latticeaxiom_launcher::FreshClientAppLeaseToken,
+        maps: Option<latticeaxiom_player::CompiledClientInputMaps>,
+    ) -> Result<(Self, latticeaxiom_launcher::FreshClientAppLeaseProof), ProductionHostError> {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
         let spine = ProductionSpine::materialize(&images)?;
         let instance = Self::new_client_with_setup(images.into_images(), move |app| {
-            install_production_host(app, product_lock_hash, spine, inspect_surface, false);
+            install_production_host(app, product_lock_hash, spine, inspect_surface, false, maps);
         })?;
         Ok((instance, lease.into_app_created_proof()))
     }
@@ -422,12 +456,13 @@ impl EngineInstance {
     }
 }
 
-fn install_production_host(
+pub(super) fn install_production_host(
     app: &mut App,
     product_lock_hash: VerifiedProductLockHash,
     spine: ProductionSpine,
     inspect_surface: ProductionInspectSurface,
     include_transform: bool,
+    #[cfg(feature = "client")] input_maps: Option<latticeaxiom_player::CompiledClientInputMaps>,
 ) {
     if include_transform {
         app.add_plugins(TransformPlugin);
@@ -446,6 +481,13 @@ fn install_production_host(
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(ProductionHostPlugin);
+    if let Ok(router) = ProductionSurfaceRouter::playing() {
+        app.insert_resource(router);
+    }
+    #[cfg(feature = "client")]
+    if let Some(maps) = input_maps {
+        app.insert_resource(maps);
+    }
     #[cfg(feature = "client")]
     {
         app.insert_resource(hud::ProductionHudSurfaces::default())
@@ -467,12 +509,17 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
     #[cfg(feature = "client")]
     {
         let client = world.get_resource::<EngineProfile>() == Some(&EngineProfile::Client);
+        let maps = world.get_resource::<CompiledClientInputMaps>().cloned();
         let mut player = world.spawn(D2PlayerBundle::new(
             spine::local_player_id(),
             Transform::from_translation(spawn),
         ));
         if client {
-            player.insert(LocalPlayerClientInputBundle::default());
+            if let Some(maps) = maps {
+                player.insert(LocalPlayerClientInputBundle::from_compiled(&maps));
+            } else {
+                player.insert(LocalPlayerClientInputBundle::default());
+            }
         }
     }
     #[cfg(not(feature = "client"))]

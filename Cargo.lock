@@ -3974,6 +3974,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "latticeaxiom-client-ui"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "latticeaxiom-compose"
 version = "0.1.0"
 dependencies = [
@@ -4036,14 +4045,17 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "latticeaxiom-client-ui",
  "latticeaxiom-compose",
  "latticeaxiom-content",
  "latticeaxiom-core",
  "latticeaxiom-gameplay",
+ "latticeaxiom-input",
  "latticeaxiom-launcher",
  "latticeaxiom-packages",
  "latticeaxiom-player",
  "latticeaxiom-registration",
+ "latticeaxiom-runtime-contracts",
  "latticeaxiom-start-ui",
  "latticeaxiom-storage",
  "latticeaxiom-voxel-mesh",
@@ -4067,6 +4079,17 @@ dependencies = [
  "proptest",
  "sha2",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "latticeaxiom-input"
+version = "0.1.0"
+dependencies = [
+ "latticeaxiom-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -4099,6 +4122,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "latticeaxiom-gameplay",
+ "latticeaxiom-input",
  "leafwing-input-manager",
  "proptest",
  "thiserror 2.0.20",
@@ -4160,6 +4184,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "latticeaxiom-settings-ui"
+version = "0.1.0"
+dependencies = [
+ "latticeaxiom-client-ui",
+ "latticeaxiom-core",
+ "latticeaxiom-runtime-contracts",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "unicode-normalization",
 ]
 
 [[package]]

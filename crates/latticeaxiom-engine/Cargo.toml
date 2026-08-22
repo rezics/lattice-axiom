@@ -34,17 +34,25 @@ name = "latticeaxiom-playable-fixture"
 path = "src/bin/playable_fixture.rs"
 required-features = ["client"]
 
+[[bin]]
+name = "latticeaxiom-play"
+path = "src/bin/latticeaxiom_play.rs"
+required-features = ["client"]
+
 [dependencies]
 avian3d = { workspace = true, default-features = false, features = ["3d", "default-collider", "f32", "parallel", "parry-f32"] }
 bevy.workspace = true
+latticeaxiom-client-ui = { path = "../latticeaxiom-client-ui" }
 latticeaxiom-compose = { path = "../latticeaxiom-compose" }
 latticeaxiom-content = { path = "../latticeaxiom-content" }
 latticeaxiom-core = { path = "../latticeaxiom-core" }
 latticeaxiom-gameplay = { path = "../latticeaxiom-gameplay" }
+latticeaxiom-input = { path = "../latticeaxiom-input" }
 latticeaxiom-launcher = { path = "../latticeaxiom-launcher" }
 latticeaxiom-packages = { path = "../latticeaxiom-packages" }
 latticeaxiom-player = { path = "../latticeaxiom-player" }
 latticeaxiom-registration = { path = "../latticeaxiom-registration" }
+latticeaxiom-runtime-contracts = { path = "../latticeaxiom-runtime-contracts" }
 latticeaxiom-start-ui = { path = "../latticeaxiom-start-ui" }
 latticeaxiom-storage = { path = "../latticeaxiom-storage" }
 latticeaxiom-voxel-mesh = { path = "../latticeaxiom-voxel-mesh" }

@@ -393,6 +393,24 @@ impl ProductionMemoryStart {
         Ok(effect)
     }
 
+    /// Save & Quit: flush Written chunks, drop the host, and return Home.
+    ///
+    /// V2 uses the sealed-writer Written close as the replacement-process
+    /// barrier. This is not a `RocksDB` Durable checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when pause/save/exit is rejected.
+    pub fn save_and_quit(
+        &mut self,
+        world_id: WorldId,
+        instance: EngineInstance,
+        writer: &mut SealedWorldWriterHost,
+    ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
+        self.save_world(world_id, writer)?;
+        self.exit_world(world_id, instance)
+    }
+
     /// Flushes dirty chunks through the sealed writer and then closes it.
     ///
     /// Missing sealed receipts still fail closed as
@@ -559,7 +577,15 @@ impl EngineInstance {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
         Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
-            super::install_production_host(app, product_lock_hash, spine, inspect_surface, true);
+            super::install_production_host(
+                app,
+                product_lock_hash,
+                spine,
+                inspect_surface,
+                true,
+                #[cfg(feature = "client")]
+                None,
+            );
         })
         .map_err(ProductionHostError::from)
     }
@@ -633,7 +659,7 @@ pub(crate) fn sealed_ready_exact_handoff(
     LaunchHandoff::for_ready_exact(
         record,
         LaunchHandoffContext {
-            generation: LaunchGeneration::FIRST,
+            generation: next_launch_generation(),
             issued_at_ms: now_ms,
             expires_at_ms: now_ms.saturating_add(MAX_LAUNCH_INTENT_LIFETIME_MS),
             shell_lock_hash,
@@ -641,6 +667,15 @@ pub(crate) fn sealed_ready_exact_handoff(
             confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
         },
     )
+}
+
+fn next_launch_generation() -> LaunchGeneration {
+    std::env::var("LATTICEAXIOM_GENERATION")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(|current| current.checked_add(1))
+        .and_then(|next| LaunchGeneration::new(next).ok())
+        .unwrap_or(LaunchGeneration::FIRST)
 }
 
 /// Milliseconds since Unix epoch; `0` when the system clock is unavailable.

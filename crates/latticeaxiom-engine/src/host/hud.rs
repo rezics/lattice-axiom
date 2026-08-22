@@ -2,7 +2,6 @@
 
 use bevy::{
     ecs::query::QueryFilter,
-    input::{ButtonInput, keyboard::KeyCode},
     prelude::{
         AlignItems, BackgroundColor, Button, Changed, Children, Color, Commands, Component,
         Display, FlexDirection, FlexWrap, GlobalZIndex, Interaction, JustifyContent, Name, Node,
@@ -530,43 +529,6 @@ fn spawn_item_slot<M: Component>(
         });
 }
 
-/// Toggles the inventory overlay on E while the pause menu is closed.
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn toggle_inventory(
-    keyboard: Res<'_, ButtonInput<KeyCode>>,
-    pause: Res<'_, ProductionSessionPause>,
-    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
-) {
-    if pause.is_paused() {
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::KeyE) {
-        let open = !surfaces.inventory_panel_open();
-        surfaces.set_inventory_open(open);
-    }
-}
-
-/// Toggles the workbench overlay on C while the pause menu is closed.
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn toggle_workbench(
-    keyboard: Res<'_, ButtonInput<KeyCode>>,
-    pause: Res<'_, ProductionSessionPause>,
-    spine: Res<'_, ProductionSpine>,
-    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
-) {
-    if pause.is_paused() {
-        return;
-    }
-    if !keyboard.just_pressed(KeyCode::KeyC) {
-        return;
-    }
-    let open = !surfaces.workbench_open();
-    if open {
-        bind_host_workbench(&spine);
-    }
-    surfaces.set_workbench_open(open);
-}
-
 /// Opens the workbench when `SurfaceActivate` aims at a crafting workstation block.
 ///
 /// Does not consume [`PlayerActionV1::PlaceBlock`].
@@ -610,47 +572,6 @@ fn crafting_workstation() -> WorkstationId {
             panic!("crafting workstation is a platform contract: {error}")
         }
     }
-}
-
-/// Selects hotbar slots 0..8 from Digit1..Digit9 / Numpad1..Numpad9.
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn select_hotbar_from_keys(
-    keyboard: Res<'_, ButtonInput<KeyCode>>,
-    pause: Res<'_, ProductionSessionPause>,
-    spine: Res<'_, ProductionSpine>,
-) {
-    if pause.is_paused() {
-        return;
-    }
-    for (code, slot) in hotbar_digit_bindings() {
-        if keyboard.just_pressed(code) {
-            let _ = spine.select_hotbar_slot(slot);
-            return;
-        }
-    }
-}
-
-const fn hotbar_digit_bindings() -> [(KeyCode, u16); 18] {
-    [
-        (KeyCode::Digit1, 0),
-        (KeyCode::Digit2, 1),
-        (KeyCode::Digit3, 2),
-        (KeyCode::Digit4, 3),
-        (KeyCode::Digit5, 4),
-        (KeyCode::Digit6, 5),
-        (KeyCode::Digit7, 6),
-        (KeyCode::Digit8, 7),
-        (KeyCode::Digit9, 8),
-        (KeyCode::Numpad1, 0),
-        (KeyCode::Numpad2, 1),
-        (KeyCode::Numpad3, 2),
-        (KeyCode::Numpad4, 3),
-        (KeyCode::Numpad5, 4),
-        (KeyCode::Numpad6, 5),
-        (KeyCode::Numpad7, 6),
-        (KeyCode::Numpad8, 7),
-        (KeyCode::Numpad9, 8),
-    ]
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
@@ -1148,10 +1069,20 @@ fn channel(value: u32) -> u8 {
 /// Digit keys that select hotbar slots; used by tests of the shipped binding table.
 #[cfg(test)]
 #[must_use]
-fn hotbar_key_slot(code: KeyCode) -> Option<u16> {
-    hotbar_digit_bindings()
-        .into_iter()
-        .find_map(|(bound, slot)| (bound == code).then_some(slot))
+fn hotbar_key_slot(code: bevy::input::keyboard::KeyCode) -> Option<u16> {
+    use bevy::input::keyboard::KeyCode;
+    match code {
+        KeyCode::Digit1 | KeyCode::Numpad1 => Some(0),
+        KeyCode::Digit2 | KeyCode::Numpad2 => Some(1),
+        KeyCode::Digit3 | KeyCode::Numpad3 => Some(2),
+        KeyCode::Digit4 | KeyCode::Numpad4 => Some(3),
+        KeyCode::Digit5 | KeyCode::Numpad5 => Some(4),
+        KeyCode::Digit6 | KeyCode::Numpad6 => Some(5),
+        KeyCode::Digit7 | KeyCode::Numpad7 => Some(6),
+        KeyCode::Digit8 | KeyCode::Numpad8 => Some(7),
+        KeyCode::Digit9 | KeyCode::Numpad9 => Some(8),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

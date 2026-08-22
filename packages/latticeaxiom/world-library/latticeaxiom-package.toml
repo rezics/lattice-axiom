@@ -34,4 +34,4 @@ trust = "data-only"
 default = "package.ncl"
 
 [source_inclusion]
-include = ["package.ncl", "latticeaxiom-package.toml"]
+include = ["package.ncl", "latticeaxiom-package.toml", "data"]

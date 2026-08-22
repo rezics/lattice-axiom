@@ -3,7 +3,10 @@
 //! The crate is deliberately independent of Bevy. It validates and persists a
 //! bounded [`LaunchIntentV1`], models shell/world/recovery transitions, and
 //! issues a single-use process lease that a future Bevy host must consume
-//! before creating its one fresh client `DefaultPlugins` application.
+//! before creating its one fresh client `DefaultPlugins` application. The
+//! non-Bevy [`SupervisorMachine`] consumes one-shot child-exit reports and
+//! intents, launches at most one replacement child, and emits deterministic
+//! semantic reports without creating a window or `App`.
 //!
 //! Ordinary launch reopens and fully verifies `latticeaxiom.lock` before a
 //! host may construct [`latticeaxiom_compose::RuntimeImage`] or load native
@@ -11,16 +14,24 @@
 //! re-resolve. This crate still does not create a Bevy `App`.
 
 mod boot;
+mod child_exit;
 mod error;
 mod filesystem;
 mod machine;
 mod model;
 mod process;
 mod store;
+mod supervisor;
 
 pub use boot::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
-pub use error::{IntentStoreError, LaunchIntentError, LaunchModelError, StoreOperation};
-pub use filesystem::FileLaunchIntentStore;
+pub use child_exit::{
+    CHILD_EXIT_SCHEMA_VERSION, ChildExitKindV1, ChildExitReportDraftV1, ChildExitReportV1,
+    ChildRoleV1,
+};
+pub use error::{
+    ChildExitError, IntentStoreError, LaunchIntentError, LaunchModelError, StoreOperation,
+};
+pub use filesystem::{FileChildExitStore, FileLaunchIntentStore};
 pub use machine::{
     BootstrapMachine, ClientTransitionMachine, TransitionBarrier, TransitionMachineError,
     TransitionPublishReport,
@@ -39,12 +50,17 @@ pub use model::{
     TransitionValidationPolicy, WorldRevision, claim_fresh_client_app_lease,
 };
 pub use process::{
-    PriorChildStatusV1, ProcessControl, RecoveryChildStatusV1, SpawnFailureV1, SpawnHandleError,
-    SpawnedProcess, TerminationFailureV1,
+    ChildObservationV1, PriorChildStatusV1, ProcessControl, RecoveryChildStatusV1, SpawnFailureV1,
+    SpawnHandleError, SpawnedProcess, TerminationFailureV1,
 };
 pub use store::{
-    AtomicLaunchIntentStore, IntentSlot, MutationDurability, PublishDisposition,
-    RecoveryClaimOutcome, SlotDisposition, TerminalPredecessor,
+    AtomicChildExitStore, AtomicLaunchIntentStore, ChildExitDisposition, ChildExitSlot, IntentSlot,
+    MutationDurability, PublishDisposition, RecoveryClaimOutcome, SlotDisposition,
+    TerminalPredecessor,
+};
+pub use supervisor::{
+    SUPERVISOR_REPORT_SCHEMA_VERSION, SupervisorConfigV1, SupervisorHopV1, SupervisorMachine,
+    SupervisorOutcomeV1, SupervisorReportV1, SupervisorStateV1,
 };
 
 /// Maximum accepted canonical launch-intent envelope size.
@@ -58,3 +74,12 @@ pub const MAX_LAUNCH_CLOCK_SKEW_MS: u64 = 5_000;
 
 /// Maximum wait for a child to acknowledge its safe bootstrap state.
 pub const MAX_BOOTSTRAP_ACK_WAIT_MS: u64 = 30_000;
+
+/// Maximum wait for a supervised child to exit after the product requests shutdown.
+pub const MAX_CHILD_SHUTDOWN_WAIT_MS: u64 = 30_000;
+
+/// Maximum replacement-process hops in one supervisor product loop.
+pub const MAX_SUPERVISOR_HOPS: usize = 8;
+
+/// Maximum consecutive child, spawn, or recovery failures before the product halts.
+pub const MAX_CONSECUTIVE_CHILD_FAILURES: u8 = 2;

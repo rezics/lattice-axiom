@@ -6,7 +6,8 @@ use thiserror::Error;
 
 use crate::{
     DisplayName, HeaderCodecError, LiveWorldLocation, MAX_WORLD_HEADER_BYTES, ReadOnlyWorldSource,
-    SourceReadError, WorldHeaderV1,
+    SourceReadError, WorldDiagnostic, WorldHeaderV1, WorldOpenAction, WorldOpenPlan,
+    WorldOpenStatus,
 };
 
 /// Bootstrap upper bound on concurrent sidecar reads.
@@ -323,6 +324,75 @@ fn map_header_error(error: HeaderCodecError) -> CatalogEntryFailure {
     }
 }
 
+/// Player-facing catalog card state from `@latticeaxiom/world-library`.
+///
+/// Preflight [`WorldOpenStatus`] remains the next-safe-step machine. Cards must
+/// not collapse every failure into a generic “cannot open” label.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CatalogCardState {
+    /// Frozen lock matches; Continue/Play may prepare a launch intent.
+    ReadyExact,
+    /// Compatible closure exists; the player must accept an explicit diff.
+    ReadyCompatible,
+    /// Required packages or artifacts are missing locally.
+    MissingPackage,
+    /// A checkpointed staged migration is the next safe step.
+    MigrationRequired,
+    /// Crash, unclean shutdown, header repair, or restore remains.
+    Recoverable,
+    /// Bytes may be inspected or exported; a writer must not open.
+    ReadOnly,
+    /// Identity, checksum, or preservation is unsafe.
+    Corrupt,
+}
+
+/// Classifies one visible card from a bounded scan entry and optional preflight.
+#[must_use]
+pub fn classify_catalog_card(
+    entry: &CatalogEntryState,
+    plan: Option<&WorldOpenPlan>,
+) -> CatalogCardState {
+    match (entry, plan) {
+        (CatalogEntryState::Failed(_), _) => CatalogCardState::Corrupt,
+        (_, Some(plan)) => classify_open_plan(plan),
+        (CatalogEntryState::Projected(projection), None) if !projection.clean_shutdown => {
+            CatalogCardState::Recoverable
+        }
+        (CatalogEntryState::Projected(_), None) => CatalogCardState::Recoverable,
+    }
+}
+
+fn classify_open_plan(plan: &WorldOpenPlan) -> CatalogCardState {
+    match plan.status {
+        WorldOpenStatus::ReadyExact => CatalogCardState::ReadyExact,
+        WorldOpenStatus::ReadyCompatible => CatalogCardState::ReadyCompatible,
+        WorldOpenStatus::NeedsDownloadOrBuild => CatalogCardState::MissingPackage,
+        WorldOpenStatus::NeedsMigration => CatalogCardState::MigrationRequired,
+        WorldOpenStatus::RecoverableReadOnly if recoverable_card(plan) => {
+            CatalogCardState::Recoverable
+        }
+        WorldOpenStatus::RecoverableReadOnly => CatalogCardState::ReadOnly,
+        WorldOpenStatus::Blocked => CatalogCardState::Corrupt,
+    }
+}
+
+fn recoverable_card(plan: &WorldOpenPlan) -> bool {
+    plan.actions.iter().any(|action| {
+        matches!(
+            action,
+            WorldOpenAction::RestoreCheckpoint { .. } | WorldOpenAction::RepairHeader { .. }
+        )
+    }) || plan.diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic,
+            WorldDiagnostic::UncleanShutdown
+                | WorldDiagnostic::NonDurableFrontier { .. }
+                | WorldDiagnostic::HeaderRepairRequired { .. }
+        )
+    })
+}
+
 /// Serializable diagnostic code for catalog failures.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -426,5 +496,79 @@ mod tests {
             Some(CatalogEntryState::Failed(_))
         ));
         assert_eq!(source.audit().metadata_reads, 0);
+        assert_eq!(
+            classify_catalog_card(
+                &index
+                    .entry(bad_location)
+                    .expect("failed entry remains visible")
+                    .state,
+                None
+            ),
+            CatalogCardState::Corrupt
+        );
+        assert_eq!(
+            classify_catalog_card(
+                &index
+                    .entry(good_location)
+                    .expect("healthy entry remains visible")
+                    .state,
+                None
+            ),
+            CatalogCardState::Recoverable
+        );
+    }
+
+    #[test]
+    fn catalog_cards_keep_preflight_states_distinct() {
+        let projection = fixture_projection();
+        let entry = CatalogEntryState::Projected(CatalogProjection::from(
+            &WorldHeaderV1::seal(projection.clone()).unwrap_or_else(|error| panic!("{error}")),
+        ));
+        let world_id = projection.world_id;
+        let exact = WorldOpenPlan {
+            world_id,
+            status: WorldOpenStatus::ReadyExact,
+            risk: crate::WorldOpenRisk::None,
+            reconciliation: crate::ReconciliationState::InSync { metadata_epoch: 1 },
+            next_safe_step: Some(WorldOpenAction::UseFrozenLock),
+            actions: vec![WorldOpenAction::UseFrozenLock],
+            diagnostics: Vec::new(),
+            activation_binding: None,
+        };
+        assert_eq!(
+            classify_catalog_card(&entry, Some(&exact)),
+            CatalogCardState::ReadyExact
+        );
+        let mut missing = exact.clone();
+        missing.status = WorldOpenStatus::NeedsDownloadOrBuild;
+        missing.actions = vec![WorldOpenAction::PreparePackage {
+            package: "@example/game"
+                .parse()
+                .unwrap_or_else(|error| panic!("{error}")),
+        }];
+        assert_eq!(
+            classify_catalog_card(&entry, Some(&missing)),
+            CatalogCardState::MissingPackage
+        );
+        let mut read_only = exact.clone();
+        read_only.status = WorldOpenStatus::RecoverableReadOnly;
+        read_only.actions = vec![WorldOpenAction::OpenReadOnly, WorldOpenAction::Export];
+        assert_eq!(
+            classify_catalog_card(&entry, Some(&read_only)),
+            CatalogCardState::ReadOnly
+        );
+        let mut recoverable = read_only;
+        recoverable.diagnostics = vec![WorldDiagnostic::UncleanShutdown];
+        recoverable.actions.insert(
+            0,
+            WorldOpenAction::RestoreCheckpoint {
+                checkpoint: crate::CheckpointId::new("checkpoint-1")
+                    .unwrap_or_else(|error| panic!("{error}")),
+            },
+        );
+        assert_eq!(
+            classify_catalog_card(&entry, Some(&recoverable)),
+            CatalogCardState::Recoverable
+        );
     }
 }

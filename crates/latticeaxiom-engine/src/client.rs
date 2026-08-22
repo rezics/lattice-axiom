@@ -68,6 +68,18 @@ pub enum ProductionClientError {
     /// This process already claimed its client App lease.
     #[error(transparent)]
     Lease(#[from] ClientAppLeaseError),
+    /// The lock-selected input catalog could not be compiled.
+    #[error(transparent)]
+    Input(#[from] crate::input::HostInputError),
+    /// Local user settings could not be loaded.
+    #[error(transparent)]
+    Settings(#[from] crate::settings::HostSettingsError),
+    /// A supervised child could not persist its one-shot handoff.
+    #[error("supervised child handoff failed: {reason}")]
+    ChildHandoff {
+        /// Diagnostic.
+        reason: String,
+    },
 }
 
 impl ProductionClientError {
@@ -131,16 +143,63 @@ pub fn run_client_host_from_lock() -> Result<(), ProductionClientError> {
 /// Returns [`ProductionClientError`] when lock or CAS evidence is missing or
 /// host construction fails.
 pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), ProductionClientError> {
-    let images = load_lock_verified_images(workspace)?;
-    let lease = claim_fresh_client_app_lease(ProcessEpoch::FIRST)?;
-    let (instance, _proof) =
-        if ProductionMemoryStart::lock_graph_selects_shell(images.images().graph()) {
-            EngineInstance::new_client_shell_from_lock(images, lease)?
-        } else {
-            EngineInstance::new_client_host_from_lock(images, lease)?
-        };
+    let lock_path = std::env::var_os(crate::supervisor::ENV_LOCK)
+        .map_or_else(|| workspace.join(PRODUCT_LOCK_FILE_NAME), PathBuf::from);
+    let images = load_lock_verified_images_from(workspace, &lock_path)?;
+    let epoch = std::env::var(crate::supervisor::ENV_PROCESS_EPOCH)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .and_then(|value| ProcessEpoch::new(value).ok())
+        .unwrap_or(ProcessEpoch::FIRST);
+    let lease = claim_fresh_client_app_lease(epoch)?;
+    write_bootstrap_ack(workspace, epoch);
+    let settings_root = workspace.join("run").join("user");
+    let settings = crate::settings::HostUserSettings::load(&settings_root).ok();
+    let profile = settings
+        .as_ref()
+        .map_or_else(latticeaxiom_input::BindingProfileV1::empty, |loaded| {
+            loaded.binding_profile().clone()
+        });
+    let cas_root = workspace
+        .join(CLIENT_CATALOG_DIRECTORY)
+        .join(LOCAL_CATALOG_CAS_DIRECTORY);
+    let store = FilesystemCas::open(&cas_root)?;
+    let compiled = crate::input::compile_lock_selected_input(&images, Some(&store), &profile)?;
+    if crate::input::graph_selects_input_actions(images.images().graph()) && compiled.is_none() {
+        return Err(ProductionClientError::Input(
+            crate::input::HostInputError::CatalogUnavailable {
+                reason: "the lock selected input-actions but no catalog compiled".to_owned(),
+            },
+        ));
+    }
+    let role = std::env::var(crate::supervisor::ENV_CHILD_ROLE).unwrap_or_default();
+    let force_shell = role == "shell" || role == "recovery";
+    let force_world = role == "world";
+    let (instance, _proof) = if force_shell
+        || (!force_world
+            && ProductionMemoryStart::lock_graph_selects_shell(images.images().graph()))
+    {
+        EngineInstance::new_client_shell_from_lock(images, lease)?
+    } else {
+        let maps = compiled
+            .as_ref()
+            .map(latticeaxiom_player::leafwing_maps_from_catalog);
+        EngineInstance::new_client_host_from_lock_with_maps(images, lease, maps)?
+    };
     instance.run();
     Ok(())
+}
+
+fn write_bootstrap_ack(workspace: &Path, epoch: ProcessEpoch) {
+    let Some(root) = std::env::var_os(crate::supervisor::ENV_LAUNCH_ROOT).map(PathBuf::from) else {
+        return;
+    };
+    let path = if root.as_os_str().is_empty() {
+        workspace.join("run").join("launcher").join("bootstrap.ack")
+    } else {
+        root.join("bootstrap.ack")
+    };
+    let _ = std::fs::write(path, epoch.get().to_string());
 }
 
 /// Reopens and freeze-verifies the workspace product lock, then binds images.
@@ -153,9 +212,22 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
 pub fn load_lock_verified_images(
     workspace: &Path,
 ) -> Result<LockVerifiedComposeImages, ProductionClientError> {
-    let lock_path = workspace.join(PRODUCT_LOCK_FILE_NAME);
+    load_lock_verified_images_from(workspace, &workspace.join(PRODUCT_LOCK_FILE_NAME))
+}
+
+/// Reopens and freeze-verifies `lock_path` against `workspace/catalog/cas`.
+///
+/// # Errors
+///
+/// Returns [`ProductionClientError`] when lock or CAS evidence is missing.
+pub fn load_lock_verified_images_from(
+    workspace: &Path,
+    lock_path: &Path,
+) -> Result<LockVerifiedComposeImages, ProductionClientError> {
     if !lock_path.is_file() {
-        return Err(ProductionClientError::MissingLock { path: lock_path });
+        return Err(ProductionClientError::MissingLock {
+            path: lock_path.to_path_buf(),
+        });
     }
     let cas_root = workspace
         .join(CLIENT_CATALOG_DIRECTORY)
@@ -164,10 +236,10 @@ pub fn load_lock_verified_images(
         return Err(ProductionClientError::MissingCas { path: cas_root });
     }
 
-    let lock = reopen_product_lock(&lock_path)?;
+    let lock = reopen_product_lock(lock_path)?;
     let host = HostBuildReceipts::sealed_by_lock(&lock)?;
     let store = FilesystemCas::open(&cas_root)?;
-    let reopened = ReopenedFinalLockV1::reopen_frozen_from_cas(&lock_path, &store, &host)?;
+    let reopened = ReopenedFinalLockV1::reopen_frozen_from_cas(lock_path, &store, &host)?;
     let target = select_target(reopened.product_lock())?;
     Ok(LockVerifiedComposeImages::from_reopened_product_lock(
         &reopened, &target,

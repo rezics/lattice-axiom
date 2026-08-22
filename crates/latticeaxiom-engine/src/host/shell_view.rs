@@ -425,6 +425,39 @@ fn exit_with_ready_exact_handoff(
     else {
         return false;
     };
+    if let Some(root) = std::env::var_os(crate::supervisor::ENV_LAUNCH_ROOT) {
+        let root = std::path::PathBuf::from(root);
+        let epoch = std::env::var(crate::supervisor::ENV_PROCESS_EPOCH)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .and_then(|value| latticeaxiom_launcher::ProcessEpoch::new(value).ok())
+            .unwrap_or(latticeaxiom_launcher::ProcessEpoch::FIRST);
+        let generation = std::env::var(crate::supervisor::ENV_GENERATION)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .and_then(|value| latticeaxiom_launcher::LaunchGeneration::new(value).ok())
+            .unwrap_or(latticeaxiom_launcher::LaunchGeneration::FIRST);
+        if let Ok(report) = latticeaxiom_launcher::ChildExitReportV1::seal(
+            latticeaxiom_launcher::ChildExitReportDraftV1 {
+                child_generation: generation,
+                process_epoch: epoch,
+                role: latticeaxiom_launcher::ChildRoleV1::Shell,
+                exit_kind: latticeaxiom_launcher::ChildExitKindV1::Handoff,
+                intent_generation: Some(handoff.intent.generation()),
+                intent_checksum: Some(handoff.intent.checksum()),
+                confirmed_setting_transaction_revision:
+                    latticeaxiom_launcher::SettingTransactionRevision::new(0),
+                last_written_world: None,
+                last_durable_world: None,
+                shell_lock_hash: handoff.intent.shell_lock_hash(),
+                world_lock_hash: handoff.intent.world_lock_hash(),
+                world_open_plan_hash: handoff.intent.world_open_plan_hash(),
+                diagnostic_ref: None,
+            },
+        ) {
+            let _ = crate::supervisor::publish_child_exit(&root, &report, Some(&handoff.intent));
+        }
+    }
     commands.insert_resource(SealedLaunchHandoff(handoff));
     exits.write(AppExit::Success);
     true

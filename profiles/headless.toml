@@ -13,6 +13,10 @@ realization = { mode = "auto" }
 version = "=0.1.0"
 realization = { mode = "auto" }
 
+[roots."@latticeaxiom/input"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
 [roots."@latticeaxiom/observability"]
 version = "=0.1.0"
 realization = { mode = "auto" }
@@ -21,6 +25,11 @@ realization = { mode = "auto" }
 kind = "path"
 package = "@latticeaxiom/settings"
 path = "packages/latticeaxiom/settings"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/input"
+path = "packages/latticeaxiom/input"
 
 [[sources]]
 kind = "path"

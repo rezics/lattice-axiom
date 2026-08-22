@@ -31,10 +31,15 @@ pub use inspect::{
     AuthoritativeTargetInspectRequestV1, HeadlessTargetInspectV1, TargetInspectReceiptV1,
     TargetInspectRejectV1, chunk_line, occupancy_line,
 };
+pub use latticeaxiom_input::{
+    AuthoritativePlayerActionV1, ClientSurfaceActionV1, CompiledInputCatalogV1,
+    CompiledLeafwingMapV1,
+};
 #[cfg(feature = "client-input")]
 pub use leafwing_adapter::{
-    LeafwingInputAdapterPlugin, LeafwingPlayerAction, LocalPlayerClientInputBundle,
-    default_leafwing_input_map,
+    CompiledClientInputMaps, GameplaySuppressed, LeafwingInputAdapterPlugin, LeafwingPlayerAction,
+    LeafwingSurfaceAction, LocalPlayerClientInputBundle, SurfaceActionFrame,
+    default_leafwing_input_map, leafwing_maps_from_catalog,
 };
 /// Leafwing action-state type used by the static client adapter.
 #[cfg(feature = "client-input")]

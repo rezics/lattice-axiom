@@ -2,6 +2,7 @@ version: "3"
 
 vars:
   BOOTSTRAP: profiles/dev.toml
+  LOCK: latticeaxiom.lock
 
 tasks:
   default:
@@ -13,12 +14,31 @@ tasks:
   lock:
     desc: Write latticeaxiom.lock and catalog/cas from a composition bootstrap
     cmds:
-      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap {{.BOOTSTRAP}}
+      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap {{.BOOTSTRAP}} --lock {{.LOCK}}
 
   verify:
     desc: Freeze-verify latticeaxiom.lock against catalog/cas
     cmds:
-      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- verify --offline --frozen
+      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- verify --offline --frozen --lock {{.LOCK}}
+
+  lock:shell:
+    desc: Write the client-shell product lock beside the shared catalog CAS
+    cmds:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/shell.toml
+          LOCK: run/shell/latticeaxiom.lock
+
+  play:
+    desc: Product supervisor — shell → world → shell from reopened locks
+    deps:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/dev.toml
+          LOCK: latticeaxiom.lock
+      - lock:shell
+    cmds:
+      - cargo run -p latticeaxiom-engine --bin latticeaxiom-play
 
   dev:
     desc: Relock the client-world bootstrap, then launch the interactive client
@@ -26,5 +46,6 @@ tasks:
       - task: lock
         vars:
           BOOTSTRAP: profiles/dev.toml
+          LOCK: latticeaxiom.lock
     cmds:
       - cargo run -p latticeaxiom-engine

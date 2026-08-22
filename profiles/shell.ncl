@@ -26,6 +26,10 @@ game.make {
       version = "=0.1.0",
       realization = auto_data,
     },
+    "@latticeaxiom/input" = {
+      version = "=0.1.0",
+      realization = auto_data,
+    },
   },
   capabilities = {
     "latticeaxiom:capability/client-shell@1" = {
@@ -39,6 +43,13 @@ game.make {
       capability = "latticeaxiom:capability/settings-registry@1",
       version = "^1.0.0",
       provider = "@latticeaxiom/settings",
+      cardinality = "exactly-one",
+      domains = ["client"],
+    },
+    "latticeaxiom:capability/input-actions@1" = {
+      capability = "latticeaxiom:capability/input-actions@1",
+      version = "^1.0.0",
+      provider = "@latticeaxiom/input",
       cardinality = "exactly-one",
       domains = ["client"],
     },
@@ -68,6 +79,10 @@ game.make {
       "@latticeaxiom/settings"
       "packages/latticeaxiom/settings",
     source_candidate
+      "latticeaxiom:source/input"
+      "@latticeaxiom/input"
+      "packages/latticeaxiom/input",
+    source_candidate
       "latticeaxiom:source/observability"
       "@latticeaxiom/observability"
       "packages/latticeaxiom/observability",
@@ -82,6 +97,12 @@ game.make {
         "latticeaxiom:capability/settings-surface",
         "latticeaxiom:capability/settings-registry",
         "latticeaxiom:capability/diagnostic-registry",
+        "latticeaxiom:capability/input-actions",
+      ],
+      "@latticeaxiom/input" = [
+        "latticeaxiom:capability/input-actions",
+        "latticeaxiom:action/**",
+        "latticeaxiom:capability/settings-registry",
       ],
     },
     maximum_trust = "data-only",

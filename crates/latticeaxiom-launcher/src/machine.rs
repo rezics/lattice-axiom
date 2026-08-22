@@ -688,7 +688,7 @@ impl BootstrapMachine {
                     LaunchFailureDetailV1::ProcessExit { exit_code },
                 ),
             ),
-            PriorChildStatusV1::Running | PriorChildStatusV1::Unknown => self.halt(
+            PriorChildStatusV1::Running { .. } | PriorChildStatusV1::Unknown => self.halt(
                 Some(intent.generation()),
                 RecoveryReasonV1::RecoveryFailure,
                 vec![target_failure_with_detail(
@@ -811,7 +811,9 @@ impl BootstrapMachine {
             BootObservationV1::Acknowledged(ack) if ack.matches_intent(attempt.intent) => {
                 self.accept_target_ack(context, attempt, ack)
             }
-            BootObservationV1::Acknowledged(_) | BootObservationV1::RecoveryAcknowledged(_) => self
+            BootObservationV1::Acknowledged(_)
+            | BootObservationV1::RecoveryAcknowledged(_)
+            | BootObservationV1::InitialShellAcknowledged { .. } => self
                 .terminate_target_then_recover(
                     context,
                     attempt,
@@ -900,6 +902,7 @@ impl BootstrapMachine {
             },
             Vec::new(),
         )
+        .with_child(attempt.child)
     }
 
     fn terminate_target_then_recover<S, P>(
@@ -1171,8 +1174,11 @@ impl BootstrapMachine {
                     },
                     failures,
                 )
+                .with_child(child)
             }
-            BootObservationV1::RecoveryAcknowledged(_) | BootObservationV1::Acknowledged(_) => {
+            BootObservationV1::RecoveryAcknowledged(_)
+            | BootObservationV1::Acknowledged(_)
+            | BootObservationV1::InitialShellAcknowledged { .. } => {
                 push_failure(
                     &mut failures,
                     LaunchFailureReceiptV1::new(
@@ -1971,6 +1977,15 @@ mod tests {
                 .unwrap_or(BootObservationV1::TimedOut)
         }
 
+        fn await_exit(
+            &mut self,
+            _process: SpawnedProcess,
+            deadline_ms: u64,
+        ) -> crate::ChildObservationV1 {
+            assert_eq!(deadline_ms, crate::MAX_CHILD_SHUTDOWN_WAIT_MS);
+            crate::ChildObservationV1::TimedOut
+        }
+
         fn terminate(&mut self, process: SpawnedProcess) -> Result<(), TerminationFailureV1> {
             self.terminated = self.terminated.saturating_add(1);
             if let Some(Some(failure)) = self.termination_failures.pop_front() {
@@ -2468,7 +2483,14 @@ mod tests {
 
     #[test]
     fn supervisor_proof_controls_claimed_launcher_crash_recovery() {
-        for status in [PriorChildStatusV1::Running, PriorChildStatusV1::Unknown] {
+        for status in [
+            PriorChildStatusV1::Running {
+                process: SpawnedProcess::new(1)
+                    .unwrap_or_else(|error| panic!("test process handle was zero: {error}")),
+                process_epoch: epoch(7),
+            },
+            PriorChildStatusV1::Unknown,
+        ] {
             let world_id = WorldId::new_v4();
             let mut store = MemoryStore::default();
             let _intent = publish_world(&mut store, world_id);

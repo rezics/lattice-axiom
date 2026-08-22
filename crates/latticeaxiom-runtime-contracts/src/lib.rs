@@ -2,7 +2,9 @@
 //!
 //! This crate validates and operates on the declaration DTOs owned by
 //! `latticeaxiom-compose`. It deliberately contains no Bevy facade, UI,
-//! renderer, task runtime, persistence backend, or callback execution.
+//! renderer, task runtime, or callback execution. Local user/device values use
+//! the canonical old-or-complete-new file protocol; world stores remain outside
+//! this crate.
 
 mod observability;
 mod settings;

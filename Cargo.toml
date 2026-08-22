@@ -2,12 +2,14 @@
 resolver = "3"
 members = [
   "crates/latticeaxiom-abi",
+  "crates/latticeaxiom-client-ui",
   "crates/latticeaxiom-compose",
   "crates/latticeaxiom-content",
   "crates/latticeaxiom-core",
   "crates/latticeaxiom-dual-fixture",
   "crates/latticeaxiom-engine",
   "crates/latticeaxiom-gameplay",
+  "crates/latticeaxiom-input",
   "crates/latticeaxiom-launcher",
   "crates/latticeaxiom-packages",
   "crates/latticeaxiom-player",
@@ -16,6 +18,7 @@ members = [
   "crates/latticeaxiom-runtime-contracts",
   "crates/latticeaxiom-sdk",
   "crates/latticeaxiom-sdk-macros",
+  "crates/latticeaxiom-settings-ui",
   "crates/latticeaxiom-start-ui",
   "crates/latticeaxiom-storage",
   "crates/latticeaxiom-territory",

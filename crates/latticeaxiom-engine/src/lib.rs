@@ -21,28 +21,34 @@
 #[cfg(feature = "client")]
 mod client;
 mod host;
+mod input;
 mod instance;
 #[cfg(feature = "client")]
 mod playable;
 mod prepared;
 #[cfg(feature = "client")]
 mod presentation_fixture;
+mod settings;
+#[cfg(feature = "client")]
+mod supervisor;
 
 #[cfg(feature = "client")]
 pub use client::{
-    ProductionClientError, load_lock_verified_images, run_client_host_from_lock,
-    run_client_host_from_workspace,
+    ProductionClientError, load_lock_verified_images, load_lock_verified_images_from,
+    run_client_host_from_lock, run_client_host_from_workspace,
 };
 pub use host::{
     CaveOccupancyArbitrationV1, CellOccupancyV1, ChunkFaceV1, ChunkLifecycle, ChunkMeshCursor,
     ChunkPresentation, ContentDisplayCatalogV1, ContentDisplayLabelV1, HOTBAR_SLOTS,
     INVENTORY_SLOTS, ProductionHostError, ProductionHostPlugin, ProductionInspectSurface,
     ProductionInventoryView, ProductionMemoryStart, ProductionMemoryStartError,
-    ProductionPlayerPose, ProductionSessionPause, ProductionSpine, ProductionWorldList,
-    ProductionWorldStorage, RequiredCaveEntranceV1, SealedWorldWriterHost, SealedWriterHostError,
-    WorkingSetDiagnosticsV1, authored_content_catalog, authored_content_display_catalog,
-    authored_gameplay_catalog, empty_gameplay_catalog, sealed_activation_binding,
+    ProductionPlayerPose, ProductionSessionPause, ProductionSpine, ProductionSurfaceRouter,
+    ProductionWorldList, ProductionWorldStorage, RequiredCaveEntranceV1, SealedWorldWriterHost,
+    SealedWriterHostError, WorkingSetDiagnosticsV1, authored_content_catalog,
+    authored_content_display_catalog, authored_gameplay_catalog, empty_gameplay_catalog,
+    sealed_activation_binding,
 };
+pub use input::{HostInputError, compile_lock_selected_input, graph_selects_input_actions};
 pub use instance::{
     EngineInstance, EngineInstanceError, EngineProfile, FixedTickCount, MAX_TICKS_PER_ADVANCE,
     VerifiedProductLockHash,
@@ -69,3 +75,8 @@ pub use prepared::{
 };
 #[cfg(feature = "client")]
 pub use presentation_fixture::run_temporary_client_presentation_fixture;
+pub use settings::{HostSettingsError, HostUserSettings};
+#[cfg(feature = "client")]
+pub use supervisor::{
+    ProductSupervisorError, publish_child_exit, run_product_supervisor_from_workspace,
+};

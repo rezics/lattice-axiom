@@ -14,8 +14,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use latticeaxiom_core::{
-    CanonicalHash, CanonicalJsonError, PackageName, SchemaId, SourceId, StableId, TargetTriple,
-    canonical_json_bytes, canonical_json_hash,
+    CanonicalHash, CanonicalJsonError, CapabilityId, PackageName, SchemaId, SourceId, StableId,
+    TargetTriple, canonical_json_bytes, canonical_json_hash,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -638,6 +638,7 @@ struct SelectedLockGraph {
     packages: BTreeMap<PackageName, LockedPackage>,
     source_objects: BTreeMap<PackageName, CanonicalHash>,
     alias_edges: BTreeMap<PackageName, BTreeMap<PackageAlias, LockedAliasEdgeV1>>,
+    capability_providers: BTreeMap<CapabilityId, Vec<PackageName>>,
     explanation: Vec<ResolutionStep>,
 }
 
@@ -655,7 +656,7 @@ fn seal_path_lock(
         evaluation_limits: bootstrap.evaluation_limits,
         roots: bootstrap.roots.keys().cloned().collect(),
         packages: selected_graph.packages,
-        capability_providers: BTreeMap::new(),
+        capability_providers: selected_graph.capability_providers,
         namespace_grants: BTreeSet::new(),
         explanation: selected_graph.explanation,
         graph_hash: CanonicalHash::digest(b"unverified-graph"),
@@ -730,12 +731,43 @@ fn selected_lock_graph(
         source_objects.insert(name.clone(), CanonicalHash::digest(&packed.source_bytes));
         packages.insert(name.clone(), locked);
     }
+    let capability_providers =
+        capability_providers_from_selected(bootstrap, selected, &mut explanation);
     Ok(SelectedLockGraph {
         packages,
         source_objects,
         alias_edges,
+        capability_providers,
         explanation,
     })
+}
+
+fn capability_providers_from_selected(
+    bootstrap: &CompositionBootstrapV1,
+    selected: &BTreeMap<PackageName, &PackedPackage>,
+    explanation: &mut Vec<ResolutionStep>,
+) -> BTreeMap<CapabilityId, Vec<PackageName>> {
+    let mut providers = BTreeMap::<CapabilityId, Vec<PackageName>>::new();
+    for (name, packed) in selected {
+        for provision in packed.manifest.provides.values() {
+            if !domains_overlap(&provision.domains, &bootstrap.projection_domains) {
+                continue;
+            }
+            explanation.push(ResolutionStep::Capability {
+                capability: provision.capability.clone(),
+                provider: name.clone(),
+            });
+            providers
+                .entry(provision.capability.clone())
+                .or_default()
+                .push(name.clone());
+        }
+    }
+    for list in providers.values_mut() {
+        list.sort();
+        list.dedup();
+    }
+    providers
 }
 
 fn locked_package_from_selected(
