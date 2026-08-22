@@ -19,20 +19,19 @@ decision:
 
 診斷基線是 implementation commit `9e1fc9ddb67eba0646c47bbdf86ba65b99c10113`。外部對照是 Riverbed commit [`00005a3a6b8f181ca2641f046434a4397a7c4dca`](https://github.com/Inspirateur/riverbed/tree/00005a3a6b8f181ca2641f046434a4397a7c4dca)。Riverbed 是 MIT 專案；本計畫只吸收可驗證的設計思路，不把它的實作或 README 性能主張提升為 Lattice Axiom 的承諾。
 
-本頁是 `active` implementation plan：P0–P2 已在 production host 落地，剩餘從 P3 起。它不新增 render provider、改寫 accepted performance profile，或授權自研 Bevy 以外的 renderer／scheduler／task runtime。若後續證據要求改變 accepted 邊界，必須另建 ADR。開始頁／`LaunchIntentV1` 進程切換不在本頁範圍，見[開始頁與安全生命週期](../architecture/world-lifecycle-and-start-ui.md)。
+本頁是 `active` implementation plan：P0–P2 已在 production host 落地。P3 每 tick 16 jobs／16 MiB apply 與 P6 色塊 atlas baseline 已適用。未關閉：P3 2 ms 牆鐘、join 當批 dispatched slice、startup／edit／collider `drain_until_idle`；P4；P6 layer table／`MeshGroup` 分 material；P7。它不新增 render provider、改寫 accepted performance profile，或授權自研 Bevy 以外的 renderer／scheduler／task runtime。若後續證據要求改變 accepted 邊界，必須另建 ADR。開始頁／`LaunchIntentV1` 進程切換不在本頁範圍，見[開始頁與安全生命週期](../architecture/world-lifecycle-and-start-ui.md)。
 
-## 落地（P0–P2）
+## 落地（P0–P2；P3／P6 部分適用）
 
-下列是 `lattice-axiom-demo` 已合併的 correctness blockers，不是 ADR 0026 量測，也不是 D2／D4 路線圖出場。
+下列是 `lattice-axiom-demo` 樹上記錄，不是 ADR 0026 量測，也不是 D2／D4 路線圖出場。
 
 | 階段 | 實作 | 證據 |
 | --- | --- | --- |
 | P0 | `f2457b1` `test(voxel-mesh): lock outward winding and halo culling` | `geometry` indexed winding；六向 halo 同時覆蓋 `visible_faces` 與 `greedy_quads` |
 | P1／P2 | `b686d3f` `fix(engine): present halo meshes and reconcile interest once` | adapter 只做 `MeshBuffer → Mesh`；`mesh_from_occupied`／`FACES` 已刪；`FixedUpdate` 只做 collider safety；`FixedPostUpdate` 以最終 pose reconcile 一次；headless：yaw／pitch 不變、每 tick 一次 reconcile、chunk 內移動不 distance-evict、折返 retain、sticky look-ahead |
-| P3（部分） | `72ba55f` dispatch／apply 分離；`0c5e883` Bevy `AsyncComputeTaskPool` | spine mutex 在 meshing 前釋放；lane-local `GreedyMesher`；completion 仍走 `complete_derived` 拒絕 stale。**未關閉：** 每 frame 仍 join 整批 derived work（headless 確定性）；每 render frame `<= 2 ms / 16 MiB` apply 上限尚未夾緊 |
+| P3（部分） | `72ba55f` dispatch／apply 分離；`0c5e883` Bevy `AsyncComputeTaskPool`；`dada50a` 每 tick apply bound | spine mutex 在 meshing 前釋放；lane-local `GreedyMesher`；`complete_derived` 拒絕 stale；`drain_derived` 每 tick 最多 16 jobs／16 MiB。**未關閉：** `execute_derived_jobs` 仍 join 當批（`pool.scope` 或同步 fallback）；無 2 ms 牆鐘；startup／edit／collider safety 仍 `drain_derived_until_idle` |
 | P5 | `5dca840` `perf(voxel-collider): merge occupied cells into bounded boxes` | greedy cuboid 合併；`8³` 實心 chunk 1 個 shape；occupancy property corpus |
-| P3 apply bound | `dada50a` | 每 tick 最多 16 jobs / 16 MiB apply；startup／collider safety 仍 drain until idle |
-| P6 baseline | `5203601` UV；`2dfcd11` nearest color atlas | `MeshBuffer` 發 UV0；palette 按 stable index 編成 16×16 色塊 atlas；缺 PNG 用該 fallback，不讀 `placeholders/` |
+| P6 baseline | `5203601` UV；`2dfcd11` nearest color atlas | `MeshBuffer` 發 UV0；palette 按 stable index 編成 16×16 色塊 atlas；nearest clamp；缺 PNG 用該 fallback，engine 不讀 `placeholders/`。**未關閉：** locked content layer table、face-specific texture、`MeshGroup` 分 material（單一 `StandardMaterial`） |
 
 診斷基線 `9e1fc9d` 的三個畫面缺陷因此在 production host 上關閉。P7 仍禁止提前。
 

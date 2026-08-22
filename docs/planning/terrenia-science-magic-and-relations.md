@@ -39,7 +39,7 @@ decision:
 2. 打开背包查看 36 格；热键栏是背包前缀。
 3. 挖掘／破坏／放置走既有权威 DDA 与 gameplay catalog，不是 client 预测改世界。
 4. Pause 打开设定：至少 **渲染距离**（chunk 半径）可调，且被 `PlayableWorldHardLimitsV1` 夹紧。
-5. 地形可用色块／atlas fallback；缺 PNG 不得假装有文件。
+5. 地形：P6 baseline 已适用——palette 色块 atlas、nearest clamp；缺 PNG 走 fallback，engine 不读 `placeholders/`。P3 每 tick apply 上限 16 jobs／16 MiB 已适用；无 2 ms 墙钟；startup／edit／collider safety 仍 drain until idle。
 
 开始页仍是独立 `ClientShellGraph` + `LaunchIntentV1` replacement process，见
 [开始页](../architecture/world-lifecycle-and-start-ui.md)。本页不批准同 App 切 Playing。
@@ -50,19 +50,22 @@ decision:
 host 只认识 capability 名，不认识 `gregtech:*` 或 `botania:*`。
 
 ```text
-terrenia
-├── @terrenia/blocks
-├── @terrenia/worldgen
-├── @terrenia/gameplay
-├── @terrenia/tools
-├── @terrenia/metallurgy          # 铜、合金、电压／热量材料图（science 输入）
-├── @terrenia/science             # 机器、配方图、电缆；requires metallurgy
-├── @terrenia/thaumaturgy         # 魔力、植物、仪式；requires blocks，不复制科学电压
-└── @latticeaxiom/progress        # 任务／成就 DAG（平台，无 terrenia ID）
-    └── @terrenia/journey         # Terrenia 章节页，引用 frozen Role 输出
-@latticeaxiom/relations           # 有向关系图（平台）
-└── @example/companion-maid       # TLM 类同伴，消费 relations，不进 host
+terrenia                              # in lock；deps: blocks/worldgen/gameplay/tools/presentation
+├── @terrenia/blocks                  # in lock
+├── @terrenia/worldgen                # in lock
+├── @terrenia/gameplay                # in lock
+├── @terrenia/tools                   # in lock
+├── @terrenia/presentation            # in lock；client；authored PNG 源列出 placeholders/，host P6 用色块 atlas
+├── @terrenia/metallurgy              # data-only skeleton；not in lock；copper/annealed-copper/bronze/brass
+├── @terrenia/science                 # data-only skeleton；not in lock；recipes []；voltage StatePropertyKey
+├── @terrenia/thaumaturgy             # data-only skeleton；not in lock；rituals []；mana StatePropertyKey
+└── @latticeaxiom/progress            # data-only skeleton；not in lock；chapters []；compile-fail cycles
+    └── @terrenia/journey             # data-only skeleton；not in lock；chapters []；requires progress
+@latticeaxiom/relations               # data-only skeleton；not in lock；kinds pet/friend/subject/companion
+└── @example/companion-maid           # not in packages/
 ```
+
+`latticeaxiom.toml` sources／`latticeaxiom.lock` 不含 metallurgy／science／thaumaturgy／progress／journey／relations。engine 无 `gtceu:`／`botania:`／`tlm:` ID。
 
 ### 有机结合，而不是两个互不说话的模组
 
@@ -79,8 +82,8 @@ terrenia
 
 | 材料 | 包 | 用途 |
 | --- | --- | --- |
-| 铜、退火铜、青铜、黄铜 | `@terrenia/metallurgy` | 电缆、管道、工具头、魔法导体框 |
-| 锡、锌 | 同一包的有限合金输入 | 不新增 host 金属表 |
+| 铜、退火铜、青铜、黄铜 | `@terrenia/metallurgy` `materials-v1.json` | `terrenia:tag/conductive`／`thermal` |
+| 锡、锌 | 未出现在该 JSON | 不新增 host 金属表 |
 
 配方与 GT 式处理图属于 science package；魔法只通过 Tag／Role 读取「导电／导热／封魔」资格。
 
