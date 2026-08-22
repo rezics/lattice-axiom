@@ -585,7 +585,7 @@ impl ProductionSpine {
             inner: Arc::new(Mutex::new(inner)),
             storage: ProductionWorldStorage { kernel },
         };
-        drain_derived(&spine, FixedTick::new(0))?;
+        drain_derived_until_idle(&spine, FixedTick::new(0))?;
         Ok(spine)
     }
 
@@ -1194,7 +1194,7 @@ impl ProductionSpine {
             record_edit_result(&mut inner, &result);
             result
         };
-        drain_derived(self, FixedTick::new(0))
+        drain_derived_until_idle(self, FixedTick::new(0))
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         result
     }
@@ -1222,7 +1222,7 @@ impl ProductionSpine {
             record_edit_result(&mut inner, &result);
             result
         };
-        drain_derived(self, FixedTick::new(0))
+        drain_derived_until_idle(self, FixedTick::new(0))
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         result
     }
@@ -1463,7 +1463,7 @@ impl ProductionSpine {
                 .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
             inner.place_fluid_occupancy(self.storage.kernel(), position, fluid, state)
         };
-        drain_derived(self, FixedTick::new(0))
+        drain_derived_until_idle(self, FixedTick::new(0))
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         result
     }
@@ -1613,7 +1613,7 @@ impl BlockEditAuthority for ProductionSpine {
             }
             result
         };
-        drain_derived(self, tick).map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        drain_derived_until_idle(self, tick).map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         result
     }
 }
@@ -2680,14 +2680,56 @@ fn project_stored(
     Ok(())
 }
 
-/// Dispatches owned [`DerivedInput`] values under a short spine lock, executes
-/// them on Bevy [`AsyncComputeTaskPool`] without world/ECS/GPU handles, then
-/// receipt-checks and applies completions on the main world.
+/// ADR 0026 main-world completion apply job cap per interest slice.
+const MAIN_WORLD_APPLY_JOB_CAP: usize = 16;
+
+/// One per-tick derived slice: dispatch at most
+/// [`RuntimeLimits::cpu_heavy_concurrency`] jobs, execute them off the spine
+/// mutex, then apply waiting jobs until [`RuntimeLimits::MAIN_WORLD_APPLY_BYTE_CAP`]
+/// or [`MAIN_WORLD_APPLY_JOB_CAP`]. Remaining work stays queued for later ticks.
 fn drain_derived(spine: &ProductionSpine, tick: FixedTick) -> Result<(), ProductionHostError> {
+    let mut applied_jobs = 0_usize;
+    let mut applied_bytes = 0_u64;
+    let inputs = {
+        let mut inner = spine.lock_inner()?;
+        apply_ready_waiting(&mut inner, tick, &mut applied_jobs, &mut applied_bytes)?;
+        let cap = inner.runtime.limits().cpu_heavy_concurrency();
+        let mut inputs = Vec::new();
+        for kind in DerivedKind::ALL {
+            while inputs.len() < cap {
+                match inner.runtime.dispatch_next(kind)? {
+                    DispatchOutcome::Started(input) => inputs.push(input),
+                    DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
+                    DispatchOutcome::MemoryContractViolation { .. } => {
+                        return Err(ProductionHostError::DerivedMemory);
+                    }
+                }
+            }
+        }
+        inputs
+    };
+    if inputs.is_empty() {
+        let mut inner = spine.lock_inner()?;
+        refresh_lifecycle(&mut inner);
+    } else {
+        let completed = execute_derived_jobs(inputs);
+        let mut inner = spine.lock_inner()?;
+        enqueue_waiting_derived(&mut inner, completed);
+        apply_ready_waiting(&mut inner, tick, &mut applied_jobs, &mut applied_bytes)?;
+        refresh_lifecycle(&mut inner);
+    }
+    Ok(())
+}
+
+/// Startup helper: keeps dispatching and applying until derived queues are idle.
+fn drain_derived_until_idle(
+    spine: &ProductionSpine,
+    tick: FixedTick,
+) -> Result<(), ProductionHostError> {
     loop {
         let inputs = {
             let mut inner = spine.lock_inner()?;
-            apply_waiting_derived(&mut inner, tick)?;
+            apply_all_waiting(&mut inner, tick)?;
             dispatch_derived_batch(&mut inner, DerivedKind::ALL)?
         };
         if inputs.is_empty() {
@@ -2698,7 +2740,7 @@ fn drain_derived(spine: &ProductionSpine, tick: FixedTick) -> Result<(), Product
         let completed = execute_derived_jobs(inputs);
         let mut inner = spine.lock_inner()?;
         enqueue_waiting_derived(&mut inner, completed);
-        apply_waiting_derived(&mut inner, tick)?;
+        apply_all_waiting(&mut inner, tick)?;
     }
 }
 
@@ -2710,7 +2752,7 @@ fn drain_player_colliders(
     loop {
         let inputs = {
             let mut inner = spine.lock_inner()?;
-            apply_waiting_derived(&mut inner, tick)?;
+            apply_all_waiting(&mut inner, tick)?;
             let pending = occupied.iter().any(|coordinate| {
                 inner.runtime.is_resident(*coordinate)
                     && !matches!(
@@ -2730,7 +2772,7 @@ fn drain_player_colliders(
         let completed = execute_derived_jobs(inputs);
         let mut inner = spine.lock_inner()?;
         enqueue_waiting_derived(&mut inner, completed);
-        apply_waiting_derived(&mut inner, tick)?;
+        apply_all_waiting(&mut inner, tick)?;
     }
 }
 
@@ -2764,17 +2806,75 @@ fn enqueue_waiting_derived(inner: &mut ProductionSpineInner, completed: Vec<Comp
     }
 }
 
-fn apply_waiting_derived(
+fn waiting_derived_bytes(job: &ComputedDerived) -> u64 {
+    job.payload
+        .as_ref()
+        .map_or(0, RetainedBytes::retained_bytes)
+}
+
+fn apply_all_waiting(
     inner: &mut ProductionSpineInner,
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
-    while let Some(job) = inner.waiting_derived.pop_front() {
-        let bytes = job
-            .payload
-            .as_ref()
-            .map_or(0, RetainedBytes::retained_bytes);
-        inner.runtime.consume_waiting_to_apply(bytes);
-        apply_computed_derived(inner, job, tick)?;
+    while !inner.waiting_derived.is_empty() {
+        let mut applied_jobs = 0_usize;
+        let mut applied_bytes = 0_u64;
+        apply_ready_waiting(inner, tick, &mut applied_jobs, &mut applied_bytes)?;
+    }
+    Ok(())
+}
+
+fn apply_ready_waiting(
+    inner: &mut ProductionSpineInner,
+    tick: FixedTick,
+    applied_jobs: &mut usize,
+    applied_bytes: &mut u64,
+) -> Result<(), ProductionHostError> {
+    let mut waiting = mem::take(&mut inner.waiting_derived);
+    let result = apply_waiting_derived(
+        &mut waiting,
+        waiting_derived_bytes,
+        |job, bytes| {
+            inner.runtime.consume_waiting_to_apply(bytes);
+            apply_computed_derived(inner, job, tick)
+        },
+        applied_jobs,
+        applied_bytes,
+    );
+    inner.waiting_derived = waiting;
+    result
+}
+
+/// Applies waiting derived jobs until the main-world job or byte cap.
+///
+/// Stops before the next job when [`MAIN_WORLD_APPLY_JOB_CAP`] jobs have been
+/// applied in this slice, or when another job would exceed
+/// [`RuntimeLimits::MAIN_WORLD_APPLY_BYTE_CAP`]. The first job of a slice is
+/// always applied so an oversized payload cannot stall the queue. Remaining
+/// jobs stay in `waiting`.
+///
+/// # Errors
+///
+/// Returns [`ProductionHostError`] when `apply` rejects a popped job.
+pub(super) fn apply_waiting_derived<T>(
+    waiting: &mut VecDeque<T>,
+    job_bytes: impl Fn(&T) -> u64,
+    mut apply: impl FnMut(T, u64) -> Result<(), ProductionHostError>,
+    applied_jobs: &mut usize,
+    applied_bytes: &mut u64,
+) -> Result<(), ProductionHostError> {
+    while let Some(job) = waiting.pop_front() {
+        let bytes = job_bytes(&job);
+        if *applied_jobs >= MAIN_WORLD_APPLY_JOB_CAP
+            || (*applied_jobs > 0
+                && applied_bytes.saturating_add(bytes) > RuntimeLimits::MAIN_WORLD_APPLY_BYTE_CAP)
+        {
+            waiting.push_front(job);
+            break;
+        }
+        apply(job, bytes)?;
+        *applied_jobs = applied_jobs.saturating_add(1);
+        *applied_bytes = applied_bytes.saturating_add(bytes);
     }
     Ok(())
 }
@@ -3813,8 +3913,12 @@ fn commit_gameplay_storage(
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::{OccupiedBox, OccupiedCell, compound_collider, merge_occupied_boxes};
-    use std::collections::BTreeSet;
+    use super::{
+        MAIN_WORLD_APPLY_JOB_CAP, OccupiedBox, OccupiedCell, apply_waiting_derived,
+        compound_collider, merge_occupied_boxes,
+    };
+    use latticeaxiom_voxel_runtime::RuntimeLimits;
+    use std::collections::{BTreeSet, VecDeque};
 
     fn cell(x: u16, y: u16, z: u16) -> OccupiedCell {
         OccupiedCell {
@@ -3986,5 +4090,66 @@ mod tests {
             }
             assert_occupancy_equivalent(&occupied);
         }
+    }
+
+    #[test]
+    fn apply_waiting_derived_stops_before_emptying_over_cap_queue() {
+        let mut waiting: VecDeque<u64> = (0..20).map(|_| 1).collect();
+        let mut applied_jobs = 0_usize;
+        let mut applied_bytes = 0_u64;
+        apply_waiting_derived(
+            &mut waiting,
+            |bytes| *bytes,
+            |_, _| Ok(()),
+            &mut applied_jobs,
+            &mut applied_bytes,
+        )
+        .expect("stub apply cannot fail");
+        assert_eq!(applied_jobs, MAIN_WORLD_APPLY_JOB_CAP);
+        assert_eq!(
+            applied_bytes,
+            u64::try_from(MAIN_WORLD_APPLY_JOB_CAP).expect("job cap fits u64")
+        );
+        assert_eq!(waiting.len(), 4, "jobs over the cap must remain queued");
+
+        let half = RuntimeLimits::MAIN_WORLD_APPLY_BYTE_CAP / 2 + 1;
+        let mut waiting = VecDeque::from([half, half, 1]);
+        let mut applied_jobs = 0_usize;
+        let mut applied_bytes = 0_u64;
+        apply_waiting_derived(
+            &mut waiting,
+            |bytes| *bytes,
+            |_, _| Ok(()),
+            &mut applied_jobs,
+            &mut applied_bytes,
+        )
+        .expect("stub apply cannot fail");
+        assert_eq!(applied_jobs, 1);
+        assert_eq!(applied_bytes, half);
+        assert_eq!(
+            waiting.len(),
+            2,
+            "jobs that would exceed the byte cap must remain queued"
+        );
+
+        let oversized = RuntimeLimits::MAIN_WORLD_APPLY_BYTE_CAP.saturating_add(1);
+        let mut waiting = VecDeque::from([oversized, 1]);
+        let mut applied_jobs = 0_usize;
+        let mut applied_bytes = 0_u64;
+        apply_waiting_derived(
+            &mut waiting,
+            |bytes| *bytes,
+            |_, _| Ok(()),
+            &mut applied_jobs,
+            &mut applied_bytes,
+        )
+        .expect("stub apply cannot fail");
+        assert_eq!(applied_jobs, 1);
+        assert_eq!(applied_bytes, oversized);
+        assert_eq!(
+            waiting.len(),
+            1,
+            "an oversized first job must still apply so the queue cannot stall"
+        );
     }
 }
