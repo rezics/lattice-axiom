@@ -36,10 +36,13 @@ decision:
 生存流程的可操作子集，同时机制走 Lattice 的 package／registration／Y-up Bevy，而不是 MC 的形状：
 
 1. 准星、状态条（活力展示、挖掘进度、工具耐久）、9 格热键栏可切换。
-2. 打开背包查看 36 格；热键栏是背包前缀。
+2. 打开背包查看 36 格；热键栏是背包前缀。**格可点击换位**，走 `MoveStack`，不是 client 改数组。
 3. 挖掘／破坏／放置走既有权威 DDA 与 gameplay catalog，不是 client 预测改世界。
 4. Pause 打开设定：至少 **渲染距离**（chunk 半径）可调，且被 `PlayableWorldHardLimitsV1` 夹紧。
 5. 地形：P6 baseline 已适用——palette 色块 atlas、nearest clamp；缺 PNG 走 fallback，engine 不读 `placeholders/`。P3 每 tick apply 上限 16 jobs／16 MiB 已适用；无 2 ms 墙钟；startup／edit／collider safety 仍 drain until idle。
+6. 准星 inspect 是 **Target Inspect** 叠加层：名称、icon、可挖掘性、包命名空间、`BlockId`。对照 Jade 只吸收 fragment 组合，不搬 provider／NBT／mixin。F 仍是 inspect receipt，不是唯一显示途径。细节见 [first-playable-player-surfaces.md](first-playable-player-surfaces.md)。
+7. 中键 **pick-block**：选中／换入能放置准星方块的已有堆叠；背包没有则失败，不创造物品。
+8. 背包内手搓（`workstation == None` 的 catalog 配方列表）与合成台（瞄准绑定 `latticeaxiom:workstation/crafting@1` 的方块，或 C）走已有 `craft_recipe`。
 
 开始页仍是独立 `ClientShellGraph` + `LaunchIntentV1` replacement process，见
 [开始页](../architecture/world-lifecycle-and-start-ui.md)。本页不批准同 App 切 Playing。
