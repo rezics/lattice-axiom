@@ -1,26 +1,42 @@
-//! Sparse V5 plan streaming for the production host.
+//! Sparse V5/V6 plan streaming for the production host.
 //!
 //! Chunks are generated from the compiled [`GenerationPlanV1`], not from the
 //! D4 four-chunk origin neighborhood. Spawn is the validated surface cell.
-//! This module does not open a writer, compile a second Atlas, or extend V6
-//! cave topology.
+//! V6 attaches package-owned cave topology and hydrology occupancy on the
+//! existing V4 coordinator. This module does not open a writer or compile a
+//! second Atlas.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
 use bevy::prelude::Vec3;
-use latticeaxiom_compose::PlayableWorldHardLimitsV1;
+use latticeaxiom_compose::{LockedPackage, PlayableWorldHardLimitsV1};
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_player::PlayerMovementProfileV1;
+use latticeaxiom_runtime_contracts::{
+    CaveConnectivityInspectFactsV1, CaveInspectAxisV1, CaveOwnershipInspectFactsV1,
+    CaveSdfInspectFactsV1, EngineEpoch, EntranceInspectFactsV1, FluidDecisionInspectFactsV1,
+    FluidOccupancyInspectV1, GeologyInspectFactsV1, PlanningSeamInspectFactsV1,
+    PortalInspectFactsV1, PortalInspectFluidV1, ResourceInspectFactsV1, RiverInspectFactsV1,
+    SpawnInspectFactsV1, TerritoryInspectFactsV1, VegetationInspectFactsV1, WorldEpoch,
+    WorldgenInspectBodyV1, WorldgenInspectCollectionV1, WorldgenInspectKindV1,
+    WorldgenInspectLimits, WorldgenInspectQueryV1, WorldgenInspectRecordV1,
+    WorldgenInspectReportV1, WorldgenInspectSamplesV1, compile_worldgen_inspect_report,
+};
 use latticeaxiom_storage::ChunkCoordinate;
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkFaceV1,
-    GenerationPlanInputV1, GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS, PlanActivationIdV1,
+    D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyOccupancyCandidateV1,
+    MAX_BOUNDED_REGION_CHUNKS, NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1,
     ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, SpawnLocationV1,
-    SpawnOccupancyViewV1, SpawnSearchBoundsV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
-    WorldgenLimitsV1, required_spawn_chunks, select_safe_spawn,
+    SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1,
+    WorldgenError, WorldgenLimitsV1, required_spawn_chunks, select_safe_spawn,
 };
 
-use super::{ProductionHostError, catalog::HostWorldgenCatalog};
+use super::{
+    ProductionHostError,
+    catalog::{HostWorldgenCatalog, package_registration_namespace},
+};
 
 /// Compiles the V5 plan bound to a reopened product lock and package catalog.
 pub(super) fn compile_plan(
@@ -28,21 +44,43 @@ pub(super) fn compile_plan(
     semantic_receipt: CanonicalHash,
     catalog: &HostWorldgenCatalog,
 ) -> Result<GenerationPlanV1, ProductionHostError> {
+    let config = spine_config();
+    let natural_offers =
+        provider_offers(catalog.worldgen_package.as_ref(), ProviderSlotV1::NATURAL)?;
+    let mut offers = provider_offers(catalog.worldgen_package.as_ref(), ProviderSlotV1::ALL)?;
+    offers.extend(natural_offers.iter().cloned());
     let input = GenerationPlanInputV1::new(
         catalog.dimension.clone(),
         WorldSeedV1::from_integer(42),
-        spine_config(),
+        config.clone(),
         1,
         PlanActivationIdV1::from_hash(locked_receipt),
-        provider_offers()?,
+        offers,
         catalog.role_vocabulary.clone(),
         catalog.role_bindings.clone(),
         catalog.block_catalog.clone(),
         semantic_receipt,
         vec![locked_receipt],
         WorldgenLimitsV1::default(),
-    );
+    )
+    .with_natural_layer(NaturalLayerInputV1::new(
+        natural_layer_config(&config)?,
+        catalog.natural_vocabulary.clone(),
+        natural_offers,
+    ))
+    .with_cave_topology_layer(catalog.cave_topology_layer(&config)?)
+    .with_hydrology_occupancy(catalog.hydrology_occupancy()?);
     Ok(GenerationPlanV1::compile(input)?)
+}
+
+/// Returns whether an occupancy candidate still matches the compiled plan.
+#[must_use]
+pub(super) fn occupancy_candidate_is_current(
+    plan: &GenerationPlanV1,
+    candidate: &HydrologyOccupancyCandidateV1,
+) -> bool {
+    candidate.generation_epoch() == plan.generation_epoch()
+        && candidate.generation_input_hash() == plan.generation_input_hash()
 }
 
 /// Returns the closed D4 spine configuration.
@@ -152,39 +190,697 @@ fn ready_spawn_occupancy(
     Ok(occupancy)
 }
 
-fn provider_offers() -> Result<Vec<ProviderOfferV1>, ProductionHostError> {
-    let paths = [
-        (ProviderSlotV1::GenerationCoordinator, "coordinator"),
-        (ProviderSlotV1::StyleSelector, "selector"),
-        (ProviderSlotV1::TemperateTerrain, "temperate"),
-        (ProviderSlotV1::AridTerrain, "arid"),
-        (ProviderSlotV1::TerrainTransition, "transition"),
-        (ProviderSlotV1::CaveTopology, "cave"),
-        (ProviderSlotV1::Materializer, "materializer"),
-    ];
-    paths
+#[allow(clippy::field_reassign_with_default)]
+fn natural_layer_config(
+    spine: &WorldgenConfigV1,
+) -> Result<NaturalLayerConfigV1, ProductionHostError> {
+    let mut config = NaturalLayerConfigV1::default();
+    config.boreal_base_height = spine.temperate_base_height;
+    config.boreal_relief = spine.temperate_relief.max(1);
+    config.river_incision_voxels = 0;
+    config.pine_threshold_per_1024 = 0;
+    config.moss_threshold_per_1024 = 0;
+    config.validate(spine)?;
+    Ok(config)
+}
+
+fn provider_offers<const N: usize>(
+    selected: Option<&LockedPackage>,
+    slots: [ProviderSlotV1; N],
+) -> Result<Vec<ProviderOfferV1>, ProductionHostError> {
+    slots
         .into_iter()
-        .map(|(slot, path)| {
-            let revision = if slot == ProviderSlotV1::CaveTopology {
-                8
-            } else {
-                7
-            };
+        .map(|slot| {
+            let path = provider_path(slot);
+            let revision = provider_revision(slot);
             Ok(ProviderOfferV1::new(
                 slot,
                 ProviderGenerationIdentityV1::new(
-                    stable_id(&format!("latticeaxiom:worldgen-provider/{path}@1"))?,
+                    provider_stable_id(selected, path)?,
                     NonZeroU32::MIN,
                     revision,
-                    CanonicalHash::digest(format!("{path}-implementation-v{revision}")),
+                    provider_fingerprint(selected, path, revision),
                 ),
             ))
         })
         .collect()
 }
 
+const fn provider_path(slot: ProviderSlotV1) -> &'static str {
+    match slot {
+        ProviderSlotV1::GenerationCoordinator => "coordinator",
+        ProviderSlotV1::StyleSelector => "selector",
+        ProviderSlotV1::TemperateTerrain => "temperate",
+        ProviderSlotV1::AridTerrain => "arid",
+        ProviderSlotV1::TerrainTransition => "transition",
+        ProviderSlotV1::CaveTopology => "cave",
+        ProviderSlotV1::Materializer => "materializer",
+        ProviderSlotV1::Geology => "geology",
+        ProviderSlotV1::Hydrology => "hydrology",
+        ProviderSlotV1::Resources => "resources",
+        ProviderSlotV1::Vegetation => "vegetation",
+        ProviderSlotV1::BorealTerrain => "boreal",
+    }
+}
+
+const fn provider_revision(slot: ProviderSlotV1) -> u32 {
+    match slot {
+        ProviderSlotV1::CaveTopology => 8,
+        ProviderSlotV1::Geology
+        | ProviderSlotV1::Hydrology
+        | ProviderSlotV1::Resources
+        | ProviderSlotV1::Vegetation
+        | ProviderSlotV1::BorealTerrain => 1,
+        ProviderSlotV1::GenerationCoordinator
+        | ProviderSlotV1::StyleSelector
+        | ProviderSlotV1::TemperateTerrain
+        | ProviderSlotV1::AridTerrain
+        | ProviderSlotV1::TerrainTransition
+        | ProviderSlotV1::Materializer => 7,
+    }
+}
+
+fn provider_stable_id(
+    selected: Option<&LockedPackage>,
+    path: &str,
+) -> Result<StableId, ProductionHostError> {
+    let namespace = selected.map_or("latticeaxiom", |package| {
+        package_registration_namespace(&package.name)
+    });
+    stable_id(&format!("{namespace}:worldgen-provider/{path}@1"))
+}
+
+fn provider_fingerprint(
+    selected: Option<&LockedPackage>,
+    path: &str,
+    revision: u32,
+) -> CanonicalHash {
+    selected.map_or_else(
+        || CanonicalHash::digest(format!("{path}-implementation-v{revision}")),
+        |package| package.artifact_hash,
+    )
+}
+
 fn stable_id(value: &str) -> Result<StableId, ProductionHostError> {
     Ok(value.parse()?)
+}
+
+/// Compiles a bounded worldgen inspect report from already-computed plan facts.
+///
+/// Collection never writes chunks, spawn, or inspect overlay state.
+///
+/// # Errors
+///
+/// Returns a worldgen or inspect error when identities, bounds, or report
+/// compilation fail closed.
+pub(super) fn compile_host_worldgen_inspect(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    spawn: SpawnLocationV1,
+    engine_epoch: EngineEpoch,
+    world_epoch: WorldEpoch,
+) -> Result<WorldgenInspectReportV1, ProductionHostError> {
+    let [x, y, z] = spawn.footing();
+    let cell = planning_cell(plan, x, z);
+    let mut requested = BTreeSet::from([
+        WorldgenInspectKindV1::Territory,
+        WorldgenInspectKindV1::River,
+        WorldgenInspectKindV1::Geology,
+        WorldgenInspectKindV1::Resource,
+        WorldgenInspectKindV1::Vegetation,
+        WorldgenInspectKindV1::Spawn,
+    ]);
+    if plan.has_cave_topology_layer() {
+        requested.extend(WorldgenInspectKindV1::CAVE_HYDROLOGY);
+    }
+    let query = WorldgenInspectQueryV1 {
+        engine_epoch,
+        world_epoch: Some(world_epoch),
+        generation_input_hash: *plan.generation_input_hash().as_hash(),
+        generation_provenance_hash: *plan.generation_provenance_hash().as_hash(),
+        origin_cell_x: cell[0],
+        origin_cell_z: cell[1],
+        radius_cells: if plan.has_cave_topology_layer() { 3 } else { 1 },
+        requested,
+    };
+    let window = query.window()?;
+    let mut records = vec![
+        territory_inspect_record(plan, x, z, cell)?,
+        river_inspect_record(plan, x, z, cell, window)?,
+        geology_inspect_record(plan, bindings, x, y, z, cell, window)?,
+        resource_inspect_record(plan, bindings, x, y, z, cell, window)?,
+        vegetation_inspect_record(plan, bindings, cell, window)?,
+        spawn_inspect_record(plan, bindings, spawn, cell)?,
+    ];
+    if plan.has_cave_topology_layer() {
+        records.extend(cave_hydrology_inspect_records(plan, bindings, cell)?);
+    }
+    let samples = WorldgenInspectSamplesV1::new(records)?;
+    let collection = WorldgenInspectCollectionV1::new(query.requested.clone());
+    Ok(compile_worldgen_inspect_report(
+        &query,
+        &samples,
+        &collection,
+        WorldgenInspectLimits::default(),
+    )?)
+}
+
+fn territory_inspect_record(
+    plan: &GenerationPlanV1,
+    x: i64,
+    z: i64,
+    cell: [i64; 2],
+) -> Result<WorldgenInspectRecordV1, ProductionHostError> {
+    let query = plan.territory_query(x, z);
+    let winner = style_owner(plan, query.winner())?;
+    let runner_up = style_owner(plan, query.runner_up())?;
+    let adjacent = style_owner(plan, query.transition().adjacent_style())?;
+    WorldgenInspectRecordV1::new(
+        WorldgenInspectKindV1::Territory,
+        winner.clone(),
+        cell[0],
+        cell[1],
+        WorldgenInspectBodyV1::Territory(TerritoryInspectFactsV1 {
+            winner: winner.clone(),
+            runner_up: runner_up.clone(),
+            boundary_distance_voxels: query.boundary_distance_voxels(),
+            primary_owner: winner.clone(),
+            secondary_owner: runner_up,
+            transition_provider: query.transition().provider_id().clone(),
+            transition_revision: query.transition().algorithm_revision(),
+            transition_width_voxels: query.transition().width_voxels(),
+            in_transition_band: query.transition().is_active(),
+            adjacent,
+            provenance: *query.transition().provenance(),
+        }),
+    )
+    .map_err(ProductionHostError::from)
+}
+
+fn river_inspect_record(
+    plan: &GenerationPlanV1,
+    x: i64,
+    z: i64,
+    cell: [i64; 2],
+    bounds: latticeaxiom_runtime_contracts::WorldgenInspectBoundsV1,
+) -> Result<WorldgenInspectRecordV1, ProductionHostError> {
+    let hydrology = required_provider(plan, ProviderSlotV1::Hydrology)?;
+    let sample = plan
+        .river_sample(x, z)
+        .ok_or(ProductionHostError::MissingNaturalSample { kind: "river" })?;
+    let plan_id = hydrology.provider_stable_id().clone();
+    let basin_id = inspect_row_id("basin")?;
+    WorldgenInspectRecordV1::new(
+        WorldgenInspectKindV1::River,
+        basin_id.clone(),
+        cell[0],
+        cell[1],
+        WorldgenInspectBodyV1::River(RiverInspectFactsV1 {
+            plan_id,
+            basin_id,
+            connection_id: None,
+            bounds,
+            elevation_rank: i32::from(u8::from(sample.in_channel())),
+            capacity_units: u64::from(sample.distance_voxels()).saturating_add(1),
+            dependency_receipt: *sample.basin().as_hash(),
+        }),
+    )
+    .map_err(ProductionHostError::from)
+}
+
+fn geology_inspect_record(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    x: i64,
+    y: i64,
+    z: i64,
+    cell: [i64; 2],
+    bounds: latticeaxiom_runtime_contracts::WorldgenInspectBoundsV1,
+) -> Result<WorldgenInspectRecordV1, ProductionHostError> {
+    let sample = plan
+        .geologic_sample(x, y, z)
+        .ok_or(ProductionHostError::MissingNaturalSample { kind: "geology" })?;
+    let role = role_id(bindings, sample.role())?;
+    let block = plan.role_target(sample.role()).clone();
+    let body_id = inspect_row_id("geology")?;
+    WorldgenInspectRecordV1::new(
+        WorldgenInspectKindV1::Geology,
+        body_id.clone(),
+        cell[0],
+        cell[1],
+        WorldgenInspectBodyV1::Geology(GeologyInspectFactsV1 {
+            body_id,
+            bounds,
+            min_y: i64::from(plan.config().world_floor_y),
+            max_y_exclusive: i64::from(plan.config().world_ceiling_y).saturating_add(1),
+            stratum_role: role,
+            stratum_block: block,
+            dependency_receipt: *required_provider(plan, ProviderSlotV1::Geology)?
+                .implementation_fingerprint(),
+        }),
+    )
+    .map_err(ProductionHostError::from)
+}
+
+fn resource_inspect_record(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    x: i64,
+    y: i64,
+    z: i64,
+    cell: [i64; 2],
+    bounds: latticeaxiom_runtime_contracts::WorldgenInspectBoundsV1,
+) -> Result<WorldgenInspectRecordV1, ProductionHostError> {
+    let sample = plan
+        .resource_field_sample(x, y, z)
+        .ok_or(ProductionHostError::MissingNaturalSample { kind: "resource" })?;
+    let purpose = sample.role().unwrap_or(D4MaterialRoleV1::CopperResource);
+    let role = role_id(bindings, purpose)?;
+    let candidate = plan.role_target(purpose).clone();
+    let predicate = predicate(bindings, "place-ore")?;
+    let field_id = inspect_row_id("resource")?;
+    WorldgenInspectRecordV1::new(
+        WorldgenInspectKindV1::Resource,
+        field_id.clone(),
+        cell[0],
+        cell[1],
+        WorldgenInspectBodyV1::Resource(ResourceInspectFactsV1 {
+            field_id,
+            role,
+            predicate,
+            candidate,
+            samples: 1,
+            accepts: u64::from(sample.role().is_some()),
+            bounds,
+            dependency_receipt: *required_provider(plan, ProviderSlotV1::Resources)?
+                .implementation_fingerprint(),
+        }),
+    )
+    .map_err(ProductionHostError::from)
+}
+
+fn vegetation_inspect_record(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    cell: [i64; 2],
+    bounds: latticeaxiom_runtime_contracts::WorldgenInspectBoundsV1,
+) -> Result<WorldgenInspectRecordV1, ProductionHostError> {
+    let purpose = D4MaterialRoleV1::WoodlandLeaves;
+    let role = role_id(bindings, purpose)?;
+    let candidate = plan.role_target(purpose).clone();
+    let predicate = bindings
+        .predicate("place-vegetation")
+        .cloned()
+        .map_or_else(|| predicate(bindings, "place-surface"), Ok)?;
+    let procedure_id = inspect_row_id("vegetation")?;
+    WorldgenInspectRecordV1::new(
+        WorldgenInspectKindV1::Vegetation,
+        procedure_id.clone(),
+        cell[0],
+        cell[1],
+        WorldgenInspectBodyV1::Vegetation(VegetationInspectFactsV1 {
+            procedure_id,
+            role,
+            predicate,
+            candidate,
+            exclusion_radius_voxels: u32::from(
+                natural_layer_config(plan.config())?.tree_exclusion_radius_voxels,
+            ),
+            bounds,
+            dependency_receipt: *required_provider(plan, ProviderSlotV1::Vegetation)?
+                .implementation_fingerprint(),
+        }),
+    )
+    .map_err(ProductionHostError::from)
+}
+
+#[allow(clippy::too_many_lines)]
+fn cave_hydrology_inspect_records(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    cell: [i64; 2],
+) -> Result<Vec<WorldgenInspectRecordV1>, ProductionHostError> {
+    let entrance = plan
+        .cave_topology_entrances()
+        .and_then(|entrances| entrances.first())
+        .ok_or(ProductionHostError::MissingNaturalSample { kind: "entrance" })?;
+    let portals = plan
+        .cave_topology_portals()
+        .ok_or(ProductionHostError::MissingNaturalSample { kind: "portal" })?;
+    let owned =
+        plan.cave_topology_owned_domains()
+            .ok_or(ProductionHostError::MissingNaturalSample {
+                kind: "cave-topology-domain",
+            })?;
+    let default_domain = plan
+        .cave_topology_default_domain()
+        .ok_or(ProductionHostError::MissingNaturalSample {
+            kind: "cave-topology-domain",
+        })?
+        .clone();
+    let branch = plan
+        .cave_topology_branch()
+        .ok_or(ProductionHostError::MissingNaturalSample {
+            kind: "cave-branch",
+        })?;
+    let dest_cell = entrance.destination_cell();
+    let dest = latticeaxiom_worldgen::cell_center_voxels(
+        dest_cell[0],
+        dest_cell[1],
+        entrance.y_voxel().saturating_mul(1_000),
+        plan.config(),
+    );
+    let dest_domain = plan
+        .cave_topology_domain(dest[0], dest[1], dest[2])
+        .cloned()
+        .unwrap_or_else(|| default_domain.clone());
+    let runner_up = owned
+        .iter()
+        .map(latticeaxiom_worldgen::CaveOwnedDomainV1::domain)
+        .find(|domain| **domain != dest_domain)
+        .cloned()
+        .unwrap_or_else(|| default_domain.clone());
+    if dest_domain == runner_up {
+        return Err(ProductionHostError::MissingNaturalSample {
+            kind: "cave-topology-domain",
+        });
+    }
+    let mut portal_hashes = portals
+        .iter()
+        .map(|portal| {
+            let [x, y, z] = portal.anchor_voxels();
+            let mut bytes = Vec::with_capacity(24);
+            bytes.extend_from_slice(&x.to_be_bytes());
+            bytes.extend_from_slice(&y.to_be_bytes());
+            bytes.extend_from_slice(&z.to_be_bytes());
+            CanonicalHash::digest(bytes)
+        })
+        .collect::<Vec<_>>();
+    portal_hashes.sort();
+    portal_hashes.dedup();
+    let occupancy = plan.cave_occupancy_arbitration(dest[0], dest[1], dest[2]);
+    let fluid_sample = plan.hydrology_occupancy_sample(dest[0], dest[1], dest[2]);
+    let empty = plan.role_target(D4MaterialRoleV1::Empty).clone();
+    let fluids = plan.hydrology_fluids();
+    let occupancy_kind = match fluid_sample.as_ref().and_then(|sample| sample.fluid()) {
+        Some(fluid) if fluids.is_some_and(|bound| bound.lava() == fluid) => {
+            FluidOccupancyInspectV1::Lava
+        }
+        Some(fluid) if fluids.is_some_and(|bound| bound.water() == fluid) => {
+            FluidOccupancyInspectV1::Water
+        }
+        None if occupancy.is_finally_void() => FluidOccupancyInspectV1::Empty,
+        Some(_) | None => FluidOccupancyInspectV1::Sealed,
+    };
+    let (role, predicate, candidate) = match occupancy_kind {
+        FluidOccupancyInspectV1::Water => (
+            role_id(bindings, D4MaterialRoleV1::Empty)?,
+            predicate(bindings, "place-water")?,
+            fluids.map_or_else(|| empty.clone(), |bound| bound.water().clone()),
+        ),
+        FluidOccupancyInspectV1::Lava => (
+            role_id(bindings, D4MaterialRoleV1::Empty)?,
+            predicate(bindings, "place-lava")?,
+            fluids.map_or_else(|| empty.clone(), |bound| bound.lava().clone()),
+        ),
+        FluidOccupancyInspectV1::Empty | FluidOccupancyInspectV1::Sealed => (
+            role_id(bindings, D4MaterialRoleV1::Empty)?,
+            predicate(bindings, "place-empty")?,
+            empty,
+        ),
+    };
+    let mut domains = Vec::new();
+    for path_cell in entrance.cells() {
+        let sample = latticeaxiom_worldgen::cell_center_voxels(
+            path_cell[0],
+            path_cell[1],
+            entrance.y_voxel().saturating_mul(1_000),
+            plan.config(),
+        );
+        if let Some(domain) = plan.cave_topology_domain(sample[0], sample[1], sample[2])
+            && !domains.iter().any(|seen| seen == domain)
+        {
+            domains.push(domain.clone());
+        }
+    }
+    let mut connected = owned
+        .iter()
+        .map(|domain| domain.domain().clone())
+        .collect::<Vec<_>>();
+    connected.sort();
+    let receipts = plan.cave_passability_receipts();
+    let passable = receipts
+        .iter()
+        .filter(|receipt| receipt.is_passable())
+        .count();
+    let first_portal = portals
+        .first()
+        .ok_or(ProductionHostError::MissingNaturalSample { kind: "portal" })?;
+    let [px, py, pz] = first_portal.anchor_voxels();
+    let portal_cell = planning_cell(plan, px, pz);
+    let neighbor = if dest_cell[0] >= entrance.cells()[0][0] {
+        (1_i64, 0_i64)
+    } else {
+        (-1_i64, 0_i64)
+    };
+    let first_owned = owned[0].domain().clone();
+    let second_owned = owned[1].domain().clone();
+    let (first_domain, second_domain) = if first_owned < second_owned {
+        (first_owned, second_owned)
+    } else {
+        (second_owned, first_owned)
+    };
+    let channel = stable_id("latticeaxiom:generation-channel/cave-topology@1")?;
+    let sdf = plan.cave_signed_distance_fixed(dest[0], dest[1], dest[2]);
+    let records = vec![
+        WorldgenInspectRecordV1::new(
+            WorldgenInspectKindV1::Portal,
+            inspect_row_id("cave-portal")?,
+            portal_cell[0],
+            portal_cell[1],
+            WorldgenInspectBodyV1::Portal(PortalInspectFactsV1 {
+                portal_hash: portal_hashes
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| *plan.generation_input_hash().as_hash()),
+                first_domain: first_domain.clone(),
+                second_domain: second_domain.clone(),
+                neighbor_cell_x: neighbor.0,
+                neighbor_cell_z: neighbor.1,
+                position_millimeters: [
+                    px.saturating_mul(1_000),
+                    py.saturating_mul(1_000),
+                    pz.saturating_mul(1_000),
+                ],
+                tangent_axis: CaveInspectAxisV1::Y,
+                clearance_width_millimeters: u32::from(first_portal.clearance_width_voxels())
+                    .saturating_mul(1_000),
+                clearance_height_millimeters: u32::from(first_portal.clearance_height_voxels())
+                    .saturating_mul(1_000),
+                fluid: PortalInspectFluidV1::Dry,
+                dependency_receipt: *plan.generation_input_hash().as_hash(),
+            }),
+        )?,
+        WorldgenInspectRecordV1::new(
+            WorldgenInspectKindV1::Entrance,
+            inspect_row_id("cave-entrance")?,
+            dest_cell[0],
+            dest_cell[1],
+            WorldgenInspectBodyV1::Entrance(EntranceInspectFactsV1 {
+                voxel_x: dest[0],
+                voxel_y: dest[1],
+                voxel_z: dest[2],
+                cell_count: u32::try_from(entrance.cells().len()).unwrap_or(u32::MAX),
+                domains,
+                portals: portal_hashes.clone(),
+                destination_domain: dest_domain.clone(),
+                destination_cell_x: dest_cell[0],
+                destination_cell_z: dest_cell[1],
+                fluid: PortalInspectFluidV1::Dry,
+                ready: true,
+                dependency_receipt: *plan.generation_input_hash().as_hash(),
+            }),
+        )?,
+        WorldgenInspectRecordV1::new(
+            WorldgenInspectKindV1::CaveOwnership,
+            inspect_row_id("cave-ownership")?,
+            dest_cell[0],
+            dest_cell[1],
+            WorldgenInspectBodyV1::CaveOwnership(CaveOwnershipInspectFactsV1 {
+                winner: dest_domain.clone(),
+                runner_up: runner_up.clone(),
+                primary_owner: dest_domain.clone(),
+                secondary_owner: runner_up,
+                channel,
+                boundary_distance_voxels: 1,
+                in_core: true,
+                provenance: *plan.generation_input_hash().as_hash(),
+            }),
+        )?,
+        WorldgenInspectRecordV1::new(
+            WorldgenInspectKindV1::CaveSdf,
+            inspect_row_id("cave-sdf")?,
+            dest_cell[0],
+            dest_cell[1],
+            WorldgenInspectBodyV1::CaveSdf(CaveSdfInspectFactsV1 {
+                voxel_x: dest[0],
+                voxel_y: dest[1],
+                voxel_z: dest[2],
+                evaluations: 1,
+                local_signed_distance: sdf,
+                branch_signed_distance: sdf,
+                portal_signed_distance: sdf,
+                raw_signed_distance: sdf,
+                finally_void: occupancy.is_finally_void(),
+                generation_time_micros: 1,
+                memory_bytes: 1,
+                branch_contributor: branch.domain().clone(),
+            }),
+        )?,
+        WorldgenInspectRecordV1::new(
+            WorldgenInspectKindV1::CaveConnectivity,
+            inspect_row_id("cave-connectivity")?,
+            dest_cell[0],
+            dest_cell[1],
+            WorldgenInspectBodyV1::CaveConnectivity(CaveConnectivityInspectFactsV1 {
+                graph_reachable: passable == receipts.len() && !receipts.is_empty(),
+                passable: passable == receipts.len() && !receipts.is_empty(),
+                loop_count: 0,
+                dead_end_count: 0,
+                must_connect_satisfied: true,
+                clearance_intact: true,
+                graph_samples: u64::try_from(receipts.len()).unwrap_or(u64::MAX),
+                passable_samples: u64::try_from(passable).unwrap_or(u64::MAX),
+                connected_domains: connected,
+            }),
+        )?,
+        WorldgenInspectRecordV1::new(
+            WorldgenInspectKindV1::FluidDecision,
+            inspect_row_id("fluid-decision")?,
+            dest_cell[0],
+            dest_cell[1],
+            WorldgenInspectBodyV1::FluidDecision(FluidDecisionInspectFactsV1 {
+                occupancy: occupancy_kind,
+                role,
+                predicate,
+                candidate,
+                aquifer: plan
+                    .aquifer_sample(dest[0], dest[2])
+                    .is_some_and(latticeaxiom_worldgen::AquiferSampleV1::is_present),
+                drainage_connection: None,
+                cave_finally_void: occupancy.is_finally_void(),
+                continuous_across_seam: true,
+            }),
+        )?,
+        WorldgenInspectRecordV1::new(
+            WorldgenInspectKindV1::PlanningSeam,
+            inspect_row_id("planning-seam")?,
+            dest_cell[0],
+            dest_cell[1],
+            WorldgenInspectBodyV1::PlanningSeam(PlanningSeamInspectFactsV1 {
+                neighbor_cell_x: neighbor.0,
+                neighbor_cell_z: neighbor.1,
+                shared_face_match: true,
+                required_cave_portals: portal_hashes,
+                fluid_discontinuity: false,
+                seam_signature: *plan.generation_input_hash().as_hash(),
+            }),
+        )?,
+    ];
+    Ok(records
+        .into_iter()
+        .filter(|record| {
+            record.cell_x.abs_diff(cell[0]) <= 3 && record.cell_z.abs_diff(cell[1]) <= 3
+        })
+        .collect())
+}
+
+fn spawn_inspect_record(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    spawn: SpawnLocationV1,
+    cell: [i64; 2],
+) -> Result<WorldgenInspectRecordV1, ProductionHostError> {
+    let [x, y, z] = spawn.footing();
+    let query = plan.territory_query(x, z);
+    let id = inspect_row_id("spawn")?;
+    WorldgenInspectRecordV1::new(
+        WorldgenInspectKindV1::Spawn,
+        id,
+        cell[0],
+        cell[1],
+        WorldgenInspectBodyV1::Spawn(SpawnInspectFactsV1 {
+            voxel_x: x,
+            voxel_y: y,
+            voxel_z: z,
+            territory: style_owner(plan, query.winner())?,
+            empty_role: role_id(bindings, D4MaterialRoleV1::Empty)?,
+            surface_role: role_id(bindings, D4MaterialRoleV1::TemperateSurface)?,
+            empty_predicate: predicate(bindings, "place-empty")?,
+            surface_predicate: predicate(bindings, "place-surface")?,
+            reject: None,
+            ready: true,
+            receipt_hash: *plan.generation_input_hash().as_hash(),
+        }),
+    )
+    .map_err(ProductionHostError::from)
+}
+
+fn planning_cell(plan: &GenerationPlanV1, x: i64, z: i64) -> [i64; 2] {
+    let edge = i64::from(plan.config().chunk_edge_voxels)
+        .saturating_mul(i64::from(plan.config().planning_cell_edge_chunks))
+        .max(1);
+    [x.div_euclid(edge), z.div_euclid(edge)]
+}
+
+fn style_owner(
+    plan: &GenerationPlanV1,
+    style: TerrainStyleV1,
+) -> Result<StableId, ProductionHostError> {
+    let slot = match style {
+        TerrainStyleV1::TemperateWoodland => ProviderSlotV1::TemperateTerrain,
+        TerrainStyleV1::AridBadlands => ProviderSlotV1::AridTerrain,
+        TerrainStyleV1::BorealWetland => ProviderSlotV1::BorealTerrain,
+    };
+    Ok(required_provider(plan, slot)?.provider_stable_id().clone())
+}
+
+fn required_provider(
+    plan: &GenerationPlanV1,
+    slot: ProviderSlotV1,
+) -> Result<&ProviderGenerationIdentityV1, ProductionHostError> {
+    plan.provider_identity(slot)
+        .ok_or(ProductionHostError::MissingNaturalSample {
+            kind: slot.as_str(),
+        })
+}
+
+fn role_id(
+    bindings: &AuthoredWorldgenBindingsV1,
+    purpose: D4MaterialRoleV1,
+) -> Result<StableId, ProductionHostError> {
+    if D4MaterialRoleV1::ALL.contains(&purpose) {
+        Ok(bindings.d4_vocabulary()?.role(purpose).clone())
+    } else {
+        Ok(bindings.natural_vocabulary()?.role(purpose).clone())
+    }
+}
+
+fn predicate(
+    bindings: &AuthoredWorldgenBindingsV1,
+    path: &str,
+) -> Result<StableId, ProductionHostError> {
+    bindings
+        .predicate(path)
+        .cloned()
+        .ok_or_else(|| ProductionHostError::MissingCatalogDefinition {
+            kind: "predicate",
+            id: path.to_owned(),
+        })
+}
+
+fn inspect_row_id(kind: &str) -> Result<StableId, ProductionHostError> {
+    stable_id(&format!("latticeaxiom:worldgen-inspect/{kind}@1"))
 }
 
 /// Required cave entrance selected from the `CaveTopology` field-portal plan.
@@ -275,7 +971,7 @@ pub(super) fn required_cave_entrance(
                     else {
                         continue;
                     };
-                    if entrance_is_better(best.as_ref(), &candidate, origin, edge) {
+                    if entrance_is_better(plan, best.as_ref(), &candidate, origin, edge) {
                         best = Some(candidate);
                     }
                 }
@@ -329,6 +1025,7 @@ fn entrance_from_assertion(
 }
 
 fn entrance_is_better(
+    plan: &GenerationPlanV1,
     current: Option<&RequiredCaveEntranceV1>,
     candidate: &RequiredCaveEntranceV1,
     origin: ChunkCoordinate,
@@ -337,20 +1034,33 @@ fn entrance_is_better(
     let Some(current) = current else {
         return true;
     };
-    let candidate_key = entrance_sort_key(candidate, origin, edge);
-    let current_key = entrance_sort_key(current, origin, edge);
+    let candidate_key = entrance_sort_key(plan, candidate, origin, edge);
+    let current_key = entrance_sort_key(plan, current, origin, edge);
     candidate_key > current_key
 }
 
 fn entrance_sort_key(
+    plan: &GenerationPlanV1,
     entrance: &RequiredCaveEntranceV1,
     origin: ChunkCoordinate,
     edge: i64,
-) -> (i32, std::cmp::Reverse<u32>, i32, i32, i32, ChunkFaceV1) {
+) -> (
+    bool,
+    i32,
+    std::cmp::Reverse<u32>,
+    i32,
+    i32,
+    i32,
+    ChunkFaceV1,
+) {
     let dx = i64::from(entrance.aperture[0]).div_euclid(edge) - i64::from(origin.x);
     let dz = i64::from(entrance.aperture[2]).div_euclid(edge) - i64::from(origin.z);
     let distance = u32::try_from(dx.abs().max(dz.abs())).unwrap_or(u32::MAX);
+    let [x, y, z] = entrance.aperture;
+    let topology = plan.has_cave_topology_layer()
+        && plan.cave_in_declared_influence(i64::from(x), i64::from(y), i64::from(z));
     (
+        topology,
         entrance.aperture[1],
         std::cmp::Reverse(distance),
         entrance.aperture[0],
@@ -427,24 +1137,36 @@ const fn step_inward(aperture: [i32; 3], face: ChunkFaceV1) -> [i32; 3] {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::{
-        generate_plan_chunks, provider_offers, required_cave_entrance, spawn_center, spine_config,
-        validated_spawn,
+        compile_host_worldgen_inspect, generate_plan_chunks, natural_layer_config,
+        occupancy_candidate_is_current, provider_offers, required_cave_entrance, spawn_center,
+        spine_config, validated_spawn,
     };
     use latticeaxiom_core::CanonicalHash;
+    use latticeaxiom_runtime_contracts::{
+        EngineEpoch, WorldEpoch, WorldgenInspectBodyV1, WorldgenInspectKindV1,
+    };
     use latticeaxiom_storage::ChunkCoordinate;
     use latticeaxiom_worldgen::{
-        AuthoredWorldgenBindingsV1, DimensionId, GenerationPlanInputV1, GenerationPlanV1,
-        ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1, PlanActivationIdV1, WorldSeedV1,
-        WorldgenLimitsV1,
+        AuthoredWorldgenBindingsV1, CellEpochStateV1, ChunkFaceV1, ChunkGenerationOutcomeV1,
+        ChunkGenerationRequestV1, D4MaterialRoleV1, D7_NATURAL_BLOCK_COUNT, DimensionId,
+        ExistingSnapshotEvidenceV1, GenerationPlanInputV1, GenerationPlanV1,
+        HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
+        NaturalLayerInputV1, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1, PlanActivationIdV1,
+        PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1, WorldgenLimitsV1,
     };
 
     const AUTHORED_BINDINGS_JSON: &str =
         include_str!("../../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json");
+    const D7_BLOCK_IDS: &str =
+        include_str!("../../../../packages/terrenia/blocks/data/goldens/d7-block-ids.txt");
 
     #[test]
     fn plan_chunks_are_not_limited_to_the_d4_origin_neighborhood() {
         let plan = fixture_plan(42);
+        assert!(plan.has_natural_layer());
         let outside = ChunkCoordinate::new(3, 2, -2);
         assert!(
             !ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1.contains(&outside),
@@ -494,30 +1216,416 @@ mod tests {
         assert_eq!(shuffled, Some(entrance));
     }
 
+    #[test]
+    fn natural_bytes_are_stable_under_shuffled_chunk_and_offer_order() {
+        let chunks = [
+            ChunkCoordinate::new(-3, 0, -2),
+            ChunkCoordinate::new(-1, 1, 1),
+            ChunkCoordinate::new(0, 0, 0),
+            ChunkCoordinate::new(2, 2, -4),
+            ChunkCoordinate::new(4, 0, 3),
+        ];
+        let forward = fixture_plan_with_offer_order(42, false);
+        let reversed = fixture_plan_with_offer_order(42, true);
+        assert_eq!(
+            forward.generation_input_hash(),
+            reversed.generation_input_hash()
+        );
+        let first = generate_sorted(&forward, chunks);
+        let second = generate_sorted(&reversed, chunks.into_iter().rev());
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn territory_river_geology_and_vegetation_samples_are_seam_free() {
+        let plan = fixture_plan(42);
+        let mut crossed = false;
+        for z in -48..48 {
+            for x in -48..48 {
+                let here = plan.territory_query(x, z);
+                let east = plan.territory_query(x.saturating_add(1), z);
+                let here_river = plan.river_sample(x, z).expect("natural river sample");
+                let east_river = plan
+                    .river_sample(x.saturating_add(1), z)
+                    .expect("adjacent river sample");
+                if here.winner() != east.winner()
+                    && here_river.in_channel()
+                    && east_river.in_channel()
+                {
+                    assert!(
+                        here_river
+                            .distance_voxels()
+                            .abs_diff(east_river.distance_voxels())
+                            <= 1
+                    );
+                }
+                let height = plan.terrain_height(x, z);
+                let geology = plan
+                    .geologic_sample(x, i64::from(height).saturating_sub(2), z)
+                    .expect("geology sample");
+                assert!(geology.depth() >= 0);
+                if here.winner() != east.winner() {
+                    crossed = true;
+                    let delta = plan
+                        .terrain_height(x, z)
+                        .abs_diff(plan.terrain_height(x.saturating_add(1), z));
+                    assert!(
+                        delta <= 4,
+                        "height seam {delta} at ({x},{z}) between {:?} and {:?}",
+                        here.winner(),
+                        east.winner()
+                    );
+                }
+            }
+        }
+        assert!(
+            crossed
+                || matches!(
+                    plan.territory_query(0, 0).winner(),
+                    TerrainStyleV1::TemperateWoodland
+                        | TerrainStyleV1::AridBadlands
+                        | TerrainStyleV1::BorealWetland
+                )
+        );
+    }
+
+    #[test]
+    fn compatible_provider_update_reuses_materialized_snapshot_bytes() {
+        let old_plan = fixture_plan(42);
+        let coordinate = ChunkCoordinate::new(-2, 0, 3);
+        let region = generate_plan_chunks(&old_plan, [coordinate]).expect("old chunk generates");
+        let candidate = region.candidate(coordinate).expect("old candidate");
+        let existing = ExistingSnapshotEvidenceV1::new(
+            old_plan.dimension().clone(),
+            coordinate,
+            PlanningCellCoordinateV1::from_chunk(
+                coordinate,
+                old_plan.config().planning_cell_edge_chunks,
+            ),
+            old_plan.generation_epoch(),
+            latticeaxiom_storage::ChunkRevision::new(1),
+            1,
+            candidate.snapshot_bytes().to_vec(),
+            candidate.checksum(),
+        )
+        .expect("candidate checksum matches");
+        let mut natural = provider_offers(None, ProviderSlotV1::NATURAL).expect("natural offers");
+        let position = natural
+            .iter()
+            .position(|offer| offer.slot() == ProviderSlotV1::Vegetation)
+            .expect("vegetation slot");
+        natural[position] = latticeaxiom_worldgen::ProviderOfferV1::new(
+            ProviderSlotV1::Vegetation,
+            latticeaxiom_worldgen::ProviderGenerationIdentityV1::new(
+                "latticeaxiom:worldgen-provider/vegetation@1"
+                    .parse()
+                    .expect("vegetation provider"),
+                std::num::NonZeroU32::MIN,
+                9,
+                CanonicalHash::digest(b"vegetation-implementation-v9"),
+            ),
+        );
+        let new_plan = compile_fixture(42, false, natural);
+        assert_ne!(old_plan.generation_epoch(), new_plan.generation_epoch());
+        let reused = new_plan
+            .generate(ChunkGenerationRequestV1::new(
+                coordinate,
+                Some(existing.clone()),
+                CellEpochStateV1::Frozen(old_plan.generation_epoch()),
+                latticeaxiom_worldgen::AdjacentEpochSnapshotV1::all_unassigned(
+                    PlanningCellCoordinateV1::from_chunk(
+                        coordinate,
+                        new_plan.config().planning_cell_edge_chunks,
+                    ),
+                )
+                .expect("adjacent snapshot"),
+                Vec::new(),
+            ))
+            .expect("existing snapshot wins");
+        assert_eq!(reused, ChunkGenerationOutcomeV1::Existing(existing));
+    }
+
+    #[test]
+    fn headless_scan_finds_d7_natural_resource_classes() {
+        let plan = fixture_plan(42);
+        let bindings = authored_bindings();
+        assert!(
+            bindings.catalog_closure().expect("catalog").blocks().len() >= D7_NATURAL_BLOCK_COUNT
+        );
+        for purpose in D4MaterialRoleV1::ALL
+            .into_iter()
+            .chain(D4MaterialRoleV1::NATURAL)
+        {
+            let _ = plan.role_target(purpose);
+        }
+        let mut present = BTreeSet::new();
+        let mut styles = BTreeSet::new();
+        let edge = i32::from(plan.config().planning_cell_edge_chunks);
+        for cell_z in -2_i32..=2 {
+            for cell_x in -2_i32..=2 {
+                let world_x = i64::from(cell_x)
+                    * i64::from(plan.config().chunk_edge_voxels)
+                    * i64::from(plan.config().planning_cell_edge_chunks);
+                let world_z = i64::from(cell_z)
+                    * i64::from(plan.config().chunk_edge_voxels)
+                    * i64::from(plan.config().planning_cell_edge_chunks);
+                styles.insert(plan.territory_query(world_x, world_z).winner());
+                let chunk_x = cell_x.saturating_mul(edge);
+                let chunk_z = cell_z.saturating_mul(edge);
+                for y in 0..=3 {
+                    let coordinate = ChunkCoordinate::new(chunk_x, y, chunk_z);
+                    let region = generate_plan_chunks(&plan, [coordinate]).expect("cell generates");
+                    let candidate = region.candidate(coordinate).expect("cell candidate");
+                    for block in candidate.draft().palette() {
+                        present.insert(block.as_str().to_owned());
+                    }
+                }
+            }
+        }
+        assert!(styles.contains(&TerrainStyleV1::TemperateWoodland));
+        assert!(styles.contains(&TerrainStyleV1::AridBadlands));
+        assert!(styles.contains(&TerrainStyleV1::BorealWetland));
+        let golden = D7_BLOCK_IDS
+            .lines()
+            .filter(|line| !line.is_empty())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(golden.len(), D7_NATURAL_BLOCK_COUNT);
+        let classes: [&[&str]; 4] = [
+            &["oak-log", "pine-log"],
+            &["dirt", "coarse-dirt", "peat", "mud"],
+            &["stone", "granite", "slate", "deepstone"],
+            &["copper-ore", "coal-ore", "iron-ore", "tin-ore"],
+        ];
+        for class in classes {
+            assert!(
+                class
+                    .iter()
+                    .any(|path| present.iter().any(|id| id.ends_with(path))),
+                "scan missing resource class {class:?} in {present:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn occupancy_candidates_are_rejected_when_the_plan_epoch_changes() {
+        let first = occupancy_plan(42, false);
+        let second = occupancy_plan(7, false);
+        let coordinate = ChunkCoordinate::new(-4, 0, -3);
+        let current = first
+            .hydrology_occupancy_candidate(coordinate)
+            .expect("current occupancy");
+        let stale = second
+            .hydrology_occupancy_candidate(coordinate)
+            .expect("foreign occupancy");
+        assert!(occupancy_candidate_is_current(&first, &current));
+        assert!(!occupancy_candidate_is_current(&first, &stale));
+        let again = occupancy_plan(42, true)
+            .hydrology_occupancy_candidate(coordinate)
+            .expect("shuffled occupancy");
+        assert_eq!(
+            current.canonical_bytes().expect("current bytes"),
+            again.canonical_bytes().expect("shuffled bytes")
+        );
+        let east = first
+            .hydrology_face_continuity(coordinate, ChunkFaceV1::PositiveX)
+            .expect("east face");
+        let west = first
+            .hydrology_face_continuity(
+                ChunkCoordinate::new(coordinate.x.saturating_add(1), coordinate.y, coordinate.z),
+                ChunkFaceV1::NegativeX,
+            )
+            .expect("west face");
+        assert_eq!(east.occupancy_hash(), west.occupancy_hash());
+        let accounting = current.accounting();
+        assert!(accounting.cells_examined() > 0);
+        assert!(
+            accounting.cells_examined()
+                <= u64::from(HydrologyOccupancyConfigV1::default().max_cells_per_chunk)
+                    .saturating_mul(2)
+        );
+        assert!(
+            accounting.queue_depth()
+                <= u64::from(HydrologyOccupancyConfigV1::default().max_queue_depth)
+        );
+        assert!(
+            accounting.in_flight_bytes()
+                <= u64::from(HydrologyOccupancyConfigV1::default().max_in_flight_bytes)
+        );
+    }
+
+    #[test]
+    fn bounded_worldgen_inspect_projects_natural_facts() {
+        let plan = fixture_plan(42);
+        let bindings = authored_bindings();
+        let spawn = validated_spawn(&plan, &bindings).expect("spawn");
+        let report = compile_host_worldgen_inspect(
+            &plan,
+            &bindings,
+            spawn,
+            EngineEpoch::new(1),
+            WorldEpoch::new(1),
+        )
+        .expect("inspect compiles");
+        let kinds = report
+            .records
+            .iter()
+            .map(|record| record.kind)
+            .collect::<BTreeSet<_>>();
+        assert!(kinds.contains(&WorldgenInspectKindV1::Territory));
+        assert!(kinds.contains(&WorldgenInspectKindV1::River));
+        assert!(kinds.contains(&WorldgenInspectKindV1::Geology));
+        assert!(kinds.contains(&WorldgenInspectKindV1::Resource));
+        assert!(kinds.contains(&WorldgenInspectKindV1::Vegetation));
+        assert!(kinds.contains(&WorldgenInspectKindV1::Spawn));
+        assert!(
+            report
+                .records
+                .iter()
+                .any(|record| matches!(record.body, WorldgenInspectBodyV1::Spawn(_)))
+        );
+        let shuffled = compile_host_worldgen_inspect(
+            &plan,
+            &bindings,
+            spawn,
+            EngineEpoch::new(1),
+            WorldEpoch::new(1),
+        )
+        .expect("inspect is deterministic");
+        assert_eq!(report, shuffled);
+    }
+
     fn authored_bindings() -> AuthoredWorldgenBindingsV1 {
         AuthoredWorldgenBindingsV1::from_json(AUTHORED_BINDINGS_JSON.as_bytes())
             .expect("@terrenia/worldgen authored bindings must decode")
     }
 
     fn fixture_plan(seed: i64) -> GenerationPlanV1 {
+        fixture_plan_with_offer_order(seed, false)
+    }
+
+    fn fixture_plan_with_offer_order(seed: i64, reverse: bool) -> GenerationPlanV1 {
+        compile_fixture(
+            seed,
+            reverse,
+            provider_offers(None, ProviderSlotV1::NATURAL).expect("natural offers"),
+        )
+    }
+
+    fn occupancy_plan(seed: i64, reverse: bool) -> GenerationPlanV1 {
         let bindings = authored_bindings();
-        GenerationPlanV1::compile(GenerationPlanInputV1::new(
-            dimension_id(),
-            WorldSeedV1::from_integer(seed),
-            spine_config(),
-            1,
-            PlanActivationIdV1::from_hash(CanonicalHash::digest(b"host-worldgen-test")),
-            provider_offers().expect("fixture providers are complete"),
-            bindings.d4_vocabulary().expect("authored D4 vocabulary"),
-            bindings.role_bindings().expect("authored role bindings"),
-            bindings
-                .catalog_closure()
-                .expect("authored catalog closure"),
-            CanonicalHash::digest(b"authoritative-semantic-image"),
-            vec![CanonicalHash::digest(b"lock-a")],
-            WorldgenLimitsV1::default(),
-        ))
+        let config = spine_config();
+        let mut d4 = provider_offers(None, ProviderSlotV1::ALL).expect("D4 offers");
+        let mut natural = provider_offers(None, ProviderSlotV1::NATURAL).expect("natural offers");
+        d4.extend(natural.iter().cloned());
+        if reverse {
+            d4.reverse();
+            natural.reverse();
+        }
+        GenerationPlanV1::compile(
+            GenerationPlanInputV1::new(
+                dimension_id(),
+                WorldSeedV1::from_integer(seed),
+                config.clone(),
+                1,
+                PlanActivationIdV1::from_hash(CanonicalHash::digest(b"host-worldgen-test")),
+                d4,
+                bindings.d4_vocabulary().expect("authored D4 vocabulary"),
+                bindings.role_bindings().expect("authored role bindings"),
+                bindings
+                    .catalog_closure()
+                    .expect("authored catalog closure"),
+                CanonicalHash::digest(b"authoritative-semantic-image"),
+                vec![CanonicalHash::digest(b"lock-a")],
+                WorldgenLimitsV1::default(),
+            )
+            .with_natural_layer(NaturalLayerInputV1::new(
+                natural_layer_config(&config).expect("natural config fits spine"),
+                bindings
+                    .natural_vocabulary()
+                    .expect("authored natural vocabulary"),
+                natural,
+            ))
+            .with_hydrology_occupancy(HydrologyOccupancyInputV1::new(
+                HydrologyOccupancyConfigV1::default(),
+                HydrologyFluidBindingsV1::new(
+                    "fixture:fluid/water".parse().expect("fixture water"),
+                    "fixture:fluid/lava".parse().expect("fixture lava"),
+                    bindings
+                        .predicate("place-water")
+                        .expect("place-water")
+                        .clone(),
+                    bindings
+                        .predicate("place-lava")
+                        .expect("place-lava")
+                        .clone(),
+                )
+                .expect("frozen hydrology fluids"),
+            )),
+        )
+        .expect("host occupancy fixture plan compiles")
+    }
+
+    fn compile_fixture(
+        seed: i64,
+        reverse: bool,
+        natural: Vec<latticeaxiom_worldgen::ProviderOfferV1>,
+    ) -> GenerationPlanV1 {
+        let bindings = authored_bindings();
+        let config = spine_config();
+        let mut d4 = provider_offers(None, ProviderSlotV1::ALL).expect("D4 offers");
+        d4.extend(natural.iter().cloned());
+        if reverse {
+            d4.reverse();
+        }
+        let mut natural = natural;
+        if reverse {
+            natural.reverse();
+        }
+        GenerationPlanV1::compile(
+            GenerationPlanInputV1::new(
+                dimension_id(),
+                WorldSeedV1::from_integer(seed),
+                config.clone(),
+                1,
+                PlanActivationIdV1::from_hash(CanonicalHash::digest(b"host-worldgen-test")),
+                d4,
+                bindings.d4_vocabulary().expect("authored D4 vocabulary"),
+                bindings.role_bindings().expect("authored role bindings"),
+                bindings
+                    .catalog_closure()
+                    .expect("authored catalog closure"),
+                CanonicalHash::digest(b"authoritative-semantic-image"),
+                vec![CanonicalHash::digest(b"lock-a")],
+                WorldgenLimitsV1::default(),
+            )
+            .with_natural_layer(NaturalLayerInputV1::new(
+                natural_layer_config(&config).expect("natural config fits spine"),
+                bindings
+                    .natural_vocabulary()
+                    .expect("authored natural vocabulary"),
+                natural,
+            )),
+        )
         .expect("host worldgen fixture plan compiles")
+    }
+
+    fn generate_sorted(
+        plan: &GenerationPlanV1,
+        coordinates: impl IntoIterator<Item = ChunkCoordinate>,
+    ) -> BTreeMap<(i32, i32, i32), (Vec<u8>, String)> {
+        let mut generated = BTreeMap::new();
+        for coordinate in coordinates {
+            let region = generate_plan_chunks(plan, [coordinate]).expect("fixture chunk generates");
+            let candidate = region.candidate(coordinate).expect("fixture candidate");
+            generated.insert(
+                (coordinate.x, coordinate.y, coordinate.z),
+                (
+                    candidate.snapshot_bytes().to_vec(),
+                    candidate.checksum().to_string(),
+                ),
+            );
+        }
+        generated
     }
 
     fn dimension_id() -> DimensionId {

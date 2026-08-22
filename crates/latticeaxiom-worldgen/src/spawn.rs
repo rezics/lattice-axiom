@@ -168,6 +168,25 @@ impl AuthoredWorldgenBindingsV1 {
         D4RoleVocabularyV1::new(entries)
     }
 
+    /// Returns the package-owned D7 natural Role vocabulary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Role-vocabulary error if a required natural purpose is missing.
+    pub fn natural_vocabulary(&self) -> WorldgenResult<crate::NaturalRoleVocabularyV1> {
+        let mut entries = Vec::with_capacity(D4MaterialRoleV1::NATURAL.len());
+        for purpose in D4MaterialRoleV1::NATURAL {
+            let path = purpose.authored_catalog_path().unwrap_or(purpose.as_str());
+            let Some((role, _)) = self.roles.get(path) else {
+                return Err(WorldgenError::MissingRolePurpose {
+                    purpose: purpose.as_str(),
+                });
+            };
+            entries.push((purpose, role.clone()));
+        }
+        crate::NaturalRoleVocabularyV1::new(entries)
+    }
+
     /// Returns frozen Role-to-block bindings for every authored Role row.
     ///
     /// # Errors
@@ -536,8 +555,12 @@ pub fn inspect_spawn_cell(
     let height = i64::from(plan.terrain_height(x, z));
     let cave =
         overlay.is_some_and(|cell| cell.cave) || (y <= height && plan.terrain_density(x, y, z) < 0);
-    let fluid = overlay.is_some_and(|cell| cell.fluid);
+    let river = plan
+        .river_sample(x, z)
+        .is_some_and(|sample| sample.in_channel() && y <= height);
+    let fluid = overlay.is_some_and(|cell| cell.fluid) || river;
     let hazard = overlay.is_some_and(|cell| cell.hazard)
+        || river
         || bindings
             .cactus_block()
             .is_some_and(|cactus| block == cactus);

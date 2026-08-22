@@ -8,6 +8,9 @@ use crate::{WorldgenError, WorldgenResult};
 /// Minimum number of unique D4 catalog blocks frozen by the roadmap.
 pub const D4_MINIMUM_BLOCK_COUNT: usize = 18;
 
+/// Cumulative D7 natural-world catalog size before D9's exact 72 content.
+pub const D7_NATURAL_BLOCK_COUNT: usize = 40;
+
 /// Absolute number of frozen Role bindings accepted before any map insertion.
 pub const D4_MAX_ROLE_BINDING_COUNT: usize = 256;
 
@@ -55,6 +58,50 @@ pub enum D4MaterialRoleV1 {
     AridBaseRock,
     /// Copper-bearing resource replacement.
     CopperResource,
+    /// Coarse temperate soil.
+    CoarseDirt,
+    /// Rooted temperate soil.
+    RootedDirt,
+    /// Wetland mud.
+    Mud,
+    /// River-silt bed.
+    Silt,
+    /// Boreal peat.
+    Peat,
+    /// Cold surface snow.
+    Snow,
+    /// Frozen river or wetland ice.
+    Ice,
+    /// Wetland moss cover.
+    Moss,
+    /// Deep basement rock.
+    Deepstone,
+    /// Mid-depth granite body.
+    Granite,
+    /// Mid-depth slate body.
+    Slate,
+    /// Volcanic tuff intrusion.
+    Tuff,
+    /// Calcite replacement.
+    Calcite,
+    /// Dripstone replacement.
+    Dripstone,
+    /// Coal-bearing resource replacement.
+    CoalResource,
+    /// Iron-bearing resource replacement.
+    IronResource,
+    /// Tin-bearing resource replacement.
+    TinResource,
+    /// Gold-bearing resource replacement.
+    GoldResource,
+    /// Sulfur-bearing resource replacement.
+    SulfurResource,
+    /// Crystal-cluster resource replacement.
+    CrystalResource,
+    /// Boreal tree trunk.
+    BorealLog,
+    /// Boreal canopy.
+    BorealLeaves,
 }
 
 impl D4MaterialRoleV1 {
@@ -78,6 +125,32 @@ impl D4MaterialRoleV1 {
         Self::CopperResource,
     ];
 
+    /// Additional D7 natural-world purposes. Required only by the V5 layer.
+    pub const NATURAL: [Self; 22] = [
+        Self::CoarseDirt,
+        Self::RootedDirt,
+        Self::Mud,
+        Self::Silt,
+        Self::Peat,
+        Self::Snow,
+        Self::Ice,
+        Self::Moss,
+        Self::Deepstone,
+        Self::Granite,
+        Self::Slate,
+        Self::Tuff,
+        Self::Calcite,
+        Self::Dripstone,
+        Self::CoalResource,
+        Self::IronResource,
+        Self::TinResource,
+        Self::GoldResource,
+        Self::SulfurResource,
+        Self::CrystalResource,
+        Self::BorealLog,
+        Self::BorealLeaves,
+    ];
+
     /// Returns the stable canonical purpose name used in diagnostics.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -98,6 +171,73 @@ impl D4MaterialRoleV1 {
             Self::AridRedSandstone => "arid-red-sandstone",
             Self::AridBaseRock => "arid-base-rock",
             Self::CopperResource => "copper-resource",
+            Self::CoarseDirt => "coarse-dirt",
+            Self::RootedDirt => "rooted-dirt",
+            Self::Mud => "mud",
+            Self::Silt => "silt",
+            Self::Peat => "peat",
+            Self::Snow => "snow",
+            Self::Ice => "ice",
+            Self::Moss => "moss",
+            Self::Deepstone => "deepstone",
+            Self::Granite => "granite",
+            Self::Slate => "slate",
+            Self::Tuff => "tuff",
+            Self::Calcite => "calcite",
+            Self::Dripstone => "dripstone",
+            Self::CoalResource => "coal-resource",
+            Self::IronResource => "iron-resource",
+            Self::TinResource => "tin-resource",
+            Self::GoldResource => "gold-resource",
+            Self::SulfurResource => "sulfur-resource",
+            Self::CrystalResource => "crystal-resource",
+            Self::BorealLog => "boreal-log",
+            Self::BorealLeaves => "boreal-leaves",
+        }
+    }
+
+    /// Returns the `@terrenia/worldgen` catalog Role path for a natural purpose.
+    #[must_use]
+    pub const fn authored_catalog_path(self) -> Option<&'static str> {
+        match self {
+            Self::CoarseDirt => Some("catalog-coarse-dirt"),
+            Self::RootedDirt => Some("catalog-rooted-dirt"),
+            Self::Mud => Some("catalog-mud"),
+            Self::Silt => Some("catalog-silt"),
+            Self::Peat => Some("catalog-peat"),
+            Self::Snow => Some("catalog-snow"),
+            Self::Ice => Some("catalog-ice"),
+            Self::Moss => Some("catalog-moss"),
+            Self::Deepstone => Some("catalog-deepstone"),
+            Self::Granite => Some("catalog-granite"),
+            Self::Slate => Some("catalog-slate"),
+            Self::Tuff => Some("catalog-tuff"),
+            Self::Calcite => Some("catalog-calcite"),
+            Self::Dripstone => Some("catalog-dripstone"),
+            Self::CoalResource => Some("catalog-coal-ore"),
+            Self::IronResource => Some("catalog-iron-ore"),
+            Self::TinResource => Some("catalog-tin-ore"),
+            Self::GoldResource => Some("catalog-gold-ore"),
+            Self::SulfurResource => Some("catalog-sulfur-ore"),
+            Self::CrystalResource => Some("catalog-crystal-cluster"),
+            Self::BorealLog => Some("catalog-pine-log"),
+            Self::BorealLeaves => Some("catalog-pine-leaves"),
+            Self::Empty
+            | Self::TemperateSurface
+            | Self::TemperateSubsurface
+            | Self::TemperateBaseRock
+            | Self::TemperateSecondaryRock
+            | Self::TemperateClay
+            | Self::TemperateGravel
+            | Self::WoodlandLog
+            | Self::WoodlandLeaves
+            | Self::WoodlandGroundCover
+            | Self::AridSand
+            | Self::AridRedSand
+            | Self::AridSandstone
+            | Self::AridRedSandstone
+            | Self::AridBaseRock
+            | Self::CopperResource => None,
         }
     }
 }
@@ -173,6 +313,81 @@ impl D4RoleVocabularyV1 {
 fn unreachable_role(purpose: D4MaterialRoleV1) -> &'static StableId {
     panic!(
         "validated D4RoleVocabularyV1 lost required purpose `{}`",
+        purpose.as_str()
+    )
+}
+
+/// Package-owned role identities assigned to each D7 natural purpose.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NaturalRoleVocabularyV1 {
+    roles: BTreeMap<D4MaterialRoleV1, StableId>,
+}
+
+impl NaturalRoleVocabularyV1 {
+    /// Builds an exact vocabulary containing every natural purpose once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for missing or repeated purposes, reused identities,
+    /// or identities whose registration kind is not `block-role`.
+    pub fn new(
+        entries: impl IntoIterator<Item = (D4MaterialRoleV1, StableId)>,
+    ) -> WorldgenResult<Self> {
+        let mut roles = BTreeMap::new();
+        let mut identities = BTreeSet::new();
+        for (purpose, role) in entries {
+            if !D4MaterialRoleV1::NATURAL.contains(&purpose) {
+                return Err(WorldgenError::InvalidRoleIdentityKind {
+                    purpose: purpose.as_str(),
+                    role,
+                });
+            }
+            if role.kind() != "block-role" {
+                return Err(WorldgenError::InvalidRoleIdentityKind {
+                    purpose: purpose.as_str(),
+                    role,
+                });
+            }
+            if roles.contains_key(&purpose) {
+                return Err(WorldgenError::DuplicateRolePurpose {
+                    purpose: purpose.as_str(),
+                });
+            }
+            if !identities.insert(role.clone()) {
+                return Err(WorldgenError::DuplicateRoleIdentity { role });
+            }
+            roles.insert(purpose, role);
+        }
+        for purpose in D4MaterialRoleV1::NATURAL {
+            if !roles.contains_key(&purpose) {
+                return Err(WorldgenError::MissingRolePurpose {
+                    purpose: purpose.as_str(),
+                });
+            }
+        }
+        Ok(Self { roles })
+    }
+
+    /// Returns the package-owned role ID for a natural purpose.
+    #[must_use]
+    pub fn role(&self, purpose: D4MaterialRoleV1) -> &StableId {
+        self.roles
+            .get(&purpose)
+            .unwrap_or_else(|| unreachable_natural_role(purpose))
+    }
+
+    /// Iterates natural purposes and role IDs in canonical purpose order.
+    #[must_use]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (D4MaterialRoleV1, &StableId)> {
+        D4MaterialRoleV1::NATURAL
+            .into_iter()
+            .map(|purpose| (purpose, self.role(purpose)))
+    }
+}
+
+fn unreachable_natural_role(purpose: D4MaterialRoleV1) -> &'static StableId {
+    panic!(
+        "validated NaturalRoleVocabularyV1 lost required purpose `{}`",
         purpose.as_str()
     )
 }

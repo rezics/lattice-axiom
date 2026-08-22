@@ -6,15 +6,19 @@ use std::{
     str::FromStr,
 };
 
-use latticeaxiom_core::{StableId, canonical_json_hash};
+use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_hash};
 use latticeaxiom_worldgen::{
-    ChunkCoordinate, PlanningCellCoordinateV1, WorldSeedV1, WorldgenConfigV1,
+    CaveBranchContributorV1, CaveLayerCorridorV1, CaveLayerEntranceV1, CaveLayerPortalV1,
+    CaveOwnedDomainV1, CaveTopologyAlgorithmV1, CaveTopologyLayerInputV1, ChunkCoordinate,
+    PlanningCellCoordinateV1, WorldSeedV1, WorldgenConfigV1, millimeters_to_voxels,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    AtlasPlanHashV1, CaveEntranceIdV1, CavePortalIdV1, HydrologyPlanV1, PlanningCellBoundsV1,
-    TerritoryError, TerritoryLimitsV1, TerritoryResult, VerticalRangeV1,
+    AtlasPlanHashV1, CaveEntranceIdV1, CavePassabilityReceiptHashV1, CavePortalIdV1,
+    CaveTopologyNodeIdV1, CaveTopologyPlanHashV1, ContributionChannelV1, HydrologyPlanV1,
+    PlanningCellBoundsV1, SpatialContributionV1, TerritoryError, TerritoryLimitsV1,
+    TerritoryResult, VerticalRangeV1,
 };
 
 /// Stable cave-topology ownership domain identity.
@@ -395,6 +399,196 @@ impl PortalAssertionV1 {
     }
 }
 
+/// Kind of a compiled cave-topology graph node.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaveTopologyNodeKindV1 {
+    /// Surface opening in the dimension-default domain.
+    SurfaceEntrance,
+    /// Cross-domain portal endpoint.
+    PortalEndpoint,
+    /// Must-connect underground destination.
+    Destination,
+    /// Intermediate corridor junction.
+    Junction,
+}
+
+/// One node in the compiled cave-topology graph.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveTopologyNodeV1 {
+    node_id: CaveTopologyNodeIdV1,
+    domain: CaveTopologyDomainIdV1,
+    cell: PlanningCellCoordinateV1,
+    anchor_millimeters: [i64; 3],
+    kind: CaveTopologyNodeKindV1,
+}
+
+impl CaveTopologyNodeV1 {
+    /// Returns the direction-independent node identity.
+    #[must_use]
+    pub const fn node_id(&self) -> CaveTopologyNodeIdV1 {
+        self.node_id
+    }
+
+    /// Returns the topology domain that owns this node.
+    #[must_use]
+    pub const fn domain(&self) -> &CaveTopologyDomainIdV1 {
+        &self.domain
+    }
+
+    /// Returns the planning cell containing this node.
+    #[must_use]
+    pub const fn cell(&self) -> PlanningCellCoordinateV1 {
+        self.cell
+    }
+
+    /// Returns the node position in world millimeters.
+    #[must_use]
+    pub const fn anchor_millimeters(&self) -> [i64; 3] {
+        self.anchor_millimeters
+    }
+
+    /// Returns the node role in the compiled graph.
+    #[must_use]
+    pub const fn kind(&self) -> CaveTopologyNodeKindV1 {
+        self.kind
+    }
+}
+
+/// One undirected edge in the compiled cave-topology graph.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveTopologyEdgeV1 {
+    first: CaveTopologyNodeIdV1,
+    second: CaveTopologyNodeIdV1,
+    algorithm: CaveTopologyAlgorithmV1,
+}
+
+impl CaveTopologyEdgeV1 {
+    /// Returns the canonical first endpoint.
+    #[must_use]
+    pub const fn first(&self) -> CaveTopologyNodeIdV1 {
+        self.first
+    }
+
+    /// Returns the canonical second endpoint.
+    #[must_use]
+    pub const fn second(&self) -> CaveTopologyNodeIdV1 {
+        self.second
+    }
+
+    /// Returns the domain algorithm used to realize this edge.
+    #[must_use]
+    pub const fn algorithm(&self) -> CaveTopologyAlgorithmV1 {
+        self.algorithm
+    }
+}
+
+/// Graph-level passability evidence for one surface entrance.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CavePassabilityReceiptV1 {
+    entrance_id: CaveEntranceIdV1,
+    destination: CaveMustConnectDestinationV1,
+    graph_connected: bool,
+    hop_count: u32,
+    dead_end_count: u32,
+    loop_edge_count: u32,
+    receipt_hash: CavePassabilityReceiptHashV1,
+}
+
+impl CavePassabilityReceiptV1 {
+    /// Returns the surface entrance this receipt validates.
+    #[must_use]
+    pub const fn entrance_id(&self) -> CaveEntranceIdV1 {
+        self.entrance_id
+    }
+
+    /// Returns the must-connect destination.
+    #[must_use]
+    pub const fn destination(&self) -> &CaveMustConnectDestinationV1 {
+        &self.destination
+    }
+
+    /// Returns whether the compiled graph reaches the destination.
+    #[must_use]
+    pub const fn graph_connected(&self) -> bool {
+        self.graph_connected
+    }
+
+    /// Returns the shortest hop count from the surface opening to the destination.
+    #[must_use]
+    pub const fn hop_count(&self) -> u32 {
+        self.hop_count
+    }
+
+    /// Returns degree-1 nodes that are not surface openings.
+    #[must_use]
+    pub const fn dead_end_count(&self) -> u32 {
+        self.dead_end_count
+    }
+
+    /// Returns extra edges that close a local loop in constrained-graph domains.
+    #[must_use]
+    pub const fn loop_edge_count(&self) -> u32 {
+        self.loop_edge_count
+    }
+
+    /// Returns the canonical receipt hash.
+    #[must_use]
+    pub const fn receipt_hash(&self) -> CavePassabilityReceiptHashV1 {
+        self.receipt_hash
+    }
+}
+
+#[derive(Serialize)]
+struct PassabilityHashPayloadV1<'a> {
+    entrance_id: CaveEntranceIdV1,
+    destination_domain: &'a CaveTopologyDomainIdV1,
+    destination_cell: PlanningCellCoordinateV1,
+    graph_connected: bool,
+    hop_count: u32,
+    dead_end_count: u32,
+    loop_edge_count: u32,
+}
+
+/// Algorithm selected for one topology ownership domain.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaveDomainAlgorithmV1 {
+    domain: CaveTopologyDomainIdV1,
+    algorithm: CaveTopologyAlgorithmV1,
+    bounds: Option<PlanningCellBoundsV1>,
+    vertical_range: Option<VerticalRangeV1>,
+}
+
+impl CaveDomainAlgorithmV1 {
+    /// Returns the topology ownership domain.
+    #[must_use]
+    pub const fn domain(&self) -> &CaveTopologyDomainIdV1 {
+        &self.domain
+    }
+
+    /// Returns the unique local algorithm.
+    #[must_use]
+    pub const fn algorithm(&self) -> CaveTopologyAlgorithmV1 {
+        self.algorithm
+    }
+
+    /// Returns finite child-domain bounds, or `None` for the dimension default.
+    #[must_use]
+    pub const fn bounds(&self) -> Option<PlanningCellBoundsV1> {
+        self.bounds
+    }
+
+    /// Returns the finite child-domain vertical range, or `None` for the default.
+    #[must_use]
+    pub const fn vertical_range(&self) -> Option<VerticalRangeV1> {
+        self.vertical_range
+    }
+}
+
 /// Required underground destination that a surface entrance must reach.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -499,12 +693,18 @@ struct EntranceHashPayloadV1<'a> {
 pub struct CaveTopologyPlanV1 {
     world_seed: WorldSeedV1,
     plan_hash: AtlasPlanHashV1,
+    topology_hash: CaveTopologyPlanHashV1,
     default_cave_domain: CaveTopologyDomainIdV1,
     underground_domains: Vec<CaveTopologyDomainIdV1>,
+    algorithms: Vec<CaveDomainAlgorithmV1>,
+    nodes: Vec<CaveTopologyNodeV1>,
+    edges: Vec<CaveTopologyEdgeV1>,
     surface_entrances: Vec<CaveSurfaceEntranceV1>,
     portals: Vec<CavePortalV1>,
     assertions: Vec<PortalAssertionV1>,
     must_connect: Vec<CaveMustConnectDestinationV1>,
+    branch: SpatialContributionV1,
+    passability: Vec<CavePassabilityReceiptV1>,
 }
 
 impl CaveTopologyPlanV1 {
@@ -526,6 +726,7 @@ impl CaveTopologyPlanV1 {
         default_cave_domain: &CaveTopologyDomainIdV1,
         underground: &[UndergroundTerritoryV1],
         portals: &[CavePortalV1],
+        contributions: &[SpatialContributionV1],
         config: &WorldgenConfigV1,
     ) -> TerritoryResult<Self> {
         if underground.len() < 2 {
@@ -565,9 +766,12 @@ impl CaveTopologyPlanV1 {
             world_seed,
             plan_hash,
             default_cave_domain.clone(),
+            underground,
             underground_domains,
             surface_entrances,
             portals,
+            contributions,
+            config,
         )
     }
 
@@ -590,6 +794,7 @@ impl CaveTopologyPlanV1 {
         default_cave_domain: &CaveTopologyDomainIdV1,
         underground: &[UndergroundTerritoryV1],
         portals: &[CavePortalV1],
+        contributions: &[SpatialContributionV1],
         config: &WorldgenConfigV1,
         chunks: impl IntoIterator<Item = ChunkCoordinate>,
     ) -> TerritoryResult<Self> {
@@ -613,6 +818,7 @@ impl CaveTopologyPlanV1 {
             default_cave_domain,
             underground,
             portals,
+            contributions,
             config,
         )?;
         Ok(compiled.restrict_to_cells(&cells))
@@ -630,6 +836,12 @@ impl CaveTopologyPlanV1 {
         self.plan_hash
     }
 
+    /// Returns the canonical topology-graph hash.
+    #[must_use]
+    pub const fn topology_hash(&self) -> CaveTopologyPlanHashV1 {
+        self.topology_hash
+    }
+
     /// Returns the dimension-default cave topology domain.
     #[must_use]
     pub const fn default_cave_domain(&self) -> &CaveTopologyDomainIdV1 {
@@ -640,6 +852,24 @@ impl CaveTopologyPlanV1 {
     #[must_use]
     pub fn underground_domains(&self) -> &[CaveTopologyDomainIdV1] {
         &self.underground_domains
+    }
+
+    /// Returns domain-owned topology algorithms, including the dimension default.
+    #[must_use]
+    pub fn algorithms(&self) -> &[CaveDomainAlgorithmV1] {
+        &self.algorithms
+    }
+
+    /// Returns compiled topology-graph nodes.
+    #[must_use]
+    pub fn nodes(&self) -> &[CaveTopologyNodeV1] {
+        &self.nodes
+    }
+
+    /// Returns compiled topology-graph edges.
+    #[must_use]
+    pub fn edges(&self) -> &[CaveTopologyEdgeV1] {
+        &self.edges
     }
 
     /// Returns seed-stable surface entrances.
@@ -664,6 +894,30 @@ impl CaveTopologyPlanV1 {
     #[must_use]
     pub fn must_connect(&self) -> &[CaveMustConnectDestinationV1] {
         &self.must_connect
+    }
+
+    /// Returns the unique bounded branch contributor.
+    #[must_use]
+    pub const fn branch(&self) -> &SpatialContributionV1 {
+        &self.branch
+    }
+
+    /// Returns graph-level passability receipts for compiled entrances.
+    #[must_use]
+    pub fn passability(&self) -> &[CavePassabilityReceiptV1] {
+        &self.passability
+    }
+
+    /// Converts this plan into the worldgen realization layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if corridor, portal, or branch conversion fails closed.
+    pub fn realization_layer(
+        &self,
+        config: &WorldgenConfigV1,
+    ) -> TerritoryResult<CaveTopologyLayerInputV1> {
+        realization_layer_from_plan(self, config)
     }
 
     fn restrict_to_cells(&self, cells: &BTreeSet<PlanningCellCoordinateV1>) -> Self {
@@ -697,15 +951,49 @@ impl CaveTopologyPlanV1 {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        let node_ids = self
+            .nodes
+            .iter()
+            .filter(|node| cells.contains(&node.cell))
+            .map(CaveTopologyNodeV1::node_id)
+            .collect::<BTreeSet<_>>();
+        let nodes = self
+            .nodes
+            .iter()
+            .filter(|node| node_ids.contains(&node.node_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let edges = self
+            .edges
+            .iter()
+            .filter(|edge| node_ids.contains(&edge.first) && node_ids.contains(&edge.second))
+            .cloned()
+            .collect::<Vec<_>>();
+        let passability = self
+            .passability
+            .iter()
+            .filter(|receipt| {
+                surface_entrances
+                    .iter()
+                    .any(|entrance| entrance.entrance_id() == receipt.entrance_id())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         Self {
             world_seed: self.world_seed,
             plan_hash: self.plan_hash,
+            topology_hash: self.topology_hash,
             default_cave_domain: self.default_cave_domain.clone(),
             underground_domains: self.underground_domains.clone(),
+            algorithms: self.algorithms.clone(),
+            nodes,
+            edges,
             surface_entrances,
             portals,
             assertions,
             must_connect,
+            branch: self.branch.clone(),
+            passability,
         }
     }
 }
@@ -752,13 +1040,20 @@ impl CaveAdjacencyV1 {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "compile inputs are explicit hash and ownership boundaries"
+)]
 fn assemble_cave_topology_plan(
     world_seed: WorldSeedV1,
     plan_hash: AtlasPlanHashV1,
     default_cave_domain: CaveTopologyDomainIdV1,
+    underground: &[UndergroundTerritoryV1],
     underground_domains: Vec<CaveTopologyDomainIdV1>,
     surface_entrances: Vec<CaveSurfaceEntranceV1>,
     portals: &[CavePortalV1],
+    contributions: &[SpatialContributionV1],
+    config: &WorldgenConfigV1,
 ) -> TerritoryResult<CaveTopologyPlanV1> {
     let portal_ids = surface_entrances
         .iter()
@@ -794,15 +1089,519 @@ fn assemble_cave_topology_plan(
             reason: "V6 cave plan requires a must-connect destination".to_owned(),
         });
     }
-    Ok(CaveTopologyPlanV1 {
+    let branch = select_branch_contributor(&default_cave_domain, underground, contributions)?;
+    let algorithms = assign_domain_algorithms(&default_cave_domain, underground);
+    if algorithms
+        .iter()
+        .filter(|entry| entry.domain != default_cave_domain)
+        .map(CaveDomainAlgorithmV1::algorithm)
+        .collect::<BTreeSet<_>>()
+        .len()
+        < 2
+    {
+        return Err(TerritoryError::InvalidCaveAdjacency {
+            reason: "underground-owned subdomains must use distinct algorithms".to_owned(),
+        });
+    }
+    let (nodes, edges, loop_edge_count) = compile_topology_graph(
+        &default_cave_domain,
+        underground,
+        &algorithms,
+        &surface_entrances,
+        config,
+    )?;
+    let passability = compile_passability(&surface_entrances, &nodes, &edges, loop_edge_count)?;
+    let mut plan = CaveTopologyPlanV1 {
         world_seed,
         plan_hash,
+        topology_hash: CaveTopologyPlanHashV1::from_hash(CanonicalHash::digest([])),
         default_cave_domain,
         underground_domains,
+        algorithms,
+        nodes,
+        edges,
         surface_entrances,
         portals: planned_portals,
         assertions,
         must_connect,
+        branch,
+        passability,
+    };
+    plan.topology_hash = CaveTopologyPlanHashV1::from_hash(
+        canonical_json_hash(&TopologyHashPayloadV1 {
+            world_seed: plan.world_seed,
+            plan_hash: plan.plan_hash,
+            default_cave_domain: &plan.default_cave_domain,
+            algorithms: &plan.algorithms,
+            nodes: &plan.nodes,
+            edges: &plan.edges,
+            surface_entrances: &plan.surface_entrances,
+            portals: &plan.portals,
+            branch_id: plan.branch.contribution_id(),
+            passability: &plan.passability,
+        })
+        .map_err(|error| TerritoryError::CanonicalEncoding {
+            kind: "cave topology plan",
+            reason: error.to_string(),
+        })?,
+    );
+    Ok(plan)
+}
+
+#[derive(Serialize)]
+struct TopologyHashPayloadV1<'a> {
+    world_seed: WorldSeedV1,
+    plan_hash: AtlasPlanHashV1,
+    default_cave_domain: &'a CaveTopologyDomainIdV1,
+    algorithms: &'a [CaveDomainAlgorithmV1],
+    nodes: &'a [CaveTopologyNodeV1],
+    edges: &'a [CaveTopologyEdgeV1],
+    surface_entrances: &'a [CaveSurfaceEntranceV1],
+    portals: &'a [CavePortalV1],
+    branch_id: &'a latticeaxiom_core::StableId,
+    passability: &'a [CavePassabilityReceiptV1],
+}
+
+fn select_branch_contributor(
+    default_domain: &CaveTopologyDomainIdV1,
+    underground: &[UndergroundTerritoryV1],
+    contributions: &[SpatialContributionV1],
+) -> TerritoryResult<SpatialContributionV1> {
+    let mut branches = contributions
+        .iter()
+        .filter(|contribution| contribution.channel() == ContributionChannelV1::CaveBranch)
+        .cloned()
+        .collect::<Vec<_>>();
+    branches.sort_by(|left, right| left.contribution_id().cmp(right.contribution_id()));
+    let [branch] = branches.as_slice() else {
+        return Err(TerritoryError::InvalidContribution {
+            contribution: default_domain.to_string(),
+            reason: "V6 cave plan requires exactly one bounded branch contributor".to_owned(),
+        });
+    };
+    let crate::ContributionTargetV1::Cave(target) = branch.target() else {
+        return Err(TerritoryError::InvalidContribution {
+            contribution: branch.contribution_id().to_string(),
+            reason: "branch contributor must target a cave topology domain".to_owned(),
+        });
+    };
+    if target == default_domain
+        || !underground
+            .iter()
+            .any(|territory| territory.domain() == target)
+    {
+        return Err(TerritoryError::InvalidContribution {
+            contribution: branch.contribution_id().to_string(),
+            reason: "branch contributor must attach to an underground-owned subdomain".to_owned(),
+        });
+    }
+    Ok(branch.clone())
+}
+
+fn assign_domain_algorithms(
+    default_domain: &CaveTopologyDomainIdV1,
+    underground: &[UndergroundTerritoryV1],
+) -> Vec<CaveDomainAlgorithmV1> {
+    let mut children = underground
+        .iter()
+        .map(|territory| {
+            (
+                territory.domain().clone(),
+                territory.bounds(),
+                territory.vertical_range(),
+            )
+        })
+        .collect::<Vec<_>>();
+    children.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut algorithms = vec![CaveDomainAlgorithmV1 {
+        domain: default_domain.clone(),
+        algorithm: CaveTopologyAlgorithmV1::CoarseCell,
+        bounds: None,
+        vertical_range: None,
+    }];
+    for (index, (domain, bounds, vertical_range)) in children.into_iter().enumerate() {
+        algorithms.push(CaveDomainAlgorithmV1 {
+            domain,
+            algorithm: if index == 0 {
+                CaveTopologyAlgorithmV1::ConstrainedGraph
+            } else {
+                CaveTopologyAlgorithmV1::FieldGrowth
+            },
+            bounds: Some(bounds),
+            vertical_range: Some(vertical_range),
+        });
+    }
+    algorithms
+}
+
+fn algorithm_for_domain(
+    algorithms: &[CaveDomainAlgorithmV1],
+    domain: &CaveTopologyDomainIdV1,
+) -> CaveTopologyAlgorithmV1 {
+    algorithms
+        .iter()
+        .find(|entry| entry.domain() == domain)
+        .map_or(
+            CaveTopologyAlgorithmV1::CoarseCell,
+            CaveDomainAlgorithmV1::algorithm,
+        )
+}
+
+fn compile_topology_graph(
+    default_domain: &CaveTopologyDomainIdV1,
+    underground: &[UndergroundTerritoryV1],
+    algorithms: &[CaveDomainAlgorithmV1],
+    surface_entrances: &[CaveSurfaceEntranceV1],
+    config: &WorldgenConfigV1,
+) -> TerritoryResult<(Vec<CaveTopologyNodeV1>, Vec<CaveTopologyEdgeV1>, u32)> {
+    let mut nodes =
+        BTreeMap::<(PlanningCellCoordinateV1, CaveTopologyDomainIdV1), CaveTopologyNodeV1>::new();
+    let mut edges =
+        BTreeMap::<(CaveTopologyNodeIdV1, CaveTopologyNodeIdV1), CaveTopologyEdgeV1>::new();
+    let mut loop_edge_count = 0_u32;
+    for entrance in surface_entrances {
+        let y_millimeters = entrance.surface_anchor_millimeters[1];
+        let portal_y = i32::try_from(y_millimeters.div_euclid(1_000)).map_err(|_| {
+            TerritoryError::InvalidCaveAdjacency {
+                reason: "entrance y does not fit the world-coordinate contract".to_owned(),
+            }
+        })?;
+        let mut path_ids = Vec::new();
+        for (index, cell) in entrance.cells.iter().enumerate() {
+            let domain = topology_domain_at(default_domain, underground, *cell, portal_y).clone();
+            let kind = if index == 0 {
+                CaveTopologyNodeKindV1::SurfaceEntrance
+            } else if index + 1 == entrance.cells.len() {
+                CaveTopologyNodeKindV1::Destination
+            } else if index == 1 {
+                CaveTopologyNodeKindV1::PortalEndpoint
+            } else {
+                CaveTopologyNodeKindV1::Junction
+            };
+            let node = insert_node(&mut nodes, domain, *cell, y_millimeters, kind, config)?;
+            path_ids.push(node);
+        }
+        for window in path_ids.windows(2) {
+            insert_edge(&mut edges, algorithms, &nodes, window[0], window[1]);
+        }
+        if path_ids.len() >= 4 {
+            let last = path_ids[path_ids.len() - 1];
+            let loop_to = path_ids[path_ids.len() - 3];
+            if algorithm_for_domain(algorithms, entrance.destination.domain())
+                == CaveTopologyAlgorithmV1::ConstrainedGraph
+            {
+                let before = edges.len();
+                insert_edge(&mut edges, algorithms, &nodes, last, loop_to);
+                if edges.len() > before {
+                    loop_edge_count = loop_edge_count.saturating_add(1);
+                }
+            }
+        }
+    }
+    Ok((
+        nodes.into_values().collect(),
+        edges.into_values().collect(),
+        loop_edge_count,
+    ))
+}
+
+fn insert_node(
+    nodes: &mut BTreeMap<(PlanningCellCoordinateV1, CaveTopologyDomainIdV1), CaveTopologyNodeV1>,
+    domain: CaveTopologyDomainIdV1,
+    cell: PlanningCellCoordinateV1,
+    y_millimeters: i64,
+    kind: CaveTopologyNodeKindV1,
+    config: &WorldgenConfigV1,
+) -> TerritoryResult<CaveTopologyNodeIdV1> {
+    if let Some(existing) = nodes.get(&(cell, domain.clone())) {
+        return Ok(existing.node_id);
+    }
+    let payload = NodeHashPayloadV1 {
+        domain: &domain,
+        cell,
+        kind,
+        y_millimeters,
+    };
+    let hash =
+        canonical_json_hash(&payload).map_err(|error| TerritoryError::CanonicalEncoding {
+            kind: "cave topology node",
+            reason: error.to_string(),
+        })?;
+    let node = CaveTopologyNodeV1 {
+        node_id: CaveTopologyNodeIdV1::from_hash(hash),
+        domain: domain.clone(),
+        cell,
+        anchor_millimeters: cell_anchor_millimeters(cell, y_millimeters, config),
+        kind,
+    };
+    let node_id = node.node_id;
+    nodes.insert((cell, domain), node);
+    Ok(node_id)
+}
+
+#[derive(Serialize)]
+struct NodeHashPayloadV1<'a> {
+    domain: &'a CaveTopologyDomainIdV1,
+    cell: PlanningCellCoordinateV1,
+    kind: CaveTopologyNodeKindV1,
+    y_millimeters: i64,
+}
+
+fn insert_edge(
+    edges: &mut BTreeMap<(CaveTopologyNodeIdV1, CaveTopologyNodeIdV1), CaveTopologyEdgeV1>,
+    algorithms: &[CaveDomainAlgorithmV1],
+    nodes: &BTreeMap<(PlanningCellCoordinateV1, CaveTopologyDomainIdV1), CaveTopologyNodeV1>,
+    first: CaveTopologyNodeIdV1,
+    second: CaveTopologyNodeIdV1,
+) {
+    if first == second {
+        return;
+    }
+    let (first, second) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    let algorithm = nodes
+        .values()
+        .find(|node| node.node_id == first)
+        .map_or(CaveTopologyAlgorithmV1::CoarseCell, |node| {
+            algorithm_for_domain(algorithms, node.domain())
+        });
+    edges.entry((first, second)).or_insert(CaveTopologyEdgeV1 {
+        first,
+        second,
+        algorithm,
+    });
+}
+
+fn compile_passability(
+    surface_entrances: &[CaveSurfaceEntranceV1],
+    nodes: &[CaveTopologyNodeV1],
+    edges: &[CaveTopologyEdgeV1],
+    loop_edge_count: u32,
+) -> TerritoryResult<Vec<CavePassabilityReceiptV1>> {
+    let mut adjacency = BTreeMap::<CaveTopologyNodeIdV1, BTreeSet<CaveTopologyNodeIdV1>>::new();
+    for edge in edges {
+        adjacency.entry(edge.first).or_default().insert(edge.second);
+        adjacency.entry(edge.second).or_default().insert(edge.first);
+    }
+    let mut by_cell_domain = BTreeMap::new();
+    for node in nodes {
+        by_cell_domain.insert((node.cell, node.domain.clone()), node.node_id);
+    }
+    let mut dead_end_count = 0_u32;
+    for node in nodes {
+        let degree = adjacency.get(&node.node_id).map_or(0, BTreeSet::len);
+        if degree <= 1 && node.kind != CaveTopologyNodeKindV1::SurfaceEntrance {
+            dead_end_count = dead_end_count.saturating_add(1);
+        }
+    }
+    let mut receipts = Vec::new();
+    for entrance in surface_entrances {
+        let Some(start) = nodes.iter().find(|node| {
+            node.cell == entrance.surface_cell
+                && node.kind == CaveTopologyNodeKindV1::SurfaceEntrance
+        }) else {
+            return Err(TerritoryError::InvalidCaveAdjacency {
+                reason: "surface entrance is missing from the topology graph".to_owned(),
+            });
+        };
+        let Some(goal) = by_cell_domain.get(&(
+            entrance.destination.cell,
+            entrance.destination.domain.clone(),
+        )) else {
+            return Err(TerritoryError::InvalidCaveAdjacency {
+                reason: "must-connect destination is missing from the topology graph".to_owned(),
+            });
+        };
+        let (graph_connected, hop_count) = shortest_hops(&adjacency, start.node_id, *goal);
+        if !graph_connected {
+            return Err(TerritoryError::InvalidCaveAdjacency {
+                reason: "must-connect destination is not reachable from a surface entrance"
+                    .to_owned(),
+            });
+        }
+        let payload = PassabilityHashPayloadV1 {
+            entrance_id: entrance.entrance_id,
+            destination_domain: entrance.destination.domain(),
+            destination_cell: entrance.destination.cell(),
+            graph_connected,
+            hop_count,
+            dead_end_count,
+            loop_edge_count,
+        };
+        let hash =
+            canonical_json_hash(&payload).map_err(|error| TerritoryError::CanonicalEncoding {
+                kind: "cave passability receipt",
+                reason: error.to_string(),
+            })?;
+        receipts.push(CavePassabilityReceiptV1 {
+            entrance_id: entrance.entrance_id,
+            destination: entrance.destination.clone(),
+            graph_connected,
+            hop_count,
+            dead_end_count,
+            loop_edge_count,
+            receipt_hash: CavePassabilityReceiptHashV1::from_hash(hash),
+        });
+    }
+    receipts.sort_by_key(CavePassabilityReceiptV1::entrance_id);
+    Ok(receipts)
+}
+
+fn shortest_hops(
+    adjacency: &BTreeMap<CaveTopologyNodeIdV1, BTreeSet<CaveTopologyNodeIdV1>>,
+    start: CaveTopologyNodeIdV1,
+    goal: CaveTopologyNodeIdV1,
+) -> (bool, u32) {
+    if start == goal {
+        return (true, 0);
+    }
+    let mut seen = BTreeSet::from([start]);
+    let mut frontier = vec![(start, 0_u32)];
+    let mut index = 0;
+    while index < frontier.len() {
+        let (node, hops) = frontier[index];
+        index = index.saturating_add(1);
+        let Some(neighbors) = adjacency.get(&node) else {
+            continue;
+        };
+        for neighbor in neighbors {
+            if !seen.insert(*neighbor) {
+                continue;
+            }
+            let next = hops.saturating_add(1);
+            if *neighbor == goal {
+                return (true, next);
+            }
+            frontier.push((*neighbor, next));
+        }
+    }
+    (false, 0)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "realization conversion keeps corridor, portal, and branch contracts in one transaction"
+)]
+fn realization_layer_from_plan(
+    plan: &CaveTopologyPlanV1,
+    _config: &WorldgenConfigV1,
+) -> TerritoryResult<CaveTopologyLayerInputV1> {
+    let mut domains = Vec::new();
+    for entry in &plan.algorithms {
+        let (Some(bounds), Some(vertical)) = (entry.bounds(), entry.vertical_range()) else {
+            continue;
+        };
+        domains.push(
+            CaveOwnedDomainV1::new(
+                entry.domain().as_stable_id().clone(),
+                entry.algorithm(),
+                [bounds.min_x(), bounds.min_z()],
+                [bounds.max_x_exclusive(), bounds.max_z_exclusive()],
+                vertical.min_y(),
+                vertical.max_y_exclusive(),
+            )
+            .map_err(|error| TerritoryError::InvalidCaveAdjacency {
+                reason: error.to_string(),
+            })?,
+        );
+    }
+    let mut corridors = Vec::new();
+    let by_id = plan
+        .nodes
+        .iter()
+        .map(|node| (node.node_id, node))
+        .collect::<BTreeMap<_, _>>();
+    for edge in &plan.edges {
+        let Some(first) = by_id.get(&edge.first) else {
+            continue;
+        };
+        let Some(second) = by_id.get(&edge.second) else {
+            continue;
+        };
+        corridors.push(CaveLayerCorridorV1::new(
+            millimeters_to_voxels(first.anchor_millimeters),
+            millimeters_to_voxels(second.anchor_millimeters),
+        ));
+    }
+    let mut portals = Vec::new();
+    for portal in &plan.portals {
+        portals.push(
+            CaveLayerPortalV1::new(
+                millimeters_to_voxels(portal.anchor_millimeters()),
+                millimeters_to_u16(portal.clearance_width_millimeters())?,
+                millimeters_to_u16(portal.clearance_height_millimeters())?,
+            )
+            .map_err(|error| TerritoryError::InvalidCaveAdjacency {
+                reason: error.to_string(),
+            })?,
+        );
+    }
+    let mut entrances = Vec::new();
+    for entrance in &plan.surface_entrances {
+        let cells = entrance
+            .cells
+            .iter()
+            .map(|cell| [cell.x, cell.z])
+            .collect::<Vec<_>>();
+        entrances.push(
+            CaveLayerEntranceV1::new(
+                cells,
+                entrance.surface_anchor_millimeters[1].div_euclid(1_000),
+                [entrance.destination.cell.x, entrance.destination.cell.z],
+            )
+            .map_err(|error| TerritoryError::InvalidCaveAdjacency {
+                reason: error.to_string(),
+            })?,
+        );
+    }
+    let crate::ContributionTargetV1::Cave(branch_domain) = plan.branch.target() else {
+        return Err(TerritoryError::InvalidContribution {
+            contribution: plan.branch.contribution_id().to_string(),
+            reason: "branch contributor must target a cave topology domain".to_owned(),
+        });
+    };
+    let vertical =
+        plan.branch
+            .vertical_range()
+            .ok_or_else(|| TerritoryError::InvalidContribution {
+                contribution: plan.branch.contribution_id().to_string(),
+                reason: "branch contributor requires finite vertical influence".to_owned(),
+            })?;
+    let branch = CaveBranchContributorV1::new(
+        branch_domain.as_stable_id().clone(),
+        [plan.branch.bounds().min_x(), plan.branch.bounds().min_z()],
+        [
+            plan.branch.bounds().max_x_exclusive(),
+            plan.branch.bounds().max_z_exclusive(),
+        ],
+        vertical.min_y(),
+        vertical.max_y_exclusive(),
+    )
+    .map_err(|error| TerritoryError::InvalidCaveAdjacency {
+        reason: error.to_string(),
+    })?;
+    let default_algorithm = algorithm_for_domain(&plan.algorithms, &plan.default_cave_domain);
+    CaveTopologyLayerInputV1::new(
+        plan.default_cave_domain.as_stable_id().clone(),
+        default_algorithm,
+        domains,
+        corridors,
+        portals,
+        entrances,
+        branch,
+    )
+    .map_err(|error| TerritoryError::InvalidCaveAdjacency {
+        reason: error.to_string(),
+    })
+}
+
+fn millimeters_to_u16(millimeters: u32) -> TerritoryResult<u16> {
+    let voxels = millimeters.saturating_add(999) / 1_000;
+    u16::try_from(voxels.max(1)).map_err(|_| TerritoryError::ArithmeticOverflow {
+        kind: "portal clearance voxels",
     })
 }
 

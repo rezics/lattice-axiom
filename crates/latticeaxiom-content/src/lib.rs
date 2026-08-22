@@ -2,10 +2,10 @@
 //!
 //! This crate validates typed block, biome, and fluid definitions, expands
 //! bounded discrete block-state palettes, freezes material Role bindings,
-//! compiles stable solid and fluid palettes, and extracts the presentation
-//! binding index consumed by terrain layer compilation. It owns no renderer,
-//! gameplay rules, package authoring files, persistence backend, scheduler, or
-//! Bevy integration.
+//! compiles stable solid and fluid palettes, arbitrates orthogonal fluid
+//! occupancy, and extracts the presentation binding index consumed by terrain
+//! layer compilation. It owns no renderer, gameplay rules, package authoring
+//! files, persistence backend, scheduler, or Bevy integration.
 //!
 //! Process-local numeric IDs are deliberately absent. Compiled palettes retain
 //! concrete [`latticeaxiom_core::StableId`] values and canonical state, so a
@@ -22,6 +22,7 @@ mod catalog;
 mod error;
 mod fluid;
 mod header;
+mod occupancy;
 mod palette;
 mod presentation;
 mod state;
@@ -46,6 +47,12 @@ pub use fluid::{
 pub use header::{
     BIOME_DEFINITION_SCHEMA_V1, BLOCK_DEFINITION_SCHEMA_V1, ContentHeaderV1, ContentRevisionV1,
     FLUID_DEFINITION_SCHEMA_V1, FLUID_STATE_SCHEMA_V1,
+};
+pub use occupancy::{
+    FluidOccupancyKindV1, FluidWorkAccountingV1, OccupancyArbitrationContextV1,
+    OccupancyCandidateV1, OccupancyCellIntentV1, OccupancyCellV1, OccupancyRejectV1,
+    ReplaceabilityKindV1, SOLID_FLUID_OCCUPANCY_CANDIDATE_SCHEMA_V1, SolidFluidArbitrationV1,
+    SolidOccupancyKindV1, arbitrate_cell,
 };
 pub use palette::{
     CompiledFluidPaletteEntryV1, CompiledFluidPaletteV1, CompiledSolidPaletteEntryV1,

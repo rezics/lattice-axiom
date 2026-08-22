@@ -204,10 +204,16 @@ impl ValidatedBlockDefinitionV1 {
     /// Returns whether this definition explicitly permits `state`.
     #[must_use]
     pub fn contains_state(&self, state: &BlockStateV1) -> bool {
+        self.semantics_for(state).is_some()
+    }
+
+    /// Returns intrinsic semantics for an explicit palette state.
+    #[must_use]
+    pub fn semantics_for(&self, state: &BlockStateV1) -> Option<&BlockStateSemanticsV1> {
         self.definition
             .states
             .iter()
-            .any(|candidate| &candidate.state == state)
+            .find(|candidate| &candidate.state == state)
     }
 }
 

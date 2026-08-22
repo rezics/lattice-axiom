@@ -1,0 +1,5 @@
+terrenia:biome/arid-badlands
+terrenia:biome/boreal-wetland
+terrenia:biome/crystal-depths
+terrenia:biome/limestone-caverns
+terrenia:biome/temperate-woodland

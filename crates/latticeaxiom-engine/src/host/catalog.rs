@@ -9,10 +9,12 @@ use std::{
     num::{NonZeroU8, NonZeroU16, NonZeroU32},
 };
 
+use latticeaxiom_compose::LockedPackage;
 use latticeaxiom_content::{
-    ContentCatalogInputV1, ContentCatalogLimitsV1, ContentCatalogV1, FluidDefinitionV1,
+    BiomeDefinitionV1, ContentCatalogInputV1, ContentCatalogLimitsV1, ContentCatalogV1,
+    FluidDefinitionV1,
 };
-use latticeaxiom_core::{SchemaId, StableId};
+use latticeaxiom_core::{CapabilityId, PackageName, SchemaId, StableId};
 use latticeaxiom_gameplay::{
     BlockDefinitionV1, BlockId, BlockSchemaBindingV1, CatalogLimits, FrozenItemRoleBindingV1,
     GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemId,
@@ -22,8 +24,10 @@ use latticeaxiom_gameplay::{
 };
 use latticeaxiom_storage::DimensionId;
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1,
-    FrozenRoleBindingsV1,
+    AuthoredWorldgenBindingsV1, CaveTopologyAlgorithmV1, D4BlockCatalogClosureV1, D4MaterialRoleV1,
+    D4RoleVocabularyV1, D7_NATURAL_BLOCK_COUNT, FrozenRoleBindingsV1, HydrologyFluidBindingsV1,
+    HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1, NaturalRoleVocabularyV1,
+    WorldgenConfigV1,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -39,8 +43,23 @@ const AUTHORED_TOOLS_JSON: &str =
     include_str!("../../../../packages/terrenia/tools/data/authored-tools-v1.json");
 const AUTHORED_BINDINGS_JSON: &str =
     include_str!("../../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json");
+const AUTHORED_BIOMES_JSON: &str =
+    include_str!("../../../../packages/terrenia/worldgen/data/authored-biomes-v1.json");
+const AUTHORED_NATURAL_LAYERS_JSON: &str =
+    include_str!("../../../../packages/terrenia/worldgen/data/authored-natural-layers-v1.json");
+const D7_BLOCK_IDS: &str =
+    include_str!("../../../../packages/terrenia/blocks/data/goldens/d7-block-ids.txt");
+const D7_BIOME_IDS: &str =
+    include_str!("../../../../packages/terrenia/worldgen/data/goldens/d7-biome-ids.txt");
+const D7_NATURAL_ROLE_IDS: &str =
+    include_str!("../../../../packages/terrenia/worldgen/data/goldens/d7-natural-role-ids.txt");
 const D9_BLOCK_IDS: &str =
     include_str!("../../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
+/// Exactly-one terrain/worldgen provider selected by a reopened product lock.
+pub(super) const WORLDGEN_TERRAIN_CAPABILITY: &str =
+    "latticeaxiom:capability/worldgen-terrain-provider@2";
+/// Exactly-one content-blocks provider selected by a reopened product lock.
+pub(super) const CONTENT_BLOCKS_CAPABILITY: &str = "latticeaxiom:capability/content-blocks@1";
 
 /// Worldgen identities compiled from the package catalog.
 #[derive(Clone, Debug)]
@@ -51,9 +70,33 @@ pub(super) struct HostWorldgenCatalog {
     pub(super) placement_content: BlockId,
     pub(super) probe_content: BlockId,
     pub(super) role_vocabulary: D4RoleVocabularyV1,
+    pub(super) natural_vocabulary: NaturalRoleVocabularyV1,
     pub(super) role_bindings: FrozenRoleBindingsV1,
     pub(super) block_catalog: D4BlockCatalogClosureV1,
     pub(super) bindings: AuthoredWorldgenBindingsV1,
+    pub(super) worldgen_package: Option<LockedPackage>,
+    pub(super) cave: HostCaveBindings,
+    pub(super) hydrology: HostHydrologyBindings,
+}
+
+/// Package-owned cave topology identities bound from authored worldgen data.
+#[derive(Clone, Debug)]
+pub(super) struct HostCaveBindings {
+    pub(super) default_domain: StableId,
+    pub(super) domains: Vec<HostCaveDomain>,
+}
+
+/// One underground-owned topology domain and its local algorithm.
+#[derive(Clone, Debug)]
+pub(super) struct HostCaveDomain {
+    pub(super) id: StableId,
+    pub(super) algorithm: CaveTopologyAlgorithmV1,
+}
+
+/// Frozen water/lava occupancy identities bound from the locked catalog.
+#[derive(Clone, Debug)]
+pub(super) struct HostHydrologyBindings {
+    pub(super) fluids: HydrologyFluidBindingsV1,
 }
 
 /// Compiles the package-authored gameplay catalog.
@@ -108,12 +151,19 @@ pub fn authored_content_catalog() -> Result<ContentCatalogV1, ProductionHostErro
         })?,
         None => Vec::new(),
     };
+    let biomes = authored_biome_definitions()?;
+    require_d7_golden_biome_ids(
+        &biomes
+            .iter()
+            .map(|biome| biome.header.stable_id.clone())
+            .collect(),
+    )?;
     let catalog = ContentCatalogV1::compile(
         ContentCatalogInputV1 {
             schema_major: 1,
             blocks,
             fluids,
-            biomes: Vec::new(),
+            biomes,
             material_role_bindings,
         },
         ContentCatalogLimitsV1::default(),
@@ -142,11 +192,15 @@ where
         .map_err(|source| ProductionHostError::InvalidAuthoredCatalog { name, source })
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn host_worldgen_catalog(
     images: &LockVerifiedComposeImages,
 ) -> Result<HostWorldgenCatalog, ProductionHostError> {
+    let worldgen_package = exactly_one_lock_provider(images, WORLDGEN_TERRAIN_CAPABILITY)?;
+    let _content_package = exactly_one_lock_provider(images, CONTENT_BLOCKS_CAPABILITY)?;
     let catalog_ids =
         authored_catalog_block_ids(&parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?)?;
+    require_d7_golden_block_ids(&catalog_ids)?;
     require_d9_golden_block_ids(&catalog_ids)?;
     let bindings = AuthoredWorldgenBindingsV1::from_json(AUTHORED_BINDINGS_JSON.as_bytes())?;
     let authored: AuthoredBlockBindings =
@@ -191,26 +245,32 @@ pub(super) fn host_worldgen_catalog(
     }
 
     let mut vocabulary_entries = Vec::new();
-    let mut binding_entries = Vec::new();
     for purpose in D4MaterialRoleV1::ALL {
-        let Some((role, target)) = roles_by_path.get(purpose.as_str()) else {
+        let Some((role, _)) = roles_by_path.get(purpose.as_str()) else {
             return Err(ProductionHostError::MissingCatalogDefinition {
                 kind: "d4-role",
                 id: purpose.as_str().to_owned(),
             });
         };
         vocabulary_entries.push((purpose, role.clone()));
-        binding_entries.push((role.clone(), target.clone()));
     }
 
     let block_catalog = D4BlockCatalogClosureV1::new(catalog_ids)?;
+    if block_catalog.blocks().len() < D7_NATURAL_BLOCK_COUNT {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "d7-natural-block",
+            id: D7_NATURAL_BLOCK_COUNT.to_string(),
+        });
+    }
     let palette = block_catalog
         .blocks()
         .iter()
         .map(|block| BlockId::parse(block.as_str()))
         .collect::<Result<Vec<_>, _>>()?;
     let role_vocabulary = D4RoleVocabularyV1::new(vocabulary_entries)?;
-    let role_bindings = FrozenRoleBindingsV1::new(binding_entries)?;
+    let natural_vocabulary = bindings.natural_vocabulary()?;
+    let role_bindings = bindings.role_bindings()?;
+    require_d7_natural_role_ids(&role_bindings)?;
     let empty = bound_block(&role_vocabulary, &role_bindings, D4MaterialRoleV1::Empty)?;
     let placement_content = bound_block(
         &role_vocabulary,
@@ -238,10 +298,329 @@ pub(super) fn host_worldgen_catalog(
         placement_content,
         probe_content,
         role_vocabulary,
+        natural_vocabulary,
         role_bindings,
         block_catalog,
+        cave: authored_cave_bindings()?,
+        hydrology: authored_hydrology_bindings(&bindings)?,
         bindings,
+        worldgen_package,
     })
+}
+
+impl HostWorldgenCatalog {
+    /// Compiles the package-owned V6 cave topology layer for `config`.
+    ///
+    /// Domain identities come from the authored worldgen package. Geometry is
+    /// derived from the closed spine config so spawn-neighborhood traversal
+    /// reaches both underground territories.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when domain identities, algorithms, or
+    /// topology contracts fail closed.
+    pub(super) fn cave_topology_layer(
+        &self,
+        config: &WorldgenConfigV1,
+    ) -> Result<latticeaxiom_worldgen::CaveTopologyLayerInputV1, ProductionHostError> {
+        compile_host_cave_topology(&self.cave, config)
+    }
+
+    /// Compiles V6 hydrology occupancy from frozen catalog fluids and predicates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when occupancy configuration is invalid.
+    pub(super) fn hydrology_occupancy(
+        &self,
+    ) -> Result<HydrologyOccupancyInputV1, ProductionHostError> {
+        let config = HydrologyOccupancyConfigV1::default();
+        config.validate()?;
+        Ok(HydrologyOccupancyInputV1::new(
+            config,
+            self.hydrology.fluids.clone(),
+        ))
+    }
+}
+
+fn authored_cave_bindings() -> Result<HostCaveBindings, ProductionHostError> {
+    let authored = parse_json_object(AUTHORED_NATURAL_LAYERS_JSON, "natural-layers")?;
+    let cave_plan = authored
+        .get("cave_plan")
+        .ok_or(ProductionHostError::InvalidCatalogField { field: "cave_plan" })?;
+    let default_domain = parse_identity(
+        json_text(cave_plan, "default_topology_domain")?,
+        "cave-topology-domain",
+    )?;
+    let mut domains = Vec::new();
+    for row in json_array(&authored, "underground_territories")? {
+        let id = parse_identity(json_text(row, "id")?, "cave-topology-domain")?;
+        let algorithm = topology_algorithm_from_id(&parse_identity(
+            json_text(row, "topology_algorithm")?,
+            "cave-algorithm",
+        )?)?;
+        if domains
+            .iter()
+            .any(|domain: &HostCaveDomain| domain.id == id)
+        {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "unique-cave-topology-domain",
+                id: id.to_string(),
+            });
+        }
+        domains.push(HostCaveDomain { id, algorithm });
+    }
+    domains.sort_by(|left, right| left.id.cmp(&right.id));
+    if domains.len() < 2 {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "cave-topology-domain",
+            id: "underground_territories".to_owned(),
+        });
+    }
+    Ok(HostCaveBindings {
+        default_domain,
+        domains,
+    })
+}
+
+fn authored_hydrology_bindings(
+    bindings: &AuthoredWorldgenBindingsV1,
+) -> Result<HostHydrologyBindings, ProductionHostError> {
+    let authored = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
+    let mut water = None;
+    let mut lava = None;
+    for row in json_array(&authored, "fluids")? {
+        let definition = row
+            .get("definition")
+            .ok_or(ProductionHostError::InvalidCatalogField {
+                field: "definition",
+            })?;
+        let header = definition
+            .get("header")
+            .ok_or(ProductionHostError::InvalidCatalogField { field: "header" })?;
+        let id: StableId = json_text(header, "stable_id")?.parse()?;
+        if id.kind() != "fluid" {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "fluid",
+                id: id.to_string(),
+            });
+        }
+        match last_path_token(&id) {
+            "water" if water.is_none() => water = Some(id),
+            "lava" if lava.is_none() => lava = Some(id),
+            token => {
+                return Err(ProductionHostError::MissingCatalogDefinition {
+                    kind: "fluid-kind",
+                    id: token.to_owned(),
+                });
+            }
+        }
+    }
+    let water = water.ok_or_else(|| ProductionHostError::MissingCatalogDefinition {
+        kind: "fluid",
+        id: "water".to_owned(),
+    })?;
+    let lava = lava.ok_or_else(|| ProductionHostError::MissingCatalogDefinition {
+        kind: "fluid",
+        id: "lava".to_owned(),
+    })?;
+    let water_predicate = bindings.predicate("place-water").cloned().ok_or_else(|| {
+        ProductionHostError::MissingCatalogDefinition {
+            kind: "predicate",
+            id: "place-water".to_owned(),
+        }
+    })?;
+    let lava_predicate = bindings.predicate("place-lava").cloned().ok_or_else(|| {
+        ProductionHostError::MissingCatalogDefinition {
+            kind: "predicate",
+            id: "place-lava".to_owned(),
+        }
+    })?;
+    Ok(HostHydrologyBindings {
+        fluids: HydrologyFluidBindingsV1::new(water, lava, water_predicate, lava_predicate)?,
+    })
+}
+
+fn compile_host_cave_topology(
+    cave: &HostCaveBindings,
+    config: &WorldgenConfigV1,
+) -> Result<latticeaxiom_worldgen::CaveTopologyLayerInputV1, ProductionHostError> {
+    use latticeaxiom_worldgen::{
+        CaveBranchContributorV1, CaveLayerCorridorV1, CaveLayerEntranceV1, CaveLayerPortalV1,
+        CaveOwnedDomainV1, CaveTopologyLayerInputV1, cell_center_voxels,
+    };
+
+    if cave.domains.len() < 2 {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "cave-topology-domain",
+            id: "underground".to_owned(),
+        });
+    }
+    let first = &cave.domains[0];
+    let second = &cave.domains[1];
+    let floor = config.world_floor_y;
+    let surface = config.temperate_base_height.max(floor.saturating_add(8));
+    let cover = i32::from(config.cave_minimum_cover).max(1);
+    let max_y = surface.saturating_sub(cover).max(floor.saturating_add(1));
+    let cave_y = i64::from(max_y);
+    let y_mm = cave_y.saturating_mul(1_000);
+    let domains = vec![
+        CaveOwnedDomainV1::new(
+            first.id.clone(),
+            first.algorithm,
+            [0, 0],
+            [1, 2],
+            floor,
+            surface,
+        )?,
+        CaveOwnedDomainV1::new(
+            second.id.clone(),
+            second.algorithm,
+            [-1, 0],
+            [0, 2],
+            floor,
+            surface,
+        )?,
+    ];
+    let first_path = [
+        cell_center_voxels(-2, 0, y_mm, config),
+        cell_center_voxels(-1, 0, y_mm, config),
+        cell_center_voxels(0, 0, y_mm, config),
+        cell_center_voxels(1, 0, y_mm, config),
+    ];
+    let second_path = [
+        cell_center_voxels(2, 0, y_mm, config),
+        cell_center_voxels(1, 0, y_mm, config),
+        cell_center_voxels(0, 0, y_mm, config),
+        cell_center_voxels(-1, 0, y_mm, config),
+    ];
+    let corridors = vec![
+        CaveLayerCorridorV1::new(first_path[0], first_path[1]),
+        CaveLayerCorridorV1::new(first_path[1], first_path[2]),
+        CaveLayerCorridorV1::new(first_path[2], first_path[3]),
+        CaveLayerCorridorV1::new(second_path[0], second_path[1]),
+        CaveLayerCorridorV1::new(second_path[1], second_path[2]),
+        CaveLayerCorridorV1::new(second_path[2], second_path[3]),
+    ];
+    let portals = vec![
+        CaveLayerPortalV1::new(first_path[1], 2, 3)?,
+        CaveLayerPortalV1::new(first_path[2], 2, 3)?,
+    ];
+    let entrances = vec![
+        CaveLayerEntranceV1::new(vec![[-2, 0], [-1, 0], [0, 0], [1, 0]], cave_y, [1, 0])?,
+        CaveLayerEntranceV1::new(vec![[2, 0], [1, 0], [0, 0], [-1, 0]], cave_y, [-1, 0])?,
+    ];
+    let branch = CaveBranchContributorV1::new(first.id.clone(), [0, 1], [1, 2], floor, surface)?;
+    Ok(CaveTopologyLayerInputV1::new(
+        cave.default_domain.clone(),
+        CaveTopologyAlgorithmV1::CoarseCell,
+        domains,
+        corridors,
+        portals,
+        entrances,
+        branch,
+    )?)
+}
+
+fn topology_algorithm_from_id(
+    id: &StableId,
+) -> Result<CaveTopologyAlgorithmV1, ProductionHostError> {
+    match last_path_token(id) {
+        "karst-graph" | "constrained-graph" => Ok(CaveTopologyAlgorithmV1::ConstrainedGraph),
+        "chamber-graph" | "field-growth" => Ok(CaveTopologyAlgorithmV1::FieldGrowth),
+        "coarse-cell" => Ok(CaveTopologyAlgorithmV1::CoarseCell),
+        token => Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "cave-algorithm",
+            id: token.to_owned(),
+        }),
+    }
+}
+
+fn parse_identity(value: &str, kind: &'static str) -> Result<StableId, ProductionHostError> {
+    let id: StableId = value.parse()?;
+    if id.kind() != kind {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind,
+            id: value.to_owned(),
+        });
+    }
+    Ok(id)
+}
+
+fn last_path_token(id: &StableId) -> &str {
+    id.path()
+        .rsplit('/')
+        .next()
+        .filter(|token| !token.is_empty())
+        .unwrap_or(id.path())
+}
+
+fn authored_biome_definitions() -> Result<Vec<BiomeDefinitionV1>, ProductionHostError> {
+    let authored = parse_json_object(AUTHORED_BIOMES_JSON, "biome-catalog")?;
+    json_array(&authored, "biomes")?
+        .iter()
+        .map(|row| {
+            serde_json::from_value(row.clone()).map_err(|source| {
+                ProductionHostError::InvalidAuthoredCatalog {
+                    name: "biome-definition",
+                    source,
+                }
+            })
+        })
+        .collect()
+}
+
+/// Returns the exactly-one lock provider for `capability`, if the graph names it.
+///
+/// Synthetic headless fixtures may omit the capability. A declared empty or
+/// duplicate provider list fails closed.
+///
+/// # Errors
+///
+/// Returns [`ProductionHostError`] when the capability identity is invalid or
+/// the lock lists zero or more than one provider.
+pub(super) fn exactly_one_lock_provider(
+    images: &LockVerifiedComposeImages,
+    capability: &str,
+) -> Result<Option<LockedPackage>, ProductionHostError> {
+    let capability_id = capability.parse::<CapabilityId>()?;
+    let Some(packages) = images
+        .images()
+        .graph()
+        .capability_providers
+        .get(&capability_id)
+    else {
+        return Ok(None);
+    };
+    match packages.as_slice() {
+        [] => Err(ProductionHostError::MissingLockProvider {
+            capability: capability.to_owned(),
+        }),
+        [name] => images
+            .images()
+            .graph()
+            .packages
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ProductionHostError::MissingLockProvider {
+                capability: capability.to_owned(),
+            })
+            .map(Some),
+        _ => Err(ProductionHostError::AmbiguousLockProvider {
+            capability: capability.to_owned(),
+        }),
+    }
+}
+
+/// Returns the registration namespace used by a scoped package name.
+#[must_use]
+pub(super) fn package_registration_namespace(package: &PackageName) -> &str {
+    package
+        .as_str()
+        .strip_prefix('@')
+        .and_then(|rest| rest.split('/').next())
+        .filter(|namespace| !namespace.is_empty())
+        .unwrap_or(package.as_str())
 }
 
 fn bound_block(
@@ -294,31 +673,43 @@ fn catalog_namespace_dimension(palette: &[BlockId]) -> Result<DimensionId, Produ
         .map_err(ProductionHostError::from)
 }
 
+fn d7_golden_block_ids() -> Result<BTreeSet<StableId>, ProductionHostError> {
+    golden_stable_ids(D7_BLOCK_IDS, "block", "d7-block")
+}
+
 fn d9_golden_block_ids() -> Result<BTreeSet<StableId>, ProductionHostError> {
+    golden_stable_ids(D9_BLOCK_IDS, "block", "d9-block")
+}
+
+fn golden_stable_ids(
+    source: &str,
+    kind: &'static str,
+    label: &'static str,
+) -> Result<BTreeSet<StableId>, ProductionHostError> {
     let mut ids = BTreeSet::new();
-    for line in D9_BLOCK_IDS.lines() {
+    for line in source.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
         let id: StableId = line.parse()?;
-        if id.kind() != "block" {
+        if id.kind() != kind {
             return Err(ProductionHostError::MissingCatalogDefinition {
-                kind: "block",
+                kind,
                 id: line.to_owned(),
             });
         }
         if !ids.insert(id) {
             return Err(ProductionHostError::MissingCatalogDefinition {
-                kind: "unique-d9-block",
+                kind: label,
                 id: line.to_owned(),
             });
         }
     }
     if ids.is_empty() {
         return Err(ProductionHostError::MissingCatalogDefinition {
-            kind: "d9-block",
-            id: "goldens/d9-block-ids.txt".to_owned(),
+            kind: label,
+            id: "goldens".to_owned(),
         });
     }
     Ok(ids)
@@ -353,12 +744,42 @@ fn authored_catalog_block_ids(catalog: &Value) -> Result<BTreeSet<StableId>, Pro
     Ok(ids)
 }
 
+fn require_d7_golden_biome_ids(present: &BTreeSet<StableId>) -> Result<(), ProductionHostError> {
+    missing_catalog_ids(
+        "d7-biome",
+        golden_stable_ids(D7_BIOME_IDS, "biome", "d7-biome")?
+            .into_iter()
+            .filter(|id| !present.contains(id))
+            .map(|id| id.as_str().to_owned()),
+    )
+}
+
+fn require_d7_golden_block_ids(present: &BTreeSet<StableId>) -> Result<(), ProductionHostError> {
+    missing_catalog_ids(
+        "d7-block",
+        d7_golden_block_ids()?
+            .into_iter()
+            .filter(|id| !present.contains(id))
+            .map(|id| id.as_str().to_owned()),
+    )
+}
+
 fn require_d9_golden_block_ids(present: &BTreeSet<StableId>) -> Result<(), ProductionHostError> {
     missing_catalog_ids(
         "d9-block",
         d9_golden_block_ids()?
             .into_iter()
             .filter(|id| !present.contains(id))
+            .map(|id| id.as_str().to_owned()),
+    )
+}
+
+fn require_d7_natural_role_ids(bindings: &FrozenRoleBindingsV1) -> Result<(), ProductionHostError> {
+    missing_catalog_ids(
+        "d7-natural-role",
+        golden_stable_ids(D7_NATURAL_ROLE_IDS, "block-role", "d7-natural-role")?
+            .into_iter()
+            .filter(|id| bindings.target(id).is_none())
             .map(|id| id.as_str().to_owned()),
     )
 }
@@ -897,12 +1318,55 @@ mod tests {
 
     use super::{
         AUTHORED_BLOCKS_JSON, authored_catalog_block_ids, authored_content_catalog,
-        authored_gameplay_catalog, d9_golden_block_ids, parse_json_object,
+        authored_gameplay_catalog, d7_golden_block_ids, d9_golden_block_ids, parse_json_object,
     };
     use latticeaxiom_gameplay::{
         BlockId, ContainerOwnerComponentV1, ContainerStateV1, FurnaceContinuationV1,
         GameplayMutationIntentV1, ItemStackV1, SchemaId, WorkstationId,
     };
+    use latticeaxiom_worldgen::D7_NATURAL_BLOCK_COUNT;
+
+    #[test]
+    fn d7_golden_block_ids_are_present_in_authored_catalog() {
+        let authored = authored_catalog_block_ids(
+            &parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")
+                .expect("Terrenia authored catalog is valid JSON"),
+        )
+        .expect("authored catalog block IDs are valid");
+        let golden = d7_golden_block_ids().expect("D7 golden IDs are valid");
+        assert_eq!(golden.len(), D7_NATURAL_BLOCK_COUNT);
+        let missing = golden
+            .iter()
+            .filter(|id| !authored.contains(*id))
+            .map(|id| id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "authored catalog is missing D7 golden IDs: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn compiled_content_catalog_includes_d7_biome_goldens() {
+        let catalog = authored_content_catalog().expect("package content catalog must compile");
+        let compiled = catalog
+            .biomes()
+            .iter()
+            .map(|biome| biome.header.stable_id.clone())
+            .collect::<BTreeSet<_>>();
+        let golden = super::golden_stable_ids(super::D7_BIOME_IDS, "biome", "d7-biome")
+            .expect("D7 biome goldens are valid");
+        let missing = golden
+            .iter()
+            .filter(|id| !compiled.contains(*id))
+            .map(|id| id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "compiled content catalog is missing D7 biomes: {missing:?}"
+        );
+        assert_eq!(compiled, golden);
+    }
 
     #[test]
     fn d9_golden_block_ids_are_present_in_authored_catalog() {

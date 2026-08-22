@@ -84,6 +84,30 @@ typed_hash!(
     SnapshotChecksumV1,
     "Checksum of the exact provisional snapshot bytes handed to storage."
 );
+typed_hash!(
+    NaturalLayerHashV1,
+    "Canonical hash of the optional V5 natural-layer config, roles, and providers."
+);
+typed_hash!(
+    RiverBasinIdV1,
+    "Stable identity of one locally queryable surface river basin."
+);
+typed_hash!(
+    HydrologyOccupancyHashV1,
+    "Canonical hash of the optional V6 hydrology occupancy config and frozen fluids."
+);
+typed_hash!(
+    AquiferBasinIdV1,
+    "Stable identity of one locally queryable underground aquifer basin."
+);
+typed_hash!(
+    DrainageLinkIdV1,
+    "Stable identity of one vertical surface-to-underground drainage column."
+);
+typed_hash!(
+    CaveTopologyLayerHashV1,
+    "Canonical hash of the optional V6 cave-topology realization layer."
+);
 
 pub(crate) fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> CanonicalHash {
     let mut hasher = Sha256::new();

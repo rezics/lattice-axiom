@@ -442,6 +442,116 @@
       "id": "terrenia:block-role/copper-resource@1",
       "candidate": "terrenia:block/copper-ore",
       "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/coarse-dirt@1",
+      "candidate": "terrenia:block/coarse-dirt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/rooted-dirt@1",
+      "candidate": "terrenia:block/rooted-dirt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/mud@1",
+      "candidate": "terrenia:block/mud",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/silt@1",
+      "candidate": "terrenia:block/silt",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/peat@1",
+      "candidate": "terrenia:block/peat",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/snow@1",
+      "candidate": "terrenia:block/snow",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/ice@1",
+      "candidate": "terrenia:block/ice",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/moss@1",
+      "candidate": "terrenia:block/moss",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/deepstone@1",
+      "candidate": "terrenia:block/deepstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/granite@1",
+      "candidate": "terrenia:block/granite",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/slate@1",
+      "candidate": "terrenia:block/slate",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/tuff@1",
+      "candidate": "terrenia:block/tuff",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/calcite@1",
+      "candidate": "terrenia:block/calcite",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/dripstone@1",
+      "candidate": "terrenia:block/dripstone",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/coal-resource@1",
+      "candidate": "terrenia:block/coal-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/iron-resource@1",
+      "candidate": "terrenia:block/iron-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/tin-resource@1",
+      "candidate": "terrenia:block/tin-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/gold-resource@1",
+      "candidate": "terrenia:block/gold-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/sulfur-resource@1",
+      "candidate": "terrenia:block/sulfur-ore",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/crystal-resource@1",
+      "candidate": "terrenia:block/crystal-cluster",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/boreal-log@1",
+      "candidate": "terrenia:block/pine-log",
+      "cardinality": "exactly-one"
+    },
+    {
+      "id": "terrenia:block-role/boreal-leaves@1",
+      "candidate": "terrenia:block/pine-leaves",
+      "cardinality": "exactly-one"
     }
   ],
   "predicates": [
@@ -524,6 +634,51 @@
         "placement-bounds",
         "target-policy-allows"
       ]
+    },
+    {
+      "id": "terrenia:predicate/place-wetland@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows",
+        "surface-territory-boreal-wetland"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-cold@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows",
+        "surface-territory-boreal-wetland"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-geology@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows",
+        "queryable-stratum-field"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-ore@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows",
+        "stable-resource-field"
+      ]
+    },
+    {
+      "id": "terrenia:predicate/place-underground@1",
+      "evaluation": "bounded-authored-clause-set",
+      "clauses": [
+        "placement-bounds",
+        "target-policy-allows",
+        "underground-territory-before-cave"
+      ]
     }
   ],
   "provenance": [
@@ -535,7 +690,10 @@
         "state",
         "role-receipt",
         "predicate-receipt",
-        "generation-epoch"
+        "generation-epoch",
+        "territory-receipt",
+        "biome-receipt",
+        "resource-class-receipt"
       ]
     }
   ]

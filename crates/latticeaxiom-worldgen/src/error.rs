@@ -343,4 +343,49 @@ pub enum WorldgenError {
         /// World voxel Z.
         z: i64,
     },
+    /// The natural-world catalog closure was smaller than the D7 minimum.
+    #[error("D7 natural catalog closure requires at least {minimum} blocks, got {actual}")]
+    IncompleteNaturalCatalogClosure {
+        /// Minimum required unique block identities.
+        minimum: usize,
+        /// Observed unique identities.
+        actual: usize,
+    },
+    /// A verified epoch-boundary receipt did not match the adjacent cells.
+    #[error("boundary receipt `{adapter}` does not cover planning cells {cell:?} and {neighbor:?}")]
+    BoundaryReceiptCellMismatch {
+        /// Receipt adapter identity.
+        adapter: Box<StableId>,
+        /// Target planning cell.
+        cell: PlanningCellCoordinateV1,
+        /// Neighbor planning cell.
+        neighbor: PlanningCellCoordinateV1,
+    },
+    /// Optional V6 cave-topology realization input failed closed validation.
+    #[error("invalid cave topology layer: {reason}")]
+    InvalidCaveTopology {
+        /// Validation diagnostic.
+        reason: String,
+    },
+    /// Hydrology occupancy configuration or candidate data was invalid.
+    #[error("invalid hydrology occupancy field `{field}`: {reason}")]
+    InvalidHydrologyOccupancy {
+        /// Stable field name.
+        field: &'static str,
+        /// Actionable reason.
+        reason: String,
+    },
+    /// Hydrology occupancy was requested without the compiled V5 natural layer.
+    #[error("hydrology occupancy requires the compiled V5 natural layer")]
+    MissingNaturalLayerForHydrology,
+    /// A frozen hydrology fluid or predicate identity used the wrong kind.
+    #[error("hydrology {purpose} identity `{id}` must use registration kind `{expected}`")]
+    InvalidHydrologyFluidIdentity {
+        /// Water, lava, or predicate purpose.
+        purpose: &'static str,
+        /// Rejected identity.
+        id: StableId,
+        /// Required registration kind.
+        expected: &'static str,
+    },
 }

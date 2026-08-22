@@ -6,9 +6,12 @@
 //! the canonical old-or-complete-new file protocol; world stores remain outside
 //! this crate.
 
+mod cave_hydrology_inspect;
 mod observability;
 mod settings;
+mod worldgen_inspect;
 
+pub use cave_hydrology_inspect::*;
 pub use latticeaxiom_compose::{
     CostClass, DebugVisualizerSpec, DiagnosticMetricSpec, DisclosureLevel, InfoItemSpec,
     MetricAggregation, ObservabilityCatalog, RuntimeApplyImpact, SettingAuthority,
@@ -17,3 +20,4 @@ pub use latticeaxiom_compose::{
 };
 pub use observability::*;
 pub use settings::*;
+pub use worldgen_inspect::*;

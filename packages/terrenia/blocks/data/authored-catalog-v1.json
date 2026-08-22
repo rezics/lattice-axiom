@@ -1464,7 +1464,8 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-coarse-dirt@1"
+          "terrenia:block-role/catalog-coarse-dirt@1",
+          "terrenia:block-role/coarse-dirt@1"
         ],
         "placement_predicates": [
           "terrenia:predicate/place-surface@1"
@@ -1527,7 +1528,8 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-rooted-dirt@1"
+          "terrenia:block-role/catalog-rooted-dirt@1",
+          "terrenia:block-role/rooted-dirt@1"
         ],
         "placement_predicates": [
           "terrenia:predicate/place-surface@1"
@@ -1590,10 +1592,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-mud@1"
+          "terrenia:block-role/catalog-mud@1",
+          "terrenia:block-role/mud@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-surface@1"
+          "terrenia:predicate/place-surface@1",
+          "terrenia:predicate/place-wetland@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -1653,10 +1657,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-silt@1"
+          "terrenia:block-role/catalog-silt@1",
+          "terrenia:block-role/silt@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-surface@1"
+          "terrenia:predicate/place-surface@1",
+          "terrenia:predicate/place-wetland@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -1716,10 +1722,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-peat@1"
+          "terrenia:block-role/catalog-peat@1",
+          "terrenia:block-role/peat@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-surface@1"
+          "terrenia:predicate/place-surface@1",
+          "terrenia:predicate/place-wetland@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -1779,10 +1787,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-snow@1"
+          "terrenia:block-role/catalog-snow@1",
+          "terrenia:block-role/snow@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-surface@1"
+          "terrenia:predicate/place-surface@1",
+          "terrenia:predicate/place-cold@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -1842,10 +1852,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-ice@1"
+          "terrenia:block-role/catalog-ice@1",
+          "terrenia:block-role/ice@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-surface@1"
+          "terrenia:predicate/place-surface@1",
+          "terrenia:predicate/place-cold@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -1905,10 +1917,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-moss@1"
+          "terrenia:block-role/catalog-moss@1",
+          "terrenia:block-role/moss@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-surface@1"
+          "terrenia:predicate/place-surface@1",
+          "terrenia:predicate/place-vegetation@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -1968,10 +1982,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-deepstone@1"
+          "terrenia:block-role/catalog-deepstone@1",
+          "terrenia:block-role/deepstone@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-geology@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2031,10 +2047,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-granite@1"
+          "terrenia:block-role/catalog-granite@1",
+          "terrenia:block-role/granite@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-geology@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2094,10 +2112,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-slate@1"
+          "terrenia:block-role/catalog-slate@1",
+          "terrenia:block-role/slate@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-geology@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2157,10 +2177,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-tuff@1"
+          "terrenia:block-role/catalog-tuff@1",
+          "terrenia:block-role/tuff@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-geology@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2220,10 +2242,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-calcite@1"
+          "terrenia:block-role/catalog-calcite@1",
+          "terrenia:block-role/calcite@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-underground@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2283,10 +2307,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-dripstone@1"
+          "terrenia:block-role/catalog-dripstone@1",
+          "terrenia:block-role/dripstone@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-underground@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2346,10 +2372,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-coal-ore@1"
+          "terrenia:block-role/catalog-coal-ore@1",
+          "terrenia:block-role/coal-resource@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-ore@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2409,10 +2437,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-iron-ore@1"
+          "terrenia:block-role/catalog-iron-ore@1",
+          "terrenia:block-role/iron-resource@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-ore@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2472,10 +2502,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-tin-ore@1"
+          "terrenia:block-role/catalog-tin-ore@1",
+          "terrenia:block-role/tin-resource@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-ore@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2535,10 +2567,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-gold-ore@1"
+          "terrenia:block-role/catalog-gold-ore@1",
+          "terrenia:block-role/gold-resource@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-ore@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2598,10 +2632,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-sulfur-ore@1"
+          "terrenia:block-role/catalog-sulfur-ore@1",
+          "terrenia:block-role/sulfur-resource@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-ore@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2661,10 +2697,12 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-crystal-cluster@1"
+          "terrenia:block-role/catalog-crystal-cluster@1",
+          "terrenia:block-role/crystal-resource@1"
         ],
         "placement_predicates": [
-          "terrenia:predicate/place-solid@1"
+          "terrenia:predicate/place-solid@1",
+          "terrenia:predicate/place-underground@1"
         ],
         "provenance": "terrenia:worldgen-provenance/authored-catalog@1"
       },
@@ -2791,7 +2829,8 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-pine-log@1"
+          "terrenia:block-role/catalog-pine-log@1",
+          "terrenia:block-role/boreal-log@1"
         ],
         "placement_predicates": [
           "terrenia:predicate/place-solid@1"
@@ -2854,7 +2893,8 @@
       },
       "worldgen": {
         "role_candidates": [
-          "terrenia:block-role/catalog-pine-leaves@1"
+          "terrenia:block-role/catalog-pine-leaves@1",
+          "terrenia:block-role/boreal-leaves@1"
         ],
         "placement_predicates": [
           "terrenia:predicate/place-canopy@1"

@@ -10,11 +10,12 @@ use std::{hint::black_box, num::NonZeroU32};
 use criterion::{Criterion, criterion_group, criterion_main};
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_worldgen::{
-    AdjacentEpochSnapshotV1, CellEpochStateV1, ChunkCoordinate, ChunkGenerationRequestV1,
-    D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, DimensionId,
-    FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1, PlanActivationIdV1,
-    PlanningCellCoordinateV1, ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1,
-    WorldSeedV1, WorldgenConfigV1, WorldgenLimitsV1,
+    AdjacentEpochSnapshotV1, AuthoredWorldgenBindingsV1, CellEpochStateV1, ChunkCoordinate,
+    ChunkGenerationRequestV1, D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1,
+    DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
+    NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, WorldSeedV1, WorldgenConfigV1,
+    WorldgenLimitsV1,
 };
 
 const ROLE_TARGETS: [(D4MaterialRoleV1, &str); 16] = [
@@ -50,6 +51,20 @@ fn generation_benchmarks(c: &mut Criterion) {
                 Vec::new(),
             ))
             .expect("benchmark chunk must remain valid")
+        });
+    });
+    let natural = natural_fixture_plan();
+    c.bench_function("v5_natural_chunk_16_cubic_snapshot_candidate", |bencher| {
+        bencher.iter(|| {
+            natural
+                .generate(ChunkGenerationRequestV1::new(
+                    black_box(ChunkCoordinate::new(-3, 1, 5)),
+                    None,
+                    CellEpochStateV1::Unassigned,
+                    adjacent.clone(),
+                    Vec::new(),
+                ))
+                .expect("natural benchmark chunk must remain valid")
         });
     });
     c.bench_function("d4_density_4096_samples", |bencher| {
@@ -136,6 +151,56 @@ fn provider_offers() -> Vec<ProviderOfferV1> {
         )
     })
     .collect()
+}
+
+fn natural_fixture_plan() -> GenerationPlanV1 {
+    let bindings = AuthoredWorldgenBindingsV1::from_json(
+        include_str!("../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json")
+            .as_bytes(),
+    )
+    .expect("benchmark authored bindings decode");
+    let mut natural_offers = Vec::new();
+    for (slot, path) in [
+        (ProviderSlotV1::Geology, "geology"),
+        (ProviderSlotV1::Hydrology, "hydrology"),
+        (ProviderSlotV1::Resources, "resources"),
+        (ProviderSlotV1::Vegetation, "vegetation"),
+        (ProviderSlotV1::BorealTerrain, "boreal"),
+    ] {
+        natural_offers.push(ProviderOfferV1::new(
+            slot,
+            ProviderGenerationIdentityV1::new(
+                stable_id(&format!("fixture:worldgen-provider/{path}@1")),
+                NonZeroU32::MIN,
+                1,
+                CanonicalHash::digest(format!("{path}-benchmark-implementation-v1")),
+            ),
+        ));
+    }
+    GenerationPlanV1::compile(
+        GenerationPlanInputV1::new(
+            "terrenia:dimension/terrenia"
+                .parse()
+                .expect("benchmark dimension is valid"),
+            WorldSeedV1::from_integer(42),
+            WorldgenConfigV1::default(),
+            7,
+            PlanActivationIdV1::from_hash(CanonicalHash::digest(b"benchmark-activation")),
+            provider_offers(),
+            bindings.d4_vocabulary().expect("D4 vocabulary"),
+            bindings.role_bindings().expect("role bindings"),
+            bindings.catalog_closure().expect("catalog"),
+            CanonicalHash::digest(b"benchmark-semantic-image"),
+            vec![CanonicalHash::digest(b"benchmark-lock")],
+            WorldgenLimitsV1::default(),
+        )
+        .with_natural_layer(NaturalLayerInputV1::new(
+            NaturalLayerConfigV1::default(),
+            bindings.natural_vocabulary().expect("natural vocabulary"),
+            natural_offers,
+        )),
+    )
+    .expect("natural benchmark plan is valid")
 }
 
 fn stable_id(value: &str) -> StableId {

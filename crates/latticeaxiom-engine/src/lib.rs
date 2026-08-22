@@ -48,8 +48,9 @@ pub use host::{
     ProductionSurfaceRouter, ProductionWorldList, ProductionWorldStorage, RequiredCaveEntranceV1,
     STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost, SealedWriterHostError,
     StreamingProfileCountsV1, StreamingProfileEvidenceV1, WorkingSetDiagnosticsV1,
-    authored_content_catalog, authored_content_display_catalog, authored_gameplay_catalog,
-    coverage_m, empty_gameplay_catalog, radius_for_coverage, sealed_activation_binding,
+    WorldgenInspectReportV1, authored_content_catalog, authored_content_display_catalog,
+    authored_gameplay_catalog, coverage_m, empty_gameplay_catalog, radius_for_coverage,
+    sealed_activation_binding,
 };
 pub use input::{HostInputError, compile_lock_selected_input, graph_selects_input_actions};
 pub use instance::{

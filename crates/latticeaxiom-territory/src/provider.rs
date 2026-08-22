@@ -443,6 +443,18 @@ impl SpatialContributionV1 {
         &self.contribution_id
     }
 
+    /// Returns the contributing provider identity.
+    #[must_use]
+    pub const fn provider(&self) -> &ProviderGenerationIdentityV1 {
+        &self.provider
+    }
+
+    /// Returns the layered channel.
+    #[must_use]
+    pub const fn channel(&self) -> ContributionChannelV1 {
+        self.channel
+    }
+
     /// Returns the target ownership domain.
     #[must_use]
     pub const fn target(&self) -> &ContributionTargetV1 {
@@ -453,6 +465,18 @@ impl SpatialContributionV1 {
     #[must_use]
     pub const fn bounds(&self) -> PlanningCellBoundsV1 {
         self.bounds
+    }
+
+    /// Returns the finite vertical range required by cave contributions.
+    #[must_use]
+    pub const fn vertical_range(&self) -> Option<VerticalRangeV1> {
+        self.vertical_range
+    }
+
+    /// Returns declared influence radius in planning cells.
+    #[must_use]
+    pub const fn influence_radius_cells(&self) -> u32 {
+        self.influence_radius_cells
     }
 
     /// Returns the hard contribution budget.

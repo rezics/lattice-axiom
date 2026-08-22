@@ -12,9 +12,9 @@ use latticeaxiom_territory::{
     PlanningCellTransitionAdapterV1, PlanningCellTransitionReceiptV1, PortalHydrologyContractV1,
     PrimaryChannelV1, PrimaryOwnershipDomainV1, PrimaryProviderOfferV1,
     ProviderGenerationIdentityV1, SpatialContributionV1, SurfaceTerritoryCandidateV1,
-    TerritoryDomainIdV1, TerritoryLimitsV1, TerritoryPlanInputV1, TerritoryPlanV1,
-    TerritoryQueryCoverageV1, UndergroundTerritoryV1, VerticalRangeV1, WorldSeedV1,
-    WorldgenConfigV1,
+    TerritoryConflictDiagnosticV1, TerritoryDomainIdV1, TerritoryLimitsV1, TerritoryPlanInputV1,
+    TerritoryPlanV1, TerritoryQueryCoverageV1, UndergroundTerritoryV1, VerticalRangeV1,
+    WorldSeedV1, WorldgenConfigV1,
 };
 use proptest::prelude::*;
 
@@ -99,6 +99,28 @@ fn candidates(count: usize) -> Vec<SurfaceTerritoryCandidateV1> {
         .collect()
 }
 
+fn cave_branch_contribution() -> SpatialContributionV1 {
+    SpatialContributionV1::new(
+        stable("latticeaxiom:contribution/limestone-branch"),
+        provider("cave-branch", 1),
+        ContributionChannelV1::CaveBranch,
+        ContributionCompositorV1::Union,
+        ContributionTargetV1::Cave(cave_domain("limestone")),
+        PlanningCellBoundsV1::new(1, 1, 3, 3)
+            .unwrap_or_else(|error| panic!("valid branch bounds were rejected: {error}")),
+        Some(
+            VerticalRangeV1::new(-48, -24)
+                .unwrap_or_else(|error| panic!("valid branch range was rejected: {error}")),
+        ),
+        1,
+        4,
+        ContributionBudgetV1::new(1_000, 4_096)
+            .unwrap_or_else(|error| panic!("valid branch budget was rejected: {error}")),
+        CanonicalHash::digest(b"limestone-branch-v1"),
+    )
+    .unwrap_or_else(|error| panic!("valid cave branch contribution was rejected: {error}"))
+}
+
 fn portal_pair() -> Vec<CavePortalV1> {
     let default = cave_domain("default");
     let limestone = cave_domain("limestone");
@@ -172,6 +194,7 @@ fn input(candidate_count: usize) -> TerritoryPlanInputV1 {
         CanonicalHash::digest(b"meadow-detail-v1"),
     )
     .unwrap_or_else(|error| panic!("valid contribution was rejected: {error}"));
+    let branch = cave_branch_contribution();
     TerritoryPlanInputV1 {
         dimension: "latticeaxiom:dimension/terrenia"
             .parse()
@@ -187,7 +210,7 @@ fn input(candidate_count: usize) -> TerritoryPlanInputV1 {
         ],
         surface_candidates: candidates(candidate_count),
         underground_territories: underground,
-        contributions: vec![contribution],
+        contributions: vec![contribution, branch],
         cave_portals: portal_pair(),
         hydrology: HydrologyPlanV1::compile(Vec::new(), Vec::new(), limits)
             .unwrap_or_else(|error| panic!("empty abstract hydrology plan was rejected: {error}")),
@@ -257,7 +280,22 @@ fn exactly_one_coordinator_and_primary_owner_are_enforced() {
     coordinator_conflict
         .coordinators
         .push(CoordinatorOfferV1::new(provider("other-coordinator", 1)));
-    assert!(TerritoryPlanV1::compile(coordinator_conflict).is_err());
+    let coordinator_error = TerritoryPlanV1::compile(coordinator_conflict)
+        .err()
+        .unwrap_or_else(|| panic!("conflicting coordinators were accepted"));
+    let coordinator_diagnostic = coordinator_error
+        .conflict_diagnostic()
+        .unwrap_or_else(|| panic!("coordinator conflict lacked a diagnostic"));
+    assert!(coordinator_diagnostic.is_exclusive_owner_conflict());
+    assert_eq!(
+        coordinator_diagnostic,
+        TerritoryConflictDiagnosticV1::ConflictingCoordinators {
+            providers: vec![
+                "latticeaxiom:provider/coordinator".to_owned(),
+                "latticeaxiom:provider/other-coordinator".to_owned(),
+            ],
+        }
+    );
 
     let mut owner_conflict = input(3);
     owner_conflict
@@ -266,7 +304,20 @@ fn exactly_one_coordinator_and_primary_owner_are_enforced() {
             terrain_domain("terrenia"),
             provider("other-terrain", 1),
         ));
-    assert!(TerritoryPlanV1::compile(owner_conflict).is_err());
+    let owner_error = TerritoryPlanV1::compile(owner_conflict)
+        .err()
+        .unwrap_or_else(|| panic!("conflicting primary owners were accepted"));
+    assert_eq!(
+        owner_error.conflict_diagnostic(),
+        Some(TerritoryConflictDiagnosticV1::ConflictingPrimaryOwners {
+            channel: "terrain.base".to_owned(),
+            domain: terrain_domain("terrenia").to_string(),
+            providers: vec![
+                "latticeaxiom:provider/other-terrain".to_owned(),
+                "latticeaxiom:provider/terrain-default".to_owned(),
+            ],
+        })
+    );
 }
 
 #[test]
@@ -539,7 +590,7 @@ fn production_surface_candidates() -> Vec<SurfaceTerritoryCandidateV1> {
 fn production_input() -> TerritoryPlanInputV1 {
     let mut fixture = input(3);
     fixture.surface_candidates = production_surface_candidates();
-    fixture.contributions.clear();
+    fixture.contributions = vec![cave_branch_contribution()];
     fixture.primary_offers = vec![
         PrimaryProviderOfferV1::terrain(terrain_domain("terrenia"), provider("terrain-default", 1)),
         PrimaryProviderOfferV1::terrain(
@@ -644,6 +695,20 @@ fn production_queries_expose_three_surface_and_two_underground_territories() {
     assert_ne!(default_cave.secondary(), default_cave.primary());
     assert_eq!(limestone.boundary_distance_cells(), 1);
     assert_eq!(crystal.boundary_distance_cells(), 1);
+
+    let limestone_order = limestone.ordered_candidates();
+    assert_eq!(limestone_order[0].rank(), 1);
+    assert_eq!(limestone_order[0].domain(), limestone.primary());
+    assert_eq!(limestone_order[1].rank(), 2);
+    assert_eq!(limestone_order[1].domain(), limestone.secondary());
+    assert_eq!(
+        limestone_order[0].owner().channel(),
+        PrimaryChannelV1::CaveTopology
+    );
+    assert_eq!(
+        limestone_order[0].owner().domain().channel(),
+        PrimaryChannelV1::CaveTopology
+    );
 }
 
 #[test]
@@ -713,6 +778,60 @@ fn production_coverage_bytes_are_identical_under_shuffled_chunk_order() {
             .unwrap_or_else(|error| panic!("divergent coverage encoding failed: {error}")),
         forward_bytes
     );
+}
+
+#[test]
+fn parallel_queries_match_sequential_queries() {
+    let plan = production_plan();
+    let cells = (-32_i64..32)
+        .flat_map(|z| (-32_i64..32).map(move |x| PlanningCellCoordinateV1::new(x, z)))
+        .collect::<Vec<_>>();
+    let sequential = cells
+        .iter()
+        .map(|cell| {
+            (
+                plan.query(*cell),
+                plan.surface_territory_query(*cell)
+                    .unwrap_or_else(|error| panic!("sequential surface query failed: {error}")),
+                plan.underground_territory_query(*cell, -32)
+                    .unwrap_or_else(|error| panic!("sequential underground query failed: {error}")),
+            )
+        })
+        .collect::<Vec<_>>();
+    let parallel = std::thread::scope(|scope| {
+        let workers = 4_usize;
+        let chunk_len = cells.len().div_ceil(workers);
+        let handles = cells
+            .chunks(chunk_len)
+            .map(|chunk| {
+                scope.spawn(|| {
+                    chunk
+                        .iter()
+                        .map(|cell| {
+                            (
+                                plan.query(*cell),
+                                plan.surface_territory_query(*cell).unwrap_or_else(|error| {
+                                    panic!("parallel surface query failed: {error}")
+                                }),
+                                plan.underground_territory_query(*cell, -32).unwrap_or_else(
+                                    |error| panic!("parallel underground query failed: {error}"),
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| panic!("query worker panicked"))
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(sequential, parallel);
 }
 
 #[test]
@@ -897,6 +1016,143 @@ fn v6_cave_portal_plan_is_identical_under_shuffled_chunk_order() {
     );
 }
 
+#[test]
+fn recursive_surface_delegation_and_cave_channel_stay_independent() {
+    let plan = production_plan();
+    let mut grove_query = None;
+    for tile_z in -8_i64..=8 {
+        for tile_x in -8_i64..=8 {
+            let cell = PlanningCellCoordinateV1::new(
+                tile_x.saturating_mul(64).saturating_add(32),
+                tile_z.saturating_mul(64).saturating_add(32),
+            );
+            let query = plan
+                .surface_territory_query(cell)
+                .unwrap_or_else(|error| panic!("surface ownership query failed: {error}"));
+            if query.primary() == &terrain_domain("woodland-grove") {
+                grove_query = Some((cell, query));
+                break;
+            }
+        }
+        if grove_query.is_some() {
+            break;
+        }
+    }
+    let (cell, query) = grove_query.unwrap_or_else(|| {
+        panic!("production Atlas never selected the nested woodland-grove child")
+    });
+    let atlas = plan.query(cell);
+    assert_eq!(atlas.levels().len(), 3);
+    assert_eq!(atlas.levels()[0].domain(), &terrain_domain("woodland"));
+    assert_eq!(
+        atlas.levels()[1].domain(),
+        &terrain_domain("woodland-hills")
+    );
+    assert_eq!(
+        atlas.levels()[2].domain(),
+        &terrain_domain("woodland-grove")
+    );
+    assert_eq!(
+        atlas.levels()[0].local_offset_cells(cell),
+        (cell.x.rem_euclid(64), cell.z.rem_euclid(64))
+    );
+    assert_eq!(atlas.levels()[2].local_offset_cells(cell), (0, 0));
+    let ordered = query.ordered_candidates();
+    assert_eq!(ordered[0].rank(), 1);
+    assert_eq!(ordered[0].domain(), query.primary());
+    assert_eq!(ordered[0].candidate_id(), query.primary_candidate());
+    assert_eq!(ordered[1].rank(), 2);
+    assert_eq!(ordered[1].domain(), query.secondary());
+    assert_eq!(ordered[1].candidate_id(), query.secondary_candidate());
+    assert_ne!(ordered[0].domain(), ordered[1].domain());
+    assert_eq!(
+        query.primary_owner().channel(),
+        PrimaryChannelV1::TerrainBase
+    );
+
+    let cave = plan
+        .underground_territory_query(cell, -32)
+        .unwrap_or_else(|error| panic!("cave ownership query failed: {error}"));
+    assert_ne!(
+        cave.primary_owner().channel(),
+        PrimaryChannelV1::TerrainBase,
+        "surface child takeover must not claim cave.topology"
+    );
+    assert_eq!(
+        cave.primary_owner().channel(),
+        PrimaryChannelV1::CaveTopology
+    );
+}
+
+#[test]
+fn sibling_underground_overlap_emits_stable_conflict_diagnostic() {
+    let mut fixture = input(3);
+    fixture
+        .underground_territories
+        .push(UndergroundTerritoryV1::new(
+            cave_domain("overlap"),
+            CaveTopologyParentV1::DimensionDefault,
+            PlanningCellBoundsV1::new(0, 0, 2, 2)
+                .unwrap_or_else(|error| panic!("valid overlap bounds were rejected: {error}")),
+            VerticalRangeV1::new(-64, -16)
+                .unwrap_or_else(|error| panic!("valid overlap range was rejected: {error}")),
+        ));
+    let error = TerritoryPlanV1::compile(fixture)
+        .err()
+        .unwrap_or_else(|| panic!("overlapping underground siblings were accepted"));
+    let diagnostic = error
+        .conflict_diagnostic()
+        .unwrap_or_else(|| panic!("overlap failure lacked a conflict diagnostic"));
+    match &diagnostic {
+        TerritoryConflictDiagnosticV1::InvalidUndergroundTerritory { territory, reason } => {
+            assert_eq!(territory, &cave_domain("overlap").to_string());
+            assert!(
+                reason.contains("overlaps sibling"),
+                "expected sibling-overlap diagnostic, got {reason}"
+            );
+        }
+        other => panic!("unexpected conflict diagnostic: {other:?}"),
+    }
+    assert_eq!(
+        diagnostic
+            .canonical_hash()
+            .ok()
+            .map(|hash| hash.to_string()),
+        Some(
+            include_str!("goldens/sibling-overlap-conflict-hash.txt")
+                .trim()
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn production_plan_receipt_is_finite_and_matches_golden() {
+    let plan = production_plan();
+    let receipt = plan
+        .receipt()
+        .unwrap_or_else(|error| panic!("production plan receipt failed: {error}"));
+    receipt
+        .validate()
+        .unwrap_or_else(|error| panic!("production plan receipt failed validation: {error}"));
+    assert_eq!(receipt.plan_hash(), plan.plan_hash());
+    assert_eq!(receipt.world_seed(), plan.world_seed());
+    assert_eq!(receipt.dimension(), plan.dimension());
+    assert_eq!(receipt.coordinator(), plan.coordinator());
+    assert_eq!(receipt.atlas(), plan.atlas());
+    assert_eq!(
+        receipt.surface_candidate_count(),
+        u32::try_from(plan.surface_candidates().len())
+            .unwrap_or_else(|error| panic!("surface candidate count overflowed u32: {error}"))
+    );
+    assert_eq!(receipt.underground_territory_count(), 2);
+    assert_eq!(receipt.hydrology_plan_hash(), plan.hydrology().plan_hash());
+    assert_eq!(
+        receipt.receipt_hash().to_string(),
+        include_str!("goldens/production-plan-receipt-hash.txt").trim()
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]
 
@@ -909,5 +1165,36 @@ proptest! {
         let compiled = TerritoryPlanV1::compile(rotated)
             .unwrap_or_else(|error| panic!("rotated plan was rejected: {error}"));
         prop_assert_eq!(baseline.plan_hash(), compiled.plan_hash());
+        prop_assert_eq!(
+            baseline.receipt().ok().map(|receipt| receipt.receipt_hash()),
+            compiled.receipt().ok().map(|receipt| receipt.receipt_hash())
+        );
+    }
+
+    #[test]
+    fn queries_are_stable_for_negative_and_positive_cells(
+        x in -4096_i64..4096,
+        z in -4096_i64..4096,
+    ) {
+        let plan = plan(24);
+        let cell = PlanningCellCoordinateV1::new(x, z);
+        let first = plan.query(cell);
+        let second = plan.query(cell);
+        prop_assert_eq!(first, second);
+        let surface = plan
+            .surface_territory_query(cell)
+            .unwrap_or_else(|error| panic!("surface query failed: {error}"));
+        let again = plan
+            .surface_territory_query(cell)
+            .unwrap_or_else(|error| panic!("repeated surface query failed: {error}"));
+        prop_assert_eq!(&surface, &again);
+        let ordered = surface.ordered_candidates();
+        prop_assert_eq!(ordered[0].domain(), surface.primary());
+        prop_assert_eq!(ordered[1].domain(), surface.secondary());
+        let underground = plan
+            .underground_territory_query(cell, -32)
+            .unwrap_or_else(|error| panic!("underground query failed: {error}"));
+        let underground_ordered = underground.ordered_candidates();
+        prop_assert_eq!(underground_ordered[0].domain(), underground.primary());
     }
 }

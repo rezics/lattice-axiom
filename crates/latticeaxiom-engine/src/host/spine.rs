@@ -14,8 +14,8 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, tick_global_task_pools_o
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
 use latticeaxiom_content::{
     CompiledFluidPaletteV1, CompiledSolidPaletteEntryV1, CompiledSolidPaletteV1, ContentCatalogV1,
-    FluidFlowV1, FluidLevelV1, FluidPaletteEntryV1, FluidStateV1, PaletteLimitsV1,
-    SolidPaletteEntryV1,
+    FluidFlowV1, FluidLevelV1, FluidPaletteEntryV1, FluidStateV1, OccupancyArbitrationContextV1,
+    PaletteLimitsV1, SolidFluidArbitrationV1, SolidPaletteEntryV1, arbitrate_cell,
 };
 use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
@@ -27,6 +27,9 @@ use latticeaxiom_player::{
     BlockEditAuthority, BlockEditRejectV1, BlockEditSuccessV1, BlockFaceV1,
     ClientTargetObservationV1, HeadlessTargetInspectV1, MAX_BLOCK_EDIT_REACH_M,
     PlayerMovementProfileV1, TargetEyePoseV1, TargetInspectRejectV1, occupancy_line,
+};
+use latticeaxiom_runtime_contracts::{
+    EngineEpoch, WorldEpoch as InspectWorldEpoch, WorldgenInspectReportV1,
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
@@ -53,7 +56,8 @@ use latticeaxiom_world_db::{
     StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitRequestV1, WorldStorage,
 };
 use latticeaxiom_worldgen::{
-    CaveOccupancyArbitrationV1, GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS,
+    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, GenerationPlanV1, HydrologyFlowV1,
+    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1,
 };
 
 use super::{
@@ -73,8 +77,9 @@ use super::{
         interest_class, prioritize_chunks, retain_protected, sticky_look_ahead,
     },
     worldgen::{
-        RequiredCaveEntranceV1, compile_plan, generate_plan_chunks, host_hard_limits,
-        required_cave_entrance, spawn_center as player_spawn_center, spine_config, validated_spawn,
+        RequiredCaveEntranceV1, compile_host_worldgen_inspect, compile_plan, generate_plan_chunks,
+        host_hard_limits, occupancy_candidate_is_current, required_cave_entrance,
+        spawn_center as player_spawn_center, spine_config, validated_spawn,
     },
 };
 use crate::LockVerifiedComposeImages;
@@ -273,6 +278,8 @@ pub struct CellOccupancyV1 {
 pub(super) struct ProductionSpineInner {
     runtime: VoxelRuntime<HostVoxel>,
     plan: GenerationPlanV1,
+    worldgen_bindings: AuthoredWorldgenBindingsV1,
+    spawn: SpawnLocationV1,
     clamps: StreamClamps,
     content: ContentCatalogV1,
     palette: Vec<BlockId>,
@@ -597,6 +604,8 @@ impl ProductionSpine {
         let mut inner = ProductionSpineInner {
             runtime,
             plan,
+            worldgen_bindings: worldgen.bindings,
+            spawn,
             clamps,
             content,
             palette,
@@ -988,6 +997,105 @@ impl ProductionSpine {
     pub fn cave_entry_ready(&self, coordinate: ChunkCoordinate) -> bool {
         self.lock_inner()
             .is_ok_and(|inner| cave_entry_ready_inner(&inner, coordinate))
+    }
+
+    /// Returns whether the compiled V5 plan includes the natural layer.
+    #[must_use]
+    pub fn has_natural_layer(&self) -> bool {
+        self.lock_inner()
+            .is_ok_and(|inner| inner.plan.has_natural_layer())
+    }
+
+    /// Returns whether the compiled plan includes V6 cave topology.
+    #[must_use]
+    pub fn has_cave_topology_layer(&self) -> bool {
+        self.lock_inner()
+            .is_ok_and(|inner| inner.plan.has_cave_topology_layer())
+    }
+
+    /// Returns whether the compiled plan includes V6 hydrology occupancy.
+    #[must_use]
+    pub fn has_hydrology_occupancy(&self) -> bool {
+        self.lock_inner()
+            .is_ok_and(|inner| inner.plan.has_hydrology_occupancy())
+    }
+
+    /// Returns the topology ownership domain at world `(x, y, z)`.
+    #[must_use]
+    pub fn cave_topology_domain(&self, x: i64, y: i64, z: i64) -> Option<StableId> {
+        self.lock_inner()
+            .ok()
+            .and_then(|inner| inner.plan.cave_topology_domain(x, y, z).cloned())
+    }
+
+    /// Returns canonically ordered underground-owned topology domains.
+    #[must_use]
+    pub fn cave_owned_domains(&self) -> Vec<StableId> {
+        self.lock_inner().map_or_else(
+            |_| Vec::new(),
+            |inner| {
+                inner
+                    .plan
+                    .cave_topology_owned_domains()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|domain| domain.domain().clone())
+                    .collect()
+            },
+        )
+    }
+
+    /// Returns must-connect destination voxels and their topology domains.
+    #[must_use]
+    pub fn cave_destinations(&self) -> Vec<([i64; 3], StableId)> {
+        self.lock_inner().map_or_else(
+            |_| Vec::new(),
+            |inner| {
+                let Some(entrances) = inner.plan.cave_topology_entrances() else {
+                    return Vec::new();
+                };
+                let mut destinations = Vec::new();
+                for entrance in entrances {
+                    let cell = entrance.destination_cell();
+                    let voxel = latticeaxiom_worldgen::cell_center_voxels(
+                        cell[0],
+                        cell[1],
+                        entrance.y_voxel().saturating_mul(1_000),
+                        inner.plan.config(),
+                    );
+                    let Some(domain) = inner
+                        .plan
+                        .cave_topology_domain(voxel[0], voxel[1], voxel[2])
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    destinations.push((voxel, domain));
+                }
+                destinations.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
+                destinations.dedup();
+                destinations
+            },
+        )
+    }
+
+    /// Projects bounded worldgen inspect rows from the compiled V5 plan.
+    ///
+    /// Collection does not mutate chunks, spawn, or overlay state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when the spine lock is poisoned or inspect
+    /// compilation fails closed.
+    pub fn worldgen_inspect_report(&self) -> Result<WorldgenInspectReportV1, ProductionHostError> {
+        let inner = self.lock_inner()?;
+        compile_host_worldgen_inspect(
+            &inner.plan,
+            &inner.worldgen_bindings,
+            inner.spawn,
+            EngineEpoch::new(1),
+            InspectWorldEpoch::new(1),
+        )
     }
 
     /// Returns the required `CaveTopology` field portal nearest the spawn column.
@@ -1430,8 +1538,7 @@ impl ProductionSpine {
             record_edit_result(&mut inner, &result);
             result
         };
-        await_edit_readiness(self, FixedTick::new(0), [position])
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        finish_edit_readiness(self, FixedTick::new(0), [position])?;
         result
     }
 
@@ -1461,8 +1568,7 @@ impl ProductionSpine {
         let placed = face
             .adjacent(anchor)
             .ok_or(BlockEditRejectV1::PermissionDenied)?;
-        await_edit_readiness(self, FixedTick::new(0), [placed])
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        finish_edit_readiness(self, FixedTick::new(0), [placed])?;
         result
     }
 
@@ -1771,8 +1877,7 @@ impl ProductionSpine {
                 .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
             inner.place_fluid_occupancy(self.storage.kernel(), position, fluid, state)
         };
-        await_edit_readiness(self, FixedTick::new(0), [position])
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        finish_edit_readiness(self, FixedTick::new(0), [position])?;
         result
     }
 
@@ -1922,9 +2027,19 @@ impl BlockEditAuthority for ProductionSpine {
             result
         };
         let target = result.as_ref().ok().map(|success| success.position);
-        await_edit_readiness(self, tick, target)
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        finish_edit_readiness(self, tick, target)?;
         result
+    }
+}
+
+fn finish_edit_readiness(
+    spine: &ProductionSpine,
+    tick: FixedTick,
+    positions: impl IntoIterator<Item = BlockPosition>,
+) -> Result<(), BlockEditRejectV1> {
+    match await_edit_readiness(spine, tick, positions) {
+        Ok(()) | Err(ProductionHostError::DerivedReadinessBarrier) => Ok(()),
+        Err(_) => Err(BlockEditRejectV1::StorageUnavailable),
     }
 }
 
@@ -2957,7 +3072,8 @@ fn publish_generated(
         {
             continue;
         }
-        let cells = draft_cells(candidate.draft(), &inner.palette, &inner.presentation)?;
+        let mut cells = draft_cells(candidate.draft(), &inner.palette, &inner.presentation)?;
+        apply_hydrology_occupancy(inner, coordinate, &mut cells)?;
         mutations.push(ChunkMutation::new(
             ChunkKey::new(inner.world, inner.dimension.clone(), coordinate),
             ChunkRevisionExpectation::Absent,
@@ -3083,7 +3199,7 @@ const MAIN_WORLD_APPLY_JOB_CAP: usize = RuntimeLimits::MAIN_WORLD_APPLY_JOB_CAP;
 /// Startup may drain the initial working set without joining a dispatched slice.
 const STARTUP_BARRIER_SLICES: usize = 8_192;
 /// Edit readiness waits only for the touched chunks' current revisions.
-const EDIT_BARRIER_SLICES: usize = 256;
+const EDIT_BARRIER_SLICES: usize = 1_024;
 /// Movement-time collider safety waits only for player-occupied chunks.
 const COLLIDER_SAFETY_BARRIER_SLICES: usize = 32;
 
@@ -3730,6 +3846,113 @@ fn draft_cells(
         }
     }
     Ok(cells)
+}
+
+fn apply_hydrology_occupancy(
+    inner: &ProductionSpineInner,
+    coordinate: ChunkCoordinate,
+    cells: &mut [HostVoxel],
+) -> Result<(), ProductionHostError> {
+    if !inner.plan.has_hydrology_occupancy() {
+        return Ok(());
+    }
+    let candidate = inner.plan.hydrology_occupancy_candidate(coordinate)?;
+    if !occupancy_candidate_is_current(&inner.plan, &candidate) {
+        return Ok(());
+    }
+    let empty_block = inner
+        .palette
+        .get(usize::from(inner.empty.palette_index))
+        .ok_or(ProductionHostError::UnknownDraftBlock)?;
+    let empty_id: StableId = empty_block.as_str().parse()?;
+    let empty_definition =
+        inner
+            .content
+            .block(&empty_id)
+            .ok_or(ProductionHostError::MissingCatalogDefinition {
+                kind: "block",
+                id: empty_id.to_string(),
+            })?;
+    let context = OccupancyArbitrationContextV1::new(
+        empty_id,
+        empty_definition.definition().default_state.clone(),
+    )?;
+    let edge = inner.chunk_edge;
+    let stride = usize::from(edge).saturating_mul(usize::from(edge));
+    for occupied in candidate.cells() {
+        let index = usize::from(occupied.y())
+            .saturating_mul(stride)
+            .saturating_add(usize::from(occupied.z()).saturating_mul(usize::from(edge)))
+            .saturating_add(usize::from(occupied.x()));
+        let Some(cell) = cells.get_mut(index) else {
+            continue;
+        };
+        if cell.palette_index != inner.empty.palette_index {
+            continue;
+        }
+        let world_x = i64::from(coordinate.x)
+            .saturating_mul(i64::from(edge))
+            .saturating_add(i64::from(occupied.x()));
+        let world_y = i64::from(coordinate.y)
+            .saturating_mul(i64::from(edge))
+            .saturating_add(i64::from(occupied.y()));
+        let world_z = i64::from(coordinate.z)
+            .saturating_mul(i64::from(edge))
+            .saturating_add(i64::from(occupied.z()));
+        if inner
+            .plan
+            .cave_occupancy_arbitration(world_x, world_y, world_z)
+            .portal_signed_distance()
+            <= 0
+        {
+            continue;
+        }
+        let solid = SolidPaletteEntryV1 {
+            block: context.empty_block().clone(),
+            state: context.empty_state().clone(),
+        };
+        let level = FluidLevelV1::new(occupied.level()).unwrap_or(FluidLevelV1::SOURCE);
+        let requested = FluidPaletteEntryV1::Fluid {
+            fluid: occupied.fluid().clone(),
+            state: FluidStateV1 {
+                level,
+                flow: hydrology_flow(occupied.flow()),
+            },
+        };
+        match arbitrate_cell(
+            &inner.content,
+            &context,
+            &solid,
+            &FluidPaletteEntryV1::Empty,
+            &requested,
+        )? {
+            SolidFluidArbitrationV1::Occupied {
+                fluid, fluid_state, ..
+            } => {
+                let Some(fluid_index) =
+                    fluid_palette_index(&inner.fluid_palette, &fluid, fluid_state)
+                else {
+                    continue;
+                };
+                *cell = HostVoxel::occupancy(cell.palette_index, fluid_index, &inner.presentation);
+            }
+            SolidFluidArbitrationV1::ReplaceThenOccupy { .. }
+            | SolidFluidArbitrationV1::Rejected { .. }
+            | SolidFluidArbitrationV1::Unchanged { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+const fn hydrology_flow(flow: HydrologyFlowV1) -> FluidFlowV1 {
+    match flow {
+        HydrologyFlowV1::Still => FluidFlowV1::Still,
+        HydrologyFlowV1::Down => FluidFlowV1::Down,
+        HydrologyFlowV1::East => FluidFlowV1::East,
+        HydrologyFlowV1::West => FluidFlowV1::West,
+        HydrologyFlowV1::South => FluidFlowV1::South,
+        HydrologyFlowV1::North => FluidFlowV1::North,
+    }
 }
 
 fn chunk_data(

@@ -280,6 +280,119 @@ impl BoundaryAdapterDeclarationV1 {
     pub const fn epochs(&self) -> (GenerationEpochIdV1, GenerationEpochIdV1) {
         (self.epoch_a, self.epoch_b)
     }
+
+    /// Returns the adapter implementation hash.
+    #[must_use]
+    pub const fn adapter_hash(&self) -> CanonicalHash {
+        self.adapter_hash
+    }
+
+    /// Returns the declared adapter version.
+    #[must_use]
+    pub const fn adapter_version(&self) -> NonZeroU32 {
+        self.adapter_version
+    }
+}
+
+/// Verified, direction-independent evidence that two planning-cell epochs may meet.
+///
+/// Unlike [`BoundaryAdapterDeclarationV1`], this receipt is the applied adapter
+/// proof. A matching receipt allows a new epoch cell to generate beside a frozen
+/// neighbor without rewriting the neighbor's durable snapshot.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoundaryReceiptV1 {
+    boundary_id: crate::BoundaryIdV1,
+    cell_a: PlanningCellCoordinateV1,
+    cell_b: PlanningCellCoordinateV1,
+    epoch_a: GenerationEpochIdV1,
+    epoch_b: GenerationEpochIdV1,
+    adapter_id: StableId,
+    adapter_version: NonZeroU32,
+    adapter_hash: CanonicalHash,
+    transition_width: NonZeroU32,
+    terrain_boundary_signature: CanonicalHash,
+    required_cave_portals: Vec<CanonicalHash>,
+}
+
+impl BoundaryReceiptV1 {
+    /// Mints verified application evidence from a bounded adapter declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an arithmetic error when the two cells are not cardinally
+    /// adjacent.
+    pub fn from_verified_declaration(
+        declaration: &BoundaryAdapterDeclarationV1,
+        first_cell: PlanningCellCoordinateV1,
+        second_cell: PlanningCellCoordinateV1,
+    ) -> WorldgenResult<Self> {
+        validate_cardinal_neighbor(first_cell, second_cell)?;
+        let (cell_a, cell_b) = canonical_cell_pair(first_cell, second_cell);
+        let (epoch_a, epoch_b) = declaration.epochs();
+        let boundary_id = crate::BoundaryIdV1::from_hash(crate::hashes::domain_hash(
+            b"latticeaxiom.generation-boundary.v1\0",
+            &[
+                &cell_a.x.to_be_bytes(),
+                &cell_a.z.to_be_bytes(),
+                &cell_b.x.to_be_bytes(),
+                &cell_b.z.to_be_bytes(),
+                epoch_a.as_bytes(),
+                epoch_b.as_bytes(),
+                declaration.adapter_id.as_str().as_bytes(),
+                &declaration.adapter_version.get().to_be_bytes(),
+                declaration.adapter_hash.as_bytes(),
+            ],
+        ));
+        Ok(Self {
+            boundary_id,
+            cell_a,
+            cell_b,
+            epoch_a,
+            epoch_b,
+            adapter_id: declaration.adapter_id.clone(),
+            adapter_version: declaration.adapter_version,
+            adapter_hash: declaration.adapter_hash,
+            transition_width: declaration.transition_width,
+            terrain_boundary_signature: declaration.terrain_boundary_signature,
+            required_cave_portals: declaration.required_cave_portals.clone(),
+        })
+    }
+
+    /// Returns the direction-independent boundary identity.
+    #[must_use]
+    pub const fn boundary_id(&self) -> crate::BoundaryIdV1 {
+        self.boundary_id
+    }
+
+    /// Returns the canonical pair of connected planning cells.
+    #[must_use]
+    pub const fn cells(&self) -> (PlanningCellCoordinateV1, PlanningCellCoordinateV1) {
+        (self.cell_a, self.cell_b)
+    }
+
+    /// Returns the canonical pair of connected epochs.
+    #[must_use]
+    pub const fn epochs(&self) -> (GenerationEpochIdV1, GenerationEpochIdV1) {
+        (self.epoch_a, self.epoch_b)
+    }
+
+    /// Returns the verified adapter identity.
+    #[must_use]
+    pub const fn adapter_id(&self) -> &StableId {
+        &self.adapter_id
+    }
+}
+
+const fn canonical_cell_pair(
+    first: PlanningCellCoordinateV1,
+    second: PlanningCellCoordinateV1,
+) -> (PlanningCellCoordinateV1, PlanningCellCoordinateV1) {
+    if first.x < second.x || (first.x == second.x && first.z <= second.z) {
+        (first, second)
+    } else {
+        (second, first)
+    }
 }
 
 /// Caller-trusted evidence returned by an authoritative storage read.
@@ -389,6 +502,7 @@ pub(crate) fn validate_epoch_boundaries(
     active_epoch: GenerationEpochIdV1,
     adjacent: &AdjacentEpochSnapshotV1,
     declarations: &[BoundaryAdapterDeclarationV1],
+    receipts: &[BoundaryReceiptV1],
     limits: WorldgenLimitsV1,
 ) -> WorldgenResult<()> {
     preflight_count(
@@ -399,6 +513,11 @@ pub(crate) fn validate_epoch_boundaries(
     preflight_count(
         "boundary adapter declarations",
         declarations.len(),
+        usize::from(limits.max_boundary_adapters.get()),
+    )?;
+    preflight_count(
+        "boundary adapter receipts",
+        receipts.len(),
         usize::from(limits.max_boundary_adapters.get()),
     )?;
     if adjacent.target_cell != cell {
@@ -416,6 +535,23 @@ pub(crate) fn validate_epoch_boundaries(
             continue;
         }
         let (epoch_a, epoch_b) = canonical_epoch_pair(active_epoch, neighbor_epoch);
+        let (cell_a, cell_b) = canonical_cell_pair(cell, neighbor.cell);
+        let matching_receipts = receipts
+            .iter()
+            .filter(|receipt| {
+                receipt.epoch_a == epoch_a
+                    && receipt.epoch_b == epoch_b
+                    && receipt.cell_a == cell_a
+                    && receipt.cell_b == cell_b
+            })
+            .collect::<Vec<_>>();
+        match matching_receipts.as_slice() {
+            [_] => continue,
+            [_, _, ..] => {
+                return Err(WorldgenError::ConflictingBoundaryAdapters { epoch_a, epoch_b });
+            }
+            [] => {}
+        }
         let candidates = declarations
             .iter()
             .filter(|declaration| declaration.epoch_a == epoch_a && declaration.epoch_b == epoch_b)

@@ -5,17 +5,26 @@ use latticeaxiom_storage::{ChunkCoordinate, ChunkRevisionExpectation, DimensionI
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AdjacentEpochSnapshotV1, BoundaryAdapterDeclarationV1, CaveFaceFieldRequestV1,
-    CaveFaceOccupancyValidationV1, CaveOccupancyArbitrationV1, CellEpochStateV1,
-    D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, ExistingSnapshotEvidenceV1,
-    FrozenRoleBindingsV1, GenerationEpochIdV1, GenerationInputHashV1, GenerationProvenanceHashV1,
-    GeneratorFingerprintV1, LockedClosureFingerprintV1, PlanActivationIdV1,
-    PlanningCellCoordinateV1, ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1,
-    SnapshotChecksumV1, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1,
-    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult,
+    AdjacentEpochSnapshotV1, AquiferSampleV1, BoundaryAdapterDeclarationV1, BoundaryReceiptV1,
+    CaveFaceFieldRequestV1, CaveFaceOccupancyValidationV1, CaveLayerEntranceV1, CaveLayerPortalV1,
+    CaveOccupancyArbitrationV1, CaveOwnedDomainV1, CaveTopologyAlgorithmV1,
+    CaveTopologyLayerInputV1, CaveVoxelPassabilityReceiptV1, CellEpochStateV1,
+    D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, DrainageSampleV1,
+    ExistingSnapshotEvidenceV1, FrozenRoleBindingsV1, GenerationEpochIdV1, GenerationInputHashV1,
+    GenerationProvenanceHashV1, GeneratorFingerprintV1, GeologicSampleV1,
+    HydrologyFaceContinuityV1, HydrologyFluidBindingsV1, HydrologyOccupancyCandidateV1,
+    HydrologyOccupancyHashV1, HydrologyOccupancyInputV1, HydrologyOccupancySampleV1,
+    LockedClosureFingerprintV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, ResourceFieldSampleV1,
+    RiverSampleV1, SnapshotChecksumV1, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1,
+    WorldgenConfigHashV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult,
     cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
     hashes::{concatenated_hash, domain_hash, hash_u64},
+    hydrology::{
+        HydrologySamplerV1, hydrology_adjacent_chunk, hydrology_face_axis, hydrology_face_hash,
+    },
+    natural::{NaturalSamplerV1, NaturalWorkCountersV1},
     provider::ResolvedProvidersV1,
     territory::TerritorySamplerV1,
 };
@@ -46,6 +55,9 @@ pub struct GenerationPlanInputV1 {
     authoritative_semantic_receipt: CanonicalHash,
     locked_receipts: Vec<CanonicalHash>,
     limits: WorldgenLimitsV1,
+    natural_layer: Option<NaturalLayerInputV1>,
+    cave_topology: Option<CaveTopologyLayerInputV1>,
+    hydrology_occupancy: Option<HydrologyOccupancyInputV1>,
 }
 
 impl GenerationPlanInputV1 {
@@ -82,7 +94,34 @@ impl GenerationPlanInputV1 {
             authoritative_semantic_receipt,
             locked_receipts,
             limits,
+            natural_layer: None,
+            cave_topology: None,
+            hydrology_occupancy: None,
         }
+    }
+
+    /// Attaches the optional V5 natural layer. D4-only plans omit this.
+    #[must_use]
+    pub fn with_natural_layer(mut self, natural_layer: NaturalLayerInputV1) -> Self {
+        self.natural_layer = Some(natural_layer);
+        self
+    }
+
+    /// Attaches the optional V6 cave-topology realization layer.
+    #[must_use]
+    pub fn with_cave_topology_layer(mut self, cave_topology: CaveTopologyLayerInputV1) -> Self {
+        self.cave_topology = Some(cave_topology);
+        self
+    }
+
+    /// Attaches the optional V6 hydrology occupancy layer. D4/D7 snapshots omit this.
+    #[must_use]
+    pub fn with_hydrology_occupancy(
+        mut self,
+        hydrology_occupancy: HydrologyOccupancyInputV1,
+    ) -> Self {
+        self.hydrology_occupancy = Some(hydrology_occupancy);
+        self
     }
 }
 
@@ -96,6 +135,18 @@ pub struct RoleBindingReceiptV1 {
 }
 
 impl RoleBindingReceiptV1 {
+    pub(crate) const fn from_parts(
+        purpose: D4MaterialRoleV1,
+        role_id: StableId,
+        block_id: StableId,
+    ) -> Self {
+        Self {
+            purpose,
+            role_id,
+            block_id,
+        }
+    }
+
     /// Returns the functional generator purpose.
     #[must_use]
     pub const fn purpose(&self) -> D4MaterialRoleV1 {
@@ -129,6 +180,14 @@ pub enum PlacementPredicateKindV1 {
     GroundCover,
     /// Deep-rock deterministic copper replacement decision.
     CopperResource,
+    /// Queryable geologic stratum or intrusion decision.
+    GeologyStratum,
+    /// Surface river-channel occupancy decision.
+    RiverChannel,
+    /// Stable resource-field replacement decision.
+    StableResource,
+    /// Exclusion-radius vegetation anchor decision.
+    VegetationExclusion,
 }
 
 /// Deterministic Predicate evaluation counts and the Roles they may place.
@@ -142,6 +201,20 @@ pub struct PlacementPredicateReceiptV1 {
 }
 
 impl PlacementPredicateReceiptV1 {
+    pub(crate) fn new(
+        predicate: PlacementPredicateKindV1,
+        placement_roles: Vec<D4MaterialRoleV1>,
+        evaluations: u64,
+        accepted: u64,
+    ) -> Self {
+        Self {
+            predicate,
+            placement_roles,
+            evaluations,
+            accepted,
+        }
+    }
+
     /// Returns the closed predicate kind.
     #[must_use]
     pub const fn predicate(&self) -> PlacementPredicateKindV1 {
@@ -194,6 +267,14 @@ pub struct GenerationDiagnosticsV1 {
     pub resource_samples: u64,
     /// Copper placements accepted.
     pub resource_accepts: u64,
+    /// Geologic stratum samples performed by the V5 natural layer.
+    pub geology_samples: u64,
+    /// River/basin samples performed by the V5 natural layer.
+    pub river_samples: u64,
+    /// Exclusion-radius vegetation comparisons performed by the V5 natural layer.
+    pub vegetation_exclusion_samples: u64,
+    /// Tree anchors rejected by a nearer exclusive neighbor.
+    pub vegetation_exclusion_rejects: u64,
     /// Exact palette UTF-8 bytes plus the allocated `u16` voxel-index buffer.
     pub palette_and_index_bytes: u64,
 }
@@ -412,6 +493,7 @@ pub struct ChunkGenerationRequestV1 {
     adjacent_epochs: AdjacentEpochSnapshotV1,
     boundary_declarations: Vec<BoundaryAdapterDeclarationV1>,
     expected_chunk_revision: ChunkRevisionExpectation,
+    boundary_receipts: Vec<BoundaryReceiptV1>,
 }
 
 impl ChunkGenerationRequestV1 {
@@ -431,6 +513,7 @@ impl ChunkGenerationRequestV1 {
             adjacent_epochs,
             boundary_declarations,
             expected_chunk_revision: ChunkRevisionExpectation::Absent,
+            boundary_receipts: Vec::new(),
         }
     }
 
@@ -441,6 +524,13 @@ impl ChunkGenerationRequestV1 {
         expected_chunk_revision: ChunkRevisionExpectation,
     ) -> Self {
         self.expected_chunk_revision = expected_chunk_revision;
+        self
+    }
+
+    /// Attaches verified epoch-boundary receipts. Declarations alone still fail closed.
+    #[must_use]
+    pub fn with_boundary_receipts(mut self, boundary_receipts: Vec<BoundaryReceiptV1>) -> Self {
+        self.boundary_receipts = boundary_receipts;
         self
     }
 }
@@ -474,6 +564,8 @@ pub struct GenerationPlanV1 {
     limits: WorldgenLimitsV1,
     territory: TerritorySamplerV1,
     cave: CaveSamplerV1,
+    natural: Option<NaturalSamplerV1>,
+    hydrology: Option<HydrologySamplerV1>,
 }
 
 impl GenerationPlanV1 {
@@ -484,6 +576,10 @@ impl GenerationPlanV1 {
     /// Fails before generation for malformed config, missing or conflicting
     /// exclusive providers, incomplete Role/content closure, inconsistent
     /// provider fingerprints, or any preflight budget violation.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "plan compilation keeps D4 hashing and the optional V5 layer in one transaction"
+    )]
     pub fn compile(input: GenerationPlanInputV1) -> WorldgenResult<Self> {
         preflight_plan_limits(&input)?;
         input.config.validate()?;
@@ -496,7 +592,7 @@ impl GenerationPlanV1 {
         let snapshot_bound = preflight_snapshot_bound(&input, &roles)?;
         preflight_live_generation_bound(&input, &roles, snapshot_bound)?;
         let providers = ResolvedProvidersV1::resolve(input.provider_offers, input.limits)?;
-        let role_targets = roles
+        let mut role_targets = roles
             .iter()
             .map(|receipt| (receipt.purpose, receipt.block_id.clone()))
             .collect::<BTreeMap<_, _>>();
@@ -515,7 +611,7 @@ impl GenerationPlanV1 {
             &[locked_bytes.as_slice()],
         ));
         let revision_bytes = input.generation_plan_revision.to_be_bytes();
-        let generation_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
+        let d4_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
             GENERATION_INPUT_DOMAIN,
             &[
                 input.world_seed.as_bytes(),
@@ -526,11 +622,13 @@ impl GenerationPlanV1 {
                 role_bytes.as_slice(),
             ],
         ));
-        let generation_provenance_hash = GenerationProvenanceHashV1::from_hash(concatenated_hash(
-            GENERATION_PROVENANCE_DOMAIN,
-            &[generation_input_hash.as_bytes(), locked_bytes.as_slice()],
-        ));
-        let generation_epoch = GenerationEpochIdV1::from_hash(concatenated_hash(
+        let mut generation_input_hash = d4_input_hash;
+        let mut generation_provenance_hash =
+            GenerationProvenanceHashV1::from_hash(concatenated_hash(
+                GENERATION_PROVENANCE_DOMAIN,
+                &[generation_input_hash.as_bytes(), locked_bytes.as_slice()],
+            ));
+        let mut generation_epoch = GenerationEpochIdV1::from_hash(concatenated_hash(
             GENERATION_EPOCH_DOMAIN,
             &[
                 &revision_bytes,
@@ -540,9 +638,9 @@ impl GenerationPlanV1 {
             ],
         ));
 
-        let territory = TerritorySamplerV1::new(
+        let mut territory = TerritorySamplerV1::new(
             input.world_seed,
-            generation_input_hash,
+            d4_input_hash,
             input.config.clone(),
             providers.identity(ProviderSlotV1::StyleSelector).clone(),
             providers
@@ -551,12 +649,75 @@ impl GenerationPlanV1 {
             providers.identity(ProviderSlotV1::TemperateTerrain).clone(),
             providers.identity(ProviderSlotV1::AridTerrain).clone(),
         );
-        let cave = CaveSamplerV1::new(
+        let mut cave = CaveSamplerV1::new(
             input.world_seed,
-            generation_input_hash,
+            d4_input_hash,
             input.config.clone(),
             providers.identity(ProviderSlotV1::CaveTopology).clone(),
         );
+        let mut roles = roles;
+        let natural = if let Some(layer) = input.natural_layer {
+            let sampler = NaturalSamplerV1::compile(
+                input.world_seed,
+                d4_input_hash,
+                &input.config,
+                input.limits,
+                layer,
+                &providers,
+                &input.role_bindings,
+                &input.block_catalog,
+                &roles,
+            )?;
+            territory = territory.with_boreal(sampler.boreal_params());
+            for receipt in sampler.receipts() {
+                role_targets.insert(receipt.purpose(), receipt.block_id().clone());
+                roles.push(receipt.clone());
+            }
+            generation_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
+                GENERATION_INPUT_DOMAIN,
+                &[d4_input_hash.as_bytes(), sampler.layer_hash().as_bytes()],
+            ));
+            generation_provenance_hash = GenerationProvenanceHashV1::from_hash(concatenated_hash(
+                GENERATION_PROVENANCE_DOMAIN,
+                &[generation_input_hash.as_bytes(), locked_bytes.as_slice()],
+            ));
+            generation_epoch = GenerationEpochIdV1::from_hash(concatenated_hash(
+                GENERATION_EPOCH_DOMAIN,
+                &[generation_epoch.as_bytes(), sampler.layer_hash().as_bytes()],
+            ));
+            Some(sampler)
+        } else {
+            None
+        };
+        if let Some(layer) = input.cave_topology {
+            let topology_hash = layer.canonical_hash()?;
+            cave = cave.with_topology(layer);
+            generation_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
+                GENERATION_INPUT_DOMAIN,
+                &[generation_input_hash.as_bytes(), topology_hash.as_bytes()],
+            ));
+            generation_provenance_hash = GenerationProvenanceHashV1::from_hash(concatenated_hash(
+                GENERATION_PROVENANCE_DOMAIN,
+                &[generation_input_hash.as_bytes(), locked_bytes.as_slice()],
+            ));
+            generation_epoch = GenerationEpochIdV1::from_hash(concatenated_hash(
+                GENERATION_EPOCH_DOMAIN,
+                &[generation_epoch.as_bytes(), topology_hash.as_bytes()],
+            ));
+        }
+        let hydrology = match (input.hydrology_occupancy, natural.as_ref()) {
+            (Some(layer), Some(natural_sampler)) => Some(HydrologySamplerV1::compile(
+                input.world_seed,
+                d4_input_hash,
+                &input.config,
+                natural_sampler,
+                layer,
+            )?),
+            (Some(_), None) => {
+                return Err(WorldgenError::MissingNaturalLayerForHydrology);
+            }
+            (None, _) => None,
+        };
 
         Ok(Self {
             dimension: input.dimension,
@@ -576,6 +737,8 @@ impl GenerationPlanV1 {
             limits: input.limits,
             territory,
             cave,
+            natural,
+            hydrology,
         })
     }
 
@@ -656,11 +819,298 @@ impl GenerationPlanV1 {
         self.territory.query(x, z)
     }
 
+    /// Returns whether the V5 natural layer is compiled into this plan.
+    #[must_use]
+    pub const fn has_natural_layer(&self) -> bool {
+        self.natural.is_some()
+    }
+
+    /// Returns whether the V6 cave-topology layer is compiled into this plan.
+    #[must_use]
+    pub const fn has_cave_topology_layer(&self) -> bool {
+        self.cave.has_topology()
+    }
+
+    /// Returns whether the V6 hydrology occupancy layer is compiled into this plan.
+    #[must_use]
+    pub const fn has_hydrology_occupancy(&self) -> bool {
+        self.hydrology.is_some()
+    }
+
+    /// Returns frozen water/lava identities compiled into hydrology occupancy.
+    #[must_use]
+    pub fn hydrology_fluids(&self) -> Option<&HydrologyFluidBindingsV1> {
+        self.hydrology.as_ref().map(HydrologySamplerV1::fluids)
+    }
+
+    /// Returns the topology ownership identity at world `(x, y, z)`.
+    #[must_use]
+    pub fn cave_topology_domain(&self, x: i64, y: i64, z: i64) -> Option<&StableId> {
+        self.cave.topology_domain(x, y, z)
+    }
+
+    /// Returns the dimension-default cave topology domain.
+    #[must_use]
+    pub fn cave_topology_default_domain(&self) -> Option<&StableId> {
+        self.cave
+            .topology()
+            .map(crate::cave_topology::TopologyFieldV1::default_domain)
+    }
+
+    /// Returns underground-owned topology domains in canonical order.
+    #[must_use]
+    pub fn cave_topology_owned_domains(&self) -> Option<&[CaveOwnedDomainV1]> {
+        self.cave
+            .topology()
+            .map(crate::cave_topology::TopologyFieldV1::owned_domains)
+    }
+
+    /// Returns compiled topology portals.
+    #[must_use]
+    pub fn cave_topology_portals(&self) -> Option<&[CaveLayerPortalV1]> {
+        self.cave
+            .topology()
+            .map(crate::cave_topology::TopologyFieldV1::portals)
+    }
+
+    /// Returns compiled surface-to-destination topology entrances.
+    #[must_use]
+    pub fn cave_topology_entrances(&self) -> Option<&[CaveLayerEntranceV1]> {
+        self.cave
+            .topology()
+            .map(crate::cave_topology::TopologyFieldV1::entrances)
+    }
+
+    /// Returns the bounded branch contributor compiled into topology.
+    #[must_use]
+    pub fn cave_topology_branch(&self) -> Option<&crate::CaveBranchContributorV1> {
+        self.cave
+            .topology()
+            .map(crate::cave_topology::TopologyFieldV1::branch)
+    }
+
+    /// Returns the occupancy-layer hash, independent of snapshot bytes.
+    #[must_use]
+    pub fn hydrology_occupancy_hash(&self) -> Option<HydrologyOccupancyHashV1> {
+        self.hydrology
+            .as_ref()
+            .map(HydrologySamplerV1::occupancy_hash)
+    }
+
+    /// Returns the exclusive provider identity compiled into a slot.
+    #[must_use]
+    pub fn provider_identity(&self, slot: ProviderSlotV1) -> Option<&ProviderGenerationIdentityV1> {
+        self.providers.try_identity(slot)
+    }
+
     /// Returns deterministic terrain height intent at world `(x, z)`.
     #[must_use]
     pub fn terrain_height(&self, x: i64, z: i64) -> i32 {
         let sample = self.territory.sample(x, z);
-        self.territory.height(x, z, sample)
+        let height = self.territory.height(x, z, sample);
+        self.natural
+            .as_ref()
+            .map_or(height, |natural| natural.adjust_height(x, z, height))
+    }
+
+    /// Returns the locally queryable surface river sample at world `(x, z)`.
+    #[must_use]
+    pub fn river_sample(&self, x: i64, z: i64) -> Option<RiverSampleV1> {
+        self.natural
+            .as_ref()
+            .map(|natural| natural.river_sample(x, z))
+    }
+
+    /// Returns the queryable geologic sample at world `(x, y, z)`.
+    #[must_use]
+    pub fn geologic_sample(&self, x: i64, y: i64, z: i64) -> Option<GeologicSampleV1> {
+        let sample = self.territory.sample(x, z);
+        let height = self.terrain_height(x, z);
+        let style = self.territory.choose_material_style(x, z, sample);
+        self.natural
+            .as_ref()
+            .map(|natural| natural.geologic_sample(x, y, z, height, style))
+    }
+
+    /// Returns the stable resource-field sample at world `(x, y, z)`.
+    #[must_use]
+    pub fn resource_field_sample(&self, x: i64, y: i64, z: i64) -> Option<ResourceFieldSampleV1> {
+        let sample = self.territory.sample(x, z);
+        let height = self.terrain_height(x, z);
+        let style = self.territory.choose_material_style(x, z, sample);
+        self.natural
+            .as_ref()
+            .map(|natural| natural.resource_sample(x, y, z, height, style))
+    }
+
+    /// Returns the queryable aquifer table at world `(x, z)`.
+    #[must_use]
+    pub fn aquifer_sample(&self, x: i64, z: i64) -> Option<AquiferSampleV1> {
+        let hydrology = self.hydrology.as_ref()?;
+        Some(hydrology.aquifer_sample(x, z, self.terrain_height(x, z)))
+    }
+
+    /// Returns the queryable vertical drainage decision at world `(x, z)`.
+    #[must_use]
+    pub fn drainage_sample(&self, x: i64, z: i64) -> Option<DrainageSampleV1> {
+        let hydrology = self.hydrology.as_ref()?;
+        Some(hydrology.drainage_sample(x, z, self.river_sample(x, z)))
+    }
+
+    /// Returns initial water/lava occupancy at world `(x, y, z)`.
+    ///
+    /// Occupancy is a coordinate query. It does not read neighbor chunks or
+    /// mutate the solid snapshot candidate.
+    #[must_use]
+    pub fn hydrology_occupancy_sample(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+    ) -> Option<HydrologyOccupancySampleV1> {
+        let hydrology = self.hydrology.as_ref()?;
+        let height = self.terrain_height(x, z);
+        let occupancy = self.cave.occupancy(x, y, z, height);
+        let sample = self.territory.sample(x, z);
+        let style = self.territory.choose_material_style(x, z, sample);
+        Some(hydrology.occupy(
+            x,
+            y,
+            z,
+            height,
+            occupancy.allows_fluid_occupancy(),
+            self.river_sample(x, z),
+            style,
+        ))
+    }
+
+    /// Builds a versioned hydrology occupancy candidate for one chunk.
+    ///
+    /// The candidate is not a storage snapshot and does not change D4/D7 chunk
+    /// bytes. Only the authority may accept it as a later revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns a missing-layer, arithmetic, or accounting-budget error.
+    pub fn hydrology_occupancy_candidate(
+        &self,
+        coordinate: ChunkCoordinate,
+    ) -> WorldgenResult<HydrologyOccupancyCandidateV1> {
+        let Some(hydrology) = self.hydrology.as_ref() else {
+            return Err(WorldgenError::InvalidHydrologyOccupancy {
+                field: "layer",
+                reason: "hydrology occupancy is not compiled into this plan".to_owned(),
+            });
+        };
+        let edge = usize::from(self.config.chunk_edge_voxels);
+        let origin = chunk_origin(coordinate, self.config.chunk_edge_voxels)?;
+        let mut accounting = hydrology.start_accounting();
+        let mut cells = Vec::new();
+        for local_y in 0..edge {
+            for local_z in 0..edge {
+                for local_x in 0..edge {
+                    HydrologySamplerV1::examine(&mut accounting, 1);
+                    let world_x = origin
+                        .0
+                        .saturating_add(i64::try_from(local_x).unwrap_or_default());
+                    let world_y = origin
+                        .1
+                        .saturating_add(i64::try_from(local_y).unwrap_or_default());
+                    let world_z = origin
+                        .2
+                        .saturating_add(i64::try_from(local_z).unwrap_or_default());
+                    let Some(sample) = self.hydrology_occupancy_sample(world_x, world_y, world_z)
+                    else {
+                        continue;
+                    };
+                    let Some(cell) = HydrologySamplerV1::occupancy_cell(
+                        u16::try_from(local_x).unwrap_or_default(),
+                        u16::try_from(local_y).unwrap_or_default(),
+                        u16::try_from(local_z).unwrap_or_default(),
+                        &sample,
+                    ) else {
+                        continue;
+                    };
+                    HydrologySamplerV1::occupy_cell(
+                        &mut accounting,
+                        sample.kind() == crate::HydrologyOccupancyKindV1::Drainage,
+                    )?;
+                    cells.push(cell);
+                }
+            }
+        }
+        hydrology.candidate(
+            self.dimension.clone(),
+            coordinate,
+            self.generation_epoch,
+            self.generation_input_hash,
+            cells,
+            accounting,
+        )
+    }
+
+    /// Returns a direction-independent occupancy continuity receipt for one face.
+    ///
+    /// Opposite faces of the same boundary hash the same world occupancy. Chunk
+    /// approach direction cannot change the receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a missing-layer or arithmetic error at the coordinate boundary.
+    pub fn hydrology_face_continuity(
+        &self,
+        coordinate: ChunkCoordinate,
+        face: crate::ChunkFaceV1,
+    ) -> WorldgenResult<HydrologyFaceContinuityV1> {
+        if self.hydrology.is_none() {
+            return Err(WorldgenError::InvalidHydrologyOccupancy {
+                field: "layer",
+                reason: "hydrology occupancy is not compiled into this plan".to_owned(),
+            });
+        }
+        let neighbor = hydrology_adjacent_chunk(coordinate, face)?;
+        let (first, second) = if coordinate < neighbor {
+            (coordinate, neighbor)
+        } else {
+            (neighbor, coordinate)
+        };
+        let outward = canonical_outward_face(first, second);
+        let edge = i64::from(self.config.chunk_edge_voxels);
+        let origin = chunk_origin(first, self.config.chunk_edge_voxels)?;
+        let mut packed = Vec::new();
+        let mut occupied = 0_u32;
+        for v in 0..edge {
+            for u in 0..edge {
+                let (local_x, local_y, local_z) = face_local_sample(outward, u, v, edge);
+                let world_x = origin.0.saturating_add(local_x);
+                let world_y = origin.1.saturating_add(local_y);
+                let world_z = origin.2.saturating_add(local_z);
+                let Some(sample) = self.hydrology_occupancy_sample(world_x, world_y, world_z)
+                else {
+                    return Err(WorldgenError::InvalidHydrologyOccupancy {
+                        field: "layer",
+                        reason: "hydrology occupancy sampler was lost after compilation".to_owned(),
+                    });
+                };
+                if sample.is_occupied() {
+                    occupied = occupied.saturating_add(1);
+                }
+                packed.push((
+                    u16::try_from(u).unwrap_or_default(),
+                    u16::try_from(v).unwrap_or_default(),
+                    sample.kind(),
+                    sample.level(),
+                    sample.flow() as u8,
+                ));
+            }
+        }
+        Ok(HydrologySamplerV1::face_continuity(
+            coordinate,
+            neighbor,
+            hydrology_face_axis(face),
+            hydrology_face_hash(&packed),
+            occupied,
+        ))
     }
 
     /// Returns deterministic signed density intent at world `(x, y, z)`.
@@ -691,6 +1141,30 @@ impl GenerationPlanV1 {
     #[must_use]
     pub fn cave_occupancy_arbitration(&self, x: i64, y: i64, z: i64) -> CaveOccupancyArbitrationV1 {
         self.cave.occupancy(x, y, z, self.terrain_height(x, z))
+    }
+
+    /// Returns the domain-owned topology algorithm at world `(x, y, z)`.
+    #[must_use]
+    pub fn cave_topology_algorithm(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+    ) -> Option<CaveTopologyAlgorithmV1> {
+        self.cave.topology_algorithm(x, y, z)
+    }
+
+    /// Returns whether world `(x, y, z)` lies inside declared cave influence.
+    #[must_use]
+    pub fn cave_in_declared_influence(&self, x: i64, y: i64, z: i64) -> bool {
+        self.cave.in_declared_influence(x, y, z)
+    }
+
+    /// Returns voxel passability receipts for compiled surface entrances.
+    #[must_use]
+    pub fn cave_passability_receipts(&self) -> Vec<CaveVoxelPassabilityReceiptV1> {
+        self.cave
+            .passability_receipts(|x, z| self.terrain_height(x, z))
     }
 
     /// Returns direction-independent raw cave-field requests for one chunk.
@@ -820,13 +1294,24 @@ impl GenerationPlanV1 {
             self.generation_epoch,
             &request.adjacent_epochs,
             &request.boundary_declarations,
+            &request.boundary_receipts,
             self.limits,
         )?;
         let cave_field_requests = self.cave.face_requests(request.coordinate)?;
         let (draft, diagnostics, styles_present) = self.materialize(request.coordinate)?;
         let cave_occupancy_validations =
             self.validate_cave_face_occupancy(request.coordinate, &draft, &cave_field_requests)?;
-        let placement_predicates = placement_predicate_receipts(diagnostics);
+        let mut placement_predicates = placement_predicate_receipts(diagnostics);
+        if self.natural.is_some() {
+            placement_predicates.extend(NaturalSamplerV1::placement_predicates(
+                diagnostics.geology_samples,
+                diagnostics.river_samples,
+                diagnostics.resource_samples,
+                diagnostics.resource_accepts,
+                diagnostics.vegetation_exclusion_samples,
+                diagnostics.vegetation_exclusion_rejects,
+            ));
+        }
         let draft_bytes = draft.canonical_bytes()?;
         let draft_hash = CanonicalHash::digest(&draft_bytes);
         let receipt = GenerationReceiptV1 {
@@ -922,7 +1407,7 @@ impl GenerationPlanV1 {
                     .2
                     .saturating_add(i64::try_from(local_z).unwrap_or_default());
                 let sample = self.territory.sample(world_x, world_z);
-                let height = self.territory.height(world_x, world_z, sample);
+                let height = self.terrain_height(world_x, world_z);
                 let material_style = self
                     .territory
                     .choose_material_style(world_x, world_z, sample);
@@ -963,7 +1448,12 @@ impl GenerationPlanV1 {
             resource_samples: 0,
             resource_accepts: 0,
         };
-        let vegetation = self.vegetation_overlay(origin, edge, &columns, &mut counters)?;
+        let mut natural_counters = NaturalWorkCountersV1::default();
+        let vegetation = if self.natural.is_some() {
+            self.natural_vegetation_overlay(origin, edge, &columns, &mut natural_counters)?
+        } else {
+            self.vegetation_overlay(origin, edge, &columns, &mut counters)?
+        };
 
         for local_y in 0..edge {
             let world_y = origin
@@ -987,6 +1477,7 @@ impl GenerationPlanV1 {
                         *column,
                         vegetation[voxel_index],
                         &mut counters,
+                        &mut natural_counters,
                     );
                     let block = self.role_target(purpose);
                     let palette_index = palette_lookup.get(block).copied().ok_or(
@@ -1005,7 +1496,13 @@ impl GenerationPlanV1 {
             .saturating_add(counters.cave_samples)
             .saturating_add(counters.tree_anchor_samples)
             .saturating_add(counters.ground_cover_samples)
-            .saturating_add(counters.resource_samples);
+            .saturating_add(counters.resource_samples)
+            .saturating_add(natural_counters.geology_samples)
+            .saturating_add(natural_counters.river_samples)
+            .saturating_add(natural_counters.resource_samples)
+            .saturating_add(natural_counters.tree_anchor_samples)
+            .saturating_add(natural_counters.exclusion_samples)
+            .saturating_add(natural_counters.ground_cover_samples);
         if work_units > self.limits.max_work_units.get() {
             return Err(WorldgenError::BudgetExceeded {
                 budget: "deterministic samples",
@@ -1026,12 +1523,28 @@ impl GenerationPlanV1 {
             height_samples: counters.height_samples,
             cave_samples: counters.cave_samples,
             cave_void_accepts: counters.cave_void_accepts,
-            tree_anchor_samples: counters.tree_anchor_samples,
-            tree_anchor_accepts: counters.tree_anchor_accepts,
-            ground_cover_samples: counters.ground_cover_samples,
-            ground_cover_accepts: counters.ground_cover_accepts,
-            resource_samples: counters.resource_samples,
-            resource_accepts: counters.resource_accepts,
+            tree_anchor_samples: counters
+                .tree_anchor_samples
+                .saturating_add(natural_counters.tree_anchor_samples),
+            tree_anchor_accepts: counters
+                .tree_anchor_accepts
+                .saturating_add(natural_counters.tree_anchor_accepts),
+            ground_cover_samples: counters
+                .ground_cover_samples
+                .saturating_add(natural_counters.ground_cover_samples),
+            ground_cover_accepts: counters
+                .ground_cover_accepts
+                .saturating_add(natural_counters.ground_cover_accepts),
+            resource_samples: counters
+                .resource_samples
+                .saturating_add(natural_counters.resource_samples),
+            resource_accepts: counters
+                .resource_accepts
+                .saturating_add(natural_counters.resource_accepts),
+            geology_samples: natural_counters.geology_samples,
+            river_samples: natural_counters.river_samples,
+            vegetation_exclusion_samples: natural_counters.exclusion_samples,
+            vegetation_exclusion_rejects: natural_counters.exclusion_rejects,
             palette_and_index_bytes,
         };
         Ok((
@@ -1113,6 +1626,10 @@ impl GenerationPlanV1 {
         Ok(validations)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "column, vegetation, and diagnostic counters stay explicit on the voxel path"
+    )]
     fn material_role(
         &self,
         x: i64,
@@ -1121,6 +1638,7 @@ impl GenerationPlanV1 {
         column: ColumnSampleV1,
         vegetation: Option<D4MaterialRoleV1>,
         counters: &mut WorkCountersV1,
+        natural_counters: &mut NaturalWorkCountersV1,
     ) -> D4MaterialRoleV1 {
         if y < i64::from(self.config.world_floor_y) || y > i64::from(self.config.world_ceiling_y) {
             return D4MaterialRoleV1::Empty;
@@ -1136,8 +1654,28 @@ impl GenerationPlanV1 {
         }
 
         let depth = i64::from(column.height).saturating_sub(y);
+        if let Some(natural) = &self.natural {
+            natural_counters.river_samples = natural_counters.river_samples.saturating_add(1);
+            let river = natural.river_sample(x, z);
+            if river.in_channel() && y == i64::from(column.height) {
+                return natural.river_bed_role(x, z, column.material_style);
+            }
+            natural_counters.geology_samples = natural_counters.geology_samples.saturating_add(1);
+            natural_counters.resource_samples = natural_counters.resource_samples.saturating_add(1);
+            let resource = natural.resource_sample(x, y, z, column.height, column.material_style);
+            if let Some(role) = resource.role() {
+                natural_counters.resource_accepts =
+                    natural_counters.resource_accepts.saturating_add(1);
+                return role;
+            }
+            return natural
+                .geologic_sample(x, y, z, column.height, column.material_style)
+                .role();
+        }
         match column.material_style {
-            TerrainStyleV1::TemperateWoodland => self.temperate_material(x, y, z, depth, counters),
+            TerrainStyleV1::TemperateWoodland | TerrainStyleV1::BorealWetland => {
+                self.temperate_material(x, y, z, depth, counters)
+            }
             TerrainStyleV1::AridBadlands => self.arid_material(x, y, z, depth, counters),
         }
     }
@@ -1260,6 +1798,125 @@ impl GenerationPlanV1 {
         }
         Ok(overlay)
     }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exclusion-radius rasterization keeps halo and canopy writes in one overlay"
+    )]
+    fn natural_vegetation_overlay(
+        &self,
+        origin: (i64, i64, i64),
+        edge: usize,
+        columns: &[ColumnSampleV1],
+        counters: &mut NaturalWorkCountersV1,
+    ) -> WorldgenResult<Vec<Option<D4MaterialRoleV1>>> {
+        let Some(natural) = &self.natural else {
+            return Ok(vec![None; edge.saturating_mul(edge).saturating_mul(edge)]);
+        };
+        let voxel_count = edge
+            .checked_mul(edge)
+            .and_then(|square| square.checked_mul(edge))
+            .ok_or(WorldgenError::ArithmeticOverflow {
+                operation: "natural vegetation overlay voxel count",
+            })?;
+        let mut overlay = vec![None; voxel_count];
+        for local_z in 0..edge {
+            for local_x in 0..edge {
+                let column = &columns[local_z * edge + local_x];
+                let world_x = origin
+                    .0
+                    .saturating_add(i64::try_from(local_x).unwrap_or_default());
+                let world_z = origin
+                    .2
+                    .saturating_add(i64::try_from(local_z).unwrap_or_default());
+                counters.ground_cover_samples = counters.ground_cover_samples.saturating_add(1);
+                counters.river_samples = counters.river_samples.saturating_add(1);
+                let in_channel = natural.river_sample(world_x, world_z).in_channel();
+                if let Some(role) =
+                    natural.ground_cover_role(world_x, world_z, column.material_style, in_channel)
+                {
+                    counters.ground_cover_accepts = counters.ground_cover_accepts.saturating_add(1);
+                    set_vegetation_role(
+                        &mut overlay,
+                        origin,
+                        edge,
+                        world_x,
+                        i64::from(column.height).saturating_add(1),
+                        world_z,
+                        role,
+                    );
+                }
+            }
+        }
+
+        let edge_i64 = i64::try_from(edge).map_err(|_| WorldgenError::ArithmeticOverflow {
+            operation: "natural vegetation chunk edge",
+        })?;
+        let radius = NaturalSamplerV1::tree_radius()
+            .saturating_add(i64::from(natural.config().tree_exclusion_radius_voxels));
+        let minimum_x = origin.0.saturating_sub(radius);
+        let maximum_x = origin
+            .0
+            .saturating_add(edge_i64.saturating_sub(1))
+            .saturating_add(radius);
+        let minimum_z = origin.2.saturating_sub(radius);
+        let maximum_z = origin
+            .2
+            .saturating_add(edge_i64.saturating_sub(1))
+            .saturating_add(radius);
+        for anchor_z in minimum_z..=maximum_z {
+            for anchor_x in minimum_x..=maximum_x {
+                let sample = self.territory.sample(anchor_x, anchor_z);
+                let style = self
+                    .territory
+                    .choose_material_style(anchor_x, anchor_z, sample);
+                let Some((log, leaves)) = NaturalSamplerV1::tree_roles(style) else {
+                    continue;
+                };
+                if !natural.is_exclusive_tree_anchor(anchor_x, anchor_z, style, counters) {
+                    continue;
+                }
+                let anchor_height = i64::from(self.terrain_height(anchor_x, anchor_z));
+                for relative_y in 4..=NaturalSamplerV1::tree_height() {
+                    for offset_z in
+                        -NaturalSamplerV1::tree_radius()..=NaturalSamplerV1::tree_radius()
+                    {
+                        for offset_x in
+                            -NaturalSamplerV1::tree_radius()..=NaturalSamplerV1::tree_radius()
+                        {
+                            if offset_x.abs().saturating_add(offset_z.abs())
+                                > NaturalSamplerV1::tree_radius().saturating_add(1)
+                            {
+                                continue;
+                            }
+                            set_vegetation_role(
+                                &mut overlay,
+                                origin,
+                                edge,
+                                anchor_x.saturating_add(offset_x),
+                                anchor_height.saturating_add(relative_y),
+                                anchor_z.saturating_add(offset_z),
+                                leaves,
+                            );
+                        }
+                    }
+                }
+                for relative_y in 1..=4 {
+                    set_vegetation_role(
+                        &mut overlay,
+                        origin,
+                        edge,
+                        anchor_x,
+                        anchor_height.saturating_add(relative_y),
+                        anchor_z,
+                        log,
+                    );
+                }
+            }
+        }
+        Ok(overlay)
+    }
+
     fn temperate_material(
         &self,
         x: i64,
@@ -1397,8 +2054,11 @@ fn set_vegetation_role(
     let index = (local_y * edge + local_z) * edge + local_x;
     let slot = &mut overlay[index];
     if role == D4MaterialRoleV1::WoodlandLog
+        || role == D4MaterialRoleV1::BorealLog
         || slot.is_none()
         || *slot == Some(D4MaterialRoleV1::WoodlandGroundCover)
+        || *slot == Some(D4MaterialRoleV1::Moss)
+        || *slot == Some(D4MaterialRoleV1::Peat)
     {
         *slot = Some(role);
     }
@@ -1474,6 +2134,24 @@ fn preflight_plan_input_bytes(input: &GenerationPlanInputV1) -> WorldgenResult<(
             offer.identity().provider_stable_id(),
             input.limits,
         )?;
+    }
+    if let Some(layer) = &input.natural_layer {
+        for offer in layer.provider_offers() {
+            add_identity_bytes(
+                &mut total,
+                offer.identity().provider_stable_id(),
+                input.limits,
+            )?;
+        }
+        for (_, role) in layer.vocabulary().iter() {
+            add_identity_bytes(&mut total, role, input.limits)?;
+        }
+    }
+    if let Some(layer) = &input.hydrology_occupancy {
+        add_identity_bytes(&mut total, layer.fluids().water(), input.limits)?;
+        add_identity_bytes(&mut total, layer.fluids().lava(), input.limits)?;
+        add_identity_bytes(&mut total, layer.fluids().water_predicate(), input.limits)?;
+        add_identity_bytes(&mut total, layer.fluids().lava_predicate(), input.limits)?;
     }
     for (_, role) in input.role_vocabulary.iter() {
         add_identity_bytes(&mut total, role, input.limits)?;
@@ -1717,7 +2395,12 @@ fn checked_cube_u64(edge: u64) -> WorldgenResult<u64> {
         })
 }
 
-fn face_local_sample(face: crate::ChunkFaceV1, u: i64, v: i64, edge: i64) -> (i64, i64, i64) {
+pub(crate) fn face_local_sample(
+    face: crate::ChunkFaceV1,
+    u: i64,
+    v: i64,
+    edge: i64,
+) -> (i64, i64, i64) {
     match face {
         crate::ChunkFaceV1::NegativeX => (0, u, v),
         crate::ChunkFaceV1::PositiveX => (edge.saturating_sub(1), u, v),
@@ -1728,7 +2411,30 @@ fn face_local_sample(face: crate::ChunkFaceV1, u: i64, v: i64, edge: i64) -> (i6
     }
 }
 
-fn chunk_origin(coordinate: ChunkCoordinate, edge: u16) -> WorldgenResult<(i64, i64, i64)> {
+fn canonical_outward_face(first: ChunkCoordinate, second: ChunkCoordinate) -> crate::ChunkFaceV1 {
+    if second.x != first.x {
+        if second.x > first.x {
+            crate::ChunkFaceV1::PositiveX
+        } else {
+            crate::ChunkFaceV1::NegativeX
+        }
+    } else if second.y != first.y {
+        if second.y > first.y {
+            crate::ChunkFaceV1::PositiveY
+        } else {
+            crate::ChunkFaceV1::NegativeY
+        }
+    } else if second.z > first.z {
+        crate::ChunkFaceV1::PositiveZ
+    } else {
+        crate::ChunkFaceV1::NegativeZ
+    }
+}
+
+pub(crate) fn chunk_origin(
+    coordinate: ChunkCoordinate,
+    edge: u16,
+) -> WorldgenResult<(i64, i64, i64)> {
     let edge = i64::from(edge);
     let x = i64::from(coordinate.x)
         .checked_mul(edge)

@@ -15,8 +15,8 @@ use crate::{
     AtlasPlanHashV1, CaveAdjacencyV1, CavePortalV1, CaveTopologyDomainIdV1, CaveTopologyParentV1,
     ContributionTargetV1, CoordinatorOfferV1, HydrologyPlanV1, PlanningCellBoundsV1,
     PrimaryOwnershipDomainV1, PrimaryProviderOfferV1, ResolvedPrimaryOwnerV1,
-    SpatialContributionV1, TerritoryDomainIdV1, TerritoryError, TerritoryLimitsV1, TerritoryResult,
-    UndergroundTerritoryV1,
+    SpatialContributionV1, TerritoryDomainIdV1, TerritoryError, TerritoryLimitsV1,
+    TerritoryPlanReceiptV1, TerritoryResult, UndergroundTerritoryV1,
     cave::{validate_portals, validate_underground},
     hashes::hash_u64,
     provider::{
@@ -284,6 +284,13 @@ impl TerritoryQueryLevelV1 {
         self.boundary_distance_cells
     }
 
+    /// Returns local tile offsets for `cell` at this scale.
+    #[must_use]
+    pub fn local_offset_cells(&self, cell: PlanningCellCoordinateV1) -> (i64, i64) {
+        let edge = i64::from(self.scale.edge_cells.get());
+        (cell.x.rem_euclid(edge), cell.z.rem_euclid(edge))
+    }
+
     /// Returns whether this non-unit scale is inside its transition band.
     #[must_use]
     pub const fn in_transition_band(&self) -> bool {
@@ -345,6 +352,12 @@ pub struct TerritoryAreaStatisticsV1 {
 }
 
 impl TerritoryAreaStatisticsV1 {
+    /// Returns the sampled ownership domain.
+    #[must_use]
+    pub const fn domain(&self) -> &TerritoryDomainIdV1 {
+        &self.domain
+    }
+
     /// Returns the sampled cell count.
     #[must_use]
     pub const fn cell_count(&self) -> u64 {
@@ -355,6 +368,12 @@ impl TerritoryAreaStatisticsV1 {
     #[must_use]
     pub const fn connected_components(&self) -> u64 {
         self.connected_components
+    }
+
+    /// Returns the sampled domain-boundary edge count.
+    #[must_use]
+    pub const fn boundary_edges(&self) -> u64 {
+        self.boundary_edges
     }
 }
 
@@ -370,6 +389,18 @@ pub struct AtlasStatisticsV1 {
 }
 
 impl AtlasStatisticsV1 {
+    /// Returns the sampled planning-cell rectangle.
+    #[must_use]
+    pub const fn bounds(&self) -> PlanningCellBoundsV1 {
+        self.bounds
+    }
+
+    /// Returns the number of sampled planning cells.
+    #[must_use]
+    pub const fn sampled_cells(&self) -> u64 {
+        self.sampled_cells
+    }
+
     /// Returns sorted per-domain area statistics.
     #[must_use]
     pub fn areas(&self) -> &[TerritoryAreaStatisticsV1] {
@@ -541,10 +572,25 @@ impl TerritoryPlanV1 {
         self.plan_hash
     }
 
+    /// Returns the planned dimension.
+    #[must_use]
+    pub const fn dimension(&self) -> &DimensionId {
+        &self.dimension
+    }
+
     /// Returns the exact persisted world seed.
     #[must_use]
     pub const fn world_seed(&self) -> WorldSeedV1 {
         self.world_seed
+    }
+
+    /// Returns a finite identity receipt for this compiled plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if collection lengths overflow or hashing fails.
+    pub fn receipt(&self) -> TerritoryResult<TerritoryPlanReceiptV1> {
+        TerritoryPlanReceiptV1::from_plan(self)
     }
 
     /// Returns the compilation and query hard limits.
@@ -605,6 +651,18 @@ impl TerritoryPlanV1 {
     #[must_use]
     pub fn cave_adjacencies(&self) -> &[CaveAdjacencyV1] {
         &self.cave_adjacencies
+    }
+
+    /// Returns canonically ordered layered contributions.
+    #[must_use]
+    pub fn contributions(&self) -> &[SpatialContributionV1] {
+        &self.contributions
+    }
+
+    /// Returns the compiled abstract hydrology plan.
+    #[must_use]
+    pub const fn hydrology(&self) -> &HydrologyPlanV1 {
+        &self.hydrology
     }
 
     /// Runs a pure deterministic surface query.

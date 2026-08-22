@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 
-use latticeaxiom_core::CanonicalHash;
+use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_storage::ChunkCoordinate;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GenerationInputHashV1, ProviderGenerationIdentityV1, SharedFaceHashV1, WorldSeedV1,
-    WorldgenConfigV1, WorldgenError, WorldgenResult,
+    CaveTopologyAlgorithmV1, CaveVoxelPassabilityReceiptV1, GenerationInputHashV1,
+    ProviderGenerationIdentityV1, SharedFaceHashV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
+    WorldgenResult,
+    cave_topology::{CaveTopologyLayerInputV1, TopologyFieldV1},
     hashes::{domain_hash, hash_u64},
 };
 
@@ -408,6 +410,7 @@ pub(crate) struct CaveSamplerV1 {
     input_hash: GenerationInputHashV1,
     config: WorldgenConfigV1,
     provider: ProviderGenerationIdentityV1,
+    topology: Option<TopologyFieldV1>,
 }
 
 impl CaveSamplerV1 {
@@ -422,7 +425,57 @@ impl CaveSamplerV1 {
             input_hash,
             config,
             provider,
+            topology: None,
         }
+    }
+
+    pub(crate) fn with_topology(mut self, layer: CaveTopologyLayerInputV1) -> Self {
+        self.topology = Some(TopologyFieldV1::compile(self.config.clone(), layer));
+        self
+    }
+
+    pub(crate) const fn has_topology(&self) -> bool {
+        self.topology.is_some()
+    }
+
+    pub(crate) const fn topology(&self) -> Option<&TopologyFieldV1> {
+        self.topology.as_ref()
+    }
+
+    pub(crate) fn topology_algorithm(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+    ) -> Option<CaveTopologyAlgorithmV1> {
+        self.topology
+            .as_ref()
+            .map(|topology| topology.algorithm_at(x, y, z))
+    }
+
+    pub(crate) fn topology_domain(&self, x: i64, y: i64, z: i64) -> Option<&StableId> {
+        self.topology
+            .as_ref()
+            .map(|topology| topology.domain_id_at(x, y, z))
+    }
+
+    pub(crate) fn in_declared_influence(&self, x: i64, y: i64, z: i64) -> bool {
+        self.topology
+            .as_ref()
+            .is_some_and(|topology| topology.in_declared_influence(x, y, z))
+    }
+
+    pub(crate) fn passability_receipts(
+        &self,
+        surface_y_at: impl Fn(i64, i64) -> i32,
+    ) -> Vec<CaveVoxelPassabilityReceiptV1> {
+        let Some(topology) = &self.topology else {
+            return Vec::new();
+        };
+        topology.passability_receipts(|x, y, z| {
+            self.occupancy(x, y, z, surface_y_at(x, z))
+                .is_finally_void()
+        })
     }
 
     pub(crate) fn is_void(&self, x: i64, y: i64, z: i64, surface_y: i32) -> bool {
@@ -455,9 +508,27 @@ impl CaveSamplerV1 {
     }
 
     fn occupancy_uncapped(&self, x: i64, y: i64, z: i64) -> CaveOccupancyArbitrationV1 {
-        let local_signed_distance = self.coarse_cell_distance(x, y, z);
-        let branch_signed_distance = self.branch_signed_distance(x, y, z);
-        let portal_signed_distance = self.portal_signed_distance(x, y, z);
+        let (local_signed_distance, branch_signed_distance, portal_signed_distance) =
+            if let Some(topology) = &self.topology {
+                let local_signed_distance = topology.local_signed_distance(x, y, z);
+                let branch_signed_distance = if topology.branch_contains(x, y, z) {
+                    self.branch_signed_distance(x, y, z)
+                } else {
+                    i32::from(self.config.cave_cell_edge_voxels).saturating_mul(2)
+                };
+                let portal_signed_distance = topology.portal_signed_distance(x, y, z);
+                (
+                    local_signed_distance,
+                    branch_signed_distance,
+                    portal_signed_distance,
+                )
+            } else {
+                (
+                    self.coarse_cell_distance(x, y, z),
+                    self.branch_signed_distance(x, y, z),
+                    self.portal_signed_distance(x, y, z),
+                )
+            };
         let raw_signed_distance = local_signed_distance
             .min(branch_signed_distance)
             .min(portal_signed_distance);
@@ -489,7 +560,7 @@ impl CaveSamplerV1 {
             .into_iter()
             .map(|face| {
                 self.shared_face_key(coordinate, face).map(|key| {
-                    let portal = self.portal_contract(key);
+                    let portal = self.portal_contract(coordinate, face, key);
                     CaveFaceFieldRequestV1 {
                         face,
                         key,
@@ -614,7 +685,7 @@ impl CaveSamplerV1 {
             let Ok(key) = self.shared_face_key(chunk, face) else {
                 continue;
             };
-            let portal = self.portal_contract(key);
+            let portal = self.portal_contract(chunk, face, key);
             if portal.requested {
                 distance = distance.min(self.portal_distance(x, y, z, chunk, face, portal));
             }
@@ -653,7 +724,28 @@ impl CaveSamplerV1 {
         ))
     }
 
-    fn portal_contract(&self, key: SharedFaceKeyV1) -> PortalContractV1 {
+    fn portal_contract(
+        &self,
+        coordinate: ChunkCoordinate,
+        face: ChunkFaceV1,
+        key: SharedFaceKeyV1,
+    ) -> PortalContractV1 {
+        if let Some(topology) = &self.topology {
+            return match topology.face_portal(coordinate, face) {
+                Some((u, v, radius)) => PortalContractV1 {
+                    requested: true,
+                    u,
+                    v,
+                    radius,
+                },
+                None => PortalContractV1 {
+                    requested: false,
+                    u: 0,
+                    v: 0,
+                    radius: 1,
+                },
+            };
+        }
         let hash = key.hash();
         let bytes = hash.as_bytes();
         let roll = u16::from_be_bytes([bytes[0], bytes[1]]) % 1_024;

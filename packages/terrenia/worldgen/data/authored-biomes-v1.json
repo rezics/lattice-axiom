@@ -1,0 +1,243 @@
+{
+  "authoring_schema": "terrenia:schema/authored-biome-catalog@1",
+  "biomes_revision": 1,
+  "owner_package": "@terrenia/worldgen",
+  "biomes": [
+    {
+      "header": {
+        "stable_id": "terrenia:biome/arid-badlands",
+        "schema_id_and_major": "latticeaxiom:schema/biome-definition@1",
+        "content_revision": 1,
+        "declared_by_package": "@terrenia/worldgen"
+      },
+      "scope": "terrenia:biome-scope/overworld@1",
+      "spatial_influence": {
+        "horizontal_cells": 256,
+        "vertical_cells": 32
+      },
+      "territory_participation": {
+        "contract": "terrenia:territory-participation/surface-primary@1"
+      },
+      "boundary_contract": "terrenia:biome-boundary/deterministic-transition@1",
+      "channel_offers": [
+        {
+          "channel": "terrenia:generation-channel/terrain-base@1",
+          "value_schema": "terrenia:schema/terrain-density@1",
+          "compositor": "terrenia:compositor/territorial-delegation@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/surface-material@1",
+          "value_schema": "terrenia:schema/surface-material@1",
+          "compositor": "terrenia:compositor/exclusive-owner@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/resource-field@1",
+          "value_schema": "terrenia:schema/resource-field@1",
+          "compositor": "terrenia:compositor/budgeted-merge@1",
+          "max_values_per_chunk": 256
+        }
+      ],
+      "emitted_intents": [
+        {
+          "intent": "terrenia:generation-intent/ore-replacement@1",
+          "payload_schema": "terrenia:schema/ore-replacement@1",
+          "max_per_chunk": 32
+        }
+      ],
+      "fallback": "terrenia:biome/temperate-woodland",
+      "generation_revision": 1
+    },
+    {
+      "header": {
+        "stable_id": "terrenia:biome/boreal-wetland",
+        "schema_id_and_major": "latticeaxiom:schema/biome-definition@1",
+        "content_revision": 1,
+        "declared_by_package": "@terrenia/worldgen"
+      },
+      "scope": "terrenia:biome-scope/overworld@1",
+      "spatial_influence": {
+        "horizontal_cells": 256,
+        "vertical_cells": 32
+      },
+      "territory_participation": {
+        "contract": "terrenia:territory-participation/surface-primary@1"
+      },
+      "boundary_contract": "terrenia:biome-boundary/deterministic-transition@1",
+      "channel_offers": [
+        {
+          "channel": "terrenia:generation-channel/terrain-base@1",
+          "value_schema": "terrenia:schema/terrain-density@1",
+          "compositor": "terrenia:compositor/territorial-delegation@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/surface-material@1",
+          "value_schema": "terrenia:schema/surface-material@1",
+          "compositor": "terrenia:compositor/exclusive-owner@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/hydrology-basin@1",
+          "value_schema": "terrenia:schema/hydrology-basin@1",
+          "compositor": "terrenia:compositor/constraint-set@1",
+          "max_values_per_chunk": 64
+        },
+        {
+          "channel": "terrenia:generation-channel/vegetation-points@1",
+          "value_schema": "terrenia:schema/vegetation-points@1",
+          "compositor": "terrenia:compositor/budgeted-merge@1",
+          "max_values_per_chunk": 64
+        }
+      ],
+      "emitted_intents": [
+        {
+          "intent": "terrenia:generation-intent/pine-placement@1",
+          "payload_schema": "terrenia:schema/tree-placement@1",
+          "max_per_chunk": 48
+        }
+      ],
+      "fallback": "terrenia:biome/temperate-woodland",
+      "generation_revision": 1
+    },
+    {
+      "header": {
+        "stable_id": "terrenia:biome/crystal-depths",
+        "schema_id_and_major": "latticeaxiom:schema/biome-definition@1",
+        "content_revision": 1,
+        "declared_by_package": "@terrenia/worldgen"
+      },
+      "scope": "terrenia:biome-scope/underground@1",
+      "spatial_influence": {
+        "horizontal_cells": 128,
+        "vertical_cells": 96
+      },
+      "territory_participation": {
+        "contract": "terrenia:territory-participation/underground-child@1"
+      },
+      "boundary_contract": "terrenia:biome-boundary/portal-contract@1",
+      "channel_offers": [
+        {
+          "channel": "terrenia:generation-channel/cave-topology@1",
+          "value_schema": "terrenia:schema/cave-topology@1",
+          "compositor": "terrenia:compositor/territorial-delegation@1",
+          "max_values_per_chunk": 256
+        },
+        {
+          "channel": "terrenia:generation-channel/cave-morphology@1",
+          "value_schema": "terrenia:schema/cave-morphology@1",
+          "compositor": "terrenia:compositor/exclusive-owner@1",
+          "max_values_per_chunk": 512
+        },
+        {
+          "channel": "terrenia:generation-channel/resource-field@1",
+          "value_schema": "terrenia:schema/resource-field@1",
+          "compositor": "terrenia:compositor/budgeted-merge@1",
+          "max_values_per_chunk": 128
+        }
+      ],
+      "emitted_intents": [
+        {
+          "intent": "terrenia:generation-intent/crystal-placement@1",
+          "payload_schema": "terrenia:schema/crystal-placement@1",
+          "max_per_chunk": 24
+        }
+      ],
+      "fallback": "terrenia:biome/limestone-caverns",
+      "generation_revision": 1
+    },
+    {
+      "header": {
+        "stable_id": "terrenia:biome/limestone-caverns",
+        "schema_id_and_major": "latticeaxiom:schema/biome-definition@1",
+        "content_revision": 1,
+        "declared_by_package": "@terrenia/worldgen"
+      },
+      "scope": "terrenia:biome-scope/underground@1",
+      "spatial_influence": {
+        "horizontal_cells": 128,
+        "vertical_cells": 96
+      },
+      "territory_participation": {
+        "contract": "terrenia:territory-participation/underground-child@1"
+      },
+      "boundary_contract": "terrenia:biome-boundary/portal-contract@1",
+      "channel_offers": [
+        {
+          "channel": "terrenia:generation-channel/cave-topology@1",
+          "value_schema": "terrenia:schema/cave-topology@1",
+          "compositor": "terrenia:compositor/territorial-delegation@1",
+          "max_values_per_chunk": 256
+        },
+        {
+          "channel": "terrenia:generation-channel/cave-morphology@1",
+          "value_schema": "terrenia:schema/cave-morphology@1",
+          "compositor": "terrenia:compositor/exclusive-owner@1",
+          "max_values_per_chunk": 512
+        },
+        {
+          "channel": "terrenia:generation-channel/geology-stratum@1",
+          "value_schema": "terrenia:schema/geology-stratum@1",
+          "compositor": "terrenia:compositor/constraint-set@1",
+          "max_values_per_chunk": 256
+        }
+      ],
+      "emitted_intents": [
+        {
+          "intent": "terrenia:generation-intent/dripstone-placement@1",
+          "payload_schema": "terrenia:schema/dripstone-placement@1",
+          "max_per_chunk": 32
+        }
+      ],
+      "fallback": null,
+      "generation_revision": 1
+    },
+    {
+      "header": {
+        "stable_id": "terrenia:biome/temperate-woodland",
+        "schema_id_and_major": "latticeaxiom:schema/biome-definition@1",
+        "content_revision": 1,
+        "declared_by_package": "@terrenia/worldgen"
+      },
+      "scope": "terrenia:biome-scope/overworld@1",
+      "spatial_influence": {
+        "horizontal_cells": 256,
+        "vertical_cells": 32
+      },
+      "territory_participation": {
+        "contract": "terrenia:territory-participation/surface-primary@1"
+      },
+      "boundary_contract": "terrenia:biome-boundary/deterministic-transition@1",
+      "channel_offers": [
+        {
+          "channel": "terrenia:generation-channel/terrain-base@1",
+          "value_schema": "terrenia:schema/terrain-density@1",
+          "compositor": "terrenia:compositor/territorial-delegation@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/surface-material@1",
+          "value_schema": "terrenia:schema/surface-material@1",
+          "compositor": "terrenia:compositor/exclusive-owner@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/vegetation-points@1",
+          "value_schema": "terrenia:schema/vegetation-points@1",
+          "compositor": "terrenia:compositor/budgeted-merge@1",
+          "max_values_per_chunk": 64
+        }
+      ],
+      "emitted_intents": [
+        {
+          "intent": "terrenia:generation-intent/tree-placement@1",
+          "payload_schema": "terrenia:schema/tree-placement@1",
+          "max_per_chunk": 64
+        }
+      ],
+      "fallback": null,
+      "generation_revision": 1
+    }
+  ]
+}

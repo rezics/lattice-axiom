@@ -63,6 +63,7 @@ use latticeaxiom_player::{
     CompiledClientInputMaps, LeafwingInputAdapterPlugin, LocalPlayerClientInputBundle,
 };
 use latticeaxiom_registration::CompiledRegistration;
+use latticeaxiom_runtime_contracts::WorldgenInspectError;
 use latticeaxiom_storage::{ChunkCoordinate, ChunkRevision, StorageError};
 use latticeaxiom_voxel_mesh::{MeshError, MeshReceipt};
 use latticeaxiom_voxel_runtime::RuntimeError;
@@ -75,6 +76,7 @@ pub use display::{
     ContentDisplayCatalogV1, ContentDisplayLabelV1, authored_content_display_catalog,
 };
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
+pub use latticeaxiom_runtime_contracts::WorldgenInspectReportV1;
 pub use latticeaxiom_worldgen::{CaveOccupancyArbitrationV1, ChunkFaceV1};
 pub use profile::{
     ADR_0026_ACTIVE_COVERAGE_M, ADR_0026_CHUNK_EDGE_VOXELS, ADR_0026_RESIDENT_COVERAGE_M,
@@ -937,6 +939,9 @@ pub enum ProductionHostError {
     /// D4 generation or plan compilation failed.
     #[error(transparent)]
     Worldgen(#[from] WorldgenError),
+    /// Bounded worldgen inspect compilation failed.
+    #[error(transparent)]
+    WorldgenInspect(#[from] WorldgenInspectError),
     /// Authored D9 content catalog compilation failed.
     #[error(transparent)]
     Content(Box<latticeaxiom_content::ContentError>),
@@ -1037,6 +1042,24 @@ pub enum ProductionHostError {
     /// The registration image named more than one dimension.
     #[error("registration image names more than one dimension")]
     AmbiguousDimension,
+    /// The reopened lock omitted a required exactly-one capability provider.
+    #[error("lock graph is missing exactly-one provider for `{capability}`")]
+    MissingLockProvider {
+        /// Capability identity that must select one package.
+        capability: String,
+    },
+    /// The reopened lock named more than one provider for an exclusive slot.
+    #[error("lock graph lists more than one provider for `{capability}`")]
+    AmbiguousLockProvider {
+        /// Capability identity that must select one package.
+        capability: String,
+    },
+    /// A compiled V5 plan omitted a required natural-layer sample.
+    #[error("compiled V5 plan is missing a `{kind}` sample")]
+    MissingNaturalSample {
+        /// Missing sample kind.
+        kind: &'static str,
+    },
     /// Compiled occupancy palettes rejected an authored content row.
     #[error("authored content catalog is invalid: {reason}")]
     InvalidContentCatalog {

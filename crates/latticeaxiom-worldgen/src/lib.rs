@@ -16,13 +16,24 @@
 //! and arid badlands); package-owned style identities and Predicate-receipt
 //! registration schemas are not frozen here. The coarse selector implements
 //! only the D7 [`TerritoryQueryV1`] result shape, not the full Territory Atlas.
+//!
+//! The optional V5 natural layer adds a third surface style, queryable strata,
+//! stable resource fields, exclusion-radius vegetation, and surface river/basin
+//! planning on the same coordinator. The optional V6 cave-topology layer adds
+//! domain-owned corridors, a bounded branch contributor, and passability
+//! receipts without replacing D4 occupancy. The optional V6 hydrology occupancy
+//! layer adds underground drainage, aquifer tables, and initial water/lava
+//! occupancy candidates without changing snapshot schema.
 
 mod cave;
+mod cave_topology;
 mod config;
 mod epoch;
 mod error;
 mod generation;
 mod hashes;
+mod hydrology;
+mod natural;
 mod provider;
 mod region;
 mod roles;
@@ -34,10 +45,15 @@ pub use cave::{
     CaveFaceFieldRequestV1, CaveFaceOccupancyValidationV1, CaveFieldPortalAssertionV1,
     CaveFieldPortalPlanV1, CaveOccupancyArbitrationV1, ChunkFaceV1, SharedFaceKeyV1,
 };
+pub use cave_topology::{
+    CaveBranchContributorV1, CaveLayerCorridorV1, CaveLayerEntranceV1, CaveLayerPortalV1,
+    CaveOwnedDomainV1, CaveTopologyAlgorithmV1, CaveTopologyLayerInputV1,
+    CaveVoxelPassabilityReceiptV1, cell_center_voxels, millimeters_to_voxels,
+};
 pub use config::{WorldgenConfigV1, WorldgenLimitsV1};
 pub use epoch::{
     AdjacentCellEpochStateV1, AdjacentCellEpochV1, AdjacentEpochSnapshotV1,
-    BoundaryAdapterDeclarationV1, CellEpochStateV1, ExistingSnapshotEvidenceV1,
+    BoundaryAdapterDeclarationV1, BoundaryReceiptV1, CellEpochStateV1, ExistingSnapshotEvidenceV1,
     PlanningCellCoordinateV1,
 };
 pub use error::{WorldgenError, WorldgenResult};
@@ -47,17 +63,30 @@ pub use generation::{
     PlacementPredicateKindV1, PlacementPredicateReceiptV1, RoleBindingReceiptV1,
 };
 pub use hashes::{
-    BoundaryIdV1, GenerationEpochIdV1, GenerationInputHashV1, GenerationProvenanceHashV1,
-    GeneratorFingerprintV1, LockedClosureFingerprintV1, PlanActivationIdV1, PlanningCellIdV1,
-    SharedFaceHashV1, SnapshotChecksumV1, WorldgenConfigHashV1,
+    AquiferBasinIdV1, BoundaryIdV1, CaveTopologyLayerHashV1, DrainageLinkIdV1, GenerationEpochIdV1,
+    GenerationInputHashV1, GenerationProvenanceHashV1, GeneratorFingerprintV1,
+    HydrologyOccupancyHashV1, LockedClosureFingerprintV1, NaturalLayerHashV1, PlanActivationIdV1,
+    PlanningCellIdV1, RiverBasinIdV1, SharedFaceHashV1, SnapshotChecksumV1, WorldgenConfigHashV1,
+};
+pub use hydrology::{
+    AquiferSampleV1, DrainageSampleV1, HydrologyAccountingV1, HydrologyFaceContinuityV1,
+    HydrologyFlowV1, HydrologyFluidBindingsV1, HydrologyOccupancyCandidateV1,
+    HydrologyOccupancyCellV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
+    HydrologyOccupancyKindV1, HydrologyOccupancySampleV1,
+};
+pub(crate) use natural::NaturalSamplerV1;
+pub use natural::{
+    GeologicSampleV1, NaturalLayerConfigV1, NaturalLayerInputV1, ResourceFieldSampleV1,
+    RiverSampleV1,
 };
 pub use provider::{ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1};
 pub use region::{
     BoundedGeneratedRegionV1, MAX_BOUNDED_REGION_CHUNKS, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1,
 };
 pub use roles::{
-    D4_MAX_CATALOG_BLOCK_COUNT, D4_MAX_ROLE_BINDING_COUNT, D4BlockCatalogClosureV1,
-    D4MaterialRoleV1, D4RoleVocabularyV1, FrozenRoleBindingsV1,
+    D4_MAX_CATALOG_BLOCK_COUNT, D4_MAX_ROLE_BINDING_COUNT, D4_MINIMUM_BLOCK_COUNT,
+    D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, D7_NATURAL_BLOCK_COUNT,
+    FrozenRoleBindingsV1, NaturalRoleVocabularyV1,
 };
 pub use seed::WorldSeedV1;
 pub use spawn::{

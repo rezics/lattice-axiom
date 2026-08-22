@@ -22,6 +22,8 @@ pub enum TerrainStyleV1 {
     TemperateWoodland,
     /// Sand/red sand, sandstone strata, basalt, and copper resources.
     AridBadlands,
+    /// Snow/peat/moss surfaces, slate, and bounded pine vegetation.
+    BorealWetland,
 }
 
 impl TerrainStyleV1 {
@@ -29,13 +31,14 @@ impl TerrainStyleV1 {
         match self {
             Self::TemperateWoodland => 0,
             Self::AridBadlands => 1,
+            Self::BorealWetland => 2,
         }
     }
 
     pub(crate) const fn other(self) -> Self {
         match self {
             Self::TemperateWoodland => Self::AridBadlands,
-            Self::AridBadlands => Self::TemperateWoodland,
+            Self::AridBadlands | Self::BorealWetland => Self::TemperateWoodland,
         }
     }
 }
@@ -156,6 +159,13 @@ pub(crate) struct CompactTerritorySampleV1 {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct BorealTerrainParamsV1 {
+    pub(crate) provider: ProviderGenerationIdentityV1,
+    pub(crate) base_height: i32,
+    pub(crate) relief: u16,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct TerritorySamplerV1 {
     seed: WorldSeedV1,
     input_hash: GenerationInputHashV1,
@@ -164,6 +174,7 @@ pub(crate) struct TerritorySamplerV1 {
     transition: ProviderGenerationIdentityV1,
     temperate: ProviderGenerationIdentityV1,
     arid: ProviderGenerationIdentityV1,
+    boreal: Option<BorealTerrainParamsV1>,
 }
 
 impl TerritorySamplerV1 {
@@ -184,7 +195,13 @@ impl TerritorySamplerV1 {
             transition,
             temperate,
             arid,
+            boreal: None,
         }
+    }
+
+    pub(crate) fn with_boreal(mut self, params: BorealTerrainParamsV1) -> Self {
+        self.boreal = Some(params);
+        self
     }
 
     pub(crate) fn query(&self, x: i64, z: i64) -> TerritoryQueryV1 {
@@ -334,7 +351,13 @@ impl TerritorySamplerV1 {
                 &cell_z.to_be_bytes(),
             ],
         );
-        if roll & 1 == 0 {
+        if self.boreal.is_some() {
+            match roll % 3 {
+                0 => TerrainStyleV1::TemperateWoodland,
+                1 => TerrainStyleV1::AridBadlands,
+                _ => TerrainStyleV1::BorealWetland,
+            }
+        } else if roll & 1 == 0 {
             TerrainStyleV1::TemperateWoodland
         } else {
             TerrainStyleV1::AridBadlands
@@ -353,6 +376,16 @@ impl TerritorySamplerV1 {
                 self.config.arid_relief,
                 &self.arid,
             ),
+            TerrainStyleV1::BorealWetland => {
+                let boreal = self.boreal.as_ref();
+                (
+                    boreal.map_or(self.config.temperate_base_height, |params| {
+                        params.base_height
+                    }),
+                    boreal.map_or(self.config.temperate_relief, |params| params.relief),
+                    boreal.map_or(&self.temperate, |params| &params.provider),
+                )
+            }
         };
         let scale = i64::from(self.config.height_noise_scale_voxels);
         let grid_x = x.div_euclid(scale);

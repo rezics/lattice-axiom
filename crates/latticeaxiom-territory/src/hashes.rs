@@ -51,12 +51,32 @@ typed_hash!(
     "Canonical identity of a validated D7 territory plan."
 );
 typed_hash!(
+    TerritoryPlanReceiptHashV1,
+    "Canonical identity of a finite compiled territory-plan receipt."
+);
+typed_hash!(
+    TerritoryConflictDiagnosticHashV1,
+    "Canonical identity of a territory ownership-conflict diagnostic."
+);
+typed_hash!(
     CavePortalIdV1,
     "Direction-independent identity of a validated cave portal."
 );
 typed_hash!(
     CaveEntranceIdV1,
     "Direction-independent identity of a planned cave surface entrance."
+);
+typed_hash!(
+    CaveTopologyPlanHashV1,
+    "Canonical identity of a compiled V6 cave topology graph and passability plan."
+);
+typed_hash!(
+    CavePassabilityReceiptHashV1,
+    "Canonical identity of one entrance-to-destination passability receipt."
+);
+typed_hash!(
+    CaveTopologyNodeIdV1,
+    "Direction-independent identity of one cave topology graph node."
 );
 typed_hash!(
     HydrologyPlanHashV1,

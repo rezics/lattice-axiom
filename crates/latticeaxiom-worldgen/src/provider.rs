@@ -27,6 +27,16 @@ pub enum ProviderSlotV1 {
     CaveTopology,
     /// Role-driven final occupancy materializer.
     Materializer,
+    /// Queryable strata and geologic-field owner used by the V5 natural layer.
+    Geology,
+    /// Surface river and basin planner used by the V5 natural layer.
+    Hydrology,
+    /// Stable ore-field owner used by the V5 natural layer.
+    Resources,
+    /// Exclusion-radius vegetation owner used by the V5 natural layer.
+    Vegetation,
+    /// Primary terrain owner for boreal wetland domains.
+    BorealTerrain,
 }
 
 impl ProviderSlotV1 {
@@ -41,6 +51,15 @@ impl ProviderSlotV1 {
         Self::Materializer,
     ];
 
+    /// Exclusive V5 natural-layer slots. Absent from D4 plans.
+    pub const NATURAL: [Self; 5] = [
+        Self::Geology,
+        Self::Hydrology,
+        Self::Resources,
+        Self::Vegetation,
+        Self::BorealTerrain,
+    ];
+
     /// Returns the stable channel/domain label.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -52,6 +71,11 @@ impl ProviderSlotV1 {
             Self::TerrainTransition => "terrain.boundary/woodland-badlands",
             Self::CaveTopology => "cave.topology/dimension-default",
             Self::Materializer => "terrain.materializer/dimension",
+            Self::Geology => "geology.strata/dimension",
+            Self::Hydrology => "hydrology.basin/dimension",
+            Self::Resources => "terrain.resource/dimension",
+            Self::Vegetation => "terrain.vegetation/dimension",
+            Self::BorealTerrain => "terrain.base/boreal-wetland",
         }
     }
 }
@@ -169,23 +193,10 @@ impl ResolvedProvidersV1 {
 
         let mut identities = BTreeMap::new();
         for slot in ProviderSlotV1::ALL {
-            let mut candidates = grouped.remove(&slot).unwrap_or_default();
-            candidates.sort();
-            match candidates.as_slice() {
-                [] => return Err(WorldgenError::MissingProvider { slot }),
-                [identity] => {
-                    identities.insert(slot, identity.clone());
-                }
-                _ => {
-                    return Err(WorldgenError::ConflictingProviders {
-                        slot,
-                        providers: candidates
-                            .into_iter()
-                            .map(|candidate| candidate.provider_stable_id)
-                            .collect(),
-                    });
-                }
-            }
+            insert_exclusive_slot(&mut identities, slot, grouped.remove(&slot), true)?;
+        }
+        for slot in ProviderSlotV1::NATURAL {
+            insert_exclusive_slot(&mut identities, slot, grouped.remove(&slot), false)?;
         }
 
         let canonical = canonical_json_bytes(&identities).map_err(|error| {
@@ -210,15 +221,53 @@ impl ResolvedProvidersV1 {
             .unwrap_or_else(|| missing_resolved_provider(slot))
     }
 
+    pub(crate) fn try_identity(
+        &self,
+        slot: ProviderSlotV1,
+    ) -> Option<&ProviderGenerationIdentityV1> {
+        self.identities.get(&slot)
+    }
+
     pub(crate) fn ordered(&self) -> Vec<(ProviderSlotV1, ProviderGenerationIdentityV1)> {
         ProviderSlotV1::ALL
             .into_iter()
-            .map(|slot| (slot, self.identity(slot).clone()))
+            .chain(ProviderSlotV1::NATURAL)
+            .filter_map(|slot| {
+                self.identities
+                    .get(&slot)
+                    .cloned()
+                    .map(|identity| (slot, identity))
+            })
             .collect()
     }
 
     pub(crate) const fn fingerprint(&self) -> GeneratorFingerprintV1 {
         self.fingerprint
+    }
+}
+
+fn insert_exclusive_slot(
+    identities: &mut BTreeMap<ProviderSlotV1, ProviderGenerationIdentityV1>,
+    slot: ProviderSlotV1,
+    candidates: Option<Vec<ProviderGenerationIdentityV1>>,
+    required: bool,
+) -> WorldgenResult<()> {
+    let mut candidates = candidates.unwrap_or_default();
+    candidates.sort();
+    match candidates.as_slice() {
+        [] if required => Err(WorldgenError::MissingProvider { slot }),
+        [] => Ok(()),
+        [identity] => {
+            identities.insert(slot, identity.clone());
+            Ok(())
+        }
+        _ => Err(WorldgenError::ConflictingProviders {
+            slot,
+            providers: candidates
+                .into_iter()
+                .map(|candidate| candidate.provider_stable_id)
+                .collect(),
+        }),
     }
 }
 

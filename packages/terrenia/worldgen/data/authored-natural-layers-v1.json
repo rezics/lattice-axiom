@@ -1,0 +1,150 @@
+{
+  "authoring_schema": "terrenia:schema/authored-natural-layers@1",
+  "layers_revision": 1,
+  "owner_package": "@terrenia/worldgen",
+  "coordinator_capability": "latticeaxiom:capability/worldgen-terrain-provider@2",
+  "surface_territories": [
+    {
+      "id": "terrenia:territory-domain/temperate-woodland",
+      "biome": "terrenia:biome/temperate-woodland",
+      "terrain_base_role": "terrenia:block-role/temperate-surface@1",
+      "spatial_influence": "surface",
+      "queryable": true
+    },
+    {
+      "id": "terrenia:territory-domain/arid-badlands",
+      "biome": "terrenia:biome/arid-badlands",
+      "terrain_base_role": "terrenia:block-role/arid-sand@1",
+      "spatial_influence": "surface",
+      "queryable": true
+    },
+    {
+      "id": "terrenia:territory-domain/boreal-wetland",
+      "biome": "terrenia:biome/boreal-wetland",
+      "terrain_base_role": "terrenia:block-role/snow@1",
+      "spatial_influence": "surface",
+      "queryable": true
+    }
+  ],
+  "underground_territories": [
+    {
+      "id": "terrenia:cave-topology-domain/limestone",
+      "biome": "terrenia:biome/limestone-caverns",
+      "exists_before_cave_generation": true,
+      "topology_algorithm": "terrenia:cave-algorithm/karst-graph@1",
+      "wall_role": "terrenia:block-role/calcite@1",
+      "queryable": true
+    },
+    {
+      "id": "terrenia:cave-topology-domain/crystal",
+      "biome": "terrenia:biome/crystal-depths",
+      "exists_before_cave_generation": true,
+      "topology_algorithm": "terrenia:cave-algorithm/chamber-graph@1",
+      "wall_role": "terrenia:block-role/deepstone@1",
+      "queryable": true
+    }
+  ],
+  "cave_plan": {
+    "default_topology_domain": "terrenia:cave-topology-domain/dimension-default",
+    "bounded_branch_contributor": "terrenia:cave-contributor/side-passage@1",
+    "required_portal_cells": 4,
+    "required_topology_domains": 2,
+    "must_connect_destination": "terrenia:cave-destination/crystal-chamber@1"
+  },
+  "hydrology": {
+    "plan": "terrenia:worldgen-plan/surface-basin@1",
+    "crosses_surface_territories": true,
+    "bounded": true,
+    "erosion_simulation": false
+  },
+  "geology": {
+    "field": "terrenia:worldgen-plan/stratum-field@1",
+    "queryable": true,
+    "roles": [
+      "terrenia:block-role/temperate-base-rock@1",
+      "terrenia:block-role/temperate-secondary-rock@1",
+      "terrenia:block-role/deepstone@1",
+      "terrenia:block-role/granite@1",
+      "terrenia:block-role/slate@1",
+      "terrenia:block-role/tuff@1"
+    ]
+  },
+  "vegetation": {
+    "point_procedure": "terrenia:worldgen-plan/vegetation-points@1",
+    "exclusion_radius_voxels": 3,
+    "roles": [
+      "terrenia:block-role/woodland-log@1",
+      "terrenia:block-role/woodland-leaves@1",
+      "terrenia:block-role/woodland-ground-cover@1",
+      "terrenia:block-role/boreal-log@1",
+      "terrenia:block-role/boreal-leaves@1",
+      "terrenia:block-role/moss@1"
+    ]
+  },
+  "obtainable_resource_classes": [
+    {
+      "class": "wood",
+      "roles": [
+        "terrenia:block-role/woodland-log@1",
+        "terrenia:block-role/boreal-log@1"
+      ],
+      "blocks": [
+        "terrenia:block/oak-log",
+        "terrenia:block/pine-log"
+      ]
+    },
+    {
+      "class": "soil",
+      "roles": [
+        "terrenia:block-role/temperate-subsurface@1",
+        "terrenia:block-role/coarse-dirt@1",
+        "terrenia:block-role/rooted-dirt@1",
+        "terrenia:block-role/mud@1",
+        "terrenia:block-role/peat@1"
+      ],
+      "blocks": [
+        "terrenia:block/dirt",
+        "terrenia:block/coarse-dirt",
+        "terrenia:block/rooted-dirt",
+        "terrenia:block/mud",
+        "terrenia:block/peat"
+      ]
+    },
+    {
+      "class": "stone",
+      "roles": [
+        "terrenia:block-role/temperate-base-rock@1",
+        "terrenia:block-role/deepstone@1",
+        "terrenia:block-role/granite@1",
+        "terrenia:block-role/slate@1"
+      ],
+      "blocks": [
+        "terrenia:block/stone",
+        "terrenia:block/deepstone",
+        "terrenia:block/granite",
+        "terrenia:block/slate"
+      ]
+    },
+    {
+      "class": "ore",
+      "roles": [
+        "terrenia:block-role/copper-resource@1",
+        "terrenia:block-role/coal-resource@1",
+        "terrenia:block-role/iron-resource@1",
+        "terrenia:block-role/tin-resource@1",
+        "terrenia:block-role/gold-resource@1",
+        "terrenia:block-role/sulfur-resource@1",
+        "terrenia:block-role/crystal-resource@1"
+      ],
+      "blocks": [
+        "terrenia:block/copper-ore",
+        "terrenia:block/coal-ore",
+        "terrenia:block/iron-ore",
+        "terrenia:block/tin-ore",
+        "terrenia:block/gold-ore",
+        "terrenia:block/sulfur-ore",
+        "terrenia:block/crystal-cluster"
+      ]
+    }
+  ]
+}

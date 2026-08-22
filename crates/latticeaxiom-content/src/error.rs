@@ -158,6 +158,20 @@ pub enum ContentError {
         /// Missing fluid.
         fluid: StableId,
     },
+    /// A solid, fluid, or replaceability occupancy policy could not be classified.
+    #[error("occupancy policy `{id}` is invalid: {reason}")]
+    InvalidOccupancyPolicy {
+        /// Rejected policy identity.
+        id: StableId,
+        /// Stable reason.
+        reason: &'static str,
+    },
+    /// A dual-layer occupancy candidate could not be compiled.
+    #[error("occupancy candidate is invalid: {reason}")]
+    InvalidOccupancyCandidate {
+        /// Stable reason.
+        reason: &'static str,
+    },
 }
 
 /// Error returned when a fluid level is outside the frozen `0..=7` range.

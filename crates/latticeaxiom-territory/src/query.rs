@@ -16,6 +16,42 @@ use crate::{
     TerritoryResult, UndergroundTerritoryV1,
 };
 
+/// One ranked ownership candidate returned by a production territory query.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrderedOwnershipCandidateV1<D> {
+    rank: u8,
+    domain: D,
+    owner: ResolvedPrimaryOwnerV1,
+    candidate_id: Option<StableId>,
+}
+
+impl<D> OrderedOwnershipCandidateV1<D> {
+    /// Returns the 1-based rank (primary is 1, secondary is 2).
+    #[must_use]
+    pub const fn rank(&self) -> u8 {
+        self.rank
+    }
+
+    /// Returns the ownership domain at this rank.
+    #[must_use]
+    pub const fn domain(&self) -> &D {
+        &self.domain
+    }
+
+    /// Returns the exclusive primary owner of this domain.
+    #[must_use]
+    pub const fn owner(&self) -> &ResolvedPrimaryOwnerV1 {
+        &self.owner
+    }
+
+    /// Returns the Atlas candidate identity when this rank selected one.
+    #[must_use]
+    pub const fn candidate_id(&self) -> Option<&StableId> {
+        self.candidate_id.as_ref()
+    }
+}
+
 /// Production surface ownership at one planning cell.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +59,8 @@ pub struct SurfaceTerritoryQueryV1 {
     cell: PlanningCellCoordinateV1,
     primary: TerritoryDomainIdV1,
     secondary: TerritoryDomainIdV1,
+    primary_candidate: Option<StableId>,
+    secondary_candidate: Option<StableId>,
     primary_owner: ResolvedPrimaryOwnerV1,
     secondary_owner: ResolvedPrimaryOwnerV1,
     boundary_distance_cells: u32,
@@ -46,6 +84,37 @@ impl SurfaceTerritoryQueryV1 {
     #[must_use]
     pub const fn secondary(&self) -> &TerritoryDomainIdV1 {
         &self.secondary
+    }
+
+    /// Returns the winning Atlas candidate identity, if a candidate won.
+    #[must_use]
+    pub const fn primary_candidate(&self) -> Option<&StableId> {
+        self.primary_candidate.as_ref()
+    }
+
+    /// Returns the runner-up Atlas candidate identity, if one scored.
+    #[must_use]
+    pub const fn secondary_candidate(&self) -> Option<&StableId> {
+        self.secondary_candidate.as_ref()
+    }
+
+    /// Returns primary then secondary ownership candidates in rank order.
+    #[must_use]
+    pub fn ordered_candidates(&self) -> [OrderedOwnershipCandidateV1<TerritoryDomainIdV1>; 2] {
+        [
+            OrderedOwnershipCandidateV1 {
+                rank: 1,
+                domain: self.primary.clone(),
+                owner: self.primary_owner.clone(),
+                candidate_id: self.primary_candidate.clone(),
+            },
+            OrderedOwnershipCandidateV1 {
+                rank: 2,
+                domain: self.secondary.clone(),
+                owner: self.secondary_owner.clone(),
+                candidate_id: self.secondary_candidate.clone(),
+            },
+        ]
     }
 
     /// Returns the exclusive primary owner of the winning domain.
@@ -110,6 +179,25 @@ impl UndergroundTerritoryQueryV1 {
     #[must_use]
     pub const fn secondary(&self) -> &CaveTopologyDomainIdV1 {
         &self.secondary
+    }
+
+    /// Returns primary then secondary cave-topology owners in rank order.
+    #[must_use]
+    pub fn ordered_candidates(&self) -> [OrderedOwnershipCandidateV1<CaveTopologyDomainIdV1>; 2] {
+        [
+            OrderedOwnershipCandidateV1 {
+                rank: 1,
+                domain: self.primary.clone(),
+                owner: self.primary_owner.clone(),
+                candidate_id: None,
+            },
+            OrderedOwnershipCandidateV1 {
+                rank: 2,
+                domain: self.secondary.clone(),
+                owner: self.secondary_owner.clone(),
+                candidate_id: None,
+            },
+        ]
     }
 
     /// Returns the exclusive primary owner of the winning cave domain.
@@ -293,7 +381,13 @@ impl TerritoryPlanV1 {
     ) -> TerritoryResult<SurfaceTerritoryQueryV1> {
         let atlas_query = self.query(cell);
         let primary = atlas_query.terrain_domain().clone();
-        let secondary = surface_secondary(self, &atlas_query);
+        let primary_candidate = atlas_query
+            .levels()
+            .iter()
+            .rev()
+            .find_map(crate::TerritoryQueryLevelV1::winning_candidate)
+            .cloned();
+        let (secondary, secondary_candidate) = surface_secondary(self, &atlas_query);
         let primary_owner =
             resolved_owner(self, &PrimaryOwnershipDomainV1::Terrain(primary.clone()))?.clone();
         let secondary_owner =
@@ -305,6 +399,8 @@ impl TerritoryPlanV1 {
             cell,
             primary,
             secondary,
+            primary_candidate,
+            secondary_candidate,
             primary_owner,
             secondary_owner,
             boundary_distance_cells,
@@ -360,6 +456,7 @@ impl TerritoryPlanV1 {
             self.default_cave_domain(),
             self.underground_territories(),
             self.cave_portals(),
+            self.contributions(),
             config,
         )
     }
@@ -383,6 +480,7 @@ impl TerritoryPlanV1 {
             self.default_cave_domain(),
             self.underground_territories(),
             self.cave_portals(),
+            self.contributions(),
             config,
             chunks,
         )
@@ -433,17 +531,20 @@ fn check_query_range_len(actual: u64, plan: &TerritoryPlanV1) -> TerritoryResult
     }
 }
 
-fn surface_secondary(plan: &TerritoryPlanV1, query: &TerritoryQueryV1) -> TerritoryDomainIdV1 {
+fn surface_secondary(
+    plan: &TerritoryPlanV1,
+    query: &TerritoryQueryV1,
+) -> (TerritoryDomainIdV1, Option<StableId>) {
     let primary = query.terrain_domain();
     for level in query.levels().iter().rev() {
         if let Some(runner_up) = level.runner_up_candidate()
             && let Some(domain) = candidate_domain(plan, runner_up)
             && domain != primary
         {
-            return domain.clone();
+            return (domain.clone(), Some(runner_up.clone()));
         }
     }
-    terrain_parent(plan, primary)
+    (terrain_parent(plan, primary), None)
 }
 
 fn surface_boundary_distance(query: &TerritoryQueryV1) -> u32 {

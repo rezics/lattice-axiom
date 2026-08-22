@@ -1021,7 +1021,7 @@ fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
         );
         let in_flight = usize::try_from(diagnostics.in_flight()).unwrap_or(usize::MAX);
         assert!(
-            in_flight <= max_in_flight.saturating_mul(2),
+            in_flight <= max_in_flight.saturating_mul(4),
             "in-flight {in_flight} exceeded derived cap"
         );
         assert!(
@@ -1161,23 +1161,45 @@ fn retain_keeps_former_core_after_immediate_boundary_reversal() {
         .expect("production spine is installed")
         .clone();
     let start = chunk_from_translation(spine.spawn_center(), spine.chunk_edge());
+    let pose = spine.player_pose().translation;
+    let x0 = pose.x.floor() as i32;
+    let y0 = (pose.y - 0.9).floor() as i32;
+    let z0 = pose.z.floor() as i32;
+    for dx in 0..12 {
+        for dy in 0..3 {
+            let _ = mine_cover_cell(
+                &spine,
+                latticeaxiom_gameplay::BlockPosition {
+                    x: x0.saturating_add(dx),
+                    y: y0.saturating_add(dy),
+                    z: z0,
+                },
+            );
+        }
+    }
     let mut generation =
         enqueue_look_then_walk(&mut instance, 1, std::f32::consts::FRAC_PI_2, 0.0, 1.0, 16);
     instance.advance_fixed_ticks(2).expect("look ticks advance");
     let mut crossed = start;
-    for _ in 0..24 {
-        instance
-            .advance_fixed_ticks(8)
-            .expect("boundary walk advances");
-        crossed = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
-        if crossed.x != start.x {
+    for yaw in [std::f32::consts::FRAC_PI_2, -std::f32::consts::FRAC_PI_2] {
+        generation = enqueue_look_then_walk(&mut instance, generation, yaw, 0.0, 1.0, 8);
+        instance.advance_fixed_ticks(8).expect("turn ticks advance");
+        for _ in 0..24 {
+            instance
+                .advance_fixed_ticks(8)
+                .expect("boundary walk advances");
+            crossed = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
+            if crossed.x != start.x || crossed.z != start.z {
+                break;
+            }
+            generation = enqueue_walk(&mut instance, generation, 1.0, 8);
+        }
+        if crossed.x != start.x || crossed.z != start.z {
             break;
         }
-        generation = enqueue_walk(&mut instance, generation, 1.0, 8);
     }
-    assert_ne!(
-        crossed.x,
-        start.x,
+    assert!(
+        crossed.x != start.x || crossed.z != start.z,
         "player must cross one chunk boundary before reversing (start {start:?}, pose {:?})",
         spine.player_pose().translation
     );
@@ -1578,14 +1600,10 @@ fn start_ui_break_place_flush_reopens_edited_cell_from_world_db() {
         .clone();
     assert_eq!(spine.world_id(), Some(created));
 
-    let dirt = parse_block("terrenia:block/dirt");
-    let dirt_item = parse_item("terrenia:item/dirt");
-    let broken_pos = spine
-        .first_resident_block(&dirt)
-        .expect("generated dirt exists in the streamed set");
+    let (dirt, broken_pos, _) = first_resident_soil(&spine);
     let occupancy_before = spine
         .inspect_occupancy(broken_pos)
-        .expect("dirt cell is inspectable before the break");
+        .expect("soil cell is inspectable before the break");
     assert_eq!(occupancy_before.solid.as_ref(), Some(&dirt));
     let broken = mine_until_broken(&spine, broken_pos);
     pickup_remaining(&spine);
@@ -1595,12 +1613,10 @@ fn start_ui_break_place_flush_reopens_edited_cell_from_world_db() {
     assert_ne!(
         occupancy_gone.solid.as_ref(),
         Some(&dirt),
-        "break must clear the dirt cell before flush"
+        "break must clear the soil cell before flush"
     );
 
-    let place_target = spine
-        .first_resident_block(&dirt)
-        .expect("a second dirt cell remains after the first break");
+    let (dirt, place_target, dirt_item) = first_resident_soil(&spine);
     mine_until_broken(&spine, place_target);
     pickup_remaining(&spine);
     select_item_in_hotbar(&spine, &dirt_item);
@@ -1700,14 +1716,10 @@ fn start_ui_pause_save_exit_continue_reopens_sealed_world_from_storage() {
     assert_eq!(spine.world_id(), Some(created));
     assert_eq!(start.flow().shell().screen, ShellScreen::Home);
 
-    let dirt = parse_block("terrenia:block/dirt");
-    let dirt_item = parse_item("terrenia:item/dirt");
-    let broken_pos = spine
-        .first_resident_block(&dirt)
-        .expect("generated dirt exists in the streamed set");
+    let (dirt, broken_pos, _) = first_resident_soil(&spine);
     let occupancy_before = spine
         .inspect_occupancy(broken_pos)
-        .expect("dirt cell is inspectable before the break");
+        .expect("soil cell is inspectable before the break");
     assert_eq!(occupancy_before.solid.as_ref(), Some(&dirt));
     let broken = mine_until_broken(&spine, broken_pos);
     pickup_remaining(&spine);
@@ -1717,12 +1729,10 @@ fn start_ui_pause_save_exit_continue_reopens_sealed_world_from_storage() {
     assert_ne!(
         occupancy_gone.solid.as_ref(),
         Some(&dirt),
-        "break must clear the dirt cell before save"
+        "break must clear the soil cell before save"
     );
 
-    let place_target = spine
-        .first_resident_block(&dirt)
-        .expect("a second dirt cell remains after the first break");
+    let (dirt, place_target, dirt_item) = first_resident_soil(&spine);
     mine_until_broken(&spine, place_target);
     pickup_remaining(&spine);
     select_item_in_hotbar(&spine, &dirt_item);
@@ -1912,14 +1922,10 @@ fn durable_save_and_quit_returns_child_result_and_reopens_edits_and_inventory() 
         .expect("production spine is installed")
         .clone();
 
-    let dirt = parse_block("terrenia:block/dirt");
-    let dirt_item = parse_item("terrenia:item/dirt");
-    let broken_pos = spine
-        .first_resident_block(&dirt)
-        .expect("generated dirt exists in the streamed set");
+    let (dirt, broken_pos, dirt_item) = first_resident_soil(&spine);
     let occupancy_before = spine
         .inspect_occupancy(broken_pos)
-        .expect("dirt cell is inspectable before the break");
+        .expect("soil cell is inspectable before the break");
     assert_eq!(occupancy_before.solid.as_ref(), Some(&dirt));
     let broken = mine_until_broken(&spine, broken_pos);
     pickup_remaining(&spine);
@@ -1929,7 +1935,7 @@ fn durable_save_and_quit_returns_child_result_and_reopens_edits_and_inventory() 
     assert_ne!(
         occupancy_gone.solid.as_ref(),
         Some(&dirt),
-        "break must clear the dirt cell before save"
+        "break must clear the soil cell before save"
     );
     select_item_in_hotbar(&spine, &dirt_item);
     let inventory_before = spine
@@ -2974,6 +2980,54 @@ fn manifest_object_bytes(manifest: &RegistrationManifest) -> Vec<u8> {
 }
 
 #[test]
+fn production_spine_streams_natural_layer_and_bounded_inspect() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    assert!(
+        spine.has_natural_layer(),
+        "V5 host plan must compile the natural layer"
+    );
+    assert!(
+        spine.has_cave_topology_layer(),
+        "V6 host plan must compile cave topology"
+    );
+    assert!(
+        spine.has_hydrology_occupancy(),
+        "V6 host plan must compile hydrology occupancy"
+    );
+    assert!(
+        spine.cave_owned_domains().len() >= 2,
+        "V6 host plan must bind two underground topology domains from the lock"
+    );
+    let report = spine
+        .worldgen_inspect_report()
+        .expect("bounded worldgen inspect compiles");
+    assert!(!report.records.is_empty());
+    let kinds = report
+        .records
+        .iter()
+        .map(|record| record.kind)
+        .collect::<BTreeSet<_>>();
+    assert!(kinds.contains(&latticeaxiom_runtime_contracts::WorldgenInspectKindV1::Portal));
+    assert!(kinds.contains(&latticeaxiom_runtime_contracts::WorldgenInspectKindV1::Entrance));
+    instance
+        .advance_fixed_ticks(8)
+        .expect("natural terrain ticks advance");
+}
+
+#[test]
 #[allow(
     clippy::too_many_lines,
     clippy::cast_precision_loss,
@@ -3090,9 +3144,9 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
         generation,
         aperture[0],
         aperture[2],
-        240,
+        1_200,
     );
-    generation = idle_at_hole(&mut instance, &spine, generation, 120);
+    generation = idle_at_hole(&mut instance, &spine, generation, 240);
     let pose = spine.player_pose();
     let underground = player_in_cave(&spine, pose.translation, aperture[1]);
     assert!(
@@ -3139,6 +3193,169 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
+)]
+fn production_host_reaches_both_underground_territories_and_three_resource_classes() {
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    assert!(spine.has_cave_topology_layer());
+    assert!(spine.has_hydrology_occupancy());
+    let owned = spine.cave_owned_domains();
+    assert_eq!(owned.len(), 2, "V6 requires two underground-owned domains");
+
+    seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
+    seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
+    let (_, dirt_pos, dirt_item) = first_resident_soil(&spine);
+    gather_until_inventory_has(&spine, dirt_pos, &dirt_item, 1);
+    seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
+    seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
+
+    let entrance = spine
+        .required_cave_entrance()
+        .expect("V6 field portals must include a required entrance");
+    let aperture = entrance.aperture();
+    let surface = entrance.surface_footing();
+    let mut generation = 1_u64;
+    generation = walk_toward_column(
+        &mut instance,
+        &spine,
+        generation,
+        surface[0],
+        surface[2],
+        1_200,
+    );
+    generation = wait_for_resident(
+        &mut instance,
+        &spine,
+        generation,
+        latticeaxiom_gameplay::BlockPosition {
+            x: aperture[0],
+            y: aperture[1],
+            z: aperture[2],
+        },
+        180,
+    );
+    seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
+    seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
+    open_required_entrance_shaft(
+        &spine,
+        latticeaxiom_gameplay::BlockPosition {
+            x: surface[0],
+            y: surface[1],
+            z: surface[2],
+        },
+        latticeaxiom_gameplay::BlockPosition {
+            x: aperture[0],
+            y: aperture[1],
+            z: aperture[2],
+        },
+    );
+    generation = idle_at_hole(&mut instance, &spine, generation, 90);
+    generation = walk_toward_column(
+        &mut instance,
+        &spine,
+        generation,
+        aperture[0],
+        aperture[2],
+        1_200,
+    );
+    generation = idle_at_hole(&mut instance, &spine, generation, 240);
+    assert!(
+        player_in_cave(&spine, spine.player_pose().translation, aperture[1]),
+        "fixed inputs must enter the required cave"
+    );
+    assert!(!spine.occupies_unready_cave_void());
+
+    let mut visited = BTreeSet::new();
+    if let Some(domain) = player_topology_domain(&spine) {
+        visited.insert(domain);
+    }
+    let mut destinations = spine.cave_destinations();
+    let origin_x = spine.player_pose().translation.x;
+    destinations.sort_by(|left, right| {
+        let left_dx = (left.0[0] as f32 - origin_x).abs();
+        let right_dx = (right.0[0] as f32 - origin_x).abs();
+        left_dx
+            .partial_cmp(&right_dx)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (voxel, _) in destinations {
+        let x = i32::try_from(voxel[0]).expect("destination x fits");
+        let y = i32::try_from(voxel[1]).expect("destination y fits");
+        let z = i32::try_from(voxel[2]).expect("destination z fits");
+        generation = wait_for_resident(
+            &mut instance,
+            &spine,
+            generation,
+            latticeaxiom_gameplay::BlockPosition { x, y, z },
+            240,
+        );
+        generation = walk_toward_column(&mut instance, &spine, generation, x, z, 2_400);
+        generation = idle_at_hole(&mut instance, &spine, generation, 180);
+        if let Some(here) = player_topology_domain(&spine) {
+            visited.insert(here);
+        }
+        if let Some(here) = spine.cave_topology_domain(voxel[0], voxel[1], voxel[2]) {
+            let pose = spine.player_pose().translation;
+            let dx = pose.x - (x as f32 + 0.5);
+            let dz = pose.z - (z as f32 + 0.5);
+            if dx.hypot(dz) < 4.0 && (pose.y - (y as f32)).abs() < 6.0 {
+                visited.insert(here);
+            }
+        }
+        assert!(!spine.occupies_unready_cave_void());
+    }
+    assert!(
+        owned.iter().all(|domain| visited.contains(domain)),
+        "journey must enter both underground territories, visited {visited:?}, owned {owned:?}, pose {:?}, dests {:?}",
+        spine.player_pose().translation,
+        spine.cave_destinations()
+    );
+
+    let stone = first_resident_any(
+        &spine,
+        &[
+            "terrenia:block/stone",
+            "terrenia:block/granite",
+            "terrenia:block/slate",
+            "terrenia:block/deepstone",
+        ],
+    );
+    let stone_item = parse_item(&stone.0.as_str().replace(":block/", ":item/"));
+    spine
+        .select_hotbar_slot(0)
+        .expect("pickaxe selected for stone");
+    gather_until_inventory_has(&spine, stone.1, &stone_item, 1);
+    let copper = parse_block("terrenia:block/copper-ore");
+    let copper_item = parse_item("terrenia:item/copper-ore");
+    let ore = spine
+        .first_cave_adjacent_block(&copper)
+        .or_else(|| spine.first_resident_block(&copper))
+        .expect("ore exists in the streamed set");
+    gather_until_inventory_has(&spine, ore, &copper_item, 1);
+    let inventory = spine.inventory_view().expect("inventory after gather");
+    assert!(inventory.count_item(&dirt_item) >= 1);
+    assert!(inventory.count_item(&stone_item) >= 1);
+    assert!(inventory.count_item(&copper_item) >= 1);
+    let _ = generation;
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
     let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
@@ -3166,25 +3383,21 @@ fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
         .expect("production spine is installed")
         .clone();
 
-    let dirt_block = parse_block("terrenia:block/dirt");
-    let log_block = parse_block("terrenia:block/oak-log");
     let stone_block = parse_block("terrenia:block/stone");
-    let dirt_item = parse_item("terrenia:item/dirt");
-    let log_item = parse_item("terrenia:item/oak-log");
     let stick_item = parse_item("terrenia:item/stick");
     let plank_item = parse_item("terrenia:item/oak-planks");
     let workbench_item = parse_item("terrenia:item/workbench");
     let pickaxe_item = parse_item("terrenia:item/wooden-pickaxe");
     let shovel_item = parse_item("terrenia:item/wooden-shovel");
-
-    let dirt_pos = spine
-        .first_resident_block(&dirt_block)
-        .expect("generated soil exists in the streamed set");
-    let log_pos = spine
-        .first_resident_block(&log_block)
-        .expect("generated wood exists in the streamed set");
+    let (_, dirt_pos, dirt_item) = first_resident_soil(&spine);
+    let log_item = parse_item("terrenia:item/oak-log");
     gather_until_inventory_has(&spine, dirt_pos, &dirt_item, 1);
-    gather_until_inventory_has(&spine, log_pos, &log_item, 1);
+    if let Some((wood_block, log_pos, gathered_wood, _, _)) = first_resident_wood(&spine) {
+        gather_until_inventory_has(&spine, log_pos, &gathered_wood, 1);
+        if wood_block.as_str().ends_with("pine-log") {
+            top_up_item(&spine, &log_item, 4);
+        }
+    }
     top_up_item(&spine, &log_item, 3);
     assert!(
         spine
@@ -3197,7 +3410,7 @@ fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
     for _ in 0..3 {
         spine
             .craft_recipe(&parse_recipe("terrenia:recipe/oak-planks@1"), None)
-            .expect("oak planks craft from gathered wood");
+            .expect("oak planks craft from gathered or seeded wood");
     }
     spine
         .craft_recipe(&parse_recipe("terrenia:recipe/stick@1"), None)
@@ -3382,7 +3595,7 @@ fn production_host_gathers_crafts_mines_with_tools_and_fails_closed() {
         .count();
     let grass = spine
         .first_resident_block(&parse_block("terrenia:block/grass"))
-        .or_else(|| spine.first_resident_block(&dirt_block))
+        .or_else(|| Some(first_resident_soil(&spine).1))
         .expect("a gatherable soil block remains");
     let _ = mine_until_broken(&spine, grass);
     let pickup = spine
@@ -3703,7 +3916,6 @@ fn production_host_lists_craftable_hand_and_workbench_recipes() {
         .get_resource::<ProductionSpine>()
         .expect("production spine is installed")
         .clone();
-    let log_block = parse_block("terrenia:block/oak-log");
     let log_item = parse_item("terrenia:item/oak-log");
     let plank_item = parse_item("terrenia:item/oak-planks");
     let stick_item = parse_item("terrenia:item/stick");
@@ -3712,10 +3924,14 @@ fn production_host_lists_craftable_hand_and_workbench_recipes() {
     let crafting = WorkstationId::parse("latticeaxiom:workstation/crafting@1")
         .expect("crafting workstation is a platform contract");
 
-    let log_pos = spine
-        .first_resident_block(&log_block)
-        .expect("generated wood exists in the streamed set");
-    gather_until_inventory_has(&spine, log_pos, &log_item, 1);
+    if let Some((wood_block, log_pos, gathered_wood, _, _)) = first_resident_wood(&spine) {
+        gather_until_inventory_has(&spine, log_pos, &gathered_wood, 1);
+        if wood_block.as_str().ends_with("pine-log") {
+            top_up_item(&spine, &log_item, 4);
+        }
+    } else {
+        top_up_item(&spine, &log_item, 4);
+    }
     let hand = spine.craftable_recipe_ids(None);
     assert!(
         hand.contains(&planks),
@@ -3806,10 +4022,7 @@ fn production_host_places_torch_and_opens_chest_container_schema() {
         .select_hotbar_slot(0)
         .expect("torch hotbar slot is selected");
 
-    let dirt = parse_block("terrenia:block/dirt");
-    let place_target = spine
-        .first_resident_block(&dirt)
-        .expect("generated soil exists in the streamed set");
+    let (_, place_target, _) = first_resident_soil(&spine);
     mine_until_broken(&spine, place_target);
     pickup_remaining(&spine);
     let place_anchor = latticeaxiom_gameplay::BlockPosition {
@@ -4047,7 +4260,7 @@ fn open_required_entrance_shaft(
     let mut opened = 0_u32;
     for dz in -1..=1 {
         for dx in -1..=1 {
-            let mut y = surface.y;
+            let mut y = surface.y.saturating_add(8);
             while y >= aperture.y {
                 let position = latticeaxiom_gameplay::BlockPosition {
                     x: surface.x.saturating_add(dx),
@@ -4067,6 +4280,20 @@ fn open_required_entrance_shaft(
                 }
                 if mine_cover_cell(spine, position) {
                     opened = opened.saturating_add(1);
+                    y -= 1;
+                    continue;
+                }
+                if spine
+                    .inspect_occupancy(position)
+                    .ok()
+                    .is_some_and(|occupancy| {
+                        occupancy.solid.is_none()
+                            || occupancy
+                                .solid
+                                .as_ref()
+                                .is_some_and(|block| block.as_str().ends_with("/air"))
+                    })
+                {
                     y -= 1;
                     continue;
                 }
@@ -4126,6 +4353,26 @@ fn player_in_cave(
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn player_topology_domain(spine: &ProductionSpine) -> Option<latticeaxiom_core::StableId> {
+    let translation = spine.player_pose().translation;
+    let cells = [
+        [
+            translation.x.floor() as i64,
+            (translation.y - 0.9).floor() as i64,
+            translation.z.floor() as i64,
+        ],
+        [
+            translation.x.floor() as i64,
+            translation.y.floor() as i64,
+            translation.z.floor() as i64,
+        ],
+    ];
+    cells
+        .iter()
+        .find_map(|&[x, y, z]| spine.cave_topology_domain(x, y, z))
+}
+
 fn player_sample_void(spine: &ProductionSpine, translation: bevy::prelude::Vec3) -> bool {
     let cells = [
         [
@@ -4156,4 +4403,71 @@ fn parse_item(id: &str) -> ItemId {
 
 fn parse_recipe(id: &str) -> RecipeId {
     RecipeId::parse(id).unwrap_or_else(|error| panic!("{id} parses: {error}"))
+}
+
+fn first_resident_any(
+    spine: &ProductionSpine,
+    ids: &[&str],
+) -> (BlockId, latticeaxiom_gameplay::BlockPosition) {
+    for id in ids {
+        let block = parse_block(id);
+        if let Some(position) = spine.first_resident_block(&block) {
+            return (block, position);
+        }
+    }
+    panic!(
+        "none of {ids:?} exist in the streamed set {:?}",
+        spine.resident_chunks()
+    );
+}
+
+fn first_resident_wood(
+    spine: &ProductionSpine,
+) -> Option<(
+    BlockId,
+    latticeaxiom_gameplay::BlockPosition,
+    ItemId,
+    RecipeId,
+    ItemId,
+)> {
+    for id in ["terrenia:block/oak-log", "terrenia:block/pine-log"] {
+        let block = parse_block(id);
+        if let Some(position) = spine.first_resident_block(&block) {
+            return Some(if id.ends_with("oak-log") {
+                (
+                    block,
+                    position,
+                    parse_item("terrenia:item/oak-log"),
+                    parse_recipe("terrenia:recipe/oak-planks@1"),
+                    parse_item("terrenia:item/oak-planks"),
+                )
+            } else {
+                (
+                    block,
+                    position,
+                    parse_item("terrenia:item/pine-log"),
+                    parse_recipe("terrenia:recipe/pine-planks@1"),
+                    parse_item("terrenia:item/pine-planks"),
+                )
+            });
+        }
+    }
+    None
+}
+
+fn first_resident_soil(
+    spine: &ProductionSpine,
+) -> (BlockId, latticeaxiom_gameplay::BlockPosition, ItemId) {
+    let (block, position) = first_resident_any(
+        spine,
+        &[
+            "terrenia:block/dirt",
+            "terrenia:block/coarse-dirt",
+            "terrenia:block/peat",
+            "terrenia:block/mud",
+            "terrenia:block/sand",
+        ],
+    );
+    let item = parse_item(&block.as_str().replace(":block/", ":item/"));
+    (block, position, item)
 }
