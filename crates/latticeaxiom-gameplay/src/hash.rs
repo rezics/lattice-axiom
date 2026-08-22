@@ -358,6 +358,20 @@ impl Encoder {
                 self.u64(command.expected_inventory_revision);
                 self.u64(command.expected_container_revision);
             }
+            GameplayCommandV1::MoveStack(command) => {
+                self.u8(8);
+                self.bytes(&command.player.as_bytes());
+                self.u16(command.from.get());
+                self.u16(command.to.get());
+                match command.quantity {
+                    Some(quantity) => {
+                        self.u8(1);
+                        self.u32(quantity.get());
+                    }
+                    None => self.u8(0),
+                }
+                self.u64(command.expected_inventory_revision);
+            }
             GameplayCommandV1::StartProcess(command) => {
                 self.u8(6);
                 self.bytes(&command.container.as_bytes());
@@ -509,6 +523,11 @@ impl Encoder {
             CommandOutcomeV1::Transferred { quantity } => {
                 self.u8(6);
                 self.u32(*quantity);
+            }
+            CommandOutcomeV1::StackMoved { from, to } => {
+                self.u8(9);
+                self.u16(from.get());
+                self.u16(to.get());
             }
             CommandOutcomeV1::ProcessScheduled {
                 continuation,

@@ -1254,6 +1254,8 @@ pub enum GameplayCommandV1 {
     Craft(RecipeCraftCommandV1),
     /// Transfer a quantity between a player and persistent container.
     Transfer(TransferCommandV1),
+    /// Move or merge a player-inventory stack between two slots.
+    MoveStack(MoveStackCommandV1),
     /// Atomically consume furnace input and fuel and schedule output.
     StartProcess(StartProcessCommandV1),
     /// Complete a bounded prefix of due scheduled processes.
@@ -1354,6 +1356,21 @@ pub struct TransferCommandV1 {
     pub expected_inventory_revision: u64,
     /// Observed container revision.
     pub expected_container_revision: u64,
+}
+
+/// Atomic player-inventory stack move payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MoveStackCommandV1 {
+    /// Player inventory.
+    pub player: PlayerId,
+    /// Source slot.
+    pub from: SlotIndex,
+    /// Destination slot.
+    pub to: SlotIndex,
+    /// Quantity to move; `None` moves the entire `from` stack.
+    pub quantity: Option<NonZeroU32>,
+    /// Observed player inventory revision.
+    pub expected_inventory_revision: u64,
 }
 
 /// Start-process command payload.
@@ -1551,6 +1568,13 @@ pub enum CommandOutcomeV1 {
     Transferred {
         /// Quantity transferred.
         quantity: u32,
+    },
+    /// A player-inventory stack move completed.
+    StackMoved {
+        /// Source slot.
+        from: SlotIndex,
+        /// Destination slot.
+        to: SlotIndex,
     },
     /// Input and fuel were consumed and a continuation was staged.
     ProcessScheduled {

@@ -20,10 +20,10 @@ use latticeaxiom_gameplay::{
     GameplayCatalogSourceV1, GameplayCommandV1, GameplayEditTarget, GameplayKernel, GameplayLimits,
     GameplayPlanV1, GameplayReject, GameplayStorageDomain, IngredientV1, InventoryStateV1,
     ItemDefinitionV1, ItemId, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, ItemStackV1,
-    ItemStateV1, ItemTagDefinitionV1, ItemTagId, MineCommandV1, MiningRuleV1, PersistentEntityId,
-    PickupCommandV1, PlaceCommandV1, PlayerId, ProcessDefinitionV1, RecipeCraftCommandV1,
-    RecipeDefinitionV1, RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier,
-    RoleOutputV1, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex,
+    ItemStateV1, ItemTagDefinitionV1, ItemTagId, MineCommandV1, MiningRuleV1, MoveStackCommandV1,
+    PersistentEntityId, PickupCommandV1, PlaceCommandV1, PlayerId, ProcessDefinitionV1,
+    RecipeCraftCommandV1, RecipeDefinitionV1, RecipePatternV1, ReferenceGameplayState,
+    ReferencePlanApplier, RoleOutputV1, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex,
     StartProcessCommandV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1, TransactionId,
     WorkstationDefinitionV1, WorkstationId, WorldRevision,
 };
@@ -1960,6 +1960,125 @@ fn ten_thousand_command_soak_has_bounded_receipts_and_no_item_loss() {
         panic!("soak inventory missing");
     };
     assert!(matches!(inventory.slot(SlotIndex::new(0)), Ok(Some(stack)) if stack.quantity() == 1));
+}
+
+#[test]
+fn move_stack_merges_matching_item_and_state_up_to_stack_limit() {
+    let catalog = catalog();
+    let mut state = state_with_inventory(4);
+    seed_stack(&mut state, PLAYER, 0, plain("example:item/log", 40));
+    seed_stack(&mut state, PLAYER, 1, plain("example:item/log", 40));
+    let mut authority = applier(state, &catalog);
+    let receipt = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::MoveStack(MoveStackCommandV1 {
+            player: PLAYER,
+            from: SlotIndex::new(0),
+            to: SlotIndex::new(1),
+            quantity: None,
+            expected_inventory_revision: 0,
+        }),
+    );
+    assert!(matches!(
+        receipt.outcome,
+        CommandOutcomeV1::StackMoved { from, to }
+            if from == SlotIndex::new(0) && to == SlotIndex::new(1)
+    ));
+    let Some(inventory) = authority.state().inventory(PLAYER) else {
+        panic!("move-stack merge inventory missing");
+    };
+    assert!(
+        matches!(inventory.slot(SlotIndex::new(0)), Ok(Some(stack)) if stack.item().as_str() == "example:item/log" && stack.quantity() == 16)
+    );
+    assert!(
+        matches!(inventory.slot(SlotIndex::new(1)), Ok(Some(stack)) if stack.item().as_str() == "example:item/log" && stack.quantity() == 64)
+    );
+}
+
+#[test]
+fn move_stack_swaps_different_items_when_quantity_is_the_full_stack() {
+    let catalog = catalog();
+    let mut state = state_with_inventory(4);
+    seed_stack(&mut state, PLAYER, 0, plain("example:item/log", 8));
+    seed_stack(&mut state, PLAYER, 1, plain("example:item/plank", 4));
+    let mut authority = applier(state, &catalog);
+    let receipt = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::MoveStack(MoveStackCommandV1 {
+            player: PLAYER,
+            from: SlotIndex::new(0),
+            to: SlotIndex::new(1),
+            quantity: None,
+            expected_inventory_revision: 0,
+        }),
+    );
+    assert!(matches!(
+        receipt.outcome,
+        CommandOutcomeV1::StackMoved { from, to }
+            if from == SlotIndex::new(0) && to == SlotIndex::new(1)
+    ));
+    let Some(inventory) = authority.state().inventory(PLAYER) else {
+        panic!("move-stack swap inventory missing");
+    };
+    assert!(
+        matches!(inventory.slot(SlotIndex::new(0)), Ok(Some(stack)) if stack.item().as_str() == "example:item/plank" && stack.quantity() == 4)
+    );
+    assert!(
+        matches!(inventory.slot(SlotIndex::new(1)), Ok(Some(stack)) if stack.item().as_str() == "example:item/log" && stack.quantity() == 8)
+    );
+}
+
+#[test]
+fn move_stack_rejects_empty_from() {
+    let catalog = catalog();
+    let mut state = state_with_inventory(2);
+    seed_stack(&mut state, PLAYER, 1, plain("example:item/log", 1));
+    let mut authority = applier(state, &catalog);
+    let before = authority.state().clone();
+    let envelope = envelope(
+        authority.state(),
+        GameplayCommandV1::MoveStack(MoveStackCommandV1 {
+            player: PLAYER,
+            from: SlotIndex::new(0),
+            to: SlotIndex::new(1),
+            quantity: None,
+            expected_inventory_revision: 0,
+        }),
+    );
+    assert!(matches!(
+        authority.execute(&envelope, FaultInjection::None),
+        Err(GameplayReject::EmptySlot)
+    ));
+    assert_eq!(authority.state(), &before);
+}
+
+#[test]
+fn move_stack_rejects_stale_inventory_revision() {
+    let catalog = catalog();
+    let mut state = state_with_inventory(2);
+    seed_stack(&mut state, PLAYER, 0, plain("example:item/log", 1));
+    let mut authority = applier(state, &catalog);
+    let before = authority.state().clone();
+    let envelope = envelope(
+        authority.state(),
+        GameplayCommandV1::MoveStack(MoveStackCommandV1 {
+            player: PLAYER,
+            from: SlotIndex::new(0),
+            to: SlotIndex::new(1),
+            quantity: None,
+            expected_inventory_revision: 1,
+        }),
+    );
+    assert!(matches!(
+        authority.execute(&envelope, FaultInjection::None),
+        Err(GameplayReject::StaleInventoryRevision {
+            expected: 1,
+            actual: 0
+        })
+    ));
+    assert_eq!(authority.state(), &before);
 }
 
 #[test]

@@ -6,9 +6,9 @@ use crate::{
     DroppedItemV1, FaultInjection, FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1,
     GameplayEditTarget, GameplayMutationIntentV1, GameplayPlanV1, GameplayReject,
     GameplayStorageDomain, InventoryStateV1, ItemStackV1, ItemStateV1, MineCommandV1,
-    PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipePatternV1, ReferenceGameplayState,
-    RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex, StartProcessCommandV1,
-    TransactionId, TransferCommandV1, TransferDirectionV1,
+    MoveStackCommandV1, PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipePatternV1,
+    ReferenceGameplayState, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex,
+    StartProcessCommandV1, TransactionId, TransferCommandV1, TransferDirectionV1,
 };
 
 /// Pure deterministic planner for version-one sandbox commands.
@@ -45,6 +45,7 @@ impl<'catalog> GameplayKernel<'catalog> {
             GameplayCommandV1::Place(command) => self.plan_place(state, command)?,
             GameplayCommandV1::Craft(command) => self.plan_craft(state, command)?,
             GameplayCommandV1::Transfer(command) => self.plan_transfer(state, command)?,
+            GameplayCommandV1::MoveStack(command) => self.plan_move_stack(state, command)?,
             GameplayCommandV1::StartProcess(command) => {
                 self.plan_start_process(state, envelope.transaction_id, command)?
             }
@@ -478,6 +479,90 @@ impl<'catalog> GameplayKernel<'catalog> {
                 quantity: command.quantity.get(),
             },
         ))
+    }
+
+    fn plan_move_stack(
+        &self,
+        state: &ReferenceGameplayState,
+        command: &MoveStackCommandV1,
+    ) -> Result<(Vec<GameplayMutationIntentV1>, CommandOutcomeV1), GameplayReject> {
+        let inventory = player_inventory(state, command.player)?;
+        if inventory.revision != command.expected_inventory_revision {
+            return Err(GameplayReject::StaleInventoryRevision {
+                expected: command.expected_inventory_revision,
+                actual: inventory.revision,
+            });
+        }
+        let from_stack = inventory
+            .slot(command.from)?
+            .cloned()
+            .ok_or(GameplayReject::EmptySlot)?;
+        let to_stack = inventory.slot(command.to)?.cloned();
+        let outcome = CommandOutcomeV1::StackMoved {
+            from: command.from,
+            to: command.to,
+        };
+        if command.from == command.to {
+            return Ok((Vec::new(), outcome));
+        }
+        self.catalog.validate_stack(&from_stack)?;
+        let requested = match command.quantity {
+            Some(quantity) => quantity.get(),
+            None => from_stack.quantity(),
+        };
+        if requested > from_stack.quantity() {
+            return Err(GameplayReject::SlotMismatch);
+        }
+        if !matches!(from_stack.state(), ItemStateV1::Plain) && requested != 1 {
+            return Err(GameplayReject::StatefulStackQuantity {
+                quantity: requested,
+            });
+        }
+        let mut after = inventory.slots.to_vec();
+        match to_stack {
+            None => {
+                after[command.from.as_usize()] =
+                    from_stack.with_quantity(from_stack.quantity() - requested)?;
+                after[command.to.as_usize()] = from_stack.with_quantity(requested)?;
+            }
+            Some(dest_stack)
+                if dest_stack.item() == from_stack.item()
+                    && dest_stack.state() == from_stack.state() =>
+            {
+                let definition = self.catalog.item(from_stack.item()).ok_or_else(|| {
+                    GameplayReject::UnknownReference {
+                        kind: "item",
+                        id: from_stack.item().as_str().to_owned(),
+                    }
+                })?;
+                let space = definition
+                    .stack_limit
+                    .get()
+                    .checked_sub(dest_stack.quantity())
+                    .ok_or(GameplayReject::QuantityOverflow)?;
+                let moved = requested.min(space);
+                after[command.from.as_usize()] =
+                    from_stack.with_quantity(from_stack.quantity() - moved)?;
+                after[command.to.as_usize()] = dest_stack.with_quantity(
+                    dest_stack
+                        .quantity()
+                        .checked_add(moved)
+                        .ok_or(GameplayReject::QuantityOverflow)?,
+                )?;
+            }
+            Some(dest_stack) => {
+                if command
+                    .quantity
+                    .is_some_and(|quantity| quantity.get() != from_stack.quantity())
+                {
+                    return Err(GameplayReject::SlotMismatch);
+                }
+                self.catalog.validate_stack(&dest_stack)?;
+                after[command.from.as_usize()] = Some(dest_stack);
+                after[command.to.as_usize()] = Some(from_stack);
+            }
+        }
+        Ok((inventory_diff(command.player, inventory, &after)?, outcome))
     }
 
     #[allow(
