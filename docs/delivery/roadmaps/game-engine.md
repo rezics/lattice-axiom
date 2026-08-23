@@ -6,7 +6,7 @@ document_type: roadmap
 tracks_implementation: true
 requirements:
   - DELIVERY-ENGINE-001
-updated: 2026-08-22
+updated: 2026-08-23
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../../decisions/0010-nickel-driven-package-system.md
@@ -28,6 +28,7 @@ decision:
   - ../../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
   - ../../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
   - ../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
+  - ../../decisions/0034-freeze-package-local-code-and-locked-source-realization.md
 ---
 
 # 套件驅動的 Bevy 執行期整合路線
@@ -335,6 +336,18 @@ Terrenia的active content／gameplay／worldgen轨继续执行D7–D10；它可�
 
 package／ABI 核心不需要通过此 gate证明「Bevy 做不到」，但其实现仍必须先采用成熟 building blocks，且不能借机复制通用 engine。
 
+## Package-local source migration Gate
+
+- package-local code、Cargo manifest与data进入同一source digest；build只读CAS materialization；
+- `@example/dual-gameplay`首先证明actual static product与actual portable `cdylib`均来自locked source；
+- foundation packages与Terrenia product policy随后迁移，pure-data packages不建立空crate；
+- graph移除package会从build closure与runtime同时移除，替换provider不改engine source；
+- engine Cargo manifest不直接依赖product package implementation，也不以feature matrix保存package list；
+- pause只路由到compiled settings surface；view distance由spec-driven `2..=32` slider表达typed
+  requested／effective值与host clamp reason；
+- static direct／LTO baseline迁移前后比较，portable batch与全部queue／frame／memory gate不因搬目录放宽；
+- effective view distance 32只有在决策0026的reference evidence通过后标为certified；更高范围由新profile治理。
+
 ## 延後项目
 
 - public／federated registry；
@@ -347,6 +360,7 @@ package／ABI 核心不需要通过此 gate证明「Bevy 做不到」，但其�
 
 ## 相關文件
 
+- [Package-local code与locked source realization](../../decisions/0034-freeze-package-local-code-and-locked-source-realization.md)
 - [第一個可玩 demo](first-demo.md)
 - [套件內核](../../platform/package-kernel/package-management.md)
 - [原生 ABI](../../platform/native-abi/native-module-abi.md)

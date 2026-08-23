@@ -4,7 +4,7 @@ document_id: decisions.index
 document_status: active
 document_type: index
 tracks_implementation: false
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 # Architecture Decision Records
@@ -39,5 +39,6 @@ compliance 由 package/platform requirements 与 evidence 证明。
 - [0031 Bevy upgrade and supply chain](0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md)
 - [0032 Local package acquisition and product lock](0032-freeze-local-package-acquisition-imports-and-product-lock.md)
 - [0033 Input actions, bindings and contexts](0033-freeze-input-actions-bindings-and-contexts.md)
+- [0034 Package-local code and locked source realization](0034-freeze-package-local-code-and-locked-source-realization.md)
 
 编号空缺只通过 Git history 追溯，不在 active tree 保留互斥方案。

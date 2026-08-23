@@ -8,7 +8,7 @@ owners:
 tracks_implementation: true
 requirements:
   - PACKAGE-KERNEL-001
-updated: 2026-08-20
+updated: 2026-08-23
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../../decisions/0010-nickel-driven-package-system.md
@@ -23,6 +23,7 @@ decision:
   - ../../decisions/0030-freeze-governance-distribution-and-security-triggers.md
   - ../../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
   - ../../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
+  - ../../decisions/0034-freeze-package-local-code-and-locked-source-realization.md
 ---
 
 # Nickel 驅動的套件內核與分發邊界
@@ -232,6 +233,11 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 
 `auto` policy 可以偏好已验证 portable artifact、否则 source static build；最终选择必须写入 lock。服务器／client profile 可以选择不同 realization 或可选 presentation package，但所有权威 package／schema closure 必须明确协商。
 
+Code-bearing logical package把root `Cargo.toml`、Rust source、data与manifest保存在同一package source
+root；pure-data package不建立空crate。Logical package与Cargo crate仍不是一对一：package root可以是
+一个crate或显式内部workspace，platform crate也可以服务多个packages。identity与build authority由
+manifest／lock明文记录，不从目录名或workspace membership推导。
+
 ## Source、lock 與 artifact
 
 首阶段支持workspace、root-relative path、local catalog与explicit fixture source。每个source按0021
@@ -239,6 +245,11 @@ exclusive provider 冲突必须在 `LockedGameGraph` 阶段失败；multi-provid
 source-tree digest识别。Local catalog提供deterministic check／pack／publish-to-directory／acquire，
 并拒绝同一package exact version对应不同source digest；它是future remote contract的本地fixture，
 不是public registry或publisher-authenticity服务。
+
+`source-build`先从CAS snapshot物化package build root，再生成只包含locked `NativeStatic`节点的
+product Cargo root／static glue，或为selected `PortableNative`构建真实`cdylib`。realizer不得直接从
+mutable workspace path构建。Generic engine Cargo manifest只依赖platform／host contracts与generated
+entry，不得预依赖product packages或以features保存隐藏package list。
 
 同一lock schema把portable resolution与target realization分层，至少保存：
 
@@ -325,6 +336,9 @@ fetch、path snapshot、build、source fallback、lock／store mutation并要求
 - Local check／pack／publish-to-directory／acquire／resolve／run-frozen fixture全程不需network。
 - Lock fault corpus证明atomic write后只能观察旧完整或新完整file，launcher不消费candidate／partial lock。
 - 官方与 test package 都只能经 graph 启动；不存在隐藏 plugin list。
+- 修改package Rust source／Cargo manifest／data会改变source digest；旧lock仍只消费旧CAS object。
+- 从graph移除code-bearing package会同时从generated Cargo closure与runtime callbacks移除；engine source不变。
+- engine manifest与workspace membership都不构成product package selection或activation authority。
 - static／dynamic realization 可互换且不改变 stable ID、schedule、save schema 与权威 state hash。
 - 随机化 source discovery／artifact load 顺序不改变结果。
 - 多个语义相似内容可共存；Tag input、Role output与fallback activation均不依赖注册顺序。
@@ -335,6 +349,7 @@ fetch、path snapshot、build、source fallback、lock／store mutation并要求
 
 ## 相關文件
 
+- [Package-local code与locked source realization](../../decisions/0034-freeze-package-local-code-and-locked-source-realization.md)
 - [模組與內容組合](../composition/module-composition.md)
 - [語義註冊、內容判定與選擇](../registration/semantic-registration.md)
 - [原生模組 ABI](../native-abi/native-module-abi.md)

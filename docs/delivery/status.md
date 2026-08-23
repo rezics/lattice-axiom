@@ -4,7 +4,7 @@ document_id: delivery.status
 document_status: active
 document_type: index
 tracks_implementation: false
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 # Implementation status
@@ -110,6 +110,7 @@ path, product entry and reproducible checks. All other states remain conservativ
 | [冻结 Bevy 升级、依赖与供应链政策](../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md) | `decision` | `not-applicable` |
 | [冻结本地包取得、Nickel package import 与产品 lock](../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md) | `decision` | `not-applicable` |
 | [冻结输入动作、绑定档案与 surface context 契约](../decisions/0033-freeze-input-actions-bindings-and-contexts.md) | `decision` | `not-applicable` |
+| [冻结 package-local code 与 locked source realization](../decisions/0034-freeze-package-local-code-and-locked-source-realization.md) | `decision` | `not-applicable` |
 | [Architecture Decision Records](../decisions/README.md) | `index` | `not-applicable` |
 | [Delivery](README.md) | `index` | `not-applicable` |
 | [待決問題決議索引](open-questions.md) | `reference` | `not-applicable` |

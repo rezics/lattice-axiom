@@ -4,28 +4,35 @@ document_id: meta.repository-and-package-layout
 document_status: active
 document_type: meta
 tracks_implementation: false
-updated: 2026-08-22
+updated: 2026-08-23
 decision:
+  - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0010-nickel-driven-package-system.md
+  - ../decisions/0018-package-kernel-from-first-vertical-slice.md
   - ../decisions/0019-separate-package-and-registration-identities.md
   - ../decisions/0020-semantic-registration-and-content-selection.md
+  - ../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
+  - ../decisions/0034-freeze-package-local-code-and-locked-source-realization.md
 ---
 
 # Implementation workspace 与 package layout
 
-## 事实基线
+## 迁移事实基线
 
-本页对照 implementation commit `653556ba7df5c5993f300bd40c1393c8221abafe`。实现仓当前有
-25 个 Cargo workspace crates 与 19 个 logical package source roots；它们不是一一对应关系。
+本页对照 implementation commit `45fe974546e6d5fa61b8ea4bf4d736fce612565d`。实现仓当前有
+28 个 Cargo workspace crates 与 20 个 logical package source roots；它们不是一一对应关系。该commit的
+`packages/`大多还是data-only skeleton，package-owned Rust implementation则位于顶层`crates/`并由engine
+固定依赖。这是[决策0034](../decisions/0034-freeze-package-local-code-and-locked-source-realization.md)
+要消除的迁移起点，不是目标layout。
 
 ```text
 lattice-axiom-demo/
 ├── Cargo.toml                 Rust workspace；crate graph
 ├── latticeaxiom.toml          非可执行 root/source/profile inputs
 ├── latticeaxiom.lock          当前生成的 client-world product lock
-├── crates/                    Rust implementation components
+├── crates/                    platform／host Rust implementation components
 ├── nickel/latticeaxiom/       versioned authoring contracts
-├── packages/                  shipped/declared logical package sources
+├── packages/                  complete logical package source roots（code／data／manifest）
 │   ├── latticeaxiom/
 │   └── terrenia/
 ├── profiles/                  roots、source universe、policy 与 projection
@@ -45,6 +52,44 @@ lattice-axiom-demo/
 `packages/latticeaxiom` 和 `packages/terrenia` 是 family containers，不是 source roots。每个包含
 manifest 的子目录是独立、非重叠 source root，避免递归 hash 或资产扫描把兄弟 package 算入。
 
+## 冻结目标 layout
+
+`crates/`与`packages/`按ownership区分，不按“Rust code或data”区分：
+
+```text
+lattice-axiom-demo/
+├── crates/
+│   ├── latticeaxiom-core/
+│   ├── latticeaxiom-compose/
+│   ├── latticeaxiom-packages/
+│   ├── latticeaxiom-sdk/
+│   ├── latticeaxiom-abi/
+│   ├── latticeaxiom-voxel-runtime/
+│   └── latticeaxiom-engine/
+└── packages/
+    ├── latticeaxiom/
+    │   └── settings-ui/
+    │       ├── latticeaxiom-package.toml
+    │       ├── package.ncl
+    │       ├── Cargo.toml
+    │       ├── src/
+    │       └── data/
+    └── terrenia/
+        └── worldgen/
+            ├── latticeaxiom-package.toml
+            ├── package.ncl
+            ├── Cargo.toml
+            ├── src/
+            └── data/
+```
+
+- 平台／host code留在`crates/`；product、game与client policy code和其data共同位于logical package root；
+- pure-data package不建立空crate；code-bearing package的root `Cargo.toml`是`source-build` entry；
+- package root可以包含一个crate或显式内部workspace，因此logical package与crate仍非一对一；
+- root Cargo workspace可以列出package-local crates供开发，但workspace membership没有产品选择语义；
+- generated product root、static glue、bindings、CAS materialization与compiled artifacts仍位于hash-addressed
+  store／`target/`，不写回`packages/`。
+
 ## 当前 logical packages
 
 当前 lock 包含 settings、settings-ui、observability、inspect、dev-tools、Terrenia root、blocks、
@@ -55,7 +100,7 @@ metallurgy、science 与 thaumaturgy 已有 source manifest，但不在这份 lo
 “在 lock”只证明 source/manifest/graph/realization 被选择，不证明 capability consumer 或完整产品
 journey 已实现。
 
-## Crate 组织
+## Crate 与 package code 组织
 
 现有 crates 按职责覆盖：
 
@@ -66,9 +111,15 @@ journey 已实现。
 - voxel/render：voxel-mesh、voxel-runtime、voxel-playground、render-contracts；
 - product host：launcher、start-ui、engine。
 
-这些是 implementation boundaries，不应为每个 crate 建立平行产品规范树。package README 显式
-列出 many-to-many implementation mapping；内部 API reference 应与代码同仓、从真实 public API
-生成。
+这些是迁移前implementation boundaries。平台职责继续由top-level crates承载；settings、input、
+front-end、Terrenia worldgen/gameplay等可选择product implementation必须迁入所属package root。
+package README显式列出many-to-many implementation mapping；内部API reference应与代码同仓、从真实
+public API生成。
+
+平台crate不得依赖product package implementation。跨package Rust dependency必须同时有logical
+dependency／capability edge，并由locked build plan指向exact package instance；普通workspace path
+dependency不能成为隐藏graph edge。generic engine manifest也不得预依赖所有product packages或维护
+feature-based package清单。
 
 ## Profile 与 source universe
 
@@ -88,6 +139,17 @@ world、checkpoint、crash marker、external acquired package 与本地 lease �
 目录，不得提交为规范或 fixture。fixture 必须按被验证职责命名，不能用 R0/R1 milestone 创建
 永久目录身份。
 
+## 迁移顺序
+
+1. 先把`@example/dual-gameplay`做成真实package-root Cargo source，并从CAS建立static／portable artifacts；
+2. 再迁移settings、settings-ui、input、front-end、world-library、observability、inspect与dev-tools；
+3. 拆分generic platform worldgen／gameplay／render contract与Terrenia-specific policy后迁移product code；
+4. 最后删除engine里的product Cargo dependencies、features与手写plugin／setting/provider fallback；
+5. 设置surface只消费compiled catalog，并在性能证据通过后扩大effective view-distance profile。
+
+阶段完成不能以“新graph路径存在但旧engine路径仍可运行”证明；compatibility bridge必须列出owner、
+适用package与删除gate。
+
 ## 新增边界的规则
 
 - 新 logical package：先有 package contract/ADR、独立 source root 与 namespace/capability 责任；
@@ -95,3 +157,7 @@ world、checkpoint、crash marker、external acquired package 与本地 lease �
 - 新 generated crate：记录 producer/input/toolchain receipt，不成为 logical package；
 - 新 docs package 目录：可以先于 manifest 表达 proposal，但必须明确 `proposed`、无 manifest、
   无 implementation evidence。
+- 新 code-bearing package：source inclusion必须覆盖Cargo manifests、Rust source与所有behavior-affecting
+  inputs；修改任一项都改变source digest。
+- 新 product Cargo dependency：必须能追溯到locked logical edge；若只能通过engine manifest或workspace
+  membership解释，就拒绝加入。

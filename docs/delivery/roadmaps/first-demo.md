@@ -6,7 +6,7 @@ document_type: roadmap
 tracks_implementation: true
 requirements:
   - DELIVERY-FIRST-DEMO-001
-updated: 2026-08-22
+updated: 2026-08-23
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../../decisions/0014-adopt-bevy-upstream-first.md
@@ -27,6 +27,7 @@ decision:
   - ../../decisions/0031-freeze-bevy-upgrade-dependency-and-supply-chain-policy.md
   - ../../decisions/0032-freeze-local-package-acquisition-imports-and-product-lock.md
   - ../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
+  - ../../decisions/0034-freeze-package-local-code-and-locked-source-realization.md
 ---
 
 # 第一個套件驅動的 Bevy 可玩 demo 路線圖
@@ -80,6 +81,7 @@ D11 remains a post-baseline biome expansion track after V9.
 
 - 非可执行`latticeaxiom.toml`／`latticeaxiom-package.toml`先授权roots、sources与graph inputs；
 - local path／catalog package快照进CAS，locked alias map再供Nickel `package.ncl`／`game.ncl` import；
+- code-bearing logical package把`Cargo.toml／src／data`保存在同一source root并完整进入source digest；
 - package SemVer、capability／realization resolution与包含source／manifest／toolchain／artifact receipts的精确产品lock；
 - `RegistrationManifest`／`RegistrationImage`；
 - Nickel-authored SemanticTag／Map／Predicate／Role 与 locked fallback ContentBundle；
@@ -93,6 +95,7 @@ D11 remains a post-baseline biome expansion track after V9.
 - RocksDB 保存完整已物化 chunk snapshot；
 - package-driven client shell、WorldHeader／catalog与write-before preflight；
 - Terrenia／test content 都经 package graph；host 没有内建默认维度；
+- engine Cargo manifest没有product package dependency／feature清单；NativeStatic产品binary由locked graph生成；
 - `terrenia` 是普通可替换root模组；host与平台contract不引用Terrenia concrete content；
 - 无自研 ECS／scheduler／renderer／asset server。
 
@@ -110,10 +113,10 @@ D11 remains a post-baseline biome expansion track after V9.
 
 ### Package 循环
 
-1. Bootstrap manifest选择`@example/dual-gameplay` root、local source provider与projection。
+1. Bootstrap manifest选择含`Cargo.toml／src／data`的`@example/dual-gameplay` root、local source provider与projection。
 2. Kernel取得／快照source、解析exact graph并建立package-local alias map。
 3. Nickel profile从locked source table import该package并产生typed `CompositionSpec`。
-4. 以`NativeStatic`启动并记录final lock／registration／state hash。
+4. 从CAS source生成product Cargo root，以`NativeStatic`构建lock-specific executable并记录final lock／registration／state hash。
 5. 只切换realization为`PortableNative`并显式产生candidate lock。
 6. Kernel验证artifact／ABI／manifest但不load native code，原子写入并reopen final lock。
 7. Loader只从reopened final lock建立`RuntimeImage`。
@@ -161,7 +164,7 @@ D11 remains a post-baseline biome expansion track after V9.
 ### 交付
 
 - SDK／proc macro prototype；
-- `@example/dual-gameplay` 的一个真实 component + fixed system + command；
+- package-root `@example/dual-gameplay`的`Cargo.toml／src／data`与一个真实component + fixed system + command；
 - generated manifest／static glue／C binding／dynamic batch shim；
 - portable ABI entry、instance lifecycle、batch／command／diagnostics；
 - dual package贡献一个typed setting、metric与inspect fragment的generated static／dynamic callback；
@@ -169,7 +172,8 @@ D11 remains a post-baseline biome expansion track after V9.
 
 ### 完成
 
-- single-source business code 同时构建两种 realization；
+- single-source business code从locked CAS materialization同时构建两种realization；
+- static product root只依赖graph-selected package，portable产物是真实`cdylib`，两者artifact receipts进入lock；
 - registration hash、IDs、schedule 与 N ticks state hash一致；
 - static direct path 不经 C ABI／可启用 LTO；
 - dynamic FFI 次数随 system／batch，不随 entity线性往返；
@@ -510,6 +514,7 @@ D0–D6完成第一個package-driven playable vertical slice；只有D0–D10全
 
 ## 相關文件
 
+- [Package-local code与locked source realization](../../decisions/0034-freeze-package-local-code-and-locked-source-realization.md)
 - [執行期整合路線](game-engine.md)
 - [套件內核](../../platform/package-kernel/package-management.md)
 - [Demo workspace 与 Terrenia package 组织](../../meta/repository-and-package-layout.md)
