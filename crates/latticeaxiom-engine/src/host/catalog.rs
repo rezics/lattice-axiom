@@ -73,7 +73,6 @@ pub(super) struct HostWorldgenCatalog {
     pub(super) palette: Vec<BlockId>,
     pub(super) empty: BlockId,
     pub(super) placement_content: BlockId,
-    pub(super) probe_content: BlockId,
     pub(super) role_vocabulary: D4RoleVocabularyV1,
     pub(super) natural_vocabulary: NaturalRoleVocabularyV1,
     pub(super) role_bindings: FrozenRoleBindingsV1,
@@ -312,12 +311,7 @@ pub(super) fn host_worldgen_catalog(
         &role_bindings,
         D4MaterialRoleV1::TemperateSubsurface,
     )?;
-    let probe_content = bound_block(
-        &role_vocabulary,
-        &role_bindings,
-        D4MaterialRoleV1::TemperateBaseRock,
-    )?;
-    for required in [&empty, &placement_content, &probe_content] {
+    for required in [&empty, &placement_content] {
         if !palette.iter().any(|block| block == required) {
             return Err(ProductionHostError::MissingCatalogDefinition {
                 kind: "palette-block",
@@ -331,7 +325,6 @@ pub(super) fn host_worldgen_catalog(
         palette,
         empty,
         placement_content,
-        probe_content,
         role_vocabulary,
         natural_vocabulary,
         role_bindings,
@@ -504,7 +497,7 @@ fn compile_host_cave_topology(
             first.id.clone(),
             first.algorithm,
             [0, 0],
-            [1, 2],
+            [2, 2],
             floor,
             surface,
         )?,

@@ -108,14 +108,14 @@ impl ProductionClientError {
 /// current workspace and freeze-verifies every CAS receipt. Lock graph roots
 /// select one process role:
 ///
-/// - Roots contain `@latticeaxiom/front-end` and do not contain `terrenia`:
+/// - Roots contain `@latticeaxiom/front-end` and no non-platform game root:
 ///   one [`bevy::prelude::DefaultPlugins`] start-shell App from the start-ui
 ///   semantic tree. Continue/Play of a `ReadyExact` world seals
 ///   [`latticeaxiom_start_ui::LaunchHandoff::for_ready_exact`] and exits.
 ///   An external supervisor must spawn the replacement game process; this
 ///   process does not.
-/// - Roots contain `terrenia` (including `profiles/dev.toml` client-world):
-///   one production game App through
+/// - A lock with a selected game root (including `profiles/dev.toml`
+///   client-world) starts one production game App through
 ///   [`EngineInstance::new_client_host_from_lock`].
 ///
 /// Start-shell and Playing never share one `DefaultPlugins` App. Missing lock

@@ -149,9 +149,11 @@ fn solid_occupied(
     let semantics = inner
         .block_semantics(&id)
         .ok_or(BlockEditRejectV1::ContentUnavailable)?;
-    Ok(SolidOccupancyKindV1::classify(&semantics.solid_occupancy)
-        .map_err(|_| BlockEditRejectV1::ContentUnavailable)?
-        == SolidOccupancyKindV1::Full)
+    Ok(matches!(
+        SolidOccupancyKindV1::classify(&semantics.solid_occupancy)
+            .map_err(|_| BlockEditRejectV1::ContentUnavailable)?,
+        SolidOccupancyKindV1::Full | SolidOccupancyKindV1::Partial
+    ))
 }
 
 fn fluid_layer(inner: &ProductionSpineInner, palette_index: u16) -> FluidLayerCell {

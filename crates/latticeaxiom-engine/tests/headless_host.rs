@@ -379,14 +379,14 @@ fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
             spine.player_pose()
         )
     });
-    assert!(
-        success.position.x < 0 || success.position.z < 0,
-        "break must land on a negative X or Z voxel, got {:?}",
-        success.position
-    );
     let edited_chunk = spine
         .chunk_of(success.position)
         .expect("broken voxel maps to a host chunk");
+    assert!(
+        spine.resident_chunks().contains(&edited_chunk),
+        "break target must come from the resident working set, got {:?}",
+        success.position
+    );
     let cursor = cursors_before
         .get(&edited_chunk)
         .copied()
@@ -515,9 +515,12 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
             spine.player_pose()
         )
     });
+    let target_chunk = spine
+        .chunk_of(current.observation.position)
+        .expect("inspected voxel maps to a host chunk");
     assert!(
-        current.observation.position.x < 0 || current.observation.position.z < 0,
-        "inspect DDA must land on a negative X or Z voxel, got {:?}",
+        spine.resident_chunks().contains(&target_chunk),
+        "inspect DDA target must be resident, got {:?}",
         current.observation.position
     );
     assert!(
@@ -713,20 +716,13 @@ fn production_spine_headless_water_and_lava_occupancy_round_trips_at_signed_xz()
             .expect("lava still inspects"),
         lava_placed
     );
+    let occupied = first_resident_soil(&spine).1;
     assert!(
         matches!(
-            spine.place_fluid_occupancy(
-                latticeaxiom_gameplay::BlockPosition {
-                    x: -1,
-                    y: 30,
-                    z: -1,
-                },
-                &water,
-                source,
-            ),
+            spine.place_fluid_occupancy(occupied, &water, source),
             Err(BlockEditRejectV1::NotReplaceable)
         ),
-        "stone probe occupancy must reject fluid writes"
+        "solid content at {occupied:?} must reject fluid writes"
     );
     assert_eq!(
         spine.working_set_diagnostics().saving(),
@@ -1320,23 +1316,30 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         .expect("production spine is installed")
         .clone();
 
-    let v2_neighborhood = [
-        ChunkCoordinate::new(-1, 0, -1),
-        ChunkCoordinate::new(-1, 0, 0),
-        ChunkCoordinate::new(0, 0, -1),
-        ChunkCoordinate::new(0, 0, 0),
-    ];
     let spawn = spine.spawn_center();
     let spawn_chunk = chunk_from_translation(spawn, spine.chunk_edge());
-    let edited = ChunkCoordinate::new(-1, 3, -1);
+    let edited_position = first_direct_fluid_cell(&spine, true);
+    spine
+        .place_fluid_occupancy(
+            edited_position,
+            &stable_id("terrenia:fluid/water"),
+            FluidStateV1 {
+                level: FluidLevelV1::SOURCE,
+                flow: FluidFlowV1::Still,
+            },
+        )
+        .expect("a real fluid edit seeds the pinning invariant");
+    let edited = spine
+        .chunk_of(edited_position)
+        .expect("the edited fluid cell maps to a host chunk");
     assert_eq!(
         spine.chunk_lifecycle(edited),
         ChunkLifecycle::Active,
-        "the spawn probe chunk starts active"
+        "the edited chunk starts active"
     );
     assert!(
         spine.edited_chunks().contains(&edited),
-        "edited chunks must be pinned before the walk"
+        "a real edit must be pinned before the walk"
     );
 
     let mut generation = 1_u64;
@@ -1426,7 +1429,7 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         "walk -X must leave the V2 neighborhood (spawn {spawn_chunk:?}, min x {minus_x})"
     );
     assert!(
-        seen_presentations.len() > v2_neighborhood.len(),
+        seen_presentations.len() > 4,
         "streaming must activate more than the V2 four-chunk neighborhood, got {}",
         seen_presentations.len()
     );
@@ -1455,9 +1458,10 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         "dirty edited chunks must not be evicted"
     );
     assert!(
-        v2_neighborhood.iter().any(|chunk| !current.contains(chunk)
-            || spine.chunk_lifecycle(*chunk) == ChunkLifecycle::Absent),
-        "clean origin-neighborhood chunks may leave the working set"
+        seen_presentations
+            .iter()
+            .any(|chunk| !current.contains(chunk) && !spine.edited_chunks().contains(chunk)),
+        "at least one clean presented chunk must leave the working set"
     );
 }
 
@@ -2152,9 +2156,9 @@ fn assert_inspect_dto_overlay_fields(inspect: &HeadlessTargetInspectV1, spine: &
         inspect.active,
         inspect.resident
     );
-    assert!(
-        inspect.dirty >= 1,
-        "inspect DTO must snapshot dirty occupancy"
+    assert_eq!(
+        inspect.dirty, 0,
+        "read-only inspect must not invent dirty occupancy"
     );
     assert_eq!(
         inspect.occupancy_line(),
@@ -2218,9 +2222,10 @@ fn assert_working_set_diagnostics(
         snapshot.in_flight(),
         limits.max_in_flight_chunks
     );
-    assert!(
-        snapshot.dirty() >= 1,
-        "the spawn probe edit must stay dirty and pinned"
+    assert_eq!(
+        snapshot.dirty(),
+        0,
+        "a fresh host must not invent a dirty startup edit"
     );
     assert_eq!(
         snapshot.saving(),
@@ -3453,9 +3458,7 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
     }
     assert!(
         owned.iter().all(|domain| visited.contains(domain)),
-        "journey must enter both underground territories, visited {visited:?}, owned {owned:?}, pose {:?}, dests {:?}",
-        spine.player_pose().translation,
-        spine.cave_destinations()
+        "journey must enter both underground territories, visited {visited:?}, owned {owned:?}"
     );
 
     let stone = first_resident_any(
@@ -3467,7 +3470,7 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
             "terrenia:block/deepstone",
         ],
     );
-    let stone_item = parse_item(&stone.0.as_str().replace(":block/", ":item/"));
+    let stone_item = parse_item("terrenia:item/cobblestone");
     spine
         .select_hotbar_slot(0)
         .expect("pickaxe selected for stone");

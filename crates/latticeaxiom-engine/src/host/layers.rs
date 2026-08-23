@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use latticeaxiom_content::{
-    CompiledFluidPaletteV1, ContentCatalogV1, ContentPresentationBindingV1,
+    CompiledFluidPaletteV1, ContentCatalogV1, ContentPresentationBindingV1, SolidOccupancyKindV1,
 };
 use latticeaxiom_core::StableId;
 use latticeaxiom_gameplay::BlockId;
@@ -53,6 +53,7 @@ impl HostFaceStyle {
 pub(super) struct HostPresentationIndex {
     table: CompiledTerrainLayerTableV1,
     solids: Vec<Option<HostFaceStyle>>,
+    solid_collision: Vec<bool>,
     fluids: Vec<Option<HostFaceStyle>>,
 }
 
@@ -70,34 +71,49 @@ impl HostPresentationIndex {
         fluid_palette: &CompiledFluidPaletteV1,
     ) -> Result<Self, ProductionHostError> {
         let table = compile_locked_layer_table(images, catalog)?;
-        Ok(Self::from_table(table, solid_palette, fluid_palette))
+        Self::from_table(table, catalog, solid_palette, fluid_palette)
     }
 
     fn from_table(
         table: CompiledTerrainLayerTableV1,
+        catalog: &ContentCatalogV1,
         solid_palette: &[BlockId],
         fluid_palette: &CompiledFluidPaletteV1,
-    ) -> Self {
-        let solids = solid_palette
-            .iter()
-            .map(|block| {
-                block
-                    .as_str()
-                    .parse::<StableId>()
-                    .ok()
-                    .and_then(|id| style_for(&table, &id))
-            })
-            .collect();
+    ) -> Result<Self, ProductionHostError> {
+        let mut solids = Vec::with_capacity(solid_palette.len());
+        let mut solid_collision = Vec::with_capacity(solid_palette.len());
+        for block in solid_palette {
+            let id = block.as_str().parse::<StableId>()?;
+            let definition = catalog.block(&id).ok_or_else(|| {
+                ProductionHostError::MissingCatalogDefinition {
+                    kind: "block",
+                    id: id.to_string(),
+                }
+            })?;
+            let state = definition
+                .semantics_for(&definition.definition().default_state)
+                .ok_or_else(|| ProductionHostError::MissingCatalogDefinition {
+                    kind: "block-state",
+                    id: id.to_string(),
+                })?;
+            let occupied = matches!(
+                SolidOccupancyKindV1::classify(&state.solid_occupancy)?,
+                SolidOccupancyKindV1::Full | SolidOccupancyKindV1::Partial
+            );
+            solids.push(style_for(&table, &id));
+            solid_collision.push(occupied);
+        }
         let fluids = fluid_palette
             .entries()
             .iter()
             .map(|entry| entry.fluid().and_then(|id| style_for(&table, id)))
             .collect();
-        Self {
+        Ok(Self {
             table,
             solids,
+            solid_collision,
             fluids,
-        }
+        })
     }
 
     /// Compiled layer table retained for GPU material routing.
@@ -114,6 +130,15 @@ impl HostPresentationIndex {
             .get(usize::from(palette_index))
             .copied()
             .flatten()
+    }
+
+    /// Returns the authoritative solid occupancy bit for a palette entry.
+    #[must_use]
+    pub(super) fn solid_collision(&self, palette_index: u16) -> bool {
+        self.solid_collision
+            .get(usize::from(palette_index))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Fluid-layer style for a host fluid palette index.

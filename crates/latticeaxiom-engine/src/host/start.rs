@@ -173,9 +173,9 @@ impl ProductionMemoryStart {
 
     /// Selects the start-shell process from reopened lock graph roots.
     ///
-    /// True only when `roots` contains `@latticeaxiom/front-end` and does not
-    /// contain `terrenia`. A `terrenia` root, including `profiles/dev.toml`
-    /// client-world, boots the production game host instead.
+    /// True when `roots` contains the front-end root and no non-platform game
+    /// root. Platform roots are namespaced under `@latticeaxiom/`; the game
+    /// package itself is selected by the lock and is never named here.
     #[must_use]
     pub fn lock_roots_select_shell<I, S>(roots: I) -> bool
     where
@@ -183,17 +183,16 @@ impl ProductionMemoryStart {
         S: AsRef<str>,
     {
         let mut has_front_end = false;
-        let mut has_terrenia = false;
+        let mut has_game_root = false;
         for root in roots {
-            match root.as_ref() {
-                FRONT_END_PACKAGE => has_front_end = true,
-                TERRENIA_PACKAGE => has_terrenia = true,
-                _ => {}
-            }
+            let root = root.as_ref();
+            has_front_end |= root == FRONT_END_PACKAGE;
+            has_game_root |= root != FRONT_END_PACKAGE && !root.starts_with(PLATFORM_ROOT_PREFIX);
         }
-        has_front_end && !has_terrenia
+        // Support packages may accompany the shell. Any selected game root,
+        // regardless of its package namespace, means this is the game process.
+        has_front_end && !has_game_root
     }
-
     /// Selects the start-shell process from a reopened locked graph.
     #[must_use]
     pub fn lock_graph_selects_shell(graph: &LockedGameGraph) -> bool {
@@ -937,9 +936,8 @@ impl From<WorldShellError> for ProductionMemoryStartError {
 
 /// Logical package name of the package-driven start shell.
 const FRONT_END_PACKAGE: &str = "@latticeaxiom/front-end";
-/// Logical package name of the current demo game world.
-const TERRENIA_PACKAGE: &str = "terrenia";
-
+/// Namespace reserved for platform packages that can accompany the shell.
+const PLATFORM_ROOT_PREFIX: &str = "@latticeaxiom/";
 /// Seals [`LaunchHandoff::for_ready_exact`] from a catalog record and lock hashes.
 pub(crate) fn sealed_ready_exact_handoff(
     record: &WorldShellRecord,
@@ -1136,9 +1134,7 @@ pub(crate) fn shell_graph_from_lock(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        FRONT_END_PACKAGE, ProductionMemoryStart, TERRENIA_PACKAGE, sealed_ready_exact_handoff,
-    };
+    use super::{FRONT_END_PACKAGE, ProductionMemoryStart, sealed_ready_exact_handoff};
     use latticeaxiom_core::{CanonicalHash, WorldId};
     use latticeaxiom_launcher::LaunchTargetV1;
     use latticeaxiom_start_ui::{
@@ -1193,16 +1189,18 @@ mod tests {
     }
 
     #[test]
-    fn lock_roots_select_shell_only_for_front_end_without_terrenia() {
+    fn lock_roots_select_shell_for_front_end_and_platform_roots() {
         assert!(ProductionMemoryStart::lock_roots_select_shell([
             FRONT_END_PACKAGE
         ]));
-        assert!(!ProductionMemoryStart::lock_roots_select_shell([
-            TERRENIA_PACKAGE
+        assert!(!ProductionMemoryStart::lock_roots_select_shell(["game"]));
+        assert!(ProductionMemoryStart::lock_roots_select_shell([
+            FRONT_END_PACKAGE,
+            "@latticeaxiom/input",
         ]));
         assert!(!ProductionMemoryStart::lock_roots_select_shell([
             FRONT_END_PACKAGE,
-            TERRENIA_PACKAGE,
+            "game",
         ]));
         assert!(!ProductionMemoryStart::lock_roots_select_shell([
             "@latticeaxiom/settings"

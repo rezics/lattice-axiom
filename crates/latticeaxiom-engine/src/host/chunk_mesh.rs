@@ -254,15 +254,6 @@ impl ProductionTerrainPalette {
         Self::map_local_uvs(tile, face, quad)
     }
 
-    fn layer_color(&self, key: LayerMergeKey) -> [f32; 4] {
-        self.layer_table
-            .as_ref()
-            .and_then(|table| table.rows().get(usize::from(key.layer_index())))
-            .map(|row| block_color(row.content().as_str()))
-            .or_else(|| self.colors.get(usize::from(key.layer_index())).copied())
-            .unwrap_or(FALLBACK_COLOR)
-    }
-
     fn map_local_uvs<K>(tile: AtlasTile, face: Face, quad: &Quad<K>) -> [[f32; 2]; 4] {
         let local = quad.uvs(face);
         let width = local[1][0].max(1.0);
@@ -376,7 +367,10 @@ fn mesh_from_group(
     let cpu = adapter_cpu_mesh_from_group(
         geometry,
         group,
-        |key| palette.layer_color(*key),
+        // The atlas already carries the authored/fallback color.  Keeping
+        // vertex colors white avoids multiplying the same tint a second time
+        // in StandardMaterial's texture * vertex-color path.
+        |_| [1.0, 1.0, 1.0, 1.0],
         |key, face, quad| palette.layer_uvs(*key, face, quad),
     )?;
     if cpu.group_count == 0 {
@@ -489,29 +483,28 @@ fn emit_adapter_mesh<K, const N: usize>(
 }
 
 fn block_color(block_id: &str) -> [f32; 4] {
-    match block_id {
-        "terrenia:block/grass" | "terrenia:block/tall-grass" | "terrenia:block/moss" => {
-            [0.24, 0.56, 0.18, 1.0]
-        }
-        "terrenia:block/dirt"
-        | "terrenia:block/coarse-dirt"
-        | "terrenia:block/rooted-dirt"
-        | "terrenia:block/peat"
-        | "terrenia:block/mud" => [0.39, 0.24, 0.12, 1.0],
-        "terrenia:block/sand" | "terrenia:block/sandstone" | "terrenia:block/silt" => {
-            [0.76, 0.67, 0.42, 1.0]
-        }
-        "terrenia:block/red-sand" | "terrenia:block/red-sandstone" => [0.72, 0.38, 0.22, 1.0],
-        "terrenia:block/stone"
-        | "terrenia:block/cobblestone"
-        | "terrenia:block/stone-bricks"
-        | "terrenia:block/polished-stone" => [0.38, 0.41, 0.43, 1.0],
-        "terrenia:block/water" => [0.18, 0.42, 0.72, 1.0],
-        "terrenia:block/lava" => [0.86, 0.28, 0.08, 1.0],
-        "terrenia:block/oak-log" | "terrenia:block/pine-log" => [0.42, 0.28, 0.14, 1.0],
-        "terrenia:block/oak-leaves" | "terrenia:block/pine-leaves" => [0.18, 0.42, 0.16, 1.0],
-        "terrenia:block/snow" | "terrenia:block/ice" => [0.86, 0.91, 0.95, 1.0],
-        "terrenia:block/coal-ore" | "terrenia:block/coal-block" => [0.16, 0.16, 0.18, 1.0],
+    // Fallback presentation is keyed by the content path, not by a game
+    // namespace.  A replacement package can therefore reuse the same basic
+    // material vocabulary without changing engine code.
+    let path = block_id.rsplit_once('/').map_or(block_id, |(_, path)| path);
+    match path {
+        "grass" => [0.31, 0.66, 0.22, 1.0],
+        "tall-grass" => [0.20, 0.52, 0.14, 1.0],
+        "moss" => [0.22, 0.48, 0.18, 1.0],
+        "dirt" => [0.45, 0.29, 0.16, 1.0],
+        "coarse-dirt" => [0.36, 0.23, 0.13, 1.0],
+        "rooted-dirt" => [0.40, 0.25, 0.13, 1.0],
+        "peat" | "mud" => [0.32, 0.22, 0.16, 1.0],
+        "sand" => [0.78, 0.69, 0.45, 1.0],
+        "sandstone" | "silt" => [0.65, 0.54, 0.34, 1.0],
+        "red-sand" | "red-sandstone" => [0.72, 0.38, 0.22, 1.0],
+        "stone" | "cobblestone" | "stone-bricks" | "polished-stone" => [0.42, 0.45, 0.48, 1.0],
+        "water" => [0.16, 0.42, 0.74, 1.0],
+        "lava" => [0.90, 0.27, 0.06, 1.0],
+        "oak-log" | "pine-log" => [0.46, 0.30, 0.15, 1.0],
+        "oak-leaves" | "pine-leaves" => [0.16, 0.46, 0.18, 1.0],
+        "snow" | "ice" => [0.86, 0.91, 0.96, 1.0],
+        "coal-ore" | "coal-block" => [0.16, 0.17, 0.20, 1.0],
         _ => hashed_color(block_id),
     }
 }

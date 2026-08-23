@@ -15,8 +15,9 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, tick_global_task_pools_o
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
 use latticeaxiom_content::{
     CompiledFluidPaletteV1, CompiledSolidPaletteEntryV1, CompiledSolidPaletteV1, ContentCatalogV1,
-    FluidFlowV1, FluidLevelV1, FluidPaletteEntryV1, FluidStateV1, OccupancyArbitrationContextV1,
-    PaletteLimitsV1, SolidFluidArbitrationV1, SolidPaletteEntryV1, arbitrate_cell,
+    FluidFlowV1, FluidLevelV1, FluidOccupancyKindV1, FluidOccupancyPolicyV1, FluidPaletteEntryV1,
+    FluidStateV1, OccupancyArbitrationContextV1, PaletteLimitsV1, SolidFluidArbitrationV1,
+    SolidPaletteEntryV1, arbitrate_cell,
 };
 use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
@@ -96,7 +97,6 @@ const VOXEL_SCHEMA_VERSION: u32 = 2;
 const CELL_OCCUPANCY_BYTES: usize = 4;
 const WORLD_ID: &str = "00000000-0000-4000-8000-0000000000b1";
 const REACH_MM: u16 = 5_000;
-const FLUID_OCCUPANCY_REJECT: &str = "terrenia:fluid-occupancy/reject@1";
 /// Portal SDF is doubled-voxel Chebyshev minus radius and is biased one unit
 /// outside the aperture voxel. Hydrology must not occupy that entrance
 /// neighborhood; cave-interior aquifers farther from portals remain.
@@ -388,6 +388,7 @@ struct ChunkDerived {
 pub(super) struct HostVoxel {
     pub(super) palette_index: u16,
     pub(super) fluid_palette_index: u16,
+    collision_occupied: bool,
     solid_style: Option<HostFaceStyle>,
     fluid_style: Option<HostFaceStyle>,
 }
@@ -401,6 +402,7 @@ impl HostVoxel {
         Self {
             palette_index,
             fluid_palette_index,
+            collision_occupied: presentation.solid_collision(palette_index),
             solid_style: (palette_index != 0)
                 .then(|| presentation.solid(palette_index))
                 .flatten(),
@@ -583,7 +585,6 @@ impl ProductionSpine {
             &presentation,
         );
         let placement_content = worldgen.placement_content.clone();
-        let probe_content = worldgen.probe_content.clone();
         let voxel_schema: SchemaId = VOXEL_SCHEMA.parse()?;
         let voxel_schema_version =
             PayloadSchemaVersion::new(VOXEL_SCHEMA_VERSION).map_err(ProductionHostError::from)?;
@@ -661,13 +662,9 @@ impl ProductionSpine {
             inner.player_pose.translation.x,
             inner.player_pose.translation.z,
         ];
-        inner.edited.insert(spawn_chunk);
         let origin = translation_chunk(inner.player_pose.translation, inner.chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
         fill_working_set(&mut inner, &kernel, origin, [0, 0], FixedTick::new(0))?;
-        if !probe_already_occupied(&inner) {
-            place_exposed_probe(&mut inner, &kernel, &probe_content)?;
-        }
         inner.last_success = None;
         bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk)?;
         if let Some(session) = restored_session {
@@ -2814,7 +2811,11 @@ impl ProductionSpineInner {
         let occupancy = self
             .occupancy_from_voxel(position, current)
             .map_err(|_| BlockEditRejectV1::ContentUnavailable)?;
-        if occupancy.fluid_occupancy.as_str() == FLUID_OCCUPANCY_REJECT {
+        let fluid_policy = FluidOccupancyPolicyV1::new(occupancy.fluid_occupancy.clone())
+            .map_err(|_| BlockEditRejectV1::ContentUnavailable)?;
+        let fluid_kind = FluidOccupancyKindV1::classify(&fluid_policy)
+            .map_err(|_| BlockEditRejectV1::ContentUnavailable)?;
+        if matches!(fluid_kind, FluidOccupancyKindV1::Reject) {
             return Err(BlockEditRejectV1::NotReplaceable);
         }
         let fluid_palette_index = fluid_palette_index(&self.fluid_palette, fluid, state)
@@ -3042,7 +3043,7 @@ impl RetainedBytes for HostVoxel {
 
 impl CollisionSemantics for HostVoxel {
     fn collision_occupied(&self) -> bool {
-        self.palette_index != 0
+        self.collision_occupied
     }
 }
 
@@ -3114,7 +3115,17 @@ fn sync_working_set(
             .iter()
             .any(|coordinate| !inner.runtime.is_resident(*coordinate));
     if needs_mutate {
-        evict_unwanted(inner, origin, look_ahead, &desired, tick)?;
+        evict_unwanted(inner, origin, look_ahead, &desired, tick, false)?;
+        let needs_capacity = desired
+            .iter()
+            .any(|coordinate| !inner.runtime.is_resident(*coordinate))
+            && inner.runtime.diagnostics().resident_chunks() >= inner.clamps.max_resident();
+        if needs_capacity {
+            // Retain is a latency optimization, not permission to deadlock
+            // admission at the hard resident cap. Dirty and pinned chunks stay
+            // protected; only clean retained chunks may be released here.
+            evict_unwanted(inner, origin, look_ahead, &desired, tick, true)?;
+        }
         let ordered = prioritize_chunks(&desired, origin, look_ahead);
         admit_desired(
             inner,
@@ -3159,6 +3170,7 @@ fn evict_unwanted(
     look_ahead: [i32; 2],
     desired: &BTreeSet<ChunkCoordinate>,
     tick: FixedTick,
+    force_retain_release: bool,
 ) -> Result<(), ProductionHostError> {
     let now = tick.get();
     let mut victims = inner
@@ -3178,9 +3190,10 @@ fn evict_unwanted(
             ) {
                 return false;
             }
-            inner.residency.get(coordinate).is_none_or(|residency| {
-                !retain_protected(now, residency.admitted_tick, residency.last_core_tick)
-            })
+            force_retain_release
+                || inner.residency.get(coordinate).is_none_or(|residency| {
+                    !retain_protected(now, residency.admitted_tick, residency.last_core_tick)
+                })
         })
         .collect::<Vec<_>>();
     victims.sort_by_key(|coordinate| {
@@ -4448,10 +4461,10 @@ fn compile_host_solid_palette(
 fn compile_host_fluid_palette(
     catalog: &ContentCatalogV1,
 ) -> Result<CompiledFluidPaletteV1, ProductionHostError> {
-    if catalog.fluids().len() != 2 {
+    if catalog.fluids().is_empty() {
         return Err(ProductionHostError::MissingCatalogDefinition {
             kind: "fluid",
-            id: "terrenia:fluid/water+lava".to_owned(),
+            id: "catalog".to_owned(),
         });
     }
     let mut entries = Vec::new();
@@ -4511,15 +4524,6 @@ fn derived_requests() -> DerivedRequestSet {
     );
     DerivedRequestSet::new(request, request)
 }
-
-fn probe_already_occupied(inner: &ProductionSpineInner) -> bool {
-    inner
-        .runtime
-        .cell(VoxelCoordinate::new(-1, 30, -1))
-        .ok()
-        .is_some_and(|cell| *cell != inner.empty)
-}
-
 fn chunk_changed_domains(current: Option<&ChunkData>, replacement: &ChunkData) -> ChangedDomains {
     let Some(current) = current else {
         return ChangedDomains::ALL;
@@ -4622,32 +4626,6 @@ fn restore_player_session(
     gameplay.set_next_drop(session.next_drop());
     Ok(())
 }
-
-#[allow(clippy::cast_precision_loss)] // Spawn stays inside the finite near-origin V2 region.
-fn place_exposed_probe(
-    inner: &mut ProductionSpineInner,
-    kernel: &MemoryTransactionKernel,
-    probe_content: &BlockId,
-) -> Result<(), ProductionHostError> {
-    let stone = palette_index(&inner.palette, probe_content)
-        .ok_or(ProductionHostError::UnknownDraftBlock)?;
-    let probe = BlockPosition {
-        x: -1,
-        y: 30,
-        z: -1,
-    };
-    inner
-        .commit_cell(
-            kernel,
-            0,
-            probe,
-            inner.empty,
-            HostVoxel::from_solid(stone, &inner.presentation),
-        )
-        .map_err(|_| ProductionHostError::NoSafeSpawn)?;
-    Ok(())
-}
-
 #[allow(clippy::cast_possible_truncation)] // Origins are rejected unless they fit `i32` chunks.
 fn dda_origin(origin_m: [f32; 3], edge: u16) -> Option<DdaOrigin> {
     let edge_f = f64::from(edge);
@@ -4921,7 +4899,6 @@ fn bind_gameplay_session(
             stored.revision(),
         );
     }
-    inner.edited.insert(spawn_chunk);
     inner.gameplay = Some(ProductionGameplay::new(
         inner.world,
         catalog,
@@ -5109,8 +5086,8 @@ fn commit_gameplay_storage(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::{
-        MAIN_WORLD_APPLY_JOB_CAP, OccupiedBox, OccupiedCell, apply_waiting_derived,
-        compound_collider, merge_occupied_boxes,
+        CollisionSemantics, HostVoxel, MAIN_WORLD_APPLY_JOB_CAP, OccupiedBox, OccupiedCell,
+        apply_waiting_derived, compound_collider, merge_occupied_boxes,
     };
     use latticeaxiom_voxel_runtime::{
         ApplyAdmission, DerivedApplyBudget, DerivedApplySlice, RuntimeLimits, WallClockNanos,
@@ -5154,6 +5131,23 @@ mod tests {
         let expected: BTreeSet<[u16; 3]> = occupied.iter().map(|cell| cell.local).collect();
         let merged = merge_occupied_boxes(occupied);
         assert_eq!(rasterize(&merged), expected);
+    }
+
+    #[test]
+    fn collision_occupancy_comes_from_content_semantics() {
+        let passable = HostVoxel {
+            palette_index: 7,
+            fluid_palette_index: 0,
+            collision_occupied: false,
+            solid_style: None,
+            fluid_style: None,
+        };
+        let solid = HostVoxel {
+            collision_occupied: true,
+            ..passable
+        };
+        assert!(!passable.collision_occupied());
+        assert!(solid.collision_occupied());
     }
 
     #[test]
