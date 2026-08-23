@@ -13,7 +13,7 @@ use bevy::{
     prelude::{
         AlignItems, BackgroundColor, Button, Camera2d, Changed, ClearColor, Color, Commands,
         Component, Entity, FlexDirection, Interaction, JustifyContent, MessageWriter, Name, Node,
-        Query, Res, ResMut, Resource, Text, TextColor, TextFont, UiRect, Val, With,
+        Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
     },
 };
 use latticeaxiom_core::WorldId;
@@ -24,7 +24,9 @@ use latticeaxiom_start_ui::{
 };
 
 use super::{ProductionHostError, ProductionMemoryStart, start::unix_now_ms};
-use crate::{EngineInstance, LockVerifiedComposeImages, VerifiedProductLockHash};
+use crate::{
+    EngineInstance, LockVerifiedComposeImages, VerifiedProductLockHash, ui_font::ui_text_font,
+};
 
 /// Sealed replacement-process handoff published immediately before [`AppExit`].
 ///
@@ -170,7 +172,7 @@ fn spawn_semantic_node(
             parent.spawn((
                 Name::new(node.name.clone()),
                 Text::new(node.name.clone()),
-                TextFont::from_font_size(if node.role == SemanticRole::Application {
+                ui_text_font(if node.role == SemanticRole::Application {
                     36.0
                 } else {
                     22.0
@@ -182,7 +184,7 @@ fn spawn_semantic_node(
             {
                 parent.spawn((
                     Text::new(description.clone()),
-                    TextFont::from_font_size(16.0),
+                    ui_text_font(16.0),
                     TextColor(Color::srgb(0.72, 0.74, 0.68)),
                     Node {
                         margin: UiRect::bottom(Val::Px(8.0)),
@@ -205,7 +207,7 @@ fn spawn_semantic_node(
             parent.spawn((
                 Name::new(node.name.clone()),
                 Text::new(label),
-                TextFont::from_font_size(18.0),
+                ui_text_font(18.0),
                 TextColor(if node.role == SemanticRole::Alert {
                     Color::srgb(0.92, 0.62, 0.45)
                 } else {
@@ -250,7 +252,7 @@ fn spawn_control(
         .with_children(|button| {
             button.spawn((
                 Text::new(label),
-                TextFont::from_font_size(20.0),
+                ui_text_font(20.0),
                 TextColor(Color::srgb(0.94, 0.95, 0.90)),
             ));
         });

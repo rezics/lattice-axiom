@@ -19,6 +19,7 @@ client = [
   "bevy/default_font",
   "bevy/keyboard",
   "bevy/mouse",
+  "bevy/system_font_discovery",
   "bevy/ui",
   "latticeaxiom-player/client-input",
 ]

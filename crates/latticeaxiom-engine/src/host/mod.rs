@@ -314,32 +314,22 @@ impl Plugin for ProductionHostPlugin {
                 client::sync_production_camera,
                 pause::toggle_pause,
                 pause::sync_pause_overlay,
+                surface::apply_surface_actions,
+                pause::update_cursor_capture,
                 pause::sync_cursor_capture,
                 pause::pause_menu_buttons,
                 pause::sync_pause_menu_page,
-            )
-                .run_if(is_interactive_client),
-        )
-        .add_systems(
-            Update,
-            (
-                surface::apply_surface_actions,
                 hud::activate_workbench_from_target,
                 surface::select_hotbar_from_surface,
                 hud::inventory_slot_buttons,
                 hud::recipe_buttons,
                 hud::sync_inventory_overlay,
                 hud::sync_workbench_overlay,
-            )
-                .run_if(is_interactive_client),
-        )
-        .add_systems(
-            Update,
-            (
                 hud::sync_slot_pickable,
                 hud::sync_hand_recipe_list,
                 hud::sync_workbench_recipe_list,
             )
+                .chain()
                 .run_if(is_interactive_client),
         )
         .add_systems(
@@ -564,7 +554,8 @@ pub(super) fn install_production_host(
     #[cfg(feature = "client")]
     {
         app.insert_resource(hud::ProductionHudSurfaces::default())
-            .insert_resource(pause::PauseMenuPage::default());
+            .insert_resource(pause::PauseMenuPage::default())
+            .insert_resource(pause::CursorCaptureState::default());
     }
     #[cfg(feature = "client")]
     if let Some(terrain_palette) = terrain_palette {

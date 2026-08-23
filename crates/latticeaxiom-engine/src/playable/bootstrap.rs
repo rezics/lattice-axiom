@@ -52,6 +52,7 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
             ..WindowPlugin::default()
         }))
         .insert_resource(pause::PlayablePause::default())
+        .insert_resource(pause::CursorCaptureState::default())
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(input::PlayableInputPlugin::new(placement_content))
@@ -70,6 +71,7 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
                 scene::sync_playable_camera,
                 pause::toggle_pause,
                 pause::sync_pause_overlay,
+                pause::update_cursor_capture,
                 pause::sync_cursor_capture,
                 pause::pause_menu_buttons,
             ),

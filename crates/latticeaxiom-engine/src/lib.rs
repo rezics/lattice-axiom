@@ -32,6 +32,8 @@ mod presentation_fixture;
 mod settings;
 #[cfg(feature = "client")]
 mod supervisor;
+#[cfg(feature = "client")]
+mod ui_font;
 
 #[cfg(feature = "client")]
 pub use client::{

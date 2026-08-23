@@ -3,10 +3,10 @@
 use bevy::{
     ecs::query::QueryFilter,
     prelude::{
-        AlignItems, BackgroundColor, Button, Changed, Children, Color, Commands, Component,
-        Display, FlexDirection, FlexWrap, GlobalZIndex, Interaction, JustifyContent, Name, Node,
-        Overflow, Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, TextFont,
-        UiRect, Val, With, Without,
+        AlignItems, BackgroundColor, BorderColor, Button, Changed, Children, Color, Commands,
+        Component, Display, FlexDirection, FlexWrap, GlobalZIndex, Interaction, JustifyContent,
+        Name, Node, Overflow, Pickable, PositionType, Query, Res, ResMut, Resource, Text,
+        TextColor, UiRect, Val, With, Without,
     },
     ui::FocusPolicy,
 };
@@ -14,6 +14,8 @@ use latticeaxiom_gameplay::{ContainerId, RecipeId, SlotIndex, WorkstationId};
 use latticeaxiom_player::{
     ActionState, BlockEditRejectV1, HeadlessTargetInspectV1, LeafwingPlayerAction, LocalPlayerInput,
 };
+
+use crate::ui_font::ui_text_font;
 
 use super::{
     HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionSessionPause, ProductionSpine,
@@ -117,6 +119,10 @@ pub(super) struct ProductionStatusReadout;
 /// Marker on a hotbar slot node. `0..HOTBAR_SLOTS`.
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 pub(super) struct ProductionHotbarSlot(u16);
+
+/// Border-only selector drawn above a hotbar/inventory swatch.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionSlotSelector;
 
 /// Marker on the inventory overlay root.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
@@ -254,7 +260,7 @@ fn spawn_inspect_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands
                 ProductionInspectReadout,
                 Name::new("Inspect text"),
                 Text::new(inspect_overlay_label(None)),
-                TextFont::from_font_size(16.0),
+                ui_text_font(16.0),
                 TextColor(Color::srgb(0.92, 0.93, 0.88)),
             ));
         });
@@ -264,8 +270,8 @@ fn spawn_status_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<
     parent.spawn((
         ProductionStatusReadout,
         Name::new("Status strip"),
-        Text::new(status_line(None, None, 20, 1, 1)),
-        TextFont::from_font_size(16.0),
+        Text::new(status_line(None, None, 1, 1)),
+        ui_text_font(16.0),
         TextColor(Color::srgb(0.94, 0.86, 0.72)),
         Node {
             position_type: PositionType::Absolute,
@@ -285,7 +291,7 @@ fn spawn_working_set_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComm
         ProductionWorkingSetReadout,
         Name::new("Working set overlay"),
         Text::new(WorkingSetDiagnosticsV1::default().overlay_line()),
-        TextFont::from_font_size(14.0),
+        ui_text_font(14.0),
         TextColor(Color::srgb(0.78, 0.80, 0.74)),
         Node {
             position_type: PositionType::Absolute,
@@ -365,7 +371,7 @@ fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                 .with_children(|panel| {
                     panel.spawn((
                         Text::new("Inventory — E closes · click slots to swap · 1-9 select hotbar"),
-                        TextFont::from_font_size(16.0),
+                        ui_text_font(16.0),
                         TextColor(Color::srgb(0.92, 0.93, 0.88)),
                     ));
                     panel
@@ -392,7 +398,7 @@ fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                         });
                     panel.spawn((
                         Text::new("Hand recipes"),
-                        TextFont::from_font_size(14.0),
+                        ui_text_font(14.0),
                         TextColor(Color::srgb(0.82, 0.84, 0.78)),
                     ));
                     spawn_recipe_list(panel, ProductionHandRecipeList, "Hand recipe list", false);
@@ -437,7 +443,7 @@ fn spawn_workbench_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                 .with_children(|panel| {
                     panel.spawn((
                         Text::new("Workbench — C closes · click a recipe to craft"),
-                        TextFont::from_font_size(16.0),
+                        ui_text_font(16.0),
                         TextColor(Color::srgb(0.92, 0.93, 0.88)),
                     ));
                     spawn_recipe_list(
@@ -490,7 +496,7 @@ fn spawn_recipe_list<M: Component>(
                 .with_children(|row| {
                     row.spawn((
                         Text::new(""),
-                        TextFont::from_font_size(14.0),
+                        ui_text_font(14.0),
                         TextColor(Color::srgb(0.92, 0.93, 0.88)),
                     ));
                 });
@@ -523,8 +529,24 @@ fn spawn_item_slot<M: Component>(
         .with_children(|slot| {
             slot.spawn((
                 Text::new(""),
-                TextFont::from_font_size(12.0),
+                ui_text_font(12.0),
                 TextColor(Color::srgb(0.94, 0.95, 0.90)),
+            ));
+            slot.spawn((
+                ProductionSlotSelector,
+                Name::new("Slot selector"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    border: UiRect::all(Val::Px(2.0)),
+                    display: Display::None,
+                    ..Node::default()
+                },
+                BorderColor::all(Color::NONE),
+                Pickable::IGNORE,
             ));
         });
 }
@@ -926,7 +948,6 @@ pub(super) fn sync_production_status_hud(
     let label = status_line(
         mining,
         durability,
-        20,
         spine.requested_view_distance(),
         spine.effective_view_distance(),
     );
@@ -938,21 +959,21 @@ pub(super) fn sync_production_status_hud(
 fn status_line(
     mining: Option<u32>,
     durability: Option<u32>,
-    vitality: u32,
     requested_view: u32,
     effective_view: u32,
 ) -> String {
     let mine = mining.map_or_else(|| "Mine —".to_owned(), |left| format!("Mine {left} left"));
     let tool = durability.map_or_else(|| "Tool —".to_owned(), |left| format!("Tool {left}"));
-    format!("Vitality {vitality}/20  {mine}  {tool}  View {effective_view}/{requested_view}")
+    format!("{mine}  {tool}  View {effective_view}/{requested_view}")
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_hotbar_hud(
     spine: Res<'_, ProductionSpine>,
     surfaces: Res<'_, ProductionHudSurfaces>,
-    mut slots: Query<'_, '_, (&ProductionHotbarSlot, &mut BackgroundColor, &mut Children)>,
+    mut slots: Query<'_, '_, (&ProductionHotbarSlot, &mut BackgroundColor, &Children)>,
     mut labels: Query<'_, '_, &mut Text>,
+    mut selectors: Query<'_, '_, (&mut Node, &mut BorderColor), With<ProductionSlotSelector>>,
 ) {
     let view = spine.inventory_view();
     let selected = view
@@ -965,13 +986,17 @@ pub(super) fn sync_production_hotbar_hud(
             .as_ref()
             .and_then(|view| view.slots().get(usize::from(slot.0))?.as_ref());
         let (label, swatch) = slot_visual(spine.as_ref(), stack, slot.0);
-        background.0 = if latched {
-            latched_slot_color()
-        } else if selected_slot {
-            selected_slot_color(swatch)
-        } else {
-            swatch
-        };
+        background.0 = swatch;
+        set_slot_selector(
+            children,
+            latched || selected_slot,
+            if latched {
+                latched_slot_color()
+            } else {
+                selected_slot_color()
+            },
+            &mut selectors,
+        );
         if let Some(child) = children.first()
             && let Ok(mut text) = labels.get_mut(*child)
             && text.0 != label
@@ -985,16 +1010,9 @@ pub(super) fn sync_production_hotbar_hud(
 pub(super) fn sync_production_inventory_hud(
     spine: Res<'_, ProductionSpine>,
     surfaces: Res<'_, ProductionHudSurfaces>,
-    mut slots: Query<
-        '_,
-        '_,
-        (
-            &ProductionInventorySlot,
-            &mut BackgroundColor,
-            &mut Children,
-        ),
-    >,
+    mut slots: Query<'_, '_, (&ProductionInventorySlot, &mut BackgroundColor, &Children)>,
     mut labels: Query<'_, '_, &mut Text>,
+    mut selectors: Query<'_, '_, (&mut Node, &mut BorderColor), With<ProductionSlotSelector>>,
 ) {
     let view = spine.inventory_view();
     let selected = view
@@ -1007,18 +1025,40 @@ pub(super) fn sync_production_inventory_hud(
         let (label, swatch) = slot_visual(spine.as_ref(), stack, slot.0);
         let selected_hotbar = slot.0 < HOTBAR_SLOTS && slot.0 == selected;
         let latched = surfaces.cursor_slot() == Some(slot.0);
-        background.0 = if latched {
-            latched_slot_color()
-        } else if selected_hotbar {
-            selected_slot_color(swatch)
-        } else {
-            swatch
-        };
+        background.0 = swatch;
+        set_slot_selector(
+            children,
+            latched || selected_hotbar,
+            if latched {
+                latched_slot_color()
+            } else {
+                selected_slot_color()
+            },
+            &mut selectors,
+        );
         if let Some(child) = children.first()
             && let Ok(mut text) = labels.get_mut(*child)
             && text.0 != label
         {
             *text = Text::new(label);
+        }
+    }
+}
+
+fn set_slot_selector(
+    children: &Children,
+    visible: bool,
+    color: Color,
+    selectors: &mut Query<'_, '_, (&mut Node, &mut BorderColor), With<ProductionSlotSelector>>,
+) {
+    for child in children {
+        if let Ok((mut node, mut border)) = selectors.get_mut(*child) {
+            node.display = if visible {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            *border = BorderColor::all(if visible { color } else { Color::NONE });
         }
     }
 }
@@ -1040,17 +1080,12 @@ fn slot_visual(
     }
 }
 
-fn empty_slot_color(selected: bool) -> Color {
-    if selected {
-        Color::srgb(0.28, 0.42, 0.30)
-    } else {
-        Color::srgb(0.12, 0.14, 0.13)
-    }
+fn empty_slot_color(_selected: bool) -> Color {
+    Color::srgb(0.12, 0.14, 0.13)
 }
 
-fn selected_slot_color(fill: Color) -> Color {
-    let _ = fill;
-    Color::srgb(0.42, 0.62, 0.38)
+fn selected_slot_color() -> Color {
+    Color::srgb(0.94, 0.94, 0.86)
 }
 
 fn latched_slot_color() -> Color {
@@ -1122,11 +1157,11 @@ mod tests {
     }
 
     #[test]
-    fn status_line_includes_vitality_mining_and_view_distance() {
-        let idle = status_line(None, None, 20, 4, 2);
-        assert!(idle.contains("Vitality 20/20"), "{idle}");
+    fn status_line_includes_mining_and_view_distance_without_fake_vitality() {
+        let idle = status_line(None, None, 4, 2);
+        assert!(!idle.contains("Vitality"), "{idle}");
         assert!(idle.contains("View 2/4"), "{idle}");
-        let mining = status_line(Some(7), Some(12), 20, 2, 2);
+        let mining = status_line(Some(7), Some(12), 2, 2);
         assert!(mining.contains("Mine 7 left"), "{mining}");
         assert!(mining.contains("Tool 12"), "{mining}");
     }

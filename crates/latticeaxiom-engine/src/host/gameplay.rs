@@ -115,7 +115,7 @@ impl ProductionGameplay {
             INVENTORY_SLOTS,
         )?;
         state.seed_player(player, inventory)?;
-        Ok(Self {
+        let mut session = Self {
             applier: ReferencePlanApplier::try_new(world, state, catalog)?,
             player,
             dimension,
@@ -124,13 +124,46 @@ impl ProductionGameplay {
             last_outcome: None,
             last_reject: None,
             bound_workstations: BTreeSet::new(),
-        })
+        };
+        session.seed_starter_inventory()?;
+        Ok(session)
     }
 
     pub(super) fn catalog(&self) -> &GameplayCatalog {
         self.applier.catalog()
     }
 
+    /// Seeds a small, catalog-derived starting kit so a new session can place
+    /// a block and begin the gather/craft loop immediately.  No package ID is
+    /// embedded here: replacement content decides which placeable item and
+    /// tool are available through its compiled catalog.
+    fn seed_starter_inventory(&mut self) -> Result<(), GameplayReject> {
+        let starter_item = self
+            .catalog()
+            .items()
+            .values()
+            .find(|item| item.placement_block.is_some())
+            .map(|item| (item.id.clone(), item.stack_limit.get().min(16)));
+        if let Some((item_id, quantity)) = starter_item {
+            self.seed_slot(
+                SlotIndex::new(0),
+                Some(ItemStackV1::plain(item_id, quantity)?),
+            )?;
+        }
+        let starter_tool = self
+            .catalog()
+            .tools()
+            .values()
+            .next()
+            .map(|tool| (tool.item.clone(), tool.maximum_durability.get()));
+        if let Some((tool_id, durability)) = starter_tool {
+            self.seed_slot(
+                SlotIndex::new(1),
+                Some(ItemStackV1::tool(tool_id, durability)?),
+            )?;
+        }
+        Ok(())
+    }
     pub(super) fn select_hotbar_slot(&mut self, slot: u16) -> Result<(), GameplayReject> {
         if slot >= HOTBAR_SLOTS {
             return Err(GameplayReject::SlotOutOfRange {

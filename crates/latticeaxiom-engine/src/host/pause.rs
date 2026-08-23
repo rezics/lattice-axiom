@@ -3,11 +3,11 @@
 use avian3d::prelude::LinearVelocity;
 use bevy::{
     app::AppExit,
+    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     prelude::{
         AlignItems, BackgroundColor, Button, Changed, Color, Commands, Component, Display,
         FlexDirection, GlobalZIndex, Interaction, JustifyContent, MessageWriter, Name, Node,
-        Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, TextFont, UiRect,
-        Val, With,
+        Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
     },
     ui::FocusPolicy,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
@@ -19,7 +19,7 @@ use latticeaxiom_player::{
 };
 
 use super::{ProductionSessionPause, ProductionSpine, hud::ProductionHudSurfaces};
-use crate::EngineProfile;
+use crate::{EngineProfile, ui_font::ui_text_font};
 
 /// Marker on the pause hint / settings readout.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
@@ -29,6 +29,25 @@ pub(super) struct PauseSettingsHint;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
 pub(super) struct PauseMenuPage {
     settings: bool,
+}
+
+/// Explicit viewport-click latch for relative-mouse capture.
+///
+/// A focused window is not enough to capture the OS cursor: the player must
+/// click the viewport first, and focus loss or an overlay always releases it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
+pub(super) struct CursorCaptureState {
+    captured: bool,
+}
+
+impl CursorCaptureState {
+    pub(super) const fn captured(self) -> bool {
+        self.captured
+    }
+
+    fn set(&mut self, captured: bool) {
+        self.captured = captured;
+    }
 }
 
 impl PauseMenuPage {
@@ -93,7 +112,7 @@ fn spawn_pause_overlay(commands: &mut Commands<'_, '_>) {
             overlay.spawn((
                 Name::new("Paused title"),
                 Text::new("Paused"),
-                TextFont::from_font_size(36.0),
+                ui_text_font(36.0),
                 TextColor(Color::srgb(0.94, 0.95, 0.90)),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
@@ -110,7 +129,7 @@ fn spawn_pause_overlay(commands: &mut Commands<'_, '_>) {
                 PauseSettingsHint,
                 Name::new("Pause hint"),
                 Text::new("Esc resumes · Settings: render distance"),
-                TextFont::from_font_size(16.0),
+                ui_text_font(16.0),
                 TextColor(Color::srgb(0.72, 0.74, 0.68)),
                 Node {
                     margin: UiRect::top(Val::Px(8.0)),
@@ -147,7 +166,7 @@ fn spawn_pause_button(
         .with_children(|button| {
             button.spawn((
                 Text::new(label),
-                TextFont::from_font_size(20.0),
+                ui_text_font(20.0),
                 TextColor(Color::srgb(0.94, 0.95, 0.90)),
             ));
         });
@@ -209,9 +228,39 @@ pub(super) fn sync_pause_overlay(
     }
 }
 
+/// Latches capture only after a click in the viewport and releases it on any
+/// focus or modal transition.
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn update_cursor_capture(
+    mut capture: ResMut<'_, CursorCaptureState>,
+    pause: Res<'_, ProductionSessionPause>,
+    surfaces: Option<Res<'_, ProductionHudSurfaces>>,
+    router: Option<Res<'_, super::ProductionSurfaceRouter>>,
+    windows: Query<'_, '_, &Window, With<PrimaryWindow>>,
+    mouse: Res<'_, ButtonInput<MouseButton>>,
+    keyboard: Res<'_, ButtonInput<KeyCode>>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let blocked = pause.is_paused()
+        || surfaces.is_some_and(|surfaces| surfaces.inventory_open())
+        || router
+            .as_ref()
+            .is_some_and(|router| !super::surface::cursor_locked(router));
+    if !window.focused || blocked || keyboard.just_pressed(KeyCode::Escape) {
+        capture.set(false);
+        return;
+    }
+    if mouse.just_pressed(MouseButton::Left) && window.cursor_position().is_some() {
+        capture.set(true);
+    }
+}
+
 /// Locks the cursor only while the window is focused and the session is live.
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_cursor_capture(
+    capture: Res<'_, CursorCaptureState>,
     pause: Res<'_, ProductionSessionPause>,
     surfaces: Option<Res<'_, ProductionHudSurfaces>>,
     router: Option<Res<'_, super::ProductionSurfaceRouter>>,
@@ -224,18 +273,18 @@ pub(super) fn sync_cursor_capture(
     let Ok(mut cursor) = cursors.single_mut() else {
         return;
     };
-    let blocked = if let Some(router) = router.as_ref() {
-        !super::surface::cursor_locked(router)
-    } else {
-        pause.is_paused() || surfaces.is_some_and(|surfaces| surfaces.inventory_open())
-    };
-    let capture = window.focused && !blocked;
-    cursor.grab_mode = if capture {
+    let blocked = pause.is_paused()
+        || surfaces.is_some_and(|surfaces| surfaces.inventory_open())
+        || router
+            .as_ref()
+            .is_some_and(|router| !super::surface::cursor_locked(router));
+    let should_capture = capture.captured() && window.focused && !blocked;
+    cursor.grab_mode = if should_capture {
         CursorGrabMode::Locked
     } else {
         CursorGrabMode::None
     };
-    cursor.visible = !capture;
+    cursor.visible = !should_capture;
 }
 
 /// Drops live walk, look, and edit input while the overlay is open.

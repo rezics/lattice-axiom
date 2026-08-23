@@ -2,14 +2,16 @@
 
 use bevy::prelude::Resource;
 #[cfg(feature = "client")]
-use bevy::prelude::{Res, ResMut};
+use bevy::prelude::{Query, Res, ResMut, With};
 #[cfg(feature = "client")]
 use latticeaxiom_client_ui::{CursorPolicy, GameModalV1, GameOverlayV1, GameTransitionV1};
 use latticeaxiom_client_ui::{GameSurfaceRouter, ROUTE_VOCABULARY_MAJOR, SurfaceCommandV1};
 #[cfg(feature = "client")]
 use latticeaxiom_input::ClientSurfaceActionV1;
 #[cfg(feature = "client")]
-use latticeaxiom_player::{GameplaySuppressed, SurfaceActionFrame};
+use latticeaxiom_player::{
+    ActionState, GameplaySuppressed, LeafwingPlayerAction, LocalPlayerInput, SurfaceActionFrame,
+};
 
 #[cfg(feature = "client")]
 use super::{ProductionSessionPause, hud::ProductionHudSurfaces};
@@ -55,6 +57,7 @@ impl ProductionSurfaceRouter {
 #[cfg(feature = "client")]
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn apply_surface_actions(
+    action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
     mut router: ResMut<'_, ProductionSurfaceRouter>,
     mut pause: ResMut<'_, ProductionSessionPause>,
     mut surfaces: ResMut<'_, ProductionHudSurfaces>,
@@ -62,21 +65,16 @@ pub(super) fn apply_surface_actions(
     mut frame: ResMut<'_, SurfaceActionFrame>,
     spine: Res<'_, super::ProductionSpine>,
 ) {
+    let gameplay_pause_started = action_states
+        .iter()
+        .any(|state| state.just_pressed(&LeafwingPlayerAction::Pause));
     let started = frame.started().clone();
     for action in started {
-        let command = match action {
-            ClientSurfaceActionV1::ToggleInventory => Some(SurfaceCommandV1::ToggleInventory),
-            ClientSurfaceActionV1::ToggleWorkbench => Some(SurfaceCommandV1::OpenWorkbench),
-            ClientSurfaceActionV1::Pause => {
-                if router.inner().route().modal() == GameModalV1::None {
-                    Some(SurfaceCommandV1::Pause)
-                } else {
-                    Some(SurfaceCommandV1::Back)
-                }
-            }
-            ClientSurfaceActionV1::Back => Some(SurfaceCommandV1::Back),
-            _ => None,
-        };
+        let command = surface_command(
+            router.inner().route().modal(),
+            action,
+            gameplay_pause_started,
+        );
         let Some(command) = command else {
             continue;
         };
@@ -93,6 +91,31 @@ pub(super) fn apply_surface_actions(
             sync_derived_state(&receipt, &mut pause, &mut surfaces, &mut suppressed);
             frame.clear();
         }
+    }
+}
+
+#[cfg(feature = "client")]
+fn surface_command(
+    modal: GameModalV1,
+    action: ClientSurfaceActionV1,
+    gameplay_pause_started: bool,
+) -> Option<SurfaceCommandV1> {
+    match action {
+        ClientSurfaceActionV1::ToggleInventory => Some(SurfaceCommandV1::ToggleInventory),
+        ClientSurfaceActionV1::ToggleWorkbench => Some(SurfaceCommandV1::OpenWorkbench),
+        ClientSurfaceActionV1::Pause => {
+            if modal == GameModalV1::None {
+                Some(SurfaceCommandV1::Pause)
+            } else {
+                Some(SurfaceCommandV1::Back)
+            }
+        }
+        // Escape is intentionally shared across gameplay Pause and surface
+        // Back. The pause edge owns that physical press so Back cannot undo
+        // the modal transition later in the same frame.
+        ClientSurfaceActionV1::Back if gameplay_pause_started => None,
+        ClientSurfaceActionV1::Back => Some(SurfaceCommandV1::Back),
+        _ => None,
     }
 }
 
@@ -151,4 +174,19 @@ pub(super) fn select_hotbar_from_surface(
 #[must_use]
 pub fn cursor_locked(router: &ProductionSurfaceRouter) -> bool {
     router.inner().route().input_context().cursor_policy() == CursorPolicy::LockedGameplay
+}
+
+#[cfg(all(test, feature = "client"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gameplay_pause_edge_wins_over_the_same_escape_surface_back_edge() {
+        assert!(surface_command(GameModalV1::None, ClientSurfaceActionV1::Back, true,).is_none());
+        assert!(surface_command(GameModalV1::Pause, ClientSurfaceActionV1::Back, true,).is_none());
+        assert!(matches!(
+            surface_command(GameModalV1::None, ClientSurfaceActionV1::Back, false,),
+            Some(SurfaceCommandV1::Back)
+        ));
+    }
 }
