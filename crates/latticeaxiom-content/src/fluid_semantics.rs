@@ -198,7 +198,7 @@ pub const fn cell_inspect_kind(
     fluid_present: bool,
 ) -> CellInspectKindV1 {
     match solid {
-        SolidOccupancyKindV1::Full => CellInspectKindV1::Solid,
+        SolidOccupancyKindV1::Full | SolidOccupancyKindV1::Partial => CellInspectKindV1::Solid,
         SolidOccupancyKindV1::Empty if fluid_present => CellInspectKindV1::Fluid,
         SolidOccupancyKindV1::Empty => CellInspectKindV1::Empty,
     }

@@ -21,7 +21,7 @@ use crate::{
 };
 
 const SPAWN_COLUMN_DOMAIN: &[u8] = b"latticeaxiom.spawn-column.v1\0";
-const AUTHORED_BINDINGS_SCHEMA: &str = "terrenia:schema/authored-worldgen-block-bindings@1";
+const AUTHORED_BINDINGS_SCHEMA_PATH: &str = "schema/authored-worldgen-block-bindings@1";
 const DEFAULT_CLEARANCE_VOXELS: u16 = 2;
 const DEFAULT_SEARCH_HALF_EXTENT: i64 = 8;
 
@@ -77,7 +77,7 @@ pub struct AuthoredWorldgenBindingsV1 {
 }
 
 impl AuthoredWorldgenBindingsV1 {
-    /// Decodes and validates `@terrenia/worldgen` Role/Predicate JSON.
+    /// Decodes and validates authored worldgen Role/Predicate JSON.
     ///
     /// # Errors
     ///
@@ -91,11 +91,15 @@ impl AuthoredWorldgenBindingsV1 {
                     reason: error.to_string(),
                 }
             })?;
-        if document.authoring_schema != AUTHORED_BINDINGS_SCHEMA {
+        let schema_path = document
+            .authoring_schema
+            .split_once(':')
+            .map_or("", |(_, path)| path);
+        if schema_path != AUTHORED_BINDINGS_SCHEMA_PATH {
             return Err(invalid_bindings(
                 "authoring_schema",
                 format!(
-                    "expected `{AUTHORED_BINDINGS_SCHEMA}`, got `{}`",
+                    "expected a namespace-qualified `{AUTHORED_BINDINGS_SCHEMA_PATH}` schema, got `{}`",
                     document.authoring_schema
                 ),
             ));
@@ -436,6 +440,7 @@ impl SpawnLocationV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SpawnOccupancyClassV1 {
     Empty,
+    Passable,
     Solid,
     Fluid,
     Cave,
@@ -491,6 +496,15 @@ impl SpawnCellInspectionV1 {
     #[must_use]
     pub const fn is_empty(self) -> bool {
         matches!(self.class, SpawnOccupancyClassV1::Empty)
+    }
+
+    /// Returns whether the cell is clear for the player capsule.
+    #[must_use]
+    pub const fn is_clearance(self) -> bool {
+        matches!(
+            self.class,
+            SpawnOccupancyClassV1::Empty | SpawnOccupancyClassV1::Passable
+        )
     }
 }
 
@@ -565,6 +579,7 @@ pub fn inspect_spawn_cell(
             .cactus_block()
             .is_some_and(|cactus| block == cactus);
     let empty_block = plan.role_target(D4MaterialRoleV1::Empty);
+    let passable_ground_cover = plan.role_target(D4MaterialRoleV1::WoodlandGroundCover);
     let class = if cave {
         SpawnOccupancyClassV1::Cave
     } else if fluid && hazard {
@@ -575,6 +590,8 @@ pub fn inspect_spawn_cell(
         SpawnOccupancyClassV1::Hazard
     } else if block == empty_block {
         SpawnOccupancyClassV1::Empty
+    } else if block == passable_ground_cover {
+        SpawnOccupancyClassV1::Passable
     } else if plan.terrain_density(x, y, z) >= 0 {
         SpawnOccupancyClassV1::Solid
     } else {
@@ -649,7 +666,7 @@ pub fn evaluate_spawn_column(
         reject_cell(cell, SpawnRejectV1::Fluid, x, standing_y, z)?;
         reject_cell(cell, SpawnRejectV1::Cave, x, standing_y, z)?;
         reject_cell(cell, SpawnRejectV1::Hazard, x, standing_y, z)?;
-        if !cell.is_empty() {
+        if !cell.is_clearance() {
             return Err(unsafe_cell(
                 SpawnRejectV1::InsufficientClearance,
                 x,
@@ -663,7 +680,7 @@ pub fn evaluate_spawn_column(
     Ok(SpawnLocationV1 {
         footing: [x, footing_y, z],
         chunk: world_chunk(x, footing_y, z, plan.config().chunk_edge_voxels)?,
-        style: plan.territory_query(x, z).winner(),
+        style: plan.material_style(x, z),
     })
 }
 
@@ -682,7 +699,39 @@ pub fn select_safe_spawn(
     occupancy: &SpawnOccupancyViewV1,
     bounds: SpawnSearchBoundsV1,
 ) -> WorldgenResult<SpawnLocationV1> {
-    let mut winner: Option<(u64, i64, i64, SpawnLocationV1)> = None;
+    select_safe_spawn_with_preference(plan, bindings, occupancy, bounds, None)
+}
+
+/// Selects a deterministic safe spawn, preferring a terrain style when one is
+/// available in the search bounds.
+///
+/// The preference is a tie-break policy above the seed-derived column hash,
+/// not a content or block identity. If no safe column has `preferred_style`,
+/// the selector falls back to the same deterministic ranking as
+/// [`select_safe_spawn`].
+///
+/// # Errors
+///
+/// Returns [`WorldgenError::NoSafeSpawn`] when no ready column passes every
+/// safety check, or any arithmetic error from chunk mapping.
+pub fn select_safe_spawn_prefer_style(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    occupancy: &SpawnOccupancyViewV1,
+    bounds: SpawnSearchBoundsV1,
+    preferred_style: TerrainStyleV1,
+) -> WorldgenResult<SpawnLocationV1> {
+    select_safe_spawn_with_preference(plan, bindings, occupancy, bounds, Some(preferred_style))
+}
+
+fn select_safe_spawn_with_preference(
+    plan: &GenerationPlanV1,
+    bindings: &AuthoredWorldgenBindingsV1,
+    occupancy: &SpawnOccupancyViewV1,
+    bounds: SpawnSearchBoundsV1,
+    preferred_style: Option<TerrainStyleV1>,
+) -> WorldgenResult<SpawnLocationV1> {
+    let mut winner: Option<(u8, u64, i64, i64, SpawnLocationV1)> = None;
     let mut z = bounds.min_z;
     while z < bounds.max_z {
         let mut x = bounds.min_x;
@@ -698,10 +747,12 @@ pub fn select_safe_spawn(
                             &z.to_be_bytes(),
                         ],
                     );
-                    let candidate = (rank, x, z, location);
+                    let style_penalty =
+                        u8::from(preferred_style.is_some_and(|style| style != location.style()));
+                    let candidate = (style_penalty, rank, x, z, location);
                     if winner.as_ref().is_none_or(|current| {
-                        (&candidate.0, &candidate.1, &candidate.2)
-                            < (&current.0, &current.1, &current.2)
+                        (&candidate.0, &candidate.1, &candidate.2, &candidate.3)
+                            < (&current.0, &current.1, &current.2, &current.3)
                     }) {
                         winner = Some(candidate);
                     }
@@ -716,10 +767,9 @@ pub fn select_safe_spawn(
         z = z.saturating_add(1);
     }
     winner
-        .map(|(_, _, _, location)| location)
+        .map(|(_, _, _, _, location)| location)
         .ok_or(WorldgenError::NoSafeSpawn)
 }
-
 fn reject_cell(
     cell: SpawnCellInspectionV1,
     reason: SpawnRejectV1,

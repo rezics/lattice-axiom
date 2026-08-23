@@ -819,6 +819,16 @@ impl GenerationPlanV1 {
         self.territory.query(x, z)
     }
 
+    /// Returns the concrete terrain style selected for materialization at `(x, z)`.
+    ///
+    /// Unlike [`Self::territory_query`], this includes the deterministic style
+    /// choice inside an authored transition band.
+    #[must_use]
+    pub fn material_style(&self, x: i64, z: i64) -> TerrainStyleV1 {
+        let sample = self.territory.sample(x, z);
+        self.territory.choose_material_style(x, z, sample)
+    }
+
     /// Returns whether the V5 natural layer is compiled into this plan.
     #[must_use]
     pub const fn has_natural_layer(&self) -> bool {

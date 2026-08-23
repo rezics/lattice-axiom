@@ -92,7 +92,7 @@ pub use seed::WorldSeedV1;
 pub use spawn::{
     AuthoredWorldgenBindingsV1, SpawnCellInspectionV1, SpawnCellOverrideV1, SpawnLocationV1,
     SpawnOccupancyViewV1, SpawnRejectV1, SpawnSearchBoundsV1, evaluate_spawn_column,
-    inspect_spawn_cell, required_spawn_chunks, select_safe_spawn,
+    inspect_spawn_cell, required_spawn_chunks, select_safe_spawn, select_safe_spawn_prefer_style,
 };
 pub use territory::{TerrainStyleV1, TerritoryQueryV1, TransitionMetadataV1};
 

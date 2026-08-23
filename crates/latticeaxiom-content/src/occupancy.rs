@@ -62,6 +62,8 @@ pub enum SolidOccupancyKindV1 {
     Empty,
     /// A solid volume occupies the cell.
     Full,
+    /// A partial solid volume (for example a slab or stair) occupies the cell.
+    Partial,
 }
 
 impl SolidOccupancyKindV1 {
@@ -76,7 +78,11 @@ impl SolidOccupancyKindV1 {
             policy.as_stable_id(),
             "solid-occupancy",
             "solid occupancy policy",
-            &[("empty", Self::Empty), ("full", Self::Full)],
+            &[
+                ("empty", Self::Empty),
+                ("full", Self::Full),
+                ("partial", Self::Partial),
+            ],
         )
     }
 }

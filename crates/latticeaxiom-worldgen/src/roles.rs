@@ -196,7 +196,7 @@ impl D4MaterialRoleV1 {
         }
     }
 
-    /// Returns the `@terrenia/worldgen` catalog Role path for a natural purpose.
+    /// Returns the authored catalog Role path for a natural purpose.
     #[must_use]
     pub const fn authored_catalog_path(self) -> Option<&'static str> {
         match self {

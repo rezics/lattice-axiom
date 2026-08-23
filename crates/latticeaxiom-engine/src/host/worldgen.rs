@@ -30,7 +30,7 @@ use latticeaxiom_worldgen::{
     MAX_BOUNDED_REGION_CHUNKS, NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1,
     ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, SpawnLocationV1,
     SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1,
-    WorldgenError, WorldgenLimitsV1, required_spawn_chunks, select_safe_spawn,
+    WorldgenError, WorldgenLimitsV1, required_spawn_chunks, select_safe_spawn_prefer_style,
 };
 
 use super::{
@@ -51,7 +51,7 @@ pub(super) fn compile_plan(
     offers.extend(natural_offers.iter().cloned());
     let input = GenerationPlanInputV1::new(
         catalog.dimension.clone(),
-        WorldSeedV1::from_integer(42),
+        WorldSeedV1::from_integer(0),
         config.clone(),
         1,
         PlanActivationIdV1::from_hash(locked_receipt),
@@ -93,9 +93,10 @@ pub(super) fn spine_config() -> WorldgenConfigV1 {
         world_floor_y: 0,
         world_ceiling_y: 31,
         temperate_base_height: 16,
-        temperate_relief: 2,
+        // Keep a broad, walkable plain while adding enough relief to avoid a flat test slab.
+        temperate_relief: 4,
         arid_base_height: 16,
-        arid_relief: 2,
+        arid_relief: 6,
         ..WorldgenConfigV1::default()
     }
 }
@@ -143,14 +144,29 @@ pub(super) fn validated_spawn(
     plan: &GenerationPlanV1,
     bindings: &AuthoredWorldgenBindingsV1,
 ) -> Result<SpawnLocationV1, ProductionHostError> {
-    let bounds = SpawnSearchBoundsV1::origin_neighborhood();
+    let bounds = host_spawn_bounds(plan);
     let occupancy = ready_spawn_occupancy(plan, bounds)?;
-    select_safe_spawn(plan, bindings, &occupancy, bounds).map_err(|error| match error {
+    select_safe_spawn_prefer_style(
+        plan,
+        bindings,
+        &occupancy,
+        bounds,
+        TerrainStyleV1::TemperateWoodland,
+    )
+    .map_err(|error| match error {
         WorldgenError::NoSafeSpawn => ProductionHostError::NoSafeSpawn,
         other => ProductionHostError::from(other),
     })
 }
 
+/// Returns the stable origin-neighborhood spawn window.
+///
+/// Keeping the initial search around the origin makes the first frame
+/// predictable and keeps the player's first working set local. The selected
+/// style is still decided by the compiled plan and authored bindings.
+fn host_spawn_bounds(_plan: &GenerationPlanV1) -> SpawnSearchBoundsV1 {
+    SpawnSearchBoundsV1::origin_neighborhood()
+}
 /// Returns the player capsule center standing on `location` footing.
 ///
 /// # Errors
@@ -1155,7 +1171,8 @@ mod tests {
         ExistingSnapshotEvidenceV1, GenerationPlanInputV1, GenerationPlanV1,
         HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
         NaturalLayerInputV1, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1, PlanActivationIdV1,
-        PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1, WorldgenLimitsV1,
+        PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1,
+        WorldgenLimitsV1,
     };
 
     const AUTHORED_BINDINGS_JSON: &str =
@@ -1499,6 +1516,15 @@ mod tests {
             .expect("@terrenia/worldgen authored bindings must decode")
     }
 
+    fn fixture_config() -> WorldgenConfigV1 {
+        let mut config = spine_config();
+        // Keep invariant fixtures on the original low-relief seam corpus;
+        // production uses the broader relief configured above.
+        config.temperate_relief = 2;
+        config.arid_relief = 2;
+        config
+    }
+
     fn fixture_plan(seed: i64) -> GenerationPlanV1 {
         fixture_plan_with_offer_order(seed, false)
     }
@@ -1571,7 +1597,7 @@ mod tests {
         natural: Vec<latticeaxiom_worldgen::ProviderOfferV1>,
     ) -> GenerationPlanV1 {
         let bindings = authored_bindings();
-        let config = spine_config();
+        let config = fixture_config();
         let mut d4 = provider_offers(None, ProviderSlotV1::ALL).expect("D4 offers");
         d4.extend(natural.iter().cloned());
         if reverse {
