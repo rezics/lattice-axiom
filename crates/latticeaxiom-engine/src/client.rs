@@ -105,18 +105,18 @@ impl ProductionClientError {
 /// Boots the package-driven client from a reopened `latticeaxiom.lock`.
 ///
 /// Ordinary launch reads `latticeaxiom.lock` and `catalog/cas` from the
-/// current workspace and freeze-verifies every CAS receipt. Lock graph roots
-/// select one process role:
+/// current workspace and freeze-verifies every CAS receipt. Locked capability
+/// evidence selects one process role:
 ///
-/// - Roots contain `@latticeaxiom/front-end` and no non-platform game root:
-///   one [`bevy::prelude::DefaultPlugins`] start-shell App from the start-ui
-///   semantic tree. Continue/Play of a `ReadyExact` world seals
-///   [`latticeaxiom_start_ui::LaunchHandoff::for_ready_exact`] and exits.
-///   An external supervisor must spawn the replacement game process; this
-///   process does not.
-/// - A lock with a selected game root (including `profiles/dev.toml`
-///   client-world) starts one production game App through
+/// - Exactly one `latticeaxiom:capability/client-shell@1` provider starts one
+///   [`bevy::prelude::DefaultPlugins`] shell App from the start-ui semantic
+///   tree. Continue/Play of a `ReadyExact` world seals
+///   [`latticeaxiom_start_ui::LaunchHandoff::for_ready_exact`] and exits. An
+///   external supervisor must spawn the replacement game process; this process
+///   does not.
+/// - Absence of that capability starts one production game App through
 ///   [`EngineInstance::new_client_host_from_lock`].
+/// - Present evidence with zero or multiple providers fails closed.
 ///
 /// Start-shell and Playing never share one `DefaultPlugins` App. Missing lock
 /// or CAS fails closed. This path does not load native modules or open a
@@ -135,8 +135,8 @@ pub fn run_client_host_from_lock() -> Result<(), ProductionClientError> {
 
 /// Boots the interactive client from lock and CAS paths under `workspace`.
 ///
-/// Lock graph roots select the start-shell process or the production game
-/// process as documented on [`run_client_host_from_lock`].
+/// Lock-selected `client-shell@1` provider evidence selects the start-shell
+/// process; its absence selects the production game process.
 ///
 /// # Errors
 ///
@@ -154,37 +154,31 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
     let lease = claim_fresh_client_app_lease(epoch)?;
     write_bootstrap_ack(workspace, epoch);
     let settings_root = workspace.join("run").join("user");
-    let settings = crate::settings::HostUserSettings::load(&settings_root).ok();
-    let profile = settings
-        .as_ref()
-        .map_or_else(latticeaxiom_input::BindingProfileV1::empty, |loaded| {
-            loaded.binding_profile().clone()
-        });
-    let cas_root = workspace
-        .join(CLIENT_CATALOG_DIRECTORY)
-        .join(LOCAL_CATALOG_CAS_DIRECTORY);
-    let store = FilesystemCas::open(&cas_root)?;
-    let compiled = crate::input::compile_lock_selected_input(&images, Some(&store), &profile)?;
-    if crate::input::graph_selects_input_actions(images.images().graph()) && compiled.is_none() {
-        return Err(ProductionClientError::Input(
-            crate::input::HostInputError::CatalogUnavailable {
-                reason: "the lock selected input-actions but no catalog compiled".to_owned(),
-            },
-        ));
-    }
-    let role = std::env::var(crate::supervisor::ENV_CHILD_ROLE).unwrap_or_default();
-    let force_shell = role == "shell" || role == "recovery";
-    let force_world = role == "world";
-    let (instance, _proof) = if force_shell
-        || (!force_world
-            && ProductionMemoryStart::lock_graph_selects_shell(images.images().graph()))
-    {
-        EngineInstance::new_client_shell_from_lock(images, lease)?
+    let settings = crate::settings::HostUserSettings::load(&settings_root)?;
+    let profile = settings.binding_profile().clone();
+    let settings_catalog = crate::settings::compile_lock_selected_settings(&images)?;
+    let active_lock = images.product_lock_hash();
+    let compiled = crate::input::compile_lock_selected_input(&images, &profile)?;
+    let selects_shell = ProductionMemoryStart::lock_graph_selects_shell(images.images().graph())?;
+    let (instance, _proof) = if selects_shell {
+        EngineInstance::new_client_shell_from_lock(
+            images,
+            lease,
+            latticeaxiom_launcher::SettingTransactionRevision::new(settings.transaction_revision()),
+        )?
     } else {
+        let catalog = settings_catalog.ok_or_else(|| {
+            crate::settings::HostSettingsError::CatalogUnavailable {
+                reason: "the game lock does not select a settings registry".to_owned(),
+            }
+        })?;
         let maps = compiled
             .as_ref()
             .map(latticeaxiom_player::leafwing_maps_from_catalog);
-        EngineInstance::new_client_host_from_lock_with_maps(images, lease, maps)?
+        let (mut instance, proof) =
+            EngineInstance::new_client_host_from_lock_with_maps(images, lease, maps)?;
+        instance.install_user_settings(settings_root, settings, catalog, active_lock)?;
+        (instance, proof)
     };
     instance.run();
     Ok(())

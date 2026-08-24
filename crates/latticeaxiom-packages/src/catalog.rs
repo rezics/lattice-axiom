@@ -5,7 +5,7 @@
 //! The same `PackageName` and exact version cannot be published as two source
 //! digests. Install and build scripts are never executed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -13,12 +13,11 @@ use std::path::{Path, PathBuf};
 
 use latticeaxiom_compose::{
     AuthorizedRoot, AuthorizedRootKind, PACKAGE_SOURCE_MANIFEST_FILE_NAME, PackageSourceManifestV1,
-    SourceFileSnapshot, SourceInclusionPolicyV1, SourceScanLimits, SourceSnapshot,
-    scan_source_snapshot,
+    SourceScanLimits, SourceSnapshot, scan_included_source_snapshot,
 };
 use latticeaxiom_core::{
-    CanonicalHash, CanonicalJsonError, CanonicalLogicalPath, PackageName, PackageVersion, SourceId,
-    canonical_json_bytes, canonical_json_hash,
+    CanonicalHash, CanonicalJsonError, PackageName, PackageVersion, SourceId, canonical_json_bytes,
+    canonical_json_hash,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
@@ -33,8 +32,6 @@ pub const LOCAL_CATALOG_INDEX_FILE_NAME: &str = "latticeaxiom-catalog.json";
 
 /// Object-store directory beside the catalog index.
 pub const LOCAL_CATALOG_CAS_DIRECTORY: &str = "cas";
-
-const SOURCE_TABLE_DOMAIN: &[u8] = b"latticeaxiom:canonical-source-table/r0\0";
 
 const PACKAGE_SCAN_LIMITS: SourceScanLimits = SourceScanLimits {
     maximum_files: 4_096,
@@ -377,7 +374,14 @@ pub struct AcquiredPackageV1 {
 /// invalid, an included path or Nickel entrypoint is missing, or the source
 /// scan fails closed.
 pub fn check_path_package(root: impl AsRef<Path>) -> Result<CheckedPackageV1, CatalogError> {
-    let root = acquisition_root(root.as_ref())?;
+    check_path_package_with_limits(root.as_ref(), PACKAGE_SCAN_LIMITS)
+}
+
+fn check_path_package_with_limits(
+    root: &Path,
+    limits: SourceScanLimits,
+) -> Result<CheckedPackageV1, CatalogError> {
+    let root = acquisition_root(root)?;
     let manifest_path = root.join(PACKAGE_SOURCE_MANIFEST_FILE_NAME);
     let manifest_text =
         fs::read_to_string(&manifest_path).map_err(|source| match source.kind() {
@@ -391,8 +395,12 @@ pub fn check_path_package(root: impl AsRef<Path>) -> Result<CheckedPackageV1, Ca
 
     let source_id = catalog_source_id(&manifest.name, &manifest.version)?;
     let authorized = AuthorizedRoot::new(source_id, AuthorizedRootKind::Package, root)?;
-    let scanned = scan_source_snapshot(&authorized, PACKAGE_SCAN_LIMITS)?;
-    let snapshot = included_source_snapshot(&scanned, &manifest.source_inclusion, &manifest.name)?;
+    let snapshot = scan_included_source_snapshot(&authorized, limits, &manifest.source_inclusion)?;
+    if snapshot.files().is_empty() {
+        return Err(CatalogError::EmptyIncludedSnapshot {
+            package: manifest.name.clone(),
+        });
+    }
     verify_entrypoints_present(&manifest, &snapshot)?;
 
     Ok(CheckedPackageV1 { manifest, snapshot })
@@ -697,100 +705,6 @@ fn verify_entrypoints_present(
     Ok(())
 }
 
-fn included_source_snapshot(
-    snapshot: &SourceSnapshot,
-    inclusion: &SourceInclusionPolicyV1,
-    package: &PackageName,
-) -> Result<SourceSnapshot, CatalogError> {
-    let mut selected = BTreeMap::new();
-    let mut total_source_bytes = 0_u64;
-    for (logical_path, file) in snapshot.files() {
-        if !inclusion_selects(inclusion, logical_path) {
-            continue;
-        }
-        total_source_bytes = total_source_bytes
-            .checked_add(file.receipt().byte_length())
-            .ok_or_else(|| CatalogError::InvalidCatalogIndex {
-                reason: format!("package {package} included source byte count overflowed"),
-            })?;
-        selected.insert(logical_path.as_str(), file);
-    }
-    if selected.is_empty() {
-        return Err(CatalogError::EmptyIncludedSnapshot {
-            package: package.clone(),
-        });
-    }
-    if selected.len() == snapshot.files().len() {
-        return Ok(snapshot.clone());
-    }
-
-    let source_hash = hash_selected_source_table(&selected)?;
-    let files = selected
-        .into_iter()
-        .map(|(logical_path, file)| {
-            (
-                logical_path,
-                PackedSourceFile {
-                    receipt: PackedFileReceipt {
-                        logical_path,
-                        byte_length: file.receipt().byte_length(),
-                        content_hash: file.receipt().content_hash(),
-                    },
-                    bytes: file.bytes(),
-                },
-            )
-        })
-        .collect();
-    let document = PackedSourceSnapshot {
-        source_id: snapshot.source_id(),
-        root_kind: snapshot.root_kind(),
-        files,
-        total_source_bytes,
-        source_hash,
-    };
-    let bytes = canonical_json_bytes(&document)?;
-    serde_json::from_slice(&bytes).map_err(|error| CatalogError::InvalidObjectPayload {
-        locator: format!("source-tree:{source_hash}"),
-        reason: error.to_string(),
-    })
-}
-
-fn hash_selected_source_table(
-    files: &BTreeMap<&str, &SourceFileSnapshot>,
-) -> Result<CanonicalHash, CatalogError> {
-    let mut encoded = Vec::new();
-    encoded.extend_from_slice(SOURCE_TABLE_DOMAIN);
-    for (logical_path, file) in files {
-        let path_length =
-            u64::try_from(logical_path.len()).map_err(|_| CatalogError::InvalidCatalogIndex {
-                reason: format!("source path `{logical_path}` exceeds supported length framing"),
-            })?;
-        encoded.extend_from_slice(&path_length.to_be_bytes());
-        encoded.extend_from_slice(logical_path.as_bytes());
-        encoded.push(0);
-        encoded.extend_from_slice(&file.receipt().byte_length().to_be_bytes());
-        encoded.extend_from_slice(file.receipt().content_hash().as_bytes());
-    }
-    Ok(CanonicalHash::digest(encoded))
-}
-
-fn inclusion_selects(inclusion: &SourceInclusionPolicyV1, logical_path: &str) -> bool {
-    logical_path_covered(&inclusion.include, logical_path)
-        && !logical_path_covered(&inclusion.exclude, logical_path)
-}
-
-fn logical_path_covered(prefixes: &BTreeSet<CanonicalLogicalPath>, logical_path: &str) -> bool {
-    prefixes.iter().any(|item| {
-        let prefix = item.as_str();
-        logical_path == prefix
-            || logical_path
-                .as_bytes()
-                .get(prefix.len())
-                .is_some_and(|byte| *byte == b'/')
-                && logical_path.starts_with(prefix)
-    })
-}
-
 fn join_logical(root: &Path, logical_path: &str) -> PathBuf {
     let mut dest = root.to_path_buf();
     for segment in logical_path.split('/') {
@@ -860,28 +774,6 @@ fn cas_kind_from_token(kind: &str) -> Result<CasObjectKind, CatalogError> {
 struct CatalogIdentityV1 {
     package: PackageName,
     version: PackageVersion,
-}
-
-#[derive(Serialize)]
-struct PackedSourceSnapshot<'a> {
-    source_id: &'a SourceId,
-    root_kind: AuthorizedRootKind,
-    files: BTreeMap<&'a str, PackedSourceFile<'a>>,
-    total_source_bytes: u64,
-    source_hash: CanonicalHash,
-}
-
-#[derive(Serialize)]
-struct PackedSourceFile<'a> {
-    receipt: PackedFileReceipt<'a>,
-    bytes: &'a [u8],
-}
-
-#[derive(Serialize)]
-struct PackedFileReceipt<'a> {
-    logical_path: &'a str,
-    byte_length: u64,
-    content_hash: CanonicalHash,
 }
 
 #[cfg(test)]
@@ -1028,6 +920,35 @@ include = ["package.ncl"]
         );
         assert!(!acquired.snapshot.files().contains_key("install.sh"));
         assert!(!package_root.exists());
+    }
+
+    #[test]
+    fn check_prunes_excluded_target_before_source_budgets() {
+        let workspace = TestDirectory::create();
+        let package_root = workspace.child("package");
+        write_package(&package_root, "terrain", "1.0.0", "{}\n");
+        let target = package_root.join("target").join("cache");
+        succeeded(fs::create_dir_all(&target));
+        succeeded(fs::write(target.join("first.bin"), b"excluded-first"));
+        succeeded(fs::write(target.join("second.bin"), b"excluded-second"));
+
+        let checked = succeeded(check_path_package_with_limits(
+            &package_root,
+            SourceScanLimits {
+                maximum_files: 1,
+                maximum_bytes: 3,
+            },
+        ));
+        assert_eq!(checked.snapshot.total_source_bytes(), 3);
+        assert_eq!(
+            checked
+                .snapshot
+                .files()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["package.ncl"]
+        );
     }
 
     #[test]

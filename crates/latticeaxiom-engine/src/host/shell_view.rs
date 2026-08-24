@@ -17,7 +17,9 @@ use bevy::{
     },
 };
 use latticeaxiom_core::WorldId;
-use latticeaxiom_launcher::{FreshClientAppLeaseProof, FreshClientAppLeaseToken};
+use latticeaxiom_launcher::{
+    FreshClientAppLeaseProof, FreshClientAppLeaseToken, SettingTransactionRevision,
+};
 use latticeaxiom_start_ui::{
     InputSource, LaunchHandoff, MemoryStartEffect, SemanticActionId, SemanticCommand, SemanticNode,
     SemanticNodeId, SemanticRole, ShellEffect,
@@ -39,6 +41,7 @@ pub(crate) struct SealedLaunchHandoff(pub LaunchHandoff);
 #[derive(Debug, Resource)]
 struct ClientShellSession {
     start: ProductionMemoryStart,
+    confirmed_setting_transaction_revision: SettingTransactionRevision,
     focused: Option<SemanticNodeId>,
     tree_epoch: u64,
 }
@@ -86,6 +89,7 @@ impl EngineInstance {
     pub fn new_client_shell_from_lock(
         images: LockVerifiedComposeImages,
         lease: FreshClientAppLeaseToken,
+        confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<(Self, FreshClientAppLeaseProof), crate::ProductionMemoryStartError> {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let mut start = ProductionMemoryStart::from_lock_images(images.clone())?;
@@ -94,7 +98,12 @@ impl EngineInstance {
             start.set_draft(intent);
         }
         let instance = Self::new_client_with_setup(images.into_images(), move |app| {
-            install_client_shell(app, product_lock_hash, start);
+            install_client_shell(
+                app,
+                product_lock_hash,
+                start,
+                confirmed_setting_transaction_revision,
+            );
         })
         .map_err(ProductionHostError::from)?;
         Ok((instance, lease.into_app_created_proof()))
@@ -105,12 +114,14 @@ fn install_client_shell(
     app: &mut App,
     product_lock_hash: VerifiedProductLockHash,
     start: ProductionMemoryStart,
+    confirmed_setting_transaction_revision: SettingTransactionRevision,
 ) {
     let focused = first_focusable(&start);
     app.insert_resource(product_lock_hash)
         .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.07)))
         .insert_resource(ClientShellSession {
             start,
+            confirmed_setting_transaction_revision,
             focused,
             tree_epoch: 0,
         })
@@ -421,10 +432,11 @@ fn exit_with_ready_exact_handoff(
     exits: &mut MessageWriter<'_, AppExit>,
     world_id: WorldId,
 ) -> bool {
-    let Ok(handoff) = session
-        .start
-        .launch_handoff_for_ready_exact(world_id, unix_now_ms())
-    else {
+    let Ok(handoff) = session.start.launch_handoff_for_ready_exact(
+        world_id,
+        unix_now_ms(),
+        session.confirmed_setting_transaction_revision,
+    ) else {
         return false;
     };
     if let Some(root) = std::env::var_os(crate::supervisor::ENV_LAUNCH_ROOT) {
@@ -447,8 +459,9 @@ fn exit_with_ready_exact_handoff(
                 exit_kind: latticeaxiom_launcher::ChildExitKindV1::Handoff,
                 intent_generation: Some(handoff.intent.generation()),
                 intent_checksum: Some(handoff.intent.checksum()),
-                confirmed_setting_transaction_revision:
-                    latticeaxiom_launcher::SettingTransactionRevision::new(0),
+                confirmed_setting_transaction_revision: handoff
+                    .intent
+                    .confirmed_setting_transaction_revision(),
                 last_written_world: None,
                 last_durable_world: None,
                 shell_lock_hash: handoff.intent.shell_lock_hash(),

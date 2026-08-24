@@ -3,19 +3,21 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
+    sync::{Arc, OnceLock},
 };
 
 use bevy::prelude::Resource;
 use latticeaxiom_compose::{
     GraphHashError, LOCK_SCHEMA_VERSION, LockV1, LockedDependency, LockedGameGraph, LockedPackage,
-    ManifestProducer, ObservabilityCatalog, RealizationKind, RegistrationImage, ResolutionStep,
-    RuntimeBinding, RuntimeImage, SemanticCatalog, SettingsCatalog, TargetRealizationLockV1,
+    ManifestProducer, ObservabilityCatalog, RealizationKind, RealizedDataRootError,
+    RealizedDataRootV1, RegistrationImage, ResolutionStep, RuntimeBinding, RuntimeImage,
+    SemanticCatalog, SettingsCatalog, TargetRealizationLockV1,
 };
 use latticeaxiom_core::{
     CanonicalHash, CanonicalJsonError, CapabilityId, PackageName, PackageVersion, SchemaId,
     StableId, TargetTriple, canonical_json_hash,
 };
-use latticeaxiom_launcher::ReopenedFinalLockV1;
+use latticeaxiom_launcher::{ReopenedFinalLockV1, VerifiedArtifactObjects};
 use latticeaxiom_registration::{
     CallbackMapReceipt, CompiledRegistration, CompiledSemanticImage, PackageProvenanceReceipt,
     REGISTRATION_COMPILE_RECEIPT_SCHEMA_VERSION, ReceiptValidationError, RegistrationImageReceipt,
@@ -104,6 +106,126 @@ impl StructurallyValidatedComposeImages {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LockedArtifactBinding {
+    realization: RealizationKind,
+    digest: CanonicalHash,
+}
+
+/// Target-selected package artifacts retained from a frozen verified reopen.
+///
+/// Package bindings come only from one target realization in the final lock.
+/// The immutable object handle contains only artifacts whose digests were
+/// independently verified during frozen reopen.
+#[derive(Clone, Debug)]
+pub struct LockedPackageArtifactStore {
+    inner: Arc<LockedPackageArtifactStoreInner>,
+}
+
+#[derive(Debug)]
+struct LockedPackageArtifactStoreInner {
+    objects: VerifiedArtifactObjects,
+    packages: BTreeMap<PackageName, LockedArtifactBinding>,
+    data_roots: BTreeMap<PackageName, OnceLock<Arc<RealizedDataRootV1>>>,
+}
+
+impl LockedPackageArtifactStore {
+    fn from_reopened(
+        lock: &ReopenedFinalLockV1,
+        target: &TargetTriple,
+    ) -> Result<Self, PreparationError> {
+        let Some(realization) = lock.product_lock().realizations.get(target) else {
+            return Err(PreparationError::MissingTargetRealization {
+                target: target.clone(),
+            });
+        };
+        let objects = lock.verified_artifacts();
+        let mut packages = BTreeMap::new();
+        for (package, realized) in &realization.packages {
+            let Some(bytes) = objects.get(realized.artifact_digest) else {
+                return Err(PreparationError::MissingVerifiedArtifact {
+                    package: package.clone(),
+                    digest: realized.artifact_digest,
+                });
+            };
+            let actual = CanonicalHash::digest(bytes);
+            if actual != realized.artifact_digest {
+                return Err(PreparationError::VerifiedArtifactDigestMismatch {
+                    package: package.clone(),
+                    locked: realized.artifact_digest,
+                    actual,
+                });
+            }
+            packages.insert(
+                package.clone(),
+                LockedArtifactBinding {
+                    realization: realized.kind,
+                    digest: realized.artifact_digest,
+                },
+            );
+        }
+        let data_roots = packages
+            .iter()
+            .filter(|(_, binding)| binding.realization == RealizationKind::Data)
+            .map(|(package, _)| (package.clone(), OnceLock::new()))
+            .collect();
+        Ok(Self {
+            inner: Arc::new(LockedPackageArtifactStoreInner {
+                objects,
+                packages,
+                data_roots,
+            }),
+        })
+    }
+
+    /// Decodes one lock-selected data realization using the stable artifact schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockedPackageArtifactError`] when the package is absent, is
+    /// not a data realization, or its verified bytes fail the data-root schema.
+    pub fn data_root(
+        &self,
+        package: &PackageName,
+    ) -> Result<Arc<RealizedDataRootV1>, LockedPackageArtifactError> {
+        let binding = self.inner.packages.get(package).ok_or_else(|| {
+            LockedPackageArtifactError::MissingPackage {
+                package: package.clone(),
+            }
+        })?;
+        if binding.realization != RealizationKind::Data {
+            return Err(LockedPackageArtifactError::NotData {
+                package: package.clone(),
+                realization: binding.realization,
+            });
+        }
+        let cache = self.inner.data_roots.get(package).ok_or_else(|| {
+            LockedPackageArtifactError::NotData {
+                package: package.clone(),
+                realization: binding.realization,
+            }
+        })?;
+        if let Some(root) = cache.get() {
+            return Ok(Arc::clone(root));
+        }
+        let bytes = self.inner.objects.get(binding.digest).ok_or_else(|| {
+            LockedPackageArtifactError::MissingArtifact {
+                package: package.clone(),
+                digest: binding.digest,
+            }
+        })?;
+        let root = RealizedDataRootV1::from_canonical_bytes_for_package(bytes, package).map_err(
+            |source| LockedPackageArtifactError::InvalidDataRoot {
+                package: package.clone(),
+                source,
+            },
+        )?;
+        let root = Arc::new(root);
+        let _ = cache.set(Arc::clone(&root));
+        Ok(cache.get().cloned().unwrap_or(root))
+    }
+}
+
 /// Exact lock, compiled registration, and runtime image bound to a reopened
 /// final `latticeaxiom.lock`.
 ///
@@ -118,6 +240,7 @@ pub struct LockVerifiedComposeImages {
     images: StructurallyValidatedComposeImages,
     product_lock_hash: CanonicalHash,
     target: TargetTriple,
+    artifacts: LockedPackageArtifactStore,
 }
 
 impl LockVerifiedComposeImages {
@@ -171,10 +294,12 @@ impl LockVerifiedComposeImages {
             });
         }
         let images = StructurallyValidatedComposeImages::new(graph, registration, runtime)?;
+        let artifacts = LockedPackageArtifactStore::from_reopened(lock, target)?;
         Ok(Self {
             images,
             product_lock_hash: lock.product_lock_hash(),
             target: target.clone(),
+            artifacts,
         })
     }
 
@@ -194,6 +319,12 @@ impl LockVerifiedComposeImages {
     #[must_use]
     pub const fn target(&self) -> &TargetTriple {
         &self.target
+    }
+
+    /// Returns target-selected artifacts retained from the frozen reopen.
+    #[must_use]
+    pub const fn locked_artifacts(&self) -> &LockedPackageArtifactStore {
+        &self.artifacts
     }
 
     /// Consumes the lock-verified images.
@@ -988,6 +1119,42 @@ impl fmt::Display for CatalogKind {
     }
 }
 
+/// Failure to select or decode a package artifact retained from frozen reopen.
+#[derive(Debug, Error)]
+pub enum LockedPackageArtifactError {
+    /// The selected target realization does not contain the requested package.
+    #[error("selected target realization does not contain package `{package}`")]
+    MissingPackage {
+        /// Requested package.
+        package: PackageName,
+    },
+    /// The package realization is not a data artifact.
+    #[error("package `{package}` uses {realization:?}, not a data realization")]
+    NotData {
+        /// Requested package.
+        package: PackageName,
+        /// Selected realization family.
+        realization: RealizationKind,
+    },
+    /// The retained verified object set does not contain the selected digest.
+    #[error("verified artifact {digest} for package `{package}` is unavailable")]
+    MissingArtifact {
+        /// Requested package.
+        package: PackageName,
+        /// Lock-selected digest.
+        digest: CanonicalHash,
+    },
+    /// Artifact bytes fail the stable realized data-root contract.
+    #[error("invalid realized data root for package `{package}`: {source}")]
+    InvalidDataRoot {
+        /// Requested package.
+        package: PackageName,
+        /// Closed wire-contract failure.
+        #[source]
+        source: RealizedDataRootError,
+    },
+}
+
 /// Failure to verify and bind host preparation inputs.
 #[derive(Debug, Error)]
 pub enum PreparationError {
@@ -1013,6 +1180,24 @@ pub enum PreparationError {
     MissingRealizationPackage {
         /// Package present in portable resolution but absent from the target.
         package: PackageName,
+    },
+    /// Frozen reopen did not retain the artifact selected by the target.
+    #[error("verified artifact {digest} for package `{package}` is unavailable")]
+    MissingVerifiedArtifact {
+        /// Selected package.
+        package: PackageName,
+        /// Digest selected by the target realization.
+        digest: CanonicalHash,
+    },
+    /// Retained bytes do not match the selected artifact digest.
+    #[error("artifact for package `{package}` hashes to {actual}, lock requires {locked}")]
+    VerifiedArtifactDigestMismatch {
+        /// Selected package.
+        package: PackageName,
+        /// Digest selected by the target realization.
+        locked: CanonicalHash,
+        /// Digest recomputed by engine preparation.
+        actual: CanonicalHash,
     },
     /// The compiled registration image hash does not match the reopened lock.
     #[error("registration image hash {registration} does not match reopened product lock {locked}")]

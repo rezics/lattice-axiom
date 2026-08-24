@@ -10,6 +10,7 @@
 mod cas;
 mod catalog;
 mod error;
+mod host;
 mod lock_verify;
 mod model;
 mod resolver;
@@ -18,6 +19,7 @@ mod transaction;
 pub use cas::*;
 pub use catalog::*;
 pub use error::*;
+pub use host::*;
 pub use lock_verify::*;
 pub use model::*;
 pub use resolver::*;

@@ -1296,6 +1296,75 @@ fn dda_validates_reach_and_negative_boundary_ownership() {
 }
 
 #[test]
+fn global_dispatch_respects_priority_across_mesh_and_collider_queues() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let coordinate = ChunkCoordinate::new(0, 0, 0);
+    let (_, stored) = commit_chunk(&storage, &runtime_scope, coordinate, vec![1; CELL_COUNT], 1);
+    let mut runtime = runtime();
+    runtime
+        .project_committed(
+            projection_from_stored(&stored, 1, 1),
+            FixedTick::new(0),
+            DerivedRequestSet::new(request(1, 50, 512, 256), request(2, 10, 512, 256)),
+        )
+        .expect("fixture projection enqueues both derived kinds");
+
+    let collider = match runtime
+        .dispatch_next_any()
+        .expect("global dispatch identity remains in range")
+    {
+        DispatchOutcome::Started(input) => input,
+        other => panic!("lower-priority-value collider must dispatch first, got {other:?}"),
+    };
+    assert_eq!(collider.ticket().key().kind(), DerivedKind::Collider);
+    assert!(matches!(
+        runtime.complete_derived(
+            collider,
+            0_u8,
+            ApplyByteDeclaration::new(0),
+            FixedTick::new(1),
+            |_| Ok::<(), ()>(()),
+        ),
+        CompletionOutcome::Applied { .. }
+    ));
+
+    let mesh = match runtime
+        .dispatch_next_any()
+        .expect("released global slot admits remaining work")
+    {
+        DispatchOutcome::Started(input) => input,
+        other => panic!("remaining mesh must dispatch after collider, got {other:?}"),
+    };
+    assert_eq!(mesh.ticket().key().kind(), DerivedKind::Mesh);
+}
+
+#[test]
+fn global_dispatch_ties_use_stable_kind_order() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let coordinate = ChunkCoordinate::new(0, 0, 0);
+    let (_, stored) = commit_chunk(&storage, &runtime_scope, coordinate, vec![1; CELL_COUNT], 1);
+    let mut runtime = runtime();
+    runtime
+        .project_committed(
+            projection_from_stored(&stored, 1, 1),
+            FixedTick::new(0),
+            DerivedRequestSet::new(request(1, 10, 512, 256), request(2, 10, 512, 256)),
+        )
+        .expect("fixture projection enqueues both derived kinds");
+
+    let first = match runtime
+        .dispatch_next_any()
+        .expect("global dispatch identity remains in range")
+    {
+        DispatchOutcome::Started(input) => input,
+        other => panic!("equal priorities must dispatch by stable kind order, got {other:?}"),
+    };
+    assert_eq!(first.ticket().key().kind(), DerivedKind::Mesh);
+}
+
+#[test]
 fn cpu_heavy_concurrency_reserves_two_cores() {
     assert_eq!(cpu_heavy_concurrency(0), 1);
     assert_eq!(cpu_heavy_concurrency(1), 1);

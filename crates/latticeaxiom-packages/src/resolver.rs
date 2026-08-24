@@ -15,6 +15,7 @@ use latticeaxiom_core::{
 };
 
 use crate::error::{ResolutionError, ResolutionFailureContext};
+use crate::host::HostCompatibilityV1;
 use crate::model::{
     BUILD_INTENT_SCHEMA_VERSION, BacktrackingFailureV1, BuildIntentV1, CandidateIdentityV1,
     CapabilityDemandReceiptV1, CapabilityProviderReceiptV1, CapabilityResolutionReceiptV1,
@@ -34,6 +35,7 @@ use crate::model::{
 pub struct PackageResolver {
     candidates: BTreeMap<SourceId, PackageCandidate>,
     by_package: BTreeMap<PackageName, Vec<SourceId>>,
+    host_compatibility: Option<HostCompatibilityV1>,
 }
 
 impl PackageResolver {
@@ -45,6 +47,29 @@ impl PackageResolver {
     /// identities disagree, or a source ID is duplicated.
     pub fn new(
         candidates: impl IntoIterator<Item = PackageCandidate>,
+    ) -> Result<Self, ResolutionError> {
+        Self::index(candidates, None)
+    }
+
+    /// Validates and indexes candidates against trusted host evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when host evidence or a package/source binding is
+    /// invalid.
+    pub fn new_with_host_compatibility(
+        candidates: impl IntoIterator<Item = PackageCandidate>,
+        host_compatibility: HostCompatibilityV1,
+    ) -> Result<Self, ResolutionError> {
+        host_compatibility
+            .validate()
+            .map_err(|source| ResolutionError::InvalidHostCompatibility { source })?;
+        Self::index(candidates, Some(host_compatibility))
+    }
+
+    fn index(
+        candidates: impl IntoIterator<Item = PackageCandidate>,
+        host_compatibility: Option<HostCompatibilityV1>,
     ) -> Result<Self, ResolutionError> {
         let mut by_source = BTreeMap::new();
         let mut by_package = BTreeMap::<PackageName, Vec<SourceId>>::new();
@@ -88,6 +113,7 @@ impl PackageResolver {
         Ok(Self {
             candidates: by_source,
             by_package,
+            host_compatibility,
         })
     }
 
@@ -167,6 +193,7 @@ impl PackageResolver {
                 source: Box::new(source),
             })?;
         Self::validate_prebuild_surfaces(composition)?;
+        self.validate_host_target(composition)?;
 
         let intent_hash = resolution_intent_hash(composition)?;
         Self::validate_frozen_intent_headers(composition, frozen, intent_hash)?;
@@ -203,6 +230,7 @@ impl PackageResolver {
             || replayed.receipt.profile != frozen.profile
             || replayed.receipt.profile_kind != frozen.profile_kind
             || replayed.receipt.target != frozen.target
+            || replayed.receipt.host_compatibility_hash != frozen.host_compatibility_hash
             || replayed.receipt.evaluation_policy != frozen.evaluation_policy
             || replayed.receipt.evaluation_limits != frozen.evaluation_limits
             || replayed.receipt.roots != frozen.roots
@@ -241,6 +269,7 @@ impl PackageResolver {
                 source: Box::new(source),
             })?;
         Self::validate_prebuild_surfaces(composition)?;
+        self.validate_host_target(composition)?;
         let allowed = self.validate_source_universe(composition)?;
         let context = ResolutionFailureContext {
             package_chain: composition.roots.keys().cloned().collect(),
@@ -337,6 +366,26 @@ impl PackageResolver {
             });
         }
         Ok(())
+    }
+
+    fn validate_host_target(&self, composition: &CompositionSpec) -> Result<(), ResolutionError> {
+        if let Some(host) = &self.host_compatibility
+            && host.target != composition.policy.target
+        {
+            return Err(ResolutionError::HostTargetMismatch {
+                selected: composition.policy.target.clone(),
+                available: host.target.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn host_compatibility_hash(&self) -> Result<Option<CanonicalHash>, ResolutionError> {
+        Ok(self
+            .host_compatibility
+            .as_ref()
+            .map(HostCompatibilityV1::compatibility_hash)
+            .transpose()?)
     }
 
     fn validate_prebuild_surfaces(composition: &CompositionSpec) -> Result<(), ResolutionError> {
@@ -767,7 +816,7 @@ impl PackageResolver {
                         context: Box::new(node.context(self.available_summaries(package))),
                     });
                 };
-                let reasons = Self::package_candidate_reasons(composition, candidate, node);
+                let reasons = self.package_candidate_reasons(composition, candidate, node);
                 if !reasons.is_empty() {
                     return Err(
                         self.error_for_candidate_reasons(package, node, candidate, &reasons)
@@ -1141,7 +1190,8 @@ impl PackageResolver {
                 if let Some(pin) = pins.get(&candidate.package.name) {
                     node.pinned_sources.insert(pin.clone());
                 }
-                let eligible = Self::package_candidate_reasons(composition, candidate, &node)
+                let eligible = self
+                    .package_candidate_reasons(composition, candidate, &node)
                     .is_empty()
                     && provision.cardinality == group.cardinality
                     && domains_active(&provision.domains, composition)
@@ -1180,7 +1230,8 @@ impl PackageResolver {
                 return false;
             }
             let node = Node::default();
-            Self::package_candidate_reasons(composition, candidate, &node).is_empty()
+            self.package_candidate_reasons(composition, candidate, &node)
+                .is_empty()
                 && domains_active(&provision.domains, composition)
                 && provider_satisfies_demands(candidate, provision, group)
                 && provision.cardinality != group.cardinality
@@ -1206,7 +1257,7 @@ impl PackageResolver {
             })
             .filter_map(|source_id| {
                 self.candidates.get(source_id).and_then(|candidate| {
-                    Self::package_candidate_reasons(composition, candidate, node)
+                    self.package_candidate_reasons(composition, candidate, node)
                         .is_empty()
                         .then(|| source_id.clone())
                 })
@@ -1215,6 +1266,7 @@ impl PackageResolver {
     }
 
     fn package_candidate_reasons(
+        &self,
         composition: &CompositionSpec,
         candidate: &PackageCandidate,
         node: &Node,
@@ -1268,13 +1320,17 @@ impl PackageResolver {
         }
 
         let features = active_features(composition, &candidate.package, &node.requested_features);
-        if Self::select_realization(composition, candidate, &active_domains, &features).is_none() {
+        if self
+            .select_realization(composition, candidate, &active_domains, &features)
+            .is_none()
+        {
             reasons.push(ResolutionReasonV1::NoEligibleRealization);
         }
         reasons
     }
 
     fn select_realization<'a>(
+        &self,
         composition: &CompositionSpec,
         candidate: &'a PackageCandidate,
         active_domains: &BTreeSet<PackageDomain>,
@@ -1289,7 +1345,7 @@ impl PackageResolver {
             .realizations
             .values()
             .filter(|realization| {
-                Self::realization_reasons(
+                self.realization_reasons(
                     composition,
                     realization,
                     preference,
@@ -1309,6 +1365,7 @@ impl PackageResolver {
     }
 
     fn realization_reasons(
+        &self,
         composition: &CompositionSpec,
         realization: &RealizationSpec,
         preference: RealizationPreference,
@@ -1359,22 +1416,34 @@ impl PackageResolver {
                 allowed: composition.policy.maximum_trust,
             });
         }
-        if let Some((interface, requirement)) = realization
-            .interfaces
-            .iter()
-            .find(|(_, requirement)| !requirement.optional)
+        if let Some((interface, requirement)) =
+            realization
+                .interfaces
+                .iter()
+                .find(|(interface, requirement)| {
+                    !requirement.optional
+                        && !self
+                            .host_compatibility
+                            .as_ref()
+                            .is_some_and(|host| host.supports(interface, requirement))
+                })
         {
             reasons.push(ResolutionReasonV1::InterfaceRequirementUnavailable {
                 interface: interface.clone(),
                 requirements: vec![requirement.version.to_string()],
             });
         }
+        let available_engine_build = self
+            .host_compatibility
+            .as_ref()
+            .and_then(|host| host.engine_build_id);
         if realization.kind == latticeaxiom_compose::RealizationKind::EngineCoupledNative
             && let Some(required) = realization.engine_build
+            && Some(required) != available_engine_build
         {
             reasons.push(ResolutionReasonV1::EngineBuildMismatch {
                 required,
-                available: None,
+                available: available_engine_build,
             });
         }
         reasons
@@ -1483,6 +1552,32 @@ impl PackageResolver {
                 context: Box::new(node.context(vec![candidate_summary(candidate)])),
             };
         }
+        if let Some(interface) = reasons.iter().find_map(|reason| match reason {
+            ResolutionReasonV1::InterfaceRequirementUnavailable { interface, .. } => {
+                Some(interface.clone())
+            }
+            _ => None,
+        }) {
+            return ResolutionError::InterfaceRequirementUnavailable {
+                package: package.clone(),
+                interface,
+                context: Box::new(node.context(vec![candidate_summary(candidate)])),
+            };
+        }
+        if let Some((required, available)) = reasons.iter().find_map(|reason| match reason {
+            ResolutionReasonV1::EngineBuildMismatch {
+                required,
+                available,
+            } => Some((*required, *available)),
+            _ => None,
+        }) {
+            return ResolutionError::EngineBuildMismatch {
+                package: package.clone(),
+                required,
+                available,
+                context: Box::new(node.context(vec![candidate_summary(candidate)])),
+            };
+        }
         ResolutionError::RealizationUnavailable {
             package: package.clone(),
             context: Box::new(node.context(vec![candidate_summary(candidate)])),
@@ -1518,7 +1613,7 @@ impl PackageResolver {
                 .intersection(&composition.projection_domains)
                 .copied()
                 .collect::<BTreeSet<_>>();
-            let Some(realization) = Self::select_realization(
+            let Some(realization) = self.select_realization(
                 composition,
                 candidate,
                 &active_domains,
@@ -1605,6 +1700,7 @@ impl PackageResolver {
             profile: composition.profile.clone(),
             profile_kind: composition.profile_kind,
             target: composition.policy.target.clone(),
+            host_compatibility_hash: self.host_compatibility_hash()?,
             evaluation_policy: composition.policy.evaluation_policy.clone(),
             evaluation_limits: composition.policy.evaluation_limits,
             roots: composition.roots.keys().cloned().collect(),
@@ -1905,7 +2001,7 @@ impl PackageResolver {
                     continue;
                 };
                 let selected = selected_source == Some(source_id);
-                let mut reasons = Self::package_candidate_reasons(composition, candidate, node);
+                let mut reasons = self.package_candidate_reasons(composition, candidate, node);
                 if selected {
                     reasons = node.selection_reasons();
                 } else {
@@ -1952,7 +2048,7 @@ impl PackageResolver {
                     let is_selected = selected_realization.is_some_and(|(id, selected_id)| {
                         id == &realization.id && selected_id == source_id
                     });
-                    let mut reasons = Self::realization_reasons(
+                    let mut reasons = self.realization_reasons(
                         composition,
                         realization,
                         preference,
@@ -2667,6 +2763,8 @@ fn backtracking_failure(error: &ResolutionError) -> Option<BacktrackingFailureV1
             context.as_ref(),
         ),
         ResolutionError::InvalidComposition { .. }
+        | ResolutionError::InvalidHostCompatibility { .. }
+        | ResolutionError::HostTargetMismatch { .. }
         | ResolutionError::InvalidLimits { .. }
         | ResolutionError::InvalidPackage { .. }
         | ResolutionError::InvalidCandidate { .. }
@@ -2688,6 +2786,8 @@ fn is_global_fatal(error: &ResolutionError) -> bool {
     matches!(
         error,
         ResolutionError::InvalidComposition { .. }
+            | ResolutionError::InvalidHostCompatibility { .. }
+            | ResolutionError::HostTargetMismatch { .. }
             | ResolutionError::InvalidLimits { .. }
             | ResolutionError::InvalidPackage { .. }
             | ResolutionError::InvalidCandidate { .. }

@@ -948,7 +948,7 @@ pub(super) fn sync_production_status_hud(
     let label = status_line(
         mining,
         durability,
-        spine.requested_view_distance(),
+        spine.admitted_view_distance(),
         spine.effective_view_distance(),
     );
     if text.0 != label {
@@ -959,12 +959,12 @@ pub(super) fn sync_production_status_hud(
 fn status_line(
     mining: Option<u32>,
     durability: Option<u32>,
-    requested_view: u32,
+    admitted_view: u32,
     effective_view: u32,
 ) -> String {
     let mine = mining.map_or_else(|| "Mine —".to_owned(), |left| format!("Mine {left} left"));
     let tool = durability.map_or_else(|| "Tool —".to_owned(), |left| format!("Tool {left}"));
-    format!("{mine}  {tool}  View {effective_view}/{requested_view}")
+    format!("{mine}  {tool}  View {effective_view}/{admitted_view}")
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.

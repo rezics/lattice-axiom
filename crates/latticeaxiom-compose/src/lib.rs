@@ -15,8 +15,11 @@ mod evaluation;
 mod evaluator_protocol;
 mod graph;
 mod imports;
+#[cfg(feature = "nickel-evaluator")]
+mod native_static_product;
 mod observability;
 mod product_lock;
+mod realized_data;
 mod registration;
 mod semantic;
 mod settings;
@@ -42,8 +45,11 @@ pub use evaluation::*;
 pub use evaluator_protocol::*;
 pub use graph::*;
 pub use imports::*;
+#[cfg(feature = "nickel-evaluator")]
+pub use native_static_product::*;
 pub use observability::*;
 pub use product_lock::*;
+pub use realized_data::*;
 pub use registration::*;
 pub use semantic::*;
 pub use settings::*;

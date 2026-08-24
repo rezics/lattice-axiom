@@ -20,8 +20,10 @@ use latticeaxiom_abi::{
 use latticeaxiom_compose::{PRODUCT_LOCK_FILE_NAME, ProductLockError, reopen_product_lock};
 use latticeaxiom_core::{CanonicalHash, CapabilityId, PackageName, SchemaId, StableId, WorldId};
 use latticeaxiom_engine::{
-    FluidRevisionStamp, SealedWorldWriterHost, SealedWriterHostError, admit_fluid_completion,
-    authored_content_display_catalog, sealed_activation_binding,
+    AuthoredContentDisplayCatalogSourcesV1, AuthoredPresentationCatalogSourcesV1,
+    ContentDisplayCatalogV1, FluidRevisionStamp, ProductionHostError, SealedWorldWriterHost,
+    SealedWriterHostError, admit_fluid_completion, compile_authored_content_display_catalog,
+    sealed_activation_binding,
 };
 use latticeaxiom_launcher::{
     ChildExitKindV1, ChildExitReportDraftV1, ChildExitReportV1, ChildRoleV1,
@@ -63,6 +65,20 @@ use latticeaxiom_world_wire::{
 use serde::Deserialize;
 
 const CORPUS_SCHEMA_ID: &str = "latticeaxiom.v1-fault-corpus.v1";
+const AUTHORED_BLOCK_DISPLAY_JSON: &str =
+    include_str!("../../../packages/terrenia/blocks/data/authored-display-v1.json");
+const AUTHORED_TOOL_DISPLAY_JSON: &str =
+    include_str!("../../../packages/terrenia/tools/data/authored-display-v1.json");
+const AUTHORED_TOOLS_JSON: &str =
+    include_str!("../../../packages/terrenia/tools/data/authored-tools-v1.json");
+const D9_BLOCK_IDS: &str =
+    include_str!("../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
+const FLUID_IDS: &str =
+    include_str!("../../../packages/terrenia/blocks/data/goldens/fluid-ids.txt");
+const PRESENTATION_DISPLAY_JSON: &str =
+    include_str!("../../../packages/terrenia/presentation/data/authored-display-v1.json");
+const PRESENTATION_ASSETS_JSON: &str =
+    include_str!("../../../packages/terrenia/presentation/data/authored-assets-v1.json");
 const REQUIRED_CASE_IDS: [&str; 15] = [
     "package.missing-lock",
     "package.tampered-engine-coupled",
@@ -668,8 +684,8 @@ fn device_loss_fallback_and_omitted_presentation_do_not_change_world_hash() {
     assert!(selection.disabled);
     assert!(selection.realization.is_none());
 
-    let omitted = authored_content_display_catalog(false).expect("omitted presentation compiles");
-    let presented = authored_content_display_catalog(true).expect("presentation compiles");
+    let omitted = fixture_display_catalog(false).expect("omitted presentation compiles");
+    let presented = fixture_display_catalog(true).expect("presentation compiles");
     assert_eq!(
         omitted.locked_ids().collect::<Vec<_>>(),
         presented.locked_ids().collect::<Vec<_>>(),
@@ -783,6 +799,23 @@ fn load_corpus() -> FaultCorpusDocument {
     let path = fixtures_root().join("corpus.json");
     let bytes = fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("parse corpus: {error}"))
+}
+
+fn fixture_display_catalog(
+    include_presentation: bool,
+) -> Result<ContentDisplayCatalogV1, ProductionHostError> {
+    let presentation = include_presentation.then_some(AuthoredPresentationCatalogSourcesV1 {
+        display: PRESENTATION_DISPLAY_JSON,
+        assets: PRESENTATION_ASSETS_JSON,
+    });
+    compile_authored_content_display_catalog(AuthoredContentDisplayCatalogSourcesV1 {
+        block_display: AUTHORED_BLOCK_DISPLAY_JSON,
+        tool_display: AUTHORED_TOOL_DISPLAY_JSON,
+        tool_catalog: AUTHORED_TOOLS_JSON,
+        d9_block_ids: D9_BLOCK_IDS,
+        fluid_ids: FLUID_IDS,
+        presentation,
+    })
 }
 
 fn require_class(class: &str) -> FaultCorpusDocument {

@@ -1,20 +1,21 @@
 //! Package-authored catalogs consumed by the production host.
 //!
-//! Identities are loaded from the locked registration image when it carries
-//! them, otherwise from the shipped package JSON. This module does not embed
-//! Terrenia block, tool, or recipe identifiers.
+//! Identities are loaded exclusively from lock-selected, receipt-verified data
+//! realizations. Explicit source compilers remain available for tooling and
+//! tests, but production never reads or embeds workspace package files.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::{NonZeroU8, NonZeroU16, NonZeroU32},
+    sync::Arc,
 };
 
-use latticeaxiom_compose::LockedPackage;
+use latticeaxiom_compose::{LockedPackage, RealizedDataRootV1, RegistrationKind};
 use latticeaxiom_content::{
     BiomeDefinitionV1, ContentCatalogInputV1, ContentCatalogLimitsV1, ContentCatalogV1,
     FluidDefinitionV1,
 };
-use latticeaxiom_core::{CapabilityId, PackageName, SchemaId, StableId};
+use latticeaxiom_core::{CanonicalLogicalPath, CapabilityId, PackageName, SchemaId, StableId};
 use latticeaxiom_gameplay::{
     BlockDefinitionV1, BlockId, BlockSchemaBindingV1, CatalogLimits, FrozenItemRoleBindingV1,
     FuelRuleV1, GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemId,
@@ -23,6 +24,7 @@ use latticeaxiom_gameplay::{
     RoleOutputV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1, WorkstationDefinitionV1,
     WorkstationId,
 };
+use latticeaxiom_registration::CompiledRegistration;
 use latticeaxiom_storage::DimensionId;
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, CaveTopologyAlgorithmV1, D4BlockCatalogClosureV1, D4MaterialRoleV1,
@@ -36,26 +38,6 @@ use serde_json::Value;
 use super::ProductionHostError;
 use crate::LockVerifiedComposeImages;
 
-const AUTHORED_BLOCKS_JSON: &str =
-    include_str!("../../../../packages/terrenia/blocks/data/authored-catalog-v1.json");
-const AUTHORED_RULES_JSON: &str =
-    include_str!("../../../../packages/terrenia/gameplay/data/authored-rules-v1.json");
-const AUTHORED_TOOLS_JSON: &str =
-    include_str!("../../../../packages/terrenia/tools/data/authored-tools-v1.json");
-const AUTHORED_BINDINGS_JSON: &str =
-    include_str!("../../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json");
-const AUTHORED_BIOMES_JSON: &str =
-    include_str!("../../../../packages/terrenia/worldgen/data/authored-biomes-v1.json");
-const AUTHORED_NATURAL_LAYERS_JSON: &str =
-    include_str!("../../../../packages/terrenia/worldgen/data/authored-natural-layers-v1.json");
-const D7_BLOCK_IDS: &str =
-    include_str!("../../../../packages/terrenia/blocks/data/goldens/d7-block-ids.txt");
-const D7_BIOME_IDS: &str =
-    include_str!("../../../../packages/terrenia/worldgen/data/goldens/d7-biome-ids.txt");
-const D7_NATURAL_ROLE_IDS: &str =
-    include_str!("../../../../packages/terrenia/worldgen/data/goldens/d7-natural-role-ids.txt");
-const D9_BLOCK_IDS: &str =
-    include_str!("../../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
 /// Exactly-one terrain/worldgen provider selected by a reopened product lock.
 pub(super) const WORLDGEN_TERRAIN_CAPABILITY: &str =
     "latticeaxiom:capability/worldgen-terrain-provider@2";
@@ -65,6 +47,83 @@ pub(super) const CONTENT_BLOCKS_CAPABILITY: &str = "latticeaxiom:capability/cont
 pub(super) const SANDBOX_GAMEPLAY_CAPABILITY: &str = "latticeaxiom:capability/sandbox-gameplay@1";
 /// Exactly-one sandbox tools provider selected by a reopened product lock.
 pub(super) const SANDBOX_TOOLS_CAPABILITY: &str = "latticeaxiom:capability/sandbox-tools@1";
+
+const BLOCKS_CATALOG_PATH: &str = "data/authored-catalog-v1.json";
+const GAMEPLAY_RULES_PATH: &str = "data/authored-rules-v1.json";
+const TOOLS_CATALOG_PATH: &str = "data/authored-tools-v1.json";
+const WORLDGEN_BINDINGS_PATH: &str = "data/authored-block-bindings-v1.json";
+const WORLDGEN_BIOMES_PATH: &str = "data/authored-biomes-v1.json";
+const WORLDGEN_NATURAL_LAYERS_PATH: &str = "data/authored-natural-layers-v1.json";
+const D7_BLOCK_IDS_PATH: &str = "data/goldens/d7-block-ids.txt";
+const D7_BIOME_IDS_PATH: &str = "data/goldens/d7-biome-ids.txt";
+const D7_NATURAL_ROLE_IDS_PATH: &str = "data/goldens/d7-natural-role-ids.txt";
+const D9_BLOCK_IDS_PATH: &str = "data/goldens/d9-block-ids.txt";
+
+pub(super) fn required_provider_data(
+    images: &LockVerifiedComposeImages,
+    capability: &'static str,
+) -> Result<(LockedPackage, Arc<RealizedDataRootV1>), ProductionHostError> {
+    let package = exactly_one_lock_provider(images, capability)?.ok_or_else(|| {
+        ProductionHostError::MissingLockProvider {
+            capability: capability.to_owned(),
+        }
+    })?;
+    let data = images.locked_artifacts().data_root(&package.name)?;
+    Ok((package, data))
+}
+
+pub(super) fn required_data_file<'a>(
+    data: &'a RealizedDataRootV1,
+    logical_path: &'static str,
+) -> Result<&'a [u8], ProductionHostError> {
+    let path = CanonicalLogicalPath::new(logical_path).map_err(|_| {
+        ProductionHostError::InvalidCatalogField {
+            field: "locked-data-path",
+        }
+    })?;
+    data.file(&path)
+        .ok_or_else(|| ProductionHostError::MissingCatalogDefinition {
+            kind: "locked-data-file",
+            id: format!("{}:{logical_path}", data.package()),
+        })
+}
+
+pub(super) fn required_data_text<'a>(
+    data: &'a RealizedDataRootV1,
+    logical_path: &'static str,
+) -> Result<&'a str, ProductionHostError> {
+    std::str::from_utf8(required_data_file(data, logical_path)?).map_err(|_| {
+        ProductionHostError::InvalidCatalogField {
+            field: "locked-data-utf8",
+        }
+    })
+}
+
+/// Explicit package-owned sources accepted by the gameplay compiler.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthoredGameplayCatalogSourcesV1<'a> {
+    /// Block definitions supplied by the content-blocks provider.
+    pub blocks: &'a str,
+    /// Sandbox rules supplied by the sandbox-gameplay provider.
+    pub rules: &'a str,
+    /// Tool definitions supplied by the sandbox-tools provider.
+    pub tools: &'a str,
+    /// Required D9 block identities supplied by the blocks provider.
+    pub d9_block_ids: &'a str,
+}
+
+/// Explicit package-owned sources accepted by the content compiler.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthoredContentCatalogSourcesV1<'a> {
+    /// Block and fluid definitions supplied by the content-blocks provider.
+    pub blocks: &'a str,
+    /// Biome definitions supplied by the terrain/worldgen provider.
+    pub biomes: &'a str,
+    /// Required D7 biome identities supplied by the worldgen provider.
+    pub d7_biome_ids: &'a str,
+    /// Required D9 block identities supplied by the blocks provider.
+    pub d9_block_ids: &'a str,
+}
 
 /// Worldgen identities compiled from the package catalog.
 #[derive(Clone, Debug)]
@@ -109,10 +168,13 @@ pub(super) struct HostHydrologyBindings {
 ///
 /// Returns [`ProductionHostError`] when authored JSON is invalid or a required
 /// item, block, tool, or recipe definition is missing.
-pub fn authored_gameplay_catalog() -> Result<GameplayCatalog, ProductionHostError> {
-    let catalog = GameplayCatalog::compile(authored_gameplay_source()?, CatalogLimits::default())
-        .map_err(ProductionHostError::from)?;
-    require_compiled_gameplay_covers_d9(&catalog)?;
+pub fn compile_authored_gameplay_catalog(
+    sources: AuthoredGameplayCatalogSourcesV1<'_>,
+) -> Result<GameplayCatalog, ProductionHostError> {
+    let catalog =
+        GameplayCatalog::compile(authored_gameplay_source(sources)?, CatalogLimits::default())
+            .map_err(ProductionHostError::from)?;
+    require_compiled_gameplay_covers_d9(&catalog, sources.blocks, sources.d9_block_ids)?;
     Ok(catalog)
 }
 
@@ -135,7 +197,7 @@ pub fn lock_selected_gameplay_catalog(
     let gameplay = exactly_one_lock_provider(images, SANDBOX_GAMEPLAY_CAPABILITY)?;
     let tools = exactly_one_lock_provider(images, SANDBOX_TOOLS_CAPABILITY)?;
     match (gameplay.is_some(), tools.is_some()) {
-        (true, true) => authored_gameplay_catalog(),
+        (true, true) => compile_lock_selected_gameplay_catalog(images),
         (false, false) => empty_gameplay_catalog(),
         (true, false) => Err(ProductionHostError::MissingLockProvider {
             capability: SANDBOX_TOOLS_CAPABILITY.to_owned(),
@@ -164,8 +226,10 @@ pub fn empty_gameplay_catalog() -> Result<GameplayCatalog, ProductionHostError> 
 ///
 /// Returns [`ProductionHostError`] when the package JSON is invalid or the
 /// compiler rejects a definition.
-pub fn authored_content_catalog() -> Result<ContentCatalogV1, ProductionHostError> {
-    let authored = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
+pub fn compile_authored_content_catalog(
+    sources: AuthoredContentCatalogSourcesV1<'_>,
+) -> Result<ContentCatalogV1, ProductionHostError> {
+    let authored = parse_json_object(sources.blocks, "blocks-catalog")?;
     let blocks = json_array(&authored, "blocks")?
         .iter()
         .map(|row| {
@@ -185,12 +249,13 @@ pub fn authored_content_catalog() -> Result<ContentCatalogV1, ProductionHostErro
         })?,
         None => Vec::new(),
     };
-    let biomes = authored_biome_definitions()?;
+    let biomes = authored_biome_definitions(sources.biomes)?;
     require_d7_golden_biome_ids(
         &biomes
             .iter()
             .map(|biome| biome.header.stable_id.clone())
             .collect(),
+        sources.d7_biome_ids,
     )?;
     let catalog = ContentCatalogV1::compile(
         ContentCatalogInputV1 {
@@ -208,8 +273,28 @@ pub fn authored_content_catalog() -> Result<ContentCatalogV1, ProductionHostErro
             .iter()
             .map(|block| block.definition().header.stable_id.clone())
             .collect(),
+        sources.d9_block_ids,
     )?;
     Ok(catalog)
+}
+
+/// Compiles the content catalog selected by a reopened product lock.
+///
+/// # Errors
+///
+/// Returns [`ProductionHostError`] when a required provider or artifact is
+/// absent, or package-owned JSON and golden identities fail validation.
+pub fn lock_selected_content_catalog(
+    images: &LockVerifiedComposeImages,
+) -> Result<ContentCatalogV1, ProductionHostError> {
+    let (_, blocks) = required_provider_data(images, CONTENT_BLOCKS_CAPABILITY)?;
+    let (_, worldgen) = required_provider_data(images, WORLDGEN_TERRAIN_CAPABILITY)?;
+    compile_authored_content_catalog(AuthoredContentCatalogSourcesV1 {
+        blocks: required_data_text(&blocks, BLOCKS_CATALOG_PATH)?,
+        biomes: required_data_text(&worldgen, WORLDGEN_BIOMES_PATH)?,
+        d7_biome_ids: required_data_text(&worldgen, D7_BIOME_IDS_PATH)?,
+        d9_block_ids: required_data_text(&blocks, D9_BLOCK_IDS_PATH)?,
+    })
 }
 
 fn decode_catalog_row<T>(row: &Value, name: &'static str) -> Result<T, ProductionHostError>
@@ -230,15 +315,22 @@ where
 pub(super) fn host_worldgen_catalog(
     images: &LockVerifiedComposeImages,
 ) -> Result<HostWorldgenCatalog, ProductionHostError> {
-    let worldgen_package = exactly_one_lock_provider(images, WORLDGEN_TERRAIN_CAPABILITY)?;
-    let _content_package = exactly_one_lock_provider(images, CONTENT_BLOCKS_CAPABILITY)?;
+    let (worldgen_package, worldgen_data) =
+        required_provider_data(images, WORLDGEN_TERRAIN_CAPABILITY)?;
+    let (_, blocks_data) = required_provider_data(images, CONTENT_BLOCKS_CAPABILITY)?;
+    let blocks_json = required_data_text(&blocks_data, BLOCKS_CATALOG_PATH)?;
+    let bindings_json = required_data_text(&worldgen_data, WORLDGEN_BINDINGS_PATH)?;
+    let natural_layers_json = required_data_text(&worldgen_data, WORLDGEN_NATURAL_LAYERS_PATH)?;
+    let d7_block_ids = required_data_text(&blocks_data, D7_BLOCK_IDS_PATH)?;
+    let d9_block_ids = required_data_text(&blocks_data, D9_BLOCK_IDS_PATH)?;
+    let d7_natural_role_ids = required_data_text(&worldgen_data, D7_NATURAL_ROLE_IDS_PATH)?;
     let catalog_ids =
-        authored_catalog_block_ids(&parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?)?;
-    require_d7_golden_block_ids(&catalog_ids)?;
-    require_d9_golden_block_ids(&catalog_ids)?;
-    let bindings = AuthoredWorldgenBindingsV1::from_json(AUTHORED_BINDINGS_JSON.as_bytes())?;
+        authored_catalog_block_ids(&parse_json_object(blocks_json, "blocks-catalog")?)?;
+    require_d7_golden_block_ids(&catalog_ids, d7_block_ids)?;
+    require_d9_golden_block_ids(&catalog_ids, d9_block_ids)?;
+    let bindings = AuthoredWorldgenBindingsV1::from_json(bindings_json.as_bytes())?;
     let authored: AuthoredBlockBindings =
-        serde_json::from_str(AUTHORED_BINDINGS_JSON).map_err(|source| {
+        serde_json::from_str(bindings_json).map_err(|source| {
             ProductionHostError::InvalidAuthoredCatalog {
                 name: "worldgen-block-bindings",
                 source,
@@ -304,7 +396,7 @@ pub(super) fn host_worldgen_catalog(
     let role_vocabulary = D4RoleVocabularyV1::new(vocabulary_entries)?;
     let natural_vocabulary = bindings.natural_vocabulary()?;
     let role_bindings = bindings.role_bindings()?;
-    require_d7_natural_role_ids(&role_bindings)?;
+    require_d7_natural_role_ids(&role_bindings, d7_natural_role_ids)?;
     let empty = bound_block(&role_vocabulary, &role_bindings, D4MaterialRoleV1::Empty)?;
     let placement_content = bound_block(
         &role_vocabulary,
@@ -321,7 +413,7 @@ pub(super) fn host_worldgen_catalog(
     }
 
     Ok(HostWorldgenCatalog {
-        dimension: resolve_dimension(images, &palette)?,
+        dimension: resolve_dimension(images)?,
         palette,
         empty,
         placement_content,
@@ -329,10 +421,10 @@ pub(super) fn host_worldgen_catalog(
         natural_vocabulary,
         role_bindings,
         block_catalog,
-        cave: authored_cave_bindings()?,
-        hydrology: authored_hydrology_bindings(&bindings)?,
+        cave: authored_cave_bindings(natural_layers_json)?,
+        hydrology: authored_hydrology_bindings(&bindings, blocks_json)?,
         bindings,
-        worldgen_package,
+        worldgen_package: Some(worldgen_package),
     })
 }
 
@@ -371,8 +463,10 @@ impl HostWorldgenCatalog {
     }
 }
 
-fn authored_cave_bindings() -> Result<HostCaveBindings, ProductionHostError> {
-    let authored = parse_json_object(AUTHORED_NATURAL_LAYERS_JSON, "natural-layers")?;
+fn authored_cave_bindings(
+    natural_layers_json: &str,
+) -> Result<HostCaveBindings, ProductionHostError> {
+    let authored = parse_json_object(natural_layers_json, "natural-layers")?;
     let cave_plan = authored
         .get("cave_plan")
         .ok_or(ProductionHostError::InvalidCatalogField { field: "cave_plan" })?;
@@ -413,8 +507,9 @@ fn authored_cave_bindings() -> Result<HostCaveBindings, ProductionHostError> {
 
 fn authored_hydrology_bindings(
     bindings: &AuthoredWorldgenBindingsV1,
+    blocks_json: &str,
 ) -> Result<HostHydrologyBindings, ProductionHostError> {
-    let authored = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
+    let authored = parse_json_object(blocks_json, "blocks-catalog")?;
     let mut water = None;
     let mut lava = None;
     for row in json_array(&authored, "fluids")? {
@@ -583,8 +678,10 @@ fn last_path_token(id: &StableId) -> &str {
         .unwrap_or(id.path())
 }
 
-fn authored_biome_definitions() -> Result<Vec<BiomeDefinitionV1>, ProductionHostError> {
-    let authored = parse_json_object(AUTHORED_BIOMES_JSON, "biome-catalog")?;
+fn authored_biome_definitions(
+    biomes_json: &str,
+) -> Result<Vec<BiomeDefinitionV1>, ProductionHostError> {
+    let authored = parse_json_object(biomes_json, "biome-catalog")?;
     json_array(&authored, "biomes")?
         .iter()
         .map(|row| {
@@ -667,46 +764,71 @@ fn bound_block(
     Ok(BlockId::parse(target.as_str())?)
 }
 
-fn resolve_dimension(
-    images: &LockVerifiedComposeImages,
-    palette: &[BlockId],
-) -> Result<DimensionId, ProductionHostError> {
-    let mut registered = images
-        .images()
-        .registration()
-        .image
-        .numeric_ids
-        .keys()
-        .filter(|id| id.kind() == "dimension")
-        .cloned()
-        .collect::<Vec<_>>();
-    registered.sort();
-    match registered.as_slice() {
-        [] => catalog_namespace_dimension(palette),
-        [id] => Ok(id.as_str().parse()?),
-        _ => Err(ProductionHostError::AmbiguousDimension),
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ExactlyOneDimensionRegistration(StableId);
+
+impl ExactlyOneDimensionRegistration {
+    fn from_registration_image(
+        registration: &CompiledRegistration,
+    ) -> Result<Self, ProductionHostError> {
+        let Some(table) = registration
+            .image_receipt
+            .numeric_ids
+            .get(&RegistrationKind::Dimension)
+        else {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "dimension-registration",
+                id: "exactly-one".to_owned(),
+            });
+        };
+        let mut dimensions = table.keys();
+        let Some(dimension) = dimensions.next() else {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "dimension-registration",
+                id: "exactly-one".to_owned(),
+            });
+        };
+        if dimensions.next().is_some() {
+            return Err(ProductionHostError::AmbiguousDimension);
+        }
+        Ok(Self(dimension.clone()))
+    }
+
+    #[cfg(test)]
+    fn from_registration_ids<'a>(
+        ids: impl IntoIterator<Item = &'a StableId>,
+    ) -> Result<Self, ProductionHostError> {
+        let mut dimensions = ids.into_iter().filter(|id| id.kind() == "dimension");
+        let Some(dimension) = dimensions.next() else {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "dimension-registration",
+                id: "exactly-one".to_owned(),
+            });
+        };
+        if dimensions.next().is_some() {
+            return Err(ProductionHostError::AmbiguousDimension);
+        }
+        Ok(Self(dimension.clone()))
+    }
+
+    fn into_dimension(self) -> Result<DimensionId, ProductionHostError> {
+        Ok(DimensionId::new(self.0)?)
     }
 }
 
-fn catalog_namespace_dimension(palette: &[BlockId]) -> Result<DimensionId, ProductionHostError> {
-    let Some(first) = palette.first() else {
-        return Err(ProductionHostError::MissingCatalogDefinition {
-            kind: "dimension",
-            id: "catalog".to_owned(),
-        });
-    };
-    let namespace = first.namespace();
-    format!("{namespace}:dimension/{namespace}")
-        .parse()
-        .map_err(ProductionHostError::from)
+fn resolve_dimension(
+    images: &LockVerifiedComposeImages,
+) -> Result<DimensionId, ProductionHostError> {
+    ExactlyOneDimensionRegistration::from_registration_image(images.images().registration())?
+        .into_dimension()
 }
 
-fn d7_golden_block_ids() -> Result<BTreeSet<StableId>, ProductionHostError> {
-    golden_stable_ids(D7_BLOCK_IDS, "block", "d7-block")
+fn d7_golden_block_ids(source: &str) -> Result<BTreeSet<StableId>, ProductionHostError> {
+    golden_stable_ids(source, "block", "d7-block")
 }
 
-fn d9_golden_block_ids() -> Result<BTreeSet<StableId>, ProductionHostError> {
-    golden_stable_ids(D9_BLOCK_IDS, "block", "d9-block")
+fn d9_golden_block_ids(source: &str) -> Result<BTreeSet<StableId>, ProductionHostError> {
+    golden_stable_ids(source, "block", "d9-block")
 }
 
 fn golden_stable_ids(
@@ -772,40 +894,52 @@ fn authored_catalog_block_ids(catalog: &Value) -> Result<BTreeSet<StableId>, Pro
     Ok(ids)
 }
 
-fn require_d7_golden_biome_ids(present: &BTreeSet<StableId>) -> Result<(), ProductionHostError> {
+fn require_d7_golden_biome_ids(
+    present: &BTreeSet<StableId>,
+    source: &str,
+) -> Result<(), ProductionHostError> {
     missing_catalog_ids(
         "d7-biome",
-        golden_stable_ids(D7_BIOME_IDS, "biome", "d7-biome")?
+        golden_stable_ids(source, "biome", "d7-biome")?
             .into_iter()
             .filter(|id| !present.contains(id))
             .map(|id| id.as_str().to_owned()),
     )
 }
 
-fn require_d7_golden_block_ids(present: &BTreeSet<StableId>) -> Result<(), ProductionHostError> {
+fn require_d7_golden_block_ids(
+    present: &BTreeSet<StableId>,
+    source: &str,
+) -> Result<(), ProductionHostError> {
     missing_catalog_ids(
         "d7-block",
-        d7_golden_block_ids()?
+        d7_golden_block_ids(source)?
             .into_iter()
             .filter(|id| !present.contains(id))
             .map(|id| id.as_str().to_owned()),
     )
 }
 
-fn require_d9_golden_block_ids(present: &BTreeSet<StableId>) -> Result<(), ProductionHostError> {
+fn require_d9_golden_block_ids(
+    present: &BTreeSet<StableId>,
+    source: &str,
+) -> Result<(), ProductionHostError> {
     missing_catalog_ids(
         "d9-block",
-        d9_golden_block_ids()?
+        d9_golden_block_ids(source)?
             .into_iter()
             .filter(|id| !present.contains(id))
             .map(|id| id.as_str().to_owned()),
     )
 }
 
-fn require_d7_natural_role_ids(bindings: &FrozenRoleBindingsV1) -> Result<(), ProductionHostError> {
+fn require_d7_natural_role_ids(
+    bindings: &FrozenRoleBindingsV1,
+    source: &str,
+) -> Result<(), ProductionHostError> {
     missing_catalog_ids(
         "d7-natural-role",
-        golden_stable_ids(D7_NATURAL_ROLE_IDS, "block-role", "d7-natural-role")?
+        golden_stable_ids(source, "block-role", "d7-natural-role")?
             .into_iter()
             .filter(|id| bindings.target(id).is_none())
             .map(|id| id.as_str().to_owned()),
@@ -814,8 +948,10 @@ fn require_d7_natural_role_ids(bindings: &FrozenRoleBindingsV1) -> Result<(), Pr
 
 fn require_compiled_gameplay_covers_d9(
     catalog: &GameplayCatalog,
+    blocks_json: &str,
+    d9_block_ids: &str,
 ) -> Result<(), ProductionHostError> {
-    let blocks = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
+    let blocks = parse_json_object(blocks_json, "blocks-catalog")?;
     let mut unmineable = BTreeSet::new();
     for row in json_array(&blocks, "blocks")? {
         if row
@@ -833,7 +969,7 @@ fn require_compiled_gameplay_covers_d9(
         }
     }
     let mut missing = Vec::new();
-    for id in d9_golden_block_ids()? {
+    for id in d9_golden_block_ids(d9_block_ids)? {
         let block = BlockId::parse(id.as_str())?;
         if catalog.block(&block).is_none() && !unmineable.contains(id.as_str()) {
             missing.push(id.as_str().to_owned());
@@ -857,11 +993,13 @@ fn missing_catalog_ids(
     }
 }
 
-fn authored_gameplay_source() -> Result<GameplayCatalogSourceV1, ProductionHostError> {
-    let blocks = parse_json_object(AUTHORED_BLOCKS_JSON, "blocks-catalog")?;
-    require_d9_golden_block_ids(&authored_catalog_block_ids(&blocks)?)?;
-    let rules = parse_json_object(AUTHORED_RULES_JSON, "gameplay-rules")?;
-    let tools = parse_json_object(AUTHORED_TOOLS_JSON, "tools")?;
+fn authored_gameplay_source(
+    sources: AuthoredGameplayCatalogSourcesV1<'_>,
+) -> Result<GameplayCatalogSourceV1, ProductionHostError> {
+    let blocks = parse_json_object(sources.blocks, "blocks-catalog")?;
+    require_d9_golden_block_ids(&authored_catalog_block_ids(&blocks)?, sources.d9_block_ids)?;
+    let rules = parse_json_object(sources.rules, "gameplay-rules")?;
+    let tools = parse_json_object(sources.tools, "tools")?;
     let mut items = BTreeMap::new();
     let mut item_roles = Vec::new();
     let mut bindings = Vec::new();
@@ -1418,20 +1556,132 @@ struct AuthoredRoleRow {
     candidate: String,
 }
 
+fn compile_lock_selected_gameplay_catalog(
+    images: &LockVerifiedComposeImages,
+) -> Result<GameplayCatalog, ProductionHostError> {
+    let (_, blocks) = required_provider_data(images, CONTENT_BLOCKS_CAPABILITY)?;
+    let (_, gameplay) = required_provider_data(images, SANDBOX_GAMEPLAY_CAPABILITY)?;
+    let (_, tools) = required_provider_data(images, SANDBOX_TOOLS_CAPABILITY)?;
+    compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
+        blocks: required_data_text(&blocks, BLOCKS_CATALOG_PATH)?,
+        rules: required_data_text(&gameplay, GAMEPLAY_RULES_PATH)?,
+        tools: required_data_text(&tools, TOOLS_CATALOG_PATH)?,
+        d9_block_ids: required_data_text(&blocks, D9_BLOCK_IDS_PATH)?,
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use latticeaxiom_compose::RealizedDataRootV1;
+    use latticeaxiom_core::{CanonicalLogicalPath, StableId};
 
     use super::{
-        AUTHORED_BLOCKS_JSON, authored_catalog_block_ids, authored_content_catalog,
-        authored_gameplay_catalog, d7_golden_block_ids, d9_golden_block_ids, parse_json_object,
+        AuthoredContentCatalogSourcesV1, AuthoredGameplayCatalogSourcesV1,
+        authored_catalog_block_ids, compile_authored_content_catalog,
+        compile_authored_gameplay_catalog, parse_json_object,
     };
+    use latticeaxiom_content::ContentCatalogV1;
     use latticeaxiom_gameplay::{
         BlockId, ContainerOwnerComponentV1, ContainerStateV1, FurnaceContinuationV1,
-        GameplayMutationIntentV1, ItemStackV1, SchemaId, WorkstationId,
+        GameplayCatalog, GameplayMutationIntentV1, ItemStackV1, SchemaId, WorkstationId,
     };
     use latticeaxiom_worldgen::D7_NATURAL_BLOCK_COUNT;
+    const AUTHORED_BLOCKS_JSON: &str =
+        include_str!("../../../../packages/terrenia/blocks/data/authored-catalog-v1.json");
+    const AUTHORED_RULES_JSON: &str =
+        include_str!("../../../../packages/terrenia/gameplay/data/authored-rules-v1.json");
+    const AUTHORED_TOOLS_JSON: &str =
+        include_str!("../../../../packages/terrenia/tools/data/authored-tools-v1.json");
+    const AUTHORED_BIOMES_JSON: &str =
+        include_str!("../../../../packages/terrenia/worldgen/data/authored-biomes-v1.json");
+    const D7_BLOCK_IDS: &str =
+        include_str!("../../../../packages/terrenia/blocks/data/goldens/d7-block-ids.txt");
+    const D7_BIOME_IDS: &str =
+        include_str!("../../../../packages/terrenia/worldgen/data/goldens/d7-biome-ids.txt");
+    const D9_BLOCK_IDS: &str =
+        include_str!("../../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
+
+    fn test_content_catalog() -> Result<ContentCatalogV1, super::ProductionHostError> {
+        compile_authored_content_catalog(AuthoredContentCatalogSourcesV1 {
+            blocks: AUTHORED_BLOCKS_JSON,
+            biomes: AUTHORED_BIOMES_JSON,
+            d7_biome_ids: D7_BIOME_IDS,
+            d9_block_ids: D9_BLOCK_IDS,
+        })
+    }
+
+    fn test_gameplay_catalog() -> Result<GameplayCatalog, super::ProductionHostError> {
+        compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
+            blocks: AUTHORED_BLOCKS_JSON,
+            rules: AUTHORED_RULES_JSON,
+            tools: AUTHORED_TOOLS_JSON,
+            d9_block_ids: D9_BLOCK_IDS,
+        })
+    }
+
+    fn fixture_registration_ids(ids: &[&str]) -> Vec<StableId> {
+        ids.iter()
+            .map(|id| {
+                id.parse::<StableId>()
+                    .unwrap_or_else(|error| panic!("fixture registration `{id}` is valid: {error}"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dimension_registration_fails_closed_when_absent() {
+        let registrations = fixture_registration_ids(&["fixture:block/air"]);
+        let error =
+            super::ExactlyOneDimensionRegistration::from_registration_ids(registrations.iter())
+                .expect_err("a fixture must explicitly register its dimension");
+        assert!(matches!(
+            error,
+            super::ProductionHostError::MissingCatalogDefinition {
+                kind: "dimension-registration",
+                ref id,
+            } if id == "exactly-one"
+        ));
+    }
+
+    #[test]
+    fn dimension_registration_accepts_one_typed_registration() {
+        let registrations =
+            fixture_registration_ids(&["fixture:block/air", "terrenia:dimension/terrenia"]);
+        let dimension =
+            super::ExactlyOneDimensionRegistration::from_registration_ids(registrations.iter())
+                .expect("exactly one dimension registration proves selection")
+                .into_dimension()
+                .expect("the typed registration converts to a dimension ID");
+        assert_eq!(dimension.as_str(), "terrenia:dimension/terrenia");
+    }
+
+    #[test]
+    fn dimension_registration_fails_closed_when_duplicate() {
+        let registrations =
+            fixture_registration_ids(&["terrenia:dimension/terrenia", "substitute:dimension/sky"]);
+        let error =
+            super::ExactlyOneDimensionRegistration::from_registration_ids(registrations.iter())
+                .expect_err("multiple dimension registrations are ambiguous");
+        assert!(matches!(
+            error,
+            super::ProductionHostError::AmbiguousDimension
+        ));
+    }
+
+    #[test]
+    fn dimension_registration_accepts_non_terrenia_substitute_provider() {
+        let registrations =
+            fixture_registration_ids(&["substitute:block/air", "substitute:dimension/sky"]);
+        let dimension =
+            super::ExactlyOneDimensionRegistration::from_registration_ids(registrations.iter())
+                .expect("a substitute provider may own the sole dimension registration")
+                .into_dimension()
+                .expect("the substitute registration converts to a dimension ID");
+        assert_eq!(dimension.as_str(), "substitute:dimension/sky");
+    }
 
     #[test]
     fn d7_golden_block_ids_are_present_in_authored_catalog() {
@@ -1440,7 +1690,7 @@ mod tests {
                 .expect("Terrenia authored catalog is valid JSON"),
         )
         .expect("authored catalog block IDs are valid");
-        let golden = d7_golden_block_ids().expect("D7 golden IDs are valid");
+        let golden = super::d7_golden_block_ids(D7_BLOCK_IDS).expect("D7 golden IDs are valid");
         assert_eq!(golden.len(), D7_NATURAL_BLOCK_COUNT);
         let missing = golden
             .iter()
@@ -1455,13 +1705,13 @@ mod tests {
 
     #[test]
     fn compiled_content_catalog_includes_d7_biome_goldens() {
-        let catalog = authored_content_catalog().expect("package content catalog must compile");
+        let catalog = test_content_catalog().expect("package content catalog must compile");
         let compiled = catalog
             .biomes()
             .iter()
             .map(|biome| biome.header.stable_id.clone())
             .collect::<BTreeSet<_>>();
-        let golden = super::golden_stable_ids(super::D7_BIOME_IDS, "biome", "d7-biome")
+        let golden = super::golden_stable_ids(D7_BIOME_IDS, "biome", "d7-biome")
             .expect("D7 biome goldens are valid");
         let missing = golden
             .iter()
@@ -1482,7 +1732,7 @@ mod tests {
                 .expect("Terrenia authored catalog is valid JSON"),
         )
         .expect("authored catalog block IDs are valid");
-        let golden = d9_golden_block_ids().expect("D9 golden IDs are valid");
+        let golden = super::d9_golden_block_ids(D9_BLOCK_IDS).expect("D9 golden IDs are valid");
         assert_eq!(golden.len(), 72);
         let missing = golden
             .iter()
@@ -1497,8 +1747,8 @@ mod tests {
 
     #[test]
     fn compiled_gameplay_catalog_contains_every_d9_golden_id() {
-        let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
-        let golden = d9_golden_block_ids().expect("D9 golden IDs are valid");
+        let catalog = test_gameplay_catalog().expect("package gameplay catalog must compile");
+        let golden = super::d9_golden_block_ids(D9_BLOCK_IDS).expect("D9 golden IDs are valid");
         let missing = golden
             .iter()
             .filter_map(|id| {
@@ -1520,7 +1770,7 @@ mod tests {
 
     #[test]
     fn d9_workbench_furnace_chest_and_torch_bind_reserved_gameplay_schemas() {
-        let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+        let catalog = test_gameplay_catalog().expect("package gameplay catalog must compile");
         let parse_schema = |id: &str| {
             id.parse::<SchemaId>()
                 .unwrap_or_else(|error| panic!("{id} is a reserved schema: {error}"))
@@ -1580,8 +1830,8 @@ mod tests {
 
     #[test]
     fn compiled_content_catalog_contains_every_d9_golden_id() {
-        let catalog = authored_content_catalog().expect("package content catalog must compile");
-        let golden = d9_golden_block_ids().expect("D9 golden IDs are valid");
+        let catalog = test_content_catalog().expect("package content catalog must compile");
+        let golden = super::d9_golden_block_ids(D9_BLOCK_IDS).expect("D9 golden IDs are valid");
         let compiled = catalog
             .blocks()
             .iter()
@@ -1598,5 +1848,62 @@ mod tests {
         );
         assert_eq!(golden.len(), 72);
         assert_eq!(compiled, golden);
+    }
+
+    #[test]
+    fn locked_data_text_fails_closed_for_missing_and_non_utf8_files() {
+        let missing = RealizedDataRootV1::from_file_bytes(
+            "fixture".parse().expect("fixture package is canonical"),
+            CanonicalLogicalPath::new("data").expect("fixture root is canonical"),
+            BTreeMap::from([("data/other.json".to_owned(), b"{}".to_vec())]),
+        )
+        .expect("missing-file fixture is otherwise valid");
+        let Err(missing_error) = super::required_data_text(&missing, super::BLOCKS_CATALOG_PATH)
+        else {
+            panic!("missing locked data file must fail closed");
+        };
+        assert!(matches!(
+            missing_error,
+            super::ProductionHostError::MissingCatalogDefinition {
+                kind: "locked-data-file",
+                ..
+            }
+        ));
+
+        let invalid_utf8 = RealizedDataRootV1::from_file_bytes(
+            "fixture".parse().expect("fixture package is canonical"),
+            CanonicalLogicalPath::new("data").expect("fixture root is canonical"),
+            BTreeMap::from([(super::BLOCKS_CATALOG_PATH.to_owned(), vec![0xff])]),
+        )
+        .expect("non-UTF-8 fixture is otherwise valid");
+        let Err(utf8_error) = super::required_data_text(&invalid_utf8, super::BLOCKS_CATALOG_PATH)
+        else {
+            panic!("non-UTF-8 locked data file must fail closed");
+        };
+        assert!(matches!(
+            utf8_error,
+            super::ProductionHostError::InvalidCatalogField {
+                field: "locked-data-utf8"
+            }
+        ));
+    }
+
+    #[test]
+    fn authored_compiler_fails_closed_for_invalid_json() {
+        let Err(error) = compile_authored_content_catalog(AuthoredContentCatalogSourcesV1 {
+            blocks: "{",
+            biomes: AUTHORED_BIOMES_JSON,
+            d7_biome_ids: D7_BIOME_IDS,
+            d9_block_ids: D9_BLOCK_IDS,
+        }) else {
+            panic!("invalid package JSON must fail closed");
+        };
+        assert!(matches!(
+            error,
+            super::ProductionHostError::InvalidAuthoredCatalog {
+                name: "blocks-catalog",
+                ..
+            }
+        ));
     }
 }

@@ -23,7 +23,9 @@ mod process;
 mod store;
 mod supervisor;
 
-pub use boot::{HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1};
+pub use boot::{
+    HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1, VerifiedArtifactObjects,
+};
 pub use child_exit::{
     CHILD_EXIT_SCHEMA_VERSION, ChildExitKindV1, ChildExitReportDraftV1, ChildExitReportV1,
     ChildRoleV1,

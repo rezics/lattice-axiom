@@ -1,30 +1,35 @@
 //! Client HUD display names and icons for locked content identities.
 //!
-//! Presentation package rows overlay locale-independent fallbacks from the
-//! blocks and tools packages. Omitting `@terrenia/presentation` still yields a
-//! deterministic name and icon for every locked block, tool, and fluid.
+//! Presentation-provider rows overlay locale-independent fallbacks from the
+//! blocks and tools providers. Omitting the presentation capability still
+//! yields a deterministic name and icon for every locked block, tool, and
+//! fluid.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
+use latticeaxiom_compose::RealizedDataRootV1;
 use serde::Deserialize;
 
-use super::ProductionHostError;
+use super::{
+    ProductionHostError,
+    catalog::{
+        CONTENT_BLOCKS_CAPABILITY, SANDBOX_TOOLS_CAPABILITY, exactly_one_lock_provider,
+        required_data_text, required_provider_data,
+    },
+};
 use crate::LockVerifiedComposeImages;
 
-const AUTHORED_BLOCK_DISPLAY_JSON: &str =
-    include_str!("../../../../packages/terrenia/blocks/data/authored-display-v1.json");
-const AUTHORED_TOOL_DISPLAY_JSON: &str =
-    include_str!("../../../../packages/terrenia/tools/data/authored-display-v1.json");
-const AUTHORED_TOOL_CATALOG_JSON: &str =
-    include_str!("../../../../packages/terrenia/tools/data/authored-tools-v1.json");
-const AUTHORED_PRESENTATION_DISPLAY_JSON: &str =
-    include_str!("../../../../packages/terrenia/presentation/data/authored-display-v1.json");
-const AUTHORED_PRESENTATION_ASSETS_JSON: &str =
-    include_str!("../../../../packages/terrenia/presentation/data/authored-assets-v1.json");
-const D9_BLOCK_IDS: &str =
-    include_str!("../../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
-const FLUID_IDS: &str =
-    include_str!("../../../../packages/terrenia/blocks/data/goldens/fluid-ids.txt");
+pub(super) const CONTENT_PRESENTATION_CAPABILITY: &str =
+    "latticeaxiom:capability/content-presentation@1";
+const AUTHORED_DISPLAY_PATH: &str = "data/authored-display-v1.json";
+const AUTHORED_TOOL_CATALOG_PATH: &str = "data/authored-tools-v1.json";
+pub(super) const AUTHORED_PRESENTATION_ASSETS_PATH: &str = "data/authored-assets-v1.json";
+pub(super) const AUTHORED_PRESENTATION_LAYERS_PATH: &str = "data/authored-layers-v1.json";
+const D9_BLOCK_IDS_PATH: &str = "data/goldens/d9-block-ids.txt";
+const FLUID_IDS_PATH: &str = "data/goldens/fluid-ids.txt";
 
 /// HUD label resolved for one locked content identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,35 +87,62 @@ impl ContentDisplayCatalogV1 {
     }
 }
 
+/// Optional presentation overlay sources selected by a capability provider.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthoredPresentationCatalogSourcesV1<'a> {
+    /// Display labels and icon bindings.
+    pub display: &'a str,
+    /// Asset identities referenced by display labels.
+    pub assets: &'a str,
+}
+
+/// Explicit package-owned sources accepted by the HUD display compiler.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthoredContentDisplayCatalogSourcesV1<'a> {
+    /// Fallback block display labels.
+    pub block_display: &'a str,
+    /// Fallback tool display labels.
+    pub tool_display: &'a str,
+    /// Tool identities included in the locked content set.
+    pub tool_catalog: &'a str,
+    /// Required D9 block identities.
+    pub d9_block_ids: &'a str,
+    /// Required fluid identities.
+    pub fluid_ids: &'a str,
+    /// Optional presentation overlay selected by the graph.
+    pub presentation: Option<AuthoredPresentationCatalogSourcesV1<'a>>,
+}
+
 /// Compiles HUD display labels for every locked block, tool, and fluid.
 ///
-/// `include_presentation` applies `@terrenia/presentation` overlay rows. When
-/// false, names come from blocks/tools authored fallbacks and icons are the
-/// derived missing-presentation identities.
+/// Supplying presentation sources applies the graph-selected provider's
+/// overlay rows. Without them, names come from blocks/tools authored fallbacks
+/// and icons are the derived missing-presentation identities.
 ///
 /// # Errors
 ///
 /// Returns [`ProductionHostError`] when authored JSON is invalid, a locked
 /// identity is missing, or a selected presentation icon is absent from the
 /// presentation asset table.
-pub fn authored_content_display_catalog(
-    include_presentation: bool,
+pub fn compile_authored_content_display_catalog(
+    sources: AuthoredContentDisplayCatalogSourcesV1<'_>,
 ) -> Result<ContentDisplayCatalogV1, ProductionHostError> {
-    let locked = locked_content_ids()?;
+    let include_presentation = sources.presentation.is_some();
+    let locked = locked_content_ids(
+        sources.d9_block_ids,
+        sources.fluid_ids,
+        sources.tool_catalog,
+    )?;
     let mut rows = BTreeMap::new();
     for id in &locked {
         rows.insert(id.clone(), ContentDisplayLabelV1::missing_presentation(id));
     }
-    overlay_display_file(AUTHORED_BLOCK_DISPLAY_JSON, "blocks-display", &mut rows)?;
-    overlay_display_file(AUTHORED_TOOL_DISPLAY_JSON, "tools-display", &mut rows)?;
-    if include_presentation {
-        overlay_display_file(
-            AUTHORED_PRESENTATION_DISPLAY_JSON,
-            "presentation-display",
-            &mut rows,
-        )?;
-        require_presentation_closure(&locked, &rows)?;
-        require_presentation_icons(&rows)?;
+    overlay_display_file(sources.block_display, "blocks-display", &mut rows)?;
+    overlay_display_file(sources.tool_display, "tools-display", &mut rows)?;
+    if let Some(presentation) = sources.presentation {
+        overlay_display_file(presentation.display, "presentation-display", &mut rows)?;
+        require_presentation_closure(&locked, &rows, presentation.display)?;
+        require_presentation_icons(&rows, presentation.assets)?;
     }
     for id in &locked {
         let Some(row) = rows.get(id) else {
@@ -130,15 +162,43 @@ pub fn authored_content_display_catalog(
     })
 }
 
-/// Returns whether the frozen lock graph selected `@terrenia/presentation`.
-#[must_use]
-pub(super) fn presentation_package_selected(images: &LockVerifiedComposeImages) -> bool {
-    images
-        .images()
-        .graph()
-        .packages
-        .keys()
-        .any(|package| package.as_str() == "@terrenia/presentation")
+/// Returns presentation data selected by the optional presentation capability.
+pub(super) fn presentation_data_root(
+    images: &LockVerifiedComposeImages,
+) -> Result<Option<Arc<RealizedDataRootV1>>, ProductionHostError> {
+    let Some(package) = exactly_one_lock_provider(images, CONTENT_PRESENTATION_CAPABILITY)? else {
+        return Ok(None);
+    };
+    Ok(Some(images.locked_artifacts().data_root(&package.name)?))
+}
+
+/// Compiles HUD display labels selected by a reopened product lock.
+///
+/// # Errors
+///
+/// Returns [`ProductionHostError`] when a capability provider, artifact,
+/// required file, UTF-8 payload, JSON document, or display closure is invalid.
+pub fn lock_selected_content_display_catalog(
+    images: &LockVerifiedComposeImages,
+) -> Result<ContentDisplayCatalogV1, ProductionHostError> {
+    let (_, blocks) = required_provider_data(images, CONTENT_BLOCKS_CAPABILITY)?;
+    let (_, tools) = required_provider_data(images, SANDBOX_TOOLS_CAPABILITY)?;
+    let presentation = presentation_data_root(images)?;
+    let presentation = match presentation.as_deref() {
+        Some(data) => Some(AuthoredPresentationCatalogSourcesV1 {
+            display: required_data_text(data, AUTHORED_DISPLAY_PATH)?,
+            assets: required_data_text(data, AUTHORED_PRESENTATION_ASSETS_PATH)?,
+        }),
+        None => None,
+    };
+    compile_authored_content_display_catalog(AuthoredContentDisplayCatalogSourcesV1 {
+        block_display: required_data_text(&blocks, AUTHORED_DISPLAY_PATH)?,
+        tool_display: required_data_text(&tools, AUTHORED_DISPLAY_PATH)?,
+        tool_catalog: required_data_text(&tools, AUTHORED_TOOL_CATALOG_PATH)?,
+        d9_block_ids: required_data_text(&blocks, D9_BLOCK_IDS_PATH)?,
+        fluid_ids: required_data_text(&blocks, FLUID_IDS_PATH)?,
+        presentation,
+    })
 }
 
 fn overlay_display_file(
@@ -168,12 +228,14 @@ fn overlay_display_file(
 fn require_presentation_closure(
     locked: &BTreeSet<String>,
     rows: &BTreeMap<String, ContentDisplayLabelV1>,
+    source: &str,
 ) -> Result<(), ProductionHostError> {
-    let file: AuthoredDisplayFile = serde_json::from_str(AUTHORED_PRESENTATION_DISPLAY_JSON)
-        .map_err(|source| ProductionHostError::InvalidAuthoredCatalog {
+    let file: AuthoredDisplayFile = serde_json::from_str(source).map_err(|source| {
+        ProductionHostError::InvalidAuthoredCatalog {
             name: "presentation-display",
             source,
-        })?;
+        }
+    })?;
     let present = file
         .entries
         .iter()
@@ -199,12 +261,14 @@ fn require_presentation_closure(
 
 fn require_presentation_icons(
     rows: &BTreeMap<String, ContentDisplayLabelV1>,
+    source: &str,
 ) -> Result<(), ProductionHostError> {
-    let file: AuthoredAssetsFile = serde_json::from_str(AUTHORED_PRESENTATION_ASSETS_JSON)
-        .map_err(|source| ProductionHostError::InvalidAuthoredCatalog {
+    let file: AuthoredAssetsFile = serde_json::from_str(source).map_err(|source| {
+        ProductionHostError::InvalidAuthoredCatalog {
             name: "presentation-assets",
             source,
-        })?;
+        }
+    })?;
     let assets = file
         .assets
         .into_iter()
@@ -218,17 +282,20 @@ fn require_presentation_icons(
     )
 }
 
-fn locked_content_ids() -> Result<BTreeSet<String>, ProductionHostError> {
+fn locked_content_ids(
+    d9_block_ids: &str,
+    fluid_ids: &str,
+    tool_catalog: &str,
+) -> Result<BTreeSet<String>, ProductionHostError> {
     let mut ids = BTreeSet::new();
-    ingest_golden_ids(D9_BLOCK_IDS, &mut ids)?;
-    ingest_golden_ids(FLUID_IDS, &mut ids)?;
-    let tools: AuthoredToolCatalogFile =
-        serde_json::from_str(AUTHORED_TOOL_CATALOG_JSON).map_err(|source| {
-            ProductionHostError::InvalidAuthoredCatalog {
-                name: "tools",
-                source,
-            }
-        })?;
+    ingest_golden_ids(d9_block_ids, &mut ids)?;
+    ingest_golden_ids(fluid_ids, &mut ids)?;
+    let tools: AuthoredToolCatalogFile = serde_json::from_str(tool_catalog).map_err(|source| {
+        ProductionHostError::InvalidAuthoredCatalog {
+            name: "tools",
+            source,
+        }
+    })?;
     for item in tools.items {
         if item.id.is_empty() {
             return Err(ProductionHostError::InvalidCatalogField { field: "item-id" });
@@ -369,11 +436,41 @@ mod tests {
 
     const AUTHORED_BLOCKS_JSON: &str =
         include_str!("../../../../packages/terrenia/blocks/data/authored-catalog-v1.json");
+    const AUTHORED_BLOCK_DISPLAY_JSON: &str =
+        include_str!("../../../../packages/terrenia/blocks/data/authored-display-v1.json");
+    const AUTHORED_TOOL_DISPLAY_JSON: &str =
+        include_str!("../../../../packages/terrenia/tools/data/authored-display-v1.json");
+    const AUTHORED_TOOLS_JSON: &str =
+        include_str!("../../../../packages/terrenia/tools/data/authored-tools-v1.json");
+    const D9_BLOCK_IDS: &str =
+        include_str!("../../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
+    const FLUID_IDS: &str =
+        include_str!("../../../../packages/terrenia/blocks/data/goldens/fluid-ids.txt");
+    const PRESENTATION_DISPLAY_JSON: &str =
+        include_str!("../../../../packages/terrenia/presentation/data/authored-display-v1.json");
+    const PRESENTATION_ASSETS_JSON: &str =
+        include_str!("../../../../packages/terrenia/presentation/data/authored-assets-v1.json");
+
+    fn test_display_catalog(
+        include_presentation: bool,
+    ) -> Result<ContentDisplayCatalogV1, ProductionHostError> {
+        let presentation = include_presentation.then_some(AuthoredPresentationCatalogSourcesV1 {
+            display: PRESENTATION_DISPLAY_JSON,
+            assets: PRESENTATION_ASSETS_JSON,
+        });
+        compile_authored_content_display_catalog(AuthoredContentDisplayCatalogSourcesV1 {
+            block_display: AUTHORED_BLOCK_DISPLAY_JSON,
+            tool_display: AUTHORED_TOOL_DISPLAY_JSON,
+            tool_catalog: AUTHORED_TOOLS_JSON,
+            d9_block_ids: D9_BLOCK_IDS,
+            fluid_ids: FLUID_IDS,
+            presentation,
+        })
+    }
 
     #[test]
     fn omitted_presentation_covers_every_locked_identity() {
-        let catalog =
-            authored_content_display_catalog(false).expect("omitted presentation catalog compiles");
+        let catalog = test_display_catalog(false).expect("omitted presentation catalog compiles");
         assert!(!catalog.includes_presentation());
         let locked = catalog.locked_ids().collect::<Vec<_>>();
         assert_eq!(locked.len(), 81);
@@ -397,10 +494,8 @@ mod tests {
 
     #[test]
     fn presentation_overlay_matches_omitted_fallbacks() {
-        let omitted =
-            authored_content_display_catalog(false).expect("omitted presentation catalog compiles");
-        let presented =
-            authored_content_display_catalog(true).expect("presentation catalog compiles");
+        let omitted = test_display_catalog(false).expect("omitted presentation catalog compiles");
+        let presented = test_display_catalog(true).expect("presentation catalog compiles");
         assert!(presented.includes_presentation());
         let omitted_ids = omitted.locked_ids().collect::<BTreeSet<_>>();
         let presented_ids = presented.locked_ids().collect::<BTreeSet<_>>();

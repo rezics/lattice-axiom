@@ -13,15 +13,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use latticeaxiom_compose::{
-    BootstrapSourceProviderV1, COMPOSITION_SCHEMA_VERSION, CompositionBootstrapV1,
+    ArtifactIntent, BootstrapSourceProviderV1, COMPOSITION_SCHEMA_VERSION, CompositionBootstrapV1,
     CompositionPolicy, CompositionSpec, LOCK_SCHEMA_VERSION, LockActionMode, LockV1,
     LockedAliasEdgeV1, LockedDependency, LockedGameGraph, LockedPackage, ObservabilityCatalog,
     PACKAGE_MODEL_VERSION, PRODUCT_LOCK_PRODUCER_MACHINE, PackageAlias, PackageDependency,
     PackageMetadata, PackageSourceManifestV1, PackageSpec, ProductLockDraftV1, ProductLockError,
-    ProductLockHostReceipts, ProductLockProducerV1, RealizationSpec, RegistrationFragment,
-    RegistrationImage, ResolutionStep, RuntimeBinding, RuntimeImage, SemanticCatalog,
-    SettingsCatalog, SourceCandidate, TargetPackageRealizationV1, TargetRealizationLockV1,
-    TrustClass, persist_product_lock, reopen_product_lock,
+    ProductLockHostReceipts, ProductLockProducerV1, RealizationKind, RealizationSpec,
+    RealizedDataRootV1, RegistrationFragment, RegistrationImage, ResolutionStep, RuntimeBinding,
+    RuntimeImage, SemanticCatalog, SettingsCatalog, SourceCandidate, SourceSnapshot,
+    TargetPackageRealizationV1, TargetRealizationLockV1, TrustClass, persist_product_lock,
+    reopen_product_lock,
 };
 use latticeaxiom_core::{
     CanonicalHash, CanonicalLogicalPath, PackageName, SourceId, SourceProvenance, StableId,
@@ -36,7 +37,9 @@ use crate::catalog::{
 };
 use crate::error::TransactionError;
 use crate::lock_verify::verify_product_lock_from_cas;
-use crate::model::{PackageCandidate, PackageSourceKind, ResolutionReceiptV1};
+use crate::model::{
+    PackageCandidate, PackageSourceKind, ResolutionReceiptV1, ResolvedRealizationV1,
+};
 use crate::resolver::PackageResolver;
 
 const BOOTSTRAP_SOURCE_ID: &str = "latticeaxiom:source/bootstrap";
@@ -545,13 +548,56 @@ fn publish_data_artifacts<S: CasObjectStore>(
     acquired: &BTreeMap<PackageName, AcquiredSourceV1>,
 ) -> Result<BTreeMap<PackageName, CanonicalHash>, TransactionError> {
     let mut artifacts = BTreeMap::new();
-    for name in receipt.packages.keys() {
+    for (name, package) in &receipt.packages {
         let acquired = require_acquired(acquired, name)?;
-        let bytes = store.get(&acquired.acquired.entry.source_object.object_id())?;
+        let bytes = materialize_artifact(name, &package.realization, &acquired.acquired.snapshot)?;
         let id = store.put(CasObjectKind::RealizedArtifact, &bytes)?;
         artifacts.insert(name.clone(), id.digest());
     }
     Ok(artifacts)
+}
+
+fn materialize_artifact(
+    package: &PackageName,
+    realization: &ResolvedRealizationV1,
+    snapshot: &SourceSnapshot,
+) -> Result<Vec<u8>, TransactionError> {
+    let ArtifactIntent::DataRoot { path: root } = &realization.artifact else {
+        return Err(TransactionError::UnsupportedArtifactMaterialization {
+            package: package.clone(),
+            realization: realization.kind,
+            artifact: realization.artifact.clone(),
+        });
+    };
+    if realization.kind != RealizationKind::Data {
+        return Err(TransactionError::UnsupportedArtifactMaterialization {
+            package: package.clone(),
+            realization: realization.kind,
+            artifact: realization.artifact.clone(),
+        });
+    }
+
+    let descendant_prefix = format!("{root}/");
+    let files = snapshot
+        .files()
+        .iter()
+        .filter(|(logical_path, _)| {
+            logical_path.as_str() == root.as_str()
+                || logical_path.starts_with(descendant_prefix.as_str())
+        })
+        .map(|(logical_path, file)| (logical_path.clone(), file.bytes().to_vec()))
+        .collect();
+    let artifact = RealizedDataRootV1::from_file_bytes(package.clone(), root.clone(), files)
+        .map_err(|source| TransactionError::RealizedDataRoot {
+            package: package.clone(),
+            source,
+        })?;
+    artifact
+        .canonical_bytes()
+        .map_err(|source| TransactionError::RealizedDataRoot {
+            package: package.clone(),
+            source,
+        })
 }
 
 fn locked_graph_from_resolution(

@@ -11,8 +11,8 @@ use thiserror::Error;
 use super::binding::BindingProfileV1;
 use super::catalog::{ValidatedSettingsCatalog, validate_setting_value};
 use super::overlay::{
-    EffectiveSettingsSnapshot, RestartImpactMetadata, SettingTransactionRevision, SettingsDiff,
-    SettingsRollbackPlan, resolve_effective_settings,
+    EffectiveSettingsSnapshot, RestartImpactMetadata, ScopeOverlay, SettingTransactionRevision,
+    SettingWriter, SettingsDiff, SettingsRollbackPlan, resolve_effective_settings,
 };
 use super::persist::{
     LatticeLocalSettingsV1, LocalSettingsPersistError, LocalSettingsStore, PendingRestartJournalV1,
@@ -150,31 +150,43 @@ impl SettingsApplyTransaction {
         {
             return Err(SettingsTransactionError::ZeroPreviewTimeout);
         }
-        let mut stored = BTreeMap::new();
+        let mut stored = current.user().clone();
         for (id, value) in proposed_user {
-            if let Some(spec) = catalog.as_catalog().runtime.get(id) {
-                if !spec.allowed_scopes.contains(&SettingScope::User) {
-                    return Err(SettingsTransactionError::ScopeNotAllowed {
-                        setting: id.clone(),
-                    });
-                }
-                validate_setting_value(spec, value).map_err(|source| {
-                    SettingsTransactionError::InvalidValue {
-                        setting: id.clone(),
-                        reason: source.to_string(),
-                    }
-                })?;
+            let Some(spec) = catalog.as_catalog().runtime.get(id) else {
+                return Err(SettingsTransactionError::UnknownSetting {
+                    setting: id.clone(),
+                });
+            };
+            if !spec.allowed_scopes.contains(&SettingScope::User) {
+                return Err(SettingsTransactionError::ScopeNotAllowed {
+                    setting: id.clone(),
+                });
             }
-            stored.insert(id.clone(), StoredSettingEntryV1::new(1, value.clone()));
+            validate_setting_value(spec, value).map_err(|source| {
+                SettingsTransactionError::InvalidValue {
+                    setting: id.clone(),
+                    reason: source.to_string(),
+                }
+            })?;
+            stored.insert(
+                id.clone(),
+                StoredSettingEntryV1::new(spec.schema_version, value.clone()),
+            );
         }
-        let proposed_envelope =
-            current.with_user_commit(stored.clone(), proposed_binding_profile.clone());
+        let proposed_user_overlay = ScopeOverlay::new(
+            SettingScope::User,
+            current.store_revision(),
+            current.transaction_revision(),
+            SettingWriter::LocalUser,
+            None,
+            stored
+                .iter()
+                .map(|(id, entry)| (id.clone(), entry.value().clone()))
+                .collect(),
+        );
         let proposed = resolve_effective_settings(
             catalog,
-            [
-                proposed_envelope.device_overlay(),
-                proposed_envelope.user_overlay(),
-            ],
+            [current.device_overlay(), proposed_user_overlay],
             active_lock,
         )
         .map_err(|source| SettingsTransactionError::Overlay(source.to_string()))?;
@@ -311,6 +323,7 @@ impl SettingsApplyTransaction {
                 domain: self.domain,
             });
         }
+        let prepared_phase = self.phase;
         self.phase = SettingsTransactionPhase::Persisting;
         let impact = self.diff.required_impact();
         let next = if matches!(impact, Some(RuntimeApplyImpact::ProcessRestart)) {
@@ -328,9 +341,17 @@ impl SettingsApplyTransaction {
                 self.proposed_binding_profile.clone(),
             )
         };
-        store
-            .persist(&next)
-            .map_err(SettingsTransactionError::Persist)?;
+        if let Err(error) = store.persist(&next) {
+            if error.publication_state_uncertain() {
+                self.phase = SettingsTransactionPhase::SafeProcessRestartRequired;
+                return Err(SettingsTransactionError::PublicationStateUncertain {
+                    source: error,
+                    proposed: Box::new(next),
+                });
+            }
+            self.phase = prepared_phase;
+            return Err(SettingsTransactionError::Persist(error));
+        }
         let transaction_revision = next.transaction_revision();
         self.committed_revision = Some(transaction_revision);
         self.phase = SettingsTransactionPhase::Committed;
@@ -373,7 +394,7 @@ fn merge_user_values(
 }
 
 /// Settings transaction failure.
-#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[derive(Clone, Debug, Error, PartialEq)]
 pub enum SettingsTransactionError {
     /// Operation does not apply to the current phase.
     #[error("settings transaction operation is invalid in the current phase")]
@@ -387,6 +408,12 @@ pub enum SettingsTransactionError {
     /// A reversible preview requires a non-zero timeout.
     #[error("settings preview timeout must be non-zero")]
     ZeroPreviewTimeout,
+    /// A draft attempted to author an ID absent from the active catalog.
+    #[error("setting `{setting}` is not declared by the active catalog")]
+    UnknownSetting {
+        /// Rejected setting ID.
+        setting: StableId,
+    },
     /// The setting is not writable in the user durability domain.
     #[error("setting `{setting}` is not writable in the user durability domain")]
     ScopeNotAllowed {
@@ -413,6 +440,36 @@ pub enum SettingsTransactionError {
     /// The local-settings store rejected the atomic write.
     #[error(transparent)]
     Persist(LocalSettingsPersistError),
+    /// The store reached a state where ordinary rollback cannot prove visibility.
+    #[error("settings publication state is uncertain; safe process restart required: {source}")]
+    PublicationStateUncertain {
+        /// Stage-specific storage failure.
+        #[source]
+        source: LocalSettingsPersistError,
+        /// Proposed envelope needed to reconcile a visible post-replace value.
+        proposed: Box<LatticeLocalSettingsV1>,
+    },
+}
+
+impl SettingsTransactionError {
+    /// Returns whether ordinary pre-persist rollback is forbidden.
+    #[must_use]
+    pub const fn requires_safe_process_restart(&self) -> bool {
+        matches!(self, Self::PublicationStateUncertain { .. })
+    }
+
+    /// Returns the proposed envelope when the new visible value is proven present.
+    #[must_use]
+    pub fn visible_proposed_envelope(&self) -> Option<&LatticeLocalSettingsV1> {
+        match self {
+            Self::PublicationStateUncertain { source, proposed }
+                if source.proposed_value_is_visible_but_durability_uncertain() =>
+            {
+                Some(proposed)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -426,7 +483,9 @@ mod tests {
         SettingsCatalogFragment, SettingsCatalogPolicy, ValidatedSettingsCatalog,
     };
     use crate::settings::overlay::resolve_effective_settings;
-    use crate::settings::persist::DeterministicLocalSettingsStore;
+    use crate::settings::persist::{
+        DeterministicLocalSettingsStore, LocalSettingsFaultPoint, LocalSettingsPersistError,
+    };
 
     fn package(value: &str) -> PackageName {
         match value.parse() {
@@ -571,6 +630,400 @@ mod tests {
         assert!(batch.restart_impact().live_immediate);
         assert!(next.pending_restart().is_none());
         assert_eq!(next.user().len(), 1);
+    }
+
+    #[test]
+    fn partial_user_draft_preserves_unrelated_confirmed_values() {
+        let alpha = bool_setting("alpha");
+        let beta = bool_setting("beta");
+        let catalog = catalog(vec![alpha.clone(), beta.clone()]);
+        let lock = CanonicalHash::digest(b"lock");
+        let current = LatticeLocalSettingsV1::empty().with_user_commit(
+            BTreeMap::from([
+                (
+                    alpha.id.clone(),
+                    StoredSettingEntryV1::new(alpha.schema_version, json!(true)),
+                ),
+                (
+                    beta.id.clone(),
+                    StoredSettingEntryV1::new(beta.schema_version, json!(true)),
+                ),
+            ]),
+            BindingProfileV1::empty(),
+        );
+        let before = match resolve_effective_settings(&catalog, [current.user_overlay()], lock) {
+            Ok(value) => value,
+            Err(error) => panic!("before: {error}"),
+        };
+        let proposed = BTreeMap::from([(alpha.id.clone(), json!(false))]);
+        let mut transaction = match SettingsApplyTransaction::user_draft(
+            &catalog,
+            before.snapshot(),
+            &current,
+            &proposed,
+            BindingProfileV1::empty(),
+            PreviewPolicyV1::None,
+            lock,
+        ) {
+            Ok(value) => value,
+            Err(error) => panic!("draft: {error}"),
+        };
+        assert_eq!(
+            transaction
+                .diff()
+                .entries()
+                .iter()
+                .map(|entry| &entry.id)
+                .collect::<Vec<_>>(),
+            vec![&alpha.id]
+        );
+        match transaction.prepare() {
+            Ok(()) => {}
+            Err(error) => panic!("prepare: {error}"),
+        }
+        let store = DeterministicLocalSettingsStore::new();
+        let (next, _) = match transaction.persist(&store, &current, lock) {
+            Ok(value) => value,
+            Err(error) => panic!("persist: {error}"),
+        };
+        assert_eq!(
+            next.user().get(&alpha.id).map(StoredSettingEntryV1::value),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            next.user().get(&beta.id).map(StoredSettingEntryV1::value),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn user_draft_rejects_ids_absent_from_active_catalog() {
+        let spec = bool_setting("alpha");
+        let catalog = catalog(vec![spec]);
+        let lock = CanonicalHash::digest(b"lock");
+        let current = LatticeLocalSettingsV1::empty();
+        let before = match resolve_effective_settings(&catalog, [], lock) {
+            Ok(value) => value,
+            Err(error) => panic!("before: {error}"),
+        };
+        let unknown = id("example:setting/not-declared");
+        let proposed = BTreeMap::from([(unknown.clone(), json!(true))]);
+        assert!(matches!(
+            SettingsApplyTransaction::user_draft(
+                &catalog,
+                before.snapshot(),
+                &current,
+                &proposed,
+                BindingProfileV1::empty(),
+                PreviewPolicyV1::None,
+                lock,
+            ),
+            Err(SettingsTransactionError::UnknownSetting { setting }) if setting == unknown
+        ));
+    }
+
+    #[test]
+    fn persist_fault_restores_the_previewing_phase_for_rollback() {
+        let spec = bool_setting("alpha");
+        let catalog = catalog(vec![spec.clone()]);
+        let lock = CanonicalHash::digest(b"lock");
+        let current = LatticeLocalSettingsV1::empty();
+        let before = match resolve_effective_settings(&catalog, [], lock) {
+            Ok(value) => value,
+            Err(error) => panic!("before: {error}"),
+        };
+        let proposed = BTreeMap::from([(spec.id, json!(true))]);
+        let mut transaction = match SettingsApplyTransaction::user_draft(
+            &catalog,
+            before.snapshot(),
+            &current,
+            &proposed,
+            BindingProfileV1::empty(),
+            PreviewPolicyV1::Reversible {
+                timeout_ms: 10_000,
+                participants: vec![package("@example/runtime")],
+            },
+            lock,
+        ) {
+            Ok(value) => value,
+            Err(error) => panic!("draft: {error}"),
+        };
+        match transaction.prepare() {
+            Ok(()) => {}
+            Err(error) => panic!("prepare: {error}"),
+        }
+        assert_eq!(transaction.begin_preview(), Ok(10_000));
+        let store = DeterministicLocalSettingsStore::new();
+        match store.inject_fault(LocalSettingsFaultPoint::TempWrite) {
+            Ok(()) => {}
+            Err(error) => panic!("inject fault: {error}"),
+        }
+        assert!(matches!(
+            transaction.persist(&store, &current, lock),
+            Err(SettingsTransactionError::Persist(
+                LocalSettingsPersistError::Injected(LocalSettingsFaultPoint::TempWrite)
+            ))
+        ));
+        assert_eq!(transaction.phase(), SettingsTransactionPhase::Previewing);
+        assert!(transaction.rollback_before_persist().is_ok());
+        assert_eq!(transaction.phase(), SettingsTransactionPhase::RollingBack);
+    }
+
+    #[test]
+    fn directory_sync_fault_requires_safe_restart_and_forbids_rollback() {
+        let spec = bool_setting("post-replace");
+        let setting_id = spec.id.clone();
+        let catalog = catalog(vec![spec]);
+        let lock = CanonicalHash::digest(b"lock");
+        let current = LatticeLocalSettingsV1::empty();
+        let before = match resolve_effective_settings(&catalog, [], lock) {
+            Ok(value) => value,
+            Err(error) => panic!("before: {error}"),
+        };
+        let proposed = BTreeMap::from([(setting_id.clone(), json!(true))]);
+        let mut transaction = match SettingsApplyTransaction::user_draft(
+            &catalog,
+            before.snapshot(),
+            &current,
+            &proposed,
+            BindingProfileV1::empty(),
+            PreviewPolicyV1::None,
+            lock,
+        ) {
+            Ok(value) => value,
+            Err(error) => panic!("draft: {error}"),
+        };
+        match transaction.prepare() {
+            Ok(()) => {}
+            Err(error) => panic!("prepare: {error}"),
+        }
+        let store = DeterministicLocalSettingsStore::new();
+        match store.inject_fault(LocalSettingsFaultPoint::DirectorySync) {
+            Ok(()) => {}
+            Err(error) => panic!("inject fault: {error}"),
+        }
+        let Err(error) = transaction.persist(&store, &current, lock) else {
+            panic!("directory-sync fault must not claim a durable commit");
+        };
+        assert!(matches!(
+            &error,
+            SettingsTransactionError::PublicationStateUncertain {
+                source: LocalSettingsPersistError::Injected(LocalSettingsFaultPoint::DirectorySync),
+                ..
+            }
+        ));
+        assert!(error.visible_proposed_envelope().is_some());
+        assert!(error.requires_safe_process_restart());
+        assert_eq!(
+            transaction.phase(),
+            SettingsTransactionPhase::SafeProcessRestartRequired
+        );
+        assert!(transaction.rollback_before_persist().is_err());
+
+        let loaded = match store.load() {
+            Ok(value) => value,
+            Err(error) => panic!("load visible replacement: {error}"),
+        };
+        assert_eq!(
+            loaded
+                .envelope()
+                .user()
+                .get(&setting_id)
+                .map(StoredSettingEntryV1::value),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn production_durability_uncertainty_exposes_proposed_and_forbids_rollback() {
+        struct ProductionDurabilityUncertainStore;
+
+        impl LocalSettingsStore for ProductionDurabilityUncertainStore {
+            fn load(
+                &self,
+            ) -> Result<crate::settings::persist::LocalSettingsLoad, LocalSettingsPersistError>
+            {
+                Err(LocalSettingsPersistError::StatePoisoned)
+            }
+
+            fn persist(
+                &self,
+                _envelope: &LatticeLocalSettingsV1,
+            ) -> Result<
+                crate::settings::persist::LocalSettingsPublishReceipt,
+                LocalSettingsPersistError,
+            > {
+                Err(LocalSettingsPersistError::PublicationDurabilityUncertain {
+                    reason: "injected production directory-sync failure".to_owned(),
+                })
+            }
+        }
+
+        let spec = bool_setting("production-post-replace");
+        let setting_id = spec.id.clone();
+        let catalog = catalog(vec![spec]);
+        let lock = CanonicalHash::digest(b"lock");
+        let current = LatticeLocalSettingsV1::empty();
+        let before = match resolve_effective_settings(&catalog, [], lock) {
+            Ok(value) => value,
+            Err(error) => panic!("before: {error}"),
+        };
+        let proposed = BTreeMap::from([(setting_id.clone(), json!(true))]);
+        let mut transaction = match SettingsApplyTransaction::user_draft(
+            &catalog,
+            before.snapshot(),
+            &current,
+            &proposed,
+            BindingProfileV1::empty(),
+            PreviewPolicyV1::None,
+            lock,
+        ) {
+            Ok(value) => value,
+            Err(error) => panic!("draft: {error}"),
+        };
+        match transaction.prepare() {
+            Ok(()) => {}
+            Err(error) => panic!("prepare: {error}"),
+        }
+
+        let Err(error) = transaction.persist(&ProductionDurabilityUncertainStore, &current, lock)
+        else {
+            panic!("production durability uncertainty must not claim a durable commit");
+        };
+        assert!(matches!(
+            &error,
+            SettingsTransactionError::PublicationStateUncertain {
+                source: LocalSettingsPersistError::PublicationDurabilityUncertain { reason },
+                ..
+            } if reason.contains("production directory-sync failure")
+        ));
+        assert!(error.requires_safe_process_restart());
+        let proposed = error
+            .visible_proposed_envelope()
+            .expect("production post-replace uncertainty proves the proposed envelope is visible");
+        assert_eq!(
+            proposed
+                .user()
+                .get(&setting_id)
+                .map(StoredSettingEntryV1::value),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            transaction.phase(),
+            SettingsTransactionPhase::SafeProcessRestartRequired
+        );
+        assert!(transaction.rollback_before_persist().is_err());
+    }
+
+    #[test]
+    fn failed_visible_recovery_requires_restart_without_assuming_proposed_visibility() {
+        struct FailedRecoveryStore;
+
+        impl LocalSettingsStore for FailedRecoveryStore {
+            fn load(
+                &self,
+            ) -> Result<crate::settings::persist::LocalSettingsLoad, LocalSettingsPersistError>
+            {
+                Err(LocalSettingsPersistError::StatePoisoned)
+            }
+
+            fn persist(
+                &self,
+                _envelope: &LatticeLocalSettingsV1,
+            ) -> Result<
+                crate::settings::persist::LocalSettingsPublishReceipt,
+                LocalSettingsPersistError,
+            > {
+                Err(LocalSettingsPersistError::VisibleRecoveryFailed {
+                    reason: "injected failed backup restore".to_owned(),
+                })
+            }
+        }
+
+        let spec = bool_setting("failed-recovery");
+        let catalog = catalog(vec![spec.clone()]);
+        let lock = CanonicalHash::digest(b"lock");
+        let current = LatticeLocalSettingsV1::empty();
+        let before = match resolve_effective_settings(&catalog, [], lock) {
+            Ok(value) => value,
+            Err(error) => panic!("before: {error}"),
+        };
+        let proposed = BTreeMap::from([(spec.id, json!(true))]);
+        let mut transaction = match SettingsApplyTransaction::user_draft(
+            &catalog,
+            before.snapshot(),
+            &current,
+            &proposed,
+            BindingProfileV1::empty(),
+            PreviewPolicyV1::None,
+            lock,
+        ) {
+            Ok(value) => value,
+            Err(error) => panic!("draft: {error}"),
+        };
+        match transaction.prepare() {
+            Ok(()) => {}
+            Err(error) => panic!("prepare: {error}"),
+        }
+
+        let Err(error) = transaction.persist(&FailedRecoveryStore, &current, lock) else {
+            panic!("failed visible-state recovery must not claim a durable commit");
+        };
+        assert!(matches!(
+            &error,
+            SettingsTransactionError::PublicationStateUncertain {
+                source: LocalSettingsPersistError::VisibleRecoveryFailed { .. },
+                ..
+            }
+        ));
+        assert!(error.requires_safe_process_restart());
+        assert!(error.visible_proposed_envelope().is_none());
+        assert_eq!(
+            transaction.phase(),
+            SettingsTransactionPhase::SafeProcessRestartRequired
+        );
+        assert!(transaction.rollback_before_persist().is_err());
+    }
+
+    #[test]
+    fn persisted_entry_uses_the_active_setting_schema_version() {
+        let mut spec = bool_setting("versioned");
+        spec.schema_version = 7;
+        let catalog = catalog(vec![spec.clone()]);
+        let lock = CanonicalHash::digest(b"lock");
+        let current = LatticeLocalSettingsV1::empty();
+        let before = match resolve_effective_settings(&catalog, [], lock) {
+            Ok(value) => value,
+            Err(error) => panic!("before: {error}"),
+        };
+        let proposed = BTreeMap::from([(spec.id.clone(), json!(true))]);
+        let mut transaction = match SettingsApplyTransaction::user_draft(
+            &catalog,
+            before.snapshot(),
+            &current,
+            &proposed,
+            BindingProfileV1::empty(),
+            PreviewPolicyV1::None,
+            lock,
+        ) {
+            Ok(value) => value,
+            Err(error) => panic!("draft: {error}"),
+        };
+        match transaction.prepare() {
+            Ok(()) => {}
+            Err(error) => panic!("prepare: {error}"),
+        }
+        let store = DeterministicLocalSettingsStore::new();
+        let (next, _) = match transaction.persist(&store, &current, lock) {
+            Ok(value) => value,
+            Err(error) => panic!("persist: {error}"),
+        };
+        assert_eq!(
+            next.user()
+                .get(&spec.id)
+                .map(StoredSettingEntryV1::schema_version),
+            Some(7)
+        );
     }
 
     #[test]

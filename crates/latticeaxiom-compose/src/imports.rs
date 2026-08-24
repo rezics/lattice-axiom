@@ -288,6 +288,47 @@ impl SourceSnapshot {
         self.source_hash
     }
 
+    /// Projects this verified snapshot through one deterministic path predicate.
+    ///
+    /// The returned snapshot retains the exact source authority and file bytes,
+    /// while recomputing its aggregate byte count and canonical source-table
+    /// hash from only the selected rows. This is the shared primitive used by
+    /// package source-inclusion policy; callers do not need to reconstruct
+    /// private snapshot fields through serialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceSnapshotError`] if the input snapshot is invalid or the
+    /// selected canonical file table cannot be length-framed on this host.
+    pub fn select_files(
+        &self,
+        mut select: impl FnMut(&str) -> bool,
+    ) -> Result<Self, SourceSnapshotError> {
+        self.verify()?;
+        let files: BTreeMap<String, SourceFileSnapshot> = self
+            .files
+            .iter()
+            .filter(|(logical_path, _)| select(logical_path))
+            .map(|(logical_path, file)| (logical_path.clone(), file.clone()))
+            .collect();
+        let total_source_bytes = files.values().try_fold(0_u64, |total, file| {
+            total
+                .checked_add(file.receipt().byte_length())
+                .ok_or(SourceSnapshotError::SelectedSourceBytesOverflow)
+        })?;
+        let source_hash = hash_file_table(&snapshot_receipts(&files))
+            .map_err(|_| SourceSnapshotError::CanonicalTableTooLarge)?;
+        let selected = Self {
+            source_id: self.source_id.clone(),
+            root_kind: self.root_kind,
+            files,
+            total_source_bytes,
+            source_hash,
+        };
+        selected.verify()?;
+        Ok(selected)
+    }
+
     /// Resolves a root-relative path to immutable receipt and raw bytes.
     ///
     /// This applies the same lexical normalization and root-escape rejection
@@ -518,6 +559,32 @@ pub fn scan_source_snapshot(
     root: &AuthorizedRoot,
     limits: SourceScanLimits,
 ) -> Result<SourceSnapshot, SourceScanError> {
+    scan_source_snapshot_selected(root, limits, |_| true, |_| true)
+}
+
+/// Acquires only files selected by deterministic logical-path predicates.
+///
+/// `select_file` identifies retained regular files. `descend_directory` must
+/// return true for every directory that can contain a selected file. Entries
+/// rejected by both predicates are pruned before metadata inspection, file
+/// accounting, or byte reads. Root and retained path components still use the
+/// same link, reparse-point, collision, and canonical hashing gates as a full
+/// snapshot scan.
+///
+/// This is crate-visible so package manifest policy can drive acquisition
+/// without making closure predicates part of the public API.
+///
+/// # Errors
+///
+/// Returns [`SourceScanError`] for I/O failures, invalid retained paths,
+/// links or reparse points on retained paths, collisions, or retained-source
+/// budget violations.
+pub(crate) fn scan_source_snapshot_selected(
+    root: &AuthorizedRoot,
+    limits: SourceScanLimits,
+    select_file: impl Fn(&str) -> bool,
+    descend_directory: impl Fn(&str) -> bool,
+) -> Result<SourceSnapshot, SourceScanError> {
     reject_linked_path_components(root.path())?;
     let metadata = metadata_without_following(root.path(), "inspect authorized root")?;
     if is_link_or_reparse(&metadata) {
@@ -532,7 +599,7 @@ pub fn scan_source_snapshot(
     }
 
     let mut state = ScanState::new(limits);
-    state.visit_directory(root.path(), "")?;
+    state.visit_directory(root.path(), "", &select_file, &descend_directory)?;
     let receipts = snapshot_receipts(&state.files);
     let source_hash = hash_file_table(&receipts)?;
     Ok(SourceSnapshot {
@@ -571,11 +638,17 @@ impl ScanState {
         }
     }
 
-    fn visit_directory(
+    fn visit_directory<SelectFile, DescendDirectory>(
         &mut self,
         physical_directory: &Path,
         logical_parent: &str,
-    ) -> Result<(), SourceScanError> {
+        select_file: &SelectFile,
+        descend_directory: &DescendDirectory,
+    ) -> Result<(), SourceScanError>
+    where
+        SelectFile: Fn(&str) -> bool,
+        DescendDirectory: Fn(&str) -> bool,
+    {
         let directory = fs::read_dir(physical_directory).map_err(|error| SourceScanError::Io {
             operation: "enumerate directory",
             physical_path: physical_directory.to_path_buf(),
@@ -617,6 +690,11 @@ impl ScanState {
         for entry in entries {
             let logical_path = join_logical(logical_parent, &entry.canonical_name);
             let original_path = join_logical(logical_parent, &entry.original_name);
+            let select_entry_file = select_file(&logical_path);
+            let descend_entry_directory = descend_directory(&logical_path);
+            if !select_entry_file && !descend_entry_directory {
+                continue;
+            }
             self.register_path(&logical_path, &original_path)?;
 
             let metadata =
@@ -627,10 +705,17 @@ impl ScanState {
                 });
             }
             if metadata.is_dir() {
-                self.visit_directory(&entry.physical_path, &logical_path)?;
-            } else if metadata.is_file() {
+                if descend_entry_directory {
+                    self.visit_directory(
+                        &entry.physical_path,
+                        &logical_path,
+                        select_file,
+                        descend_directory,
+                    )?;
+                }
+            } else if metadata.is_file() && select_entry_file {
                 self.read_file(&entry.physical_path, logical_path, metadata.len())?;
-            } else {
+            } else if !metadata.is_file() {
                 return Err(SourceScanError::UnsupportedFileType {
                     physical_path: entry.physical_path,
                 });
@@ -1003,6 +1088,9 @@ pub enum SourceSnapshotError {
         /// SHA-256 digest computed from the retained bytes.
         actual_hash: CanonicalHash,
     },
+    /// A selected subset could not represent its aggregate bytes in `u64`.
+    #[error("selected source snapshot byte count overflowed")]
+    SelectedSourceBytesOverflow,
     /// Aggregate retained bytes did not match the snapshot receipt.
     #[error("source snapshot total-byte mismatch: receipt {receipt_bytes}, actual {actual_bytes}")]
     TotalSourceBytesMismatch {
@@ -1332,6 +1420,43 @@ mod tests {
         assert!(matches!(
             try_scan(&directory, limits(8, 5)),
             Err(SourceScanError::RootBytesLimitExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn selected_scan_prunes_target_before_charging_source_budgets() {
+        let directory = TestDirectory::new("selected-limits");
+        directory.write("src/lib.rs", b"code");
+        directory.write("target/cache/a.bin", b"excluded-a");
+        directory.write("target/cache/b.bin", b"excluded-b");
+        let root = AuthorizedRoot::new(
+            "latticeaxiom:source/test"
+                .parse()
+                .unwrap_or_else(|error| panic!("fixture source ID is invalid: {error}")),
+            AuthorizedRootKind::Test,
+            directory.path(),
+        )
+        .unwrap_or_else(|error| panic!("fixture root is invalid: {error}"));
+
+        let selected = scan_source_snapshot_selected(
+            &root,
+            limits(1, 4),
+            |logical_path| logical_path == "src/lib.rs",
+            |logical_path| logical_path == "src",
+        )
+        .unwrap_or_else(|error| panic!("selected scan must fit retained budgets: {error}"));
+        assert_eq!(selected.total_source_bytes(), 4);
+        assert_eq!(
+            selected
+                .files()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["src/lib.rs"]
+        );
+        assert!(matches!(
+            scan_source_snapshot(&root, limits(1, 4)),
+            Err(SourceScanError::RootFilesLimitExceeded { .. })
         ));
     }
 

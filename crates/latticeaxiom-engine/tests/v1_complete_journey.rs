@@ -29,7 +29,9 @@ use latticeaxiom_engine::{
     TransferCommandV1, TransferDirectionV1, VerifiedProductLockHash,
 };
 use latticeaxiom_gameplay::{BlockId, BlockPosition, ProcessId, WorkstationId};
-use latticeaxiom_launcher::{ChildExitKindV1, HostBuildReceipts, ReopenedFinalLockV1};
+use latticeaxiom_launcher::{
+    ChildExitKindV1, HostBuildReceipts, ReopenedFinalLockV1, SettingTransactionRevision,
+};
 use latticeaxiom_packages::{FilesystemCas, LOCAL_CATALOG_CAS_DIRECTORY};
 use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1};
 use latticeaxiom_start_ui::{
@@ -45,6 +47,8 @@ const FIXTURE_PATH: &str = concat!(
 );
 const SCHEMA_ID: &str = "latticeaxiom.v1-complete-journey.v1";
 const FIXED_TIMESTEP: Duration = Duration::from_nanos(1_000_000_000 / 60);
+// The GPU-free journey fixture does not install a user-settings journal.
+const EMPTY_SETTINGS_REVISION: SettingTransactionRevision = SettingTransactionRevision::new(0);
 const LOCK_COMMAND: &str = "cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap profiles/dev.toml";
 const REQUIRED_STEPS: [&str; 12] = [
     "create",
@@ -180,12 +184,17 @@ fn reopened_frozen_locks_bind_shell_and_game_without_resolving() {
         shell.product_lock_hash(),
         "shell and game locks must stay distinct replacement-process closures"
     );
+    let game_selects_shell = ProductionMemoryStart::lock_graph_selects_shell(game.images().graph())
+        .unwrap_or_else(|error| panic!("game process-role evidence: {error}"));
     assert!(
-        !ProductionMemoryStart::lock_graph_selects_shell(game.images().graph()),
+        !game_selects_shell,
         "the game lock must boot the world host, not a hidden Terrenia shell plugin list"
     );
+    let shell_selects_shell =
+        ProductionMemoryStart::lock_graph_selects_shell(shell.images().graph())
+            .unwrap_or_else(|error| panic!("shell process-role evidence: {error}"));
     assert!(
-        ProductionMemoryStart::lock_graph_selects_shell(shell.images().graph()),
+        shell_selects_shell,
         "the shell lock must select the package-driven front-end process"
     );
 }
@@ -526,7 +535,7 @@ fn complete_d10_journey_create_through_reopen() {
 
     start.pause_session(&mut instance).expect("pause");
     let result = start
-        .save_and_quit_durable(created, instance, &mut writer)
+        .save_and_quit_durable(created, instance, &mut writer, EMPTY_SETTINGS_REVISION)
         .expect("durable Save & Quit checkpoints");
     assert_eq!(result.report().exit_kind(), ChildExitKindV1::SaveAndQuit);
     assert!(result.report().last_durable_world().is_some());
@@ -534,7 +543,7 @@ fn complete_d10_journey_create_through_reopen() {
     assert_eq!(start.flow().shell().screen, ShellScreen::Home);
     assert_eq!(start.continue_world_id(), Some(created));
     let timeout = start
-        .on_shutdown_timeout(created, &mut writer)
+        .on_shutdown_timeout(created, &mut writer, EMPTY_SETTINGS_REVISION)
         .expect("shutdown timeout recovers the latest durable world");
     assert_eq!(timeout.exit_kind(), ChildExitKindV1::ShutdownTimeout);
     assert!(!timeout.exit_kind().is_normal_handoff());

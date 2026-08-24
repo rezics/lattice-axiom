@@ -12,26 +12,30 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use latticeaxiom_core::{
-    CanonicalHash, CanonicalJsonError, CapabilityId, PackageName, SchemaId, SourceId, StableId,
-    TargetTriple, canonical_json_bytes, canonical_json_hash,
+    CanonicalHash, CanonicalJsonError, CanonicalLogicalPath, CapabilityId, PackageName, SchemaId,
+    SourceId, StableId, TargetTriple, canonical_json_bytes, canonical_json_hash,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 use crate::{
-    AuthorizedRoot, AuthorizedRootKind, BootstrapManifestError, BootstrapSourceProviderV1,
-    COMPOSITION_BOOTSTRAP_FILE_NAME, CompositionBootstrapV1, LOCK_SCHEMA_VERSION, LockActionMode,
-    LockV1, LockedAliasEdgeV1, LockedDependency, LockedGameGraph, LockedPackage,
-    ManifestRealizationV1, NickelEvaluationLimits, ObservabilityCatalog,
-    PACKAGE_SOURCE_MANIFEST_FILE_NAME, PRODUCT_LOCK_FILE_NAME, PRODUCT_LOCK_PRODUCER_MACHINE,
-    PackageAlias, PackageDomain, PackageSourceManifestV1, ProductLockDraftV1, ProductLockError,
-    ProductLockHostReceipts, ProductLockObjects, ProductLockProducerV1, ProductLockReceiptKind,
-    RealizationKind, RegistrationImage, ResolutionStep, RuntimeBinding, RuntimeImage,
+    ArtifactIntent, AuthorizedRoot, AuthorizedRootKind, BootstrapManifestError,
+    BootstrapSourceProviderV1, COMPOSITION_BOOTSTRAP_FILE_NAME, CompositionBootstrapV1,
+    LOCK_SCHEMA_VERSION, LockActionMode, LockV1, LockedAliasEdgeV1, LockedDependency,
+    LockedGameGraph, LockedPackage, ManifestRealizationV1, NickelEvaluationLimits,
+    ObservabilityCatalog, PACKAGE_SOURCE_MANIFEST_FILE_NAME, PRODUCT_LOCK_FILE_NAME,
+    PRODUCT_LOCK_PRODUCER_MACHINE, PackageAlias, PackageDomain, PackageSourceManifestV1,
+    ProductLockDraftV1, ProductLockError, ProductLockHostReceipts, ProductLockObjects,
+    ProductLockProducerV1, ProductLockReceiptKind, RealizationId, RealizationKind,
+    RealizedDataRootV1, RegistrationImage, ResolutionStep, RuntimeBinding, RuntimeImage,
     SemanticCatalog, SettingsCatalog, SourceScanError, SourceScanLimits, SourceSnapshot,
     TargetPackageRealizationV1, TargetRealizationLockV1, controller_host_target,
-    persist_product_lock, reopen_product_lock, scan_source_snapshot, verify_product_lock,
+    persist_product_lock, reopen_product_lock, scan_included_source_snapshot, scan_source_snapshot,
+    verify_product_lock,
 };
 
 /// Directory that receives the local catalog index and CAS objects.
@@ -42,6 +46,8 @@ pub const CLI_CAS_DIRECTORY: &str = "cas";
 
 const CAS_SOURCE_TREE: &str = "source-tree";
 const CAS_PACKAGE_MANIFEST: &str = "package-manifest";
+static NEXT_SOURCE_BUILD_STAGING_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
 const CAS_REALIZED_ARTIFACT: &str = "realized-artifact";
 const CLI_TOOLCHAIN_DOMAIN: &[u8] = b"latticeaxiom:cli-lock-toolchain/r0";
 const PACKAGE_SCAN_LIMITS: SourceScanLimits = SourceScanLimits {
@@ -394,7 +400,8 @@ pub fn lock_workspace(request: &LockRequest) -> Result<(LockV1, CliLockReport), 
 
     let packed = pack_declared_path_sources(&workspace_root, &bootstrap, &catalog_root)?;
     let selected = select_closure(&bootstrap, &packed)?;
-    let lock = seal_path_lock(request, &bootstrap, &selected)?;
+    let realized = realize_selected_packages(request, &bootstrap, &selected, &catalog_root)?;
+    let lock = seal_path_lock(request, &bootstrap, &selected, &realized)?;
     persist_product_lock(&lock_path, &lock, LockActionMode::Offline)?;
     let reopened = verify_lock_at(&lock_path, &catalog_root)?;
     Ok((
@@ -474,13 +481,33 @@ pub fn worker_command(worker: PathBuf) -> Result<crate::WorkerCommand, CliError>
     crate::WorkerCommand::new(worker).map_err(|error| CliError::supervisor(&error))
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactBuildReceiptV1 {
+    package: PackageName,
+    source_hash: CanonicalHash,
+    realization_id: RealizationId,
+    realization_kind: RealizationKind,
+    target: TargetTriple,
+    requested_toolchain: CanonicalHash,
+    producer_kind: &'static str,
+    cargo_version_hash: Option<CanonicalHash>,
+    rustc_version_hash: Option<CanonicalHash>,
+    producer_configuration_hash: Option<CanonicalHash>,
+    artifact_hash: CanonicalHash,
+}
+
+struct RealizedPackage {
+    bytes: Vec<u8>,
+    receipt: ArtifactBuildReceiptV1,
+}
+
 struct PackedPackage {
     locator: String,
     manifest: PackageSourceManifestV1,
     snapshot: SourceSnapshot,
     manifest_bytes: Vec<u8>,
     source_bytes: Vec<u8>,
-    artifact_bytes: Vec<u8>,
 }
 
 fn load_bootstrap(path: &Path) -> Result<CompositionBootstrapV1, CliError> {
@@ -512,7 +539,6 @@ fn pack_declared_path_sources(
         let source_bytes = canonical_json_bytes(&package.snapshot)?;
         put_cas(&cas_root, CAS_PACKAGE_MANIFEST, &manifest_bytes)?;
         put_cas(&cas_root, CAS_SOURCE_TREE, &source_bytes)?;
-        put_cas(&cas_root, CAS_REALIZED_ARTIFACT, &source_bytes)?;
         packed.insert(
             source.package().clone(),
             PackedPackage {
@@ -521,12 +547,8 @@ fn pack_declared_path_sources(
                 snapshot: package.snapshot,
                 manifest_bytes,
                 source_bytes,
-                artifact_bytes: Vec::new(),
             },
         );
-    }
-    for package in packed.values_mut() {
-        package.artifact_bytes.clone_from(&package.source_bytes);
     }
     Ok(packed)
 }
@@ -564,7 +586,42 @@ fn check_path_package(root: &Path) -> Result<CheckedPackage, CliError> {
     let manifest = PackageSourceManifestV1::from_toml_str(&manifest_text)?;
     let source_id = catalog_source_id(&manifest.name, &manifest.version.to_string())?;
     let authorized = AuthorizedRoot::new(source_id, AuthorizedRootKind::Package, absolute)?;
-    let snapshot = scan_source_snapshot(&authorized, PACKAGE_SCAN_LIMITS)?;
+    let snapshot = scan_included_source_snapshot(
+        &authorized,
+        PACKAGE_SCAN_LIMITS,
+        &manifest.source_inclusion,
+    )?;
+    for included in &manifest.source_inclusion.include {
+        let prefix = included.as_str();
+        let present = snapshot.files().keys().any(|logical_path| {
+            logical_path == prefix
+                || logical_path.starts_with(prefix)
+                    && logical_path
+                        .as_bytes()
+                        .get(prefix.len())
+                        .is_some_and(|byte| *byte == b'/')
+        });
+        if !present {
+            return Err(CliError::lock(format!(
+                "package {} source inclusion path `{included}` is missing, empty, or fully excluded",
+                manifest.name
+            )));
+        }
+    }
+    if snapshot.files().is_empty() {
+        return Err(CliError::lock(format!(
+            "package {} source inclusion selected no files",
+            manifest.name
+        )));
+    }
+    for entrypoint in manifest.nickel_public_entrypoints.values() {
+        snapshot.resolve_path(entrypoint.as_str()).map_err(|error| {
+            CliError::lock(format!(
+                "package {} Nickel entrypoint `{entrypoint}` is outside its source inclusion: {error}",
+                manifest.name
+            ))
+        })?;
+    }
     Ok(CheckedPackage { manifest, snapshot })
 }
 
@@ -630,6 +687,759 @@ fn select_closure<'a>(
     Ok(selected)
 }
 
+struct RealizedPayload {
+    bytes: Vec<u8>,
+    producer_kind: &'static str,
+    cargo_version_hash: Option<CanonicalHash>,
+    rustc_version_hash: Option<CanonicalHash>,
+    producer_configuration_hash: Option<CanonicalHash>,
+}
+
+fn realize_selected_packages(
+    request: &LockRequest,
+    bootstrap: &CompositionBootstrapV1,
+    selected: &BTreeMap<PackageName, &PackedPackage>,
+    catalog_root: &Path,
+) -> Result<BTreeMap<PackageName, RealizedPackage>, CliError> {
+    let cas_root = catalog_root.join(CLI_CAS_DIRECTORY);
+    let mut realized = BTreeMap::new();
+    for (name, package) in selected {
+        let realization = select_realization(
+            &package.manifest,
+            &bootstrap.realization_policy,
+            &bootstrap.projection_domains,
+            &request.target,
+        )?;
+        let payload = realize_package_payload(package, realization, &request.target, catalog_root)?;
+        let artifact_hash = put_cas(&cas_root, CAS_REALIZED_ARTIFACT, &payload.bytes)?;
+        realized.insert(
+            name.clone(),
+            RealizedPackage {
+                bytes: payload.bytes,
+                receipt: ArtifactBuildReceiptV1 {
+                    package: name.clone(),
+                    source_hash: package.snapshot.source_hash(),
+                    realization_id: realization.id.clone(),
+                    realization_kind: realization.kind,
+                    target: request.target.clone(),
+                    requested_toolchain: request.toolchain,
+                    producer_kind: payload.producer_kind,
+                    cargo_version_hash: payload.cargo_version_hash,
+                    rustc_version_hash: payload.rustc_version_hash,
+                    producer_configuration_hash: payload.producer_configuration_hash,
+                    artifact_hash,
+                },
+            },
+        );
+    }
+    Ok(realized)
+}
+
+fn realize_package_payload(
+    package: &PackedPackage,
+    realization: &ManifestRealizationV1,
+    target: &TargetTriple,
+    catalog_root: &Path,
+) -> Result<RealizedPayload, CliError> {
+    match &realization.artifact {
+        ArtifactIntent::SourceBuild => {
+            source_build_payload(package, realization, target, catalog_root)
+        }
+        ArtifactIntent::LocalPrebuilt { path } => {
+            let file = package.snapshot.resolve_path(path.as_str()).map_err(|error| {
+                CliError::lock(format!(
+                    "package {} prebuilt artifact `{path}` is outside its frozen source inclusion: {error}",
+                    package.manifest.name
+                ))
+            })?;
+            Ok(RealizedPayload {
+                bytes: file.bytes().to_vec(),
+                producer_kind: "local-prebuilt",
+                cargo_version_hash: None,
+                rustc_version_hash: None,
+                producer_configuration_hash: None,
+            })
+        }
+        ArtifactIntent::DataRoot { path } => data_root_payload(package, path),
+    }
+}
+
+fn data_root_payload(
+    package: &PackedPackage,
+    root: &CanonicalLogicalPath,
+) -> Result<RealizedPayload, CliError> {
+    let mut files = BTreeMap::new();
+    let root_path = root.as_str();
+    for (logical_path, file) in package.snapshot.files() {
+        if logical_path == root_path
+            || logical_path.starts_with(root_path)
+                && logical_path
+                    .as_bytes()
+                    .get(root_path.len())
+                    .is_some_and(|byte| *byte == b'/')
+        {
+            files.insert(logical_path.clone(), file.bytes().to_vec());
+        }
+    }
+    if files.is_empty() {
+        return Err(CliError::lock(format!(
+            "package {} data artifact root `{root}` selected no frozen source files",
+            package.manifest.name
+        )));
+    }
+    let artifact =
+        RealizedDataRootV1::from_file_bytes(package.manifest.name.clone(), root.clone(), files)
+            .map_err(|error| {
+                CliError::lock(format!(
+                    "package {} data artifact root `{root}` is invalid: {error}",
+                    package.manifest.name
+                ))
+            })?;
+    Ok(RealizedPayload {
+        bytes: artifact.canonical_bytes().map_err(|error| {
+            CliError::lock(format!(
+                "package {} data artifact encoding failed: {error}",
+                package.manifest.name
+            ))
+        })?,
+        producer_kind: "data-root",
+        cargo_version_hash: None,
+        rustc_version_hash: None,
+        producer_configuration_hash: None,
+    })
+}
+
+const SOURCE_BUILD_PATH_REMAP_DESTINATION: &str = "/latticeaxiom/source-build";
+const SOURCE_BUILD_RUST_ENVIRONMENT_POLICY: &str = "latticeaxiom:source-build-rust-environment/r0";
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct SourceBuildProducerConfigurationV1 {
+    schema_version: u32,
+    path_remap_destination: &'static str,
+    rust_environment_policy: &'static str,
+}
+
+#[derive(Deserialize)]
+struct CargoManifestV1 {
+    package: CargoManifestPackageV1,
+}
+
+#[derive(Deserialize)]
+struct CargoManifestPackageV1 {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CargoMetadataV1 {
+    packages: Vec<CargoMetadataPackageV1>,
+    workspace_members: Vec<String>,
+    workspace_root: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct CargoMetadataPackageV1 {
+    id: String,
+    name: String,
+    source: Option<String>,
+    manifest_path: PathBuf,
+    targets: Vec<CargoJsonTarget>,
+}
+
+#[derive(Deserialize)]
+struct CargoJsonMessage {
+    reason: String,
+    #[serde(default)]
+    package_id: String,
+    #[serde(default)]
+    target: Option<CargoJsonTarget>,
+    #[serde(default)]
+    filenames: Vec<PathBuf>,
+}
+
+#[derive(Deserialize, Eq, PartialEq)]
+struct CargoJsonTarget {
+    name: String,
+    kind: Vec<String>,
+    crate_types: Vec<String>,
+    src_path: PathBuf,
+}
+
+#[allow(clippy::too_many_lines)]
+/// One uniquely-owned `SourceBuild` tree. The tree is always ephemeral: only
+/// the verified artifact bytes leave it, through the caller's CAS publish.
+struct SourceBuildStagingDirectory {
+    parent: PathBuf,
+    canonical_parent: PathBuf,
+    path: PathBuf,
+    cleaned: bool,
+}
+
+impl SourceBuildStagingDirectory {
+    fn create(parent: &Path) -> Result<Self, CliError> {
+        const MAXIMUM_CREATE_ATTEMPTS: usize = 1_024;
+
+        fs::create_dir_all(parent).map_err(|source| CliError::io(parent, &source))?;
+        let parent = std::path::absolute(parent).map_err(|source| CliError::io(parent, &source))?;
+        let metadata =
+            fs::symlink_metadata(&parent).map_err(|source| CliError::io(&parent, &source))?;
+        if !metadata.is_dir() || source_build_is_link_or_reparse(&metadata) {
+            return Err(CliError::lock(format!(
+                "source build staging parent is not a regular directory: {}",
+                parent.display()
+            )));
+        }
+        let canonical_parent =
+            fs::canonicalize(&parent).map_err(|source| CliError::io(&parent, &source))?;
+
+        for _ in 0..MAXIMUM_CREATE_ATTEMPTS {
+            let serial = NEXT_SOURCE_BUILD_STAGING_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!(".staging-{}-{serial}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    return Ok(Self {
+                        parent,
+                        canonical_parent,
+                        path,
+                        cleaned: false,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(CliError::io(&path, &error)),
+            }
+        }
+        Err(CliError::lock(format!(
+            "source build could not allocate a unique staging directory below {}",
+            parent.display()
+        )))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn cleanup(mut self) -> Result<(), CliError> {
+        if !safe_source_build_staging_tree(&self.parent, &self.canonical_parent, &self.path) {
+            return Err(CliError::lock(format!(
+                "source build refused to clean an unsafe staging tree: {}",
+                self.path.display()
+            )));
+        }
+        fs::remove_dir_all(&self.path).map_err(|source| CliError::io(&self.path, &source))?;
+        self.cleaned = true;
+        Ok(())
+    }
+}
+
+impl Drop for SourceBuildStagingDirectory {
+    fn drop(&mut self) {
+        if !self.cleaned
+            && safe_source_build_staging_tree(&self.parent, &self.canonical_parent, &self.path)
+        {
+            let _ignored = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn source_build_payload(
+    package: &PackedPackage,
+    realization: &ManifestRealizationV1,
+    target: &TargetTriple,
+    catalog_root: &Path,
+) -> Result<RealizedPayload, CliError> {
+    let cargo_manifest_file = package.snapshot.resolve_path("Cargo.toml").map_err(|error| {
+        CliError::lock(format!(
+            "package {} SourceBuild must include Cargo.toml in its frozen source snapshot: {error}",
+            package.manifest.name
+        ))
+    })?;
+    let cargo_manifest: CargoManifestV1 = toml::from_str(
+        std::str::from_utf8(cargo_manifest_file.bytes()).map_err(|error| {
+            CliError::lock(format!(
+                "package {} Cargo.toml is not UTF-8: {error}",
+                package.manifest.name
+            ))
+        })?,
+    )
+    .map_err(|error| {
+        CliError::lock(format!(
+            "package {} Cargo.toml identity is invalid: {error}",
+            package.manifest.name
+        ))
+    })?;
+    if !package
+        .snapshot
+        .files()
+        .keys()
+        .any(|logical_path| logical_path.starts_with("src/"))
+    {
+        return Err(CliError::lock(format!(
+            "package {} SourceBuild must include package-local src files",
+            package.manifest.name
+        )));
+    }
+    let extension = match realization.kind {
+        RealizationKind::NativeStatic => "rlib",
+        RealizationKind::PortableNative if target.as_str().contains("windows") => "dll",
+        RealizationKind::PortableNative if target.as_str().contains("apple") => "dylib",
+        RealizationKind::PortableNative => "so",
+        unsupported => {
+            return Err(CliError::lock(format!(
+                "package {} SourceBuild does not yet support {unsupported:?} artifact production",
+                package.manifest.name
+            )));
+        }
+    };
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let cargo_version_hash = command_version_hash(&cargo, "-Vv")?;
+    let rustc_version_hash = command_version_hash(&rustc, "-vV")?;
+    let build_root = catalog_root.join("build");
+    let staging = SourceBuildStagingDirectory::create(&build_root)?;
+    let staging_path = staging.path().to_str().ok_or_else(|| {
+        CliError::lock(format!(
+            "source build staging path is not Unicode: {}",
+            staging.path().display()
+        ))
+    })?;
+    let encoded_rustflags =
+        format!("--remap-path-prefix={staging_path}={SOURCE_BUILD_PATH_REMAP_DESTINATION}");
+    let producer_configuration_hash = canonical_json_hash(&SourceBuildProducerConfigurationV1 {
+        schema_version: 1,
+        path_remap_destination: SOURCE_BUILD_PATH_REMAP_DESTINATION,
+        rust_environment_policy: SOURCE_BUILD_RUST_ENVIRONMENT_POLICY,
+    })?;
+
+    let staged_root = staging.path().join("source");
+    materialize_source_snapshot(&package.snapshot, &staged_root)?;
+    let target_dir =
+        create_source_build_target_directory(staging.path(), target, realization.id.as_str())?;
+    let manifest_path = staged_root.join("Cargo.toml");
+    let expected_crate_type = match realization.kind {
+        RealizationKind::NativeStatic => "rlib",
+        RealizationKind::PortableNative => "cdylib",
+        _ => unreachable!("unsupported kinds returned before Cargo execution"),
+    };
+    let metadata = load_cargo_metadata(&cargo, &manifest_path, &staged_root)?;
+    let canonical_manifest_path =
+        canonical_source_build_regular_file(&manifest_path, "primary Cargo manifest")?;
+    let mut primary_packages = metadata.packages.iter().filter(|candidate| {
+        candidate.name == cargo_manifest.package.name
+            && metadata
+                .workspace_members
+                .iter()
+                .any(|member| member == &candidate.id)
+            && fs::canonicalize(&candidate.manifest_path)
+                .is_ok_and(|path| path == canonical_manifest_path)
+    });
+    let primary_package = primary_packages.next().ok_or_else(|| {
+        CliError::lock(format!(
+            "package {} Cargo metadata did not identify its primary workspace package",
+            package.manifest.name
+        ))
+    })?;
+    if primary_packages.next().is_some() {
+        return Err(CliError::lock(format!(
+            "package {} Cargo metadata identified multiple primary packages",
+            package.manifest.name
+        )));
+    }
+    let expected_target = primary_package
+        .targets
+        .iter()
+        .find(|cargo_target| cargo_target_supports(cargo_target, expected_crate_type))
+        .ok_or_else(|| {
+            CliError::lock(format!(
+                "package {} Cargo metadata declares no {expected_crate_type} library target",
+                package.manifest.name
+            ))
+        })?;
+    let output = Command::new(&cargo)
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .arg("--package")
+        .arg(&primary_package.name)
+        .arg("--lib")
+        .arg("--release")
+        .arg("--frozen")
+        .arg("--target")
+        .arg(target.as_str())
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .arg("--message-format=json-render-diagnostics")
+        .current_dir(&staged_root)
+        .env("RUSTC", &rustc)
+        .env_remove("RUSTFLAGS")
+        .env("CARGO_ENCODED_RUSTFLAGS", &encoded_rustflags)
+        .env("CARGO_INCREMENTAL", "0")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .output()
+        .map_err(|source| CliError::io(&manifest_path, &source))?;
+    if !output.status.success() {
+        return Err(CliError::lock(format!(
+            "package {} SourceBuild failed: {}",
+            package.manifest.name,
+            bounded_diagnostic(&output.stderr)
+        )));
+    }
+    let artifact_path = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<CargoJsonMessage>(line).ok())
+        .filter(|message| {
+            message.reason == "compiler-artifact"
+                && message.package_id == primary_package.id
+                && message.target.as_ref() == Some(expected_target)
+        })
+        .flat_map(|message| message.filenames)
+        .find(|path| path.extension().is_some_and(|found| found == extension))
+        .ok_or_else(|| {
+            CliError::lock(format!(
+                "package {} SourceBuild emitted no .{extension} library for {target}",
+                package.manifest.name
+            ))
+        })?;
+    let bytes =
+        read_source_build_artifact(staging.path(), &staged_root, &target_dir, &artifact_path)?;
+    verify_materialized_source_snapshot(&package.snapshot, &staged_root)?;
+    let payload = RealizedPayload {
+        bytes,
+        producer_kind: "cargo-library-transitional",
+        cargo_version_hash: Some(cargo_version_hash),
+        rustc_version_hash: Some(rustc_version_hash),
+        producer_configuration_hash: Some(producer_configuration_hash),
+    };
+    staging.cleanup()?;
+    Ok(payload)
+}
+
+fn load_cargo_metadata(
+    cargo: &OsString,
+    manifest_path: &Path,
+    staged_root: &Path,
+) -> Result<CargoMetadataV1, CliError> {
+    let output = Command::new(cargo)
+        .arg("metadata")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .arg("--format-version")
+        .arg("1")
+        .arg("--frozen")
+        .arg("--offline")
+        .current_dir(staged_root)
+        .output()
+        .map_err(|source| CliError::io(manifest_path, &source))?;
+    if !output.status.success() {
+        return Err(CliError::lock(format!(
+            "Cargo metadata failed for staged package: {}",
+            bounded_diagnostic(&output.stderr)
+        )));
+    }
+    let metadata: CargoMetadataV1 = serde_json::from_slice(&output.stdout).map_err(|error| {
+        CliError::lock(format!(
+            "Cargo metadata emitted an invalid primary-package receipt: {error}"
+        ))
+    })?;
+    verify_source_build_metadata_containment(&metadata, manifest_path, staged_root)?;
+    Ok(metadata)
+}
+
+fn cargo_target_supports(target: &CargoJsonTarget, expected_crate_type: &str) -> bool {
+    target
+        .crate_types
+        .iter()
+        .any(|crate_type| crate_type == expected_crate_type)
+        && target
+            .kind
+            .iter()
+            .any(|kind| kind == "lib" || kind == expected_crate_type)
+}
+
+fn verify_source_build_metadata_containment(
+    metadata: &CargoMetadataV1,
+    manifest_path: &Path,
+    staged_root: &Path,
+) -> Result<(), CliError> {
+    let root_metadata =
+        fs::symlink_metadata(staged_root).map_err(|source| CliError::io(staged_root, &source))?;
+    if !root_metadata.is_dir() || source_build_is_link_or_reparse(&root_metadata) {
+        return Err(CliError::lock(format!(
+            "source build root is not a regular unlinked directory: {}",
+            staged_root.display()
+        )));
+    }
+    let canonical_root =
+        fs::canonicalize(staged_root).map_err(|source| CliError::io(staged_root, &source))?;
+    let canonical_workspace_root = fs::canonicalize(&metadata.workspace_root)
+        .map_err(|source| CliError::io(&metadata.workspace_root, &source))?;
+    if canonical_workspace_root != canonical_root {
+        return Err(CliError::lock(format!(
+            "Cargo metadata workspace root {} escaped staged source root {}",
+            canonical_workspace_root.display(),
+            canonical_root.display()
+        )));
+    }
+
+    let canonical_manifest =
+        canonical_source_build_regular_file(manifest_path, "primary Cargo manifest")?;
+    require_source_build_path_below(
+        &canonical_root,
+        &canonical_manifest,
+        "primary Cargo manifest",
+    )?;
+
+    for package in &metadata.packages {
+        if package.source.is_some() {
+            continue;
+        }
+        let manifest =
+            canonical_source_build_regular_file(&package.manifest_path, "local Cargo manifest")?;
+        require_source_build_path_below(&canonical_root, &manifest, "local Cargo manifest")?;
+        for target in &package.targets {
+            let source =
+                canonical_source_build_regular_file(&target.src_path, "local Cargo target source")?;
+            require_source_build_path_below(&canonical_root, &source, "local Cargo target source")?;
+        }
+    }
+    Ok(())
+}
+
+fn create_source_build_target_directory(
+    staging_root: &Path,
+    target: &TargetTriple,
+    realization_id: &str,
+) -> Result<PathBuf, CliError> {
+    let target_root = staging_root.join("target");
+    fs::create_dir(&target_root).map_err(|source| CliError::io(&target_root, &source))?;
+    let target_triple_root = target_root.join(target.as_str());
+    fs::create_dir(&target_triple_root)
+        .map_err(|source| CliError::io(&target_triple_root, &source))?;
+    let target_dir = target_triple_root.join(realization_id);
+    fs::create_dir(&target_dir).map_err(|source| CliError::io(&target_dir, &source))?;
+    Ok(target_dir)
+}
+
+fn read_source_build_artifact(
+    staging_root: &Path,
+    working_directory: &Path,
+    target_dir: &Path,
+    cargo_path: &Path,
+) -> Result<Vec<u8>, CliError> {
+    let candidate = if cargo_path.is_absolute() {
+        cargo_path.to_path_buf()
+    } else {
+        working_directory.join(cargo_path)
+    };
+    let metadata =
+        fs::symlink_metadata(&candidate).map_err(|source| CliError::io(&candidate, &source))?;
+    if !metadata.is_file() || source_build_is_link_or_reparse(&metadata) {
+        return Err(CliError::lock(format!(
+            "Cargo artifact is not a regular unlinked file: {}",
+            candidate.display()
+        )));
+    }
+    let target_metadata =
+        fs::symlink_metadata(target_dir).map_err(|source| CliError::io(target_dir, &source))?;
+    if !target_metadata.is_dir() || source_build_is_link_or_reparse(&target_metadata) {
+        return Err(CliError::lock(format!(
+            "Cargo target root is not a regular unlinked directory: {}",
+            target_dir.display()
+        )));
+    }
+    let canonical_staging =
+        fs::canonicalize(staging_root).map_err(|source| CliError::io(staging_root, &source))?;
+    let canonical_target =
+        fs::canonicalize(target_dir).map_err(|source| CliError::io(target_dir, &source))?;
+    require_source_build_path_below(&canonical_staging, &canonical_target, "Cargo target root")?;
+    let canonical_artifact =
+        fs::canonicalize(&candidate).map_err(|source| CliError::io(&candidate, &source))?;
+    require_source_build_path_below(&canonical_target, &canonical_artifact, "Cargo artifact")?;
+
+    let mut artifact = File::open(&canonical_artifact)
+        .map_err(|source| CliError::io(&canonical_artifact, &source))?;
+    let opened_metadata = artifact
+        .metadata()
+        .map_err(|source| CliError::io(&canonical_artifact, &source))?;
+    if !opened_metadata.is_file() {
+        return Err(CliError::lock(format!(
+            "opened Cargo artifact is not a regular file: {}",
+            canonical_artifact.display()
+        )));
+    }
+    let mut bytes = Vec::new();
+    artifact
+        .read_to_end(&mut bytes)
+        .map_err(|source| CliError::io(&canonical_artifact, &source))?;
+    Ok(bytes)
+}
+
+fn canonical_source_build_regular_file(path: &Path, label: &str) -> Result<PathBuf, CliError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| CliError::io(path, &source))?;
+    if !metadata.is_file() || source_build_is_link_or_reparse(&metadata) {
+        return Err(CliError::lock(format!(
+            "{label} is not a regular unlinked file: {}",
+            path.display()
+        )));
+    }
+    fs::canonicalize(path).map_err(|source| CliError::io(path, &source))
+}
+
+fn require_source_build_path_below(root: &Path, path: &Path, label: &str) -> Result<(), CliError> {
+    if path != root && path.starts_with(root) {
+        Ok(())
+    } else {
+        Err(CliError::lock(format!(
+            "{label} {} escaped source build root {}",
+            path.display(),
+            root.display()
+        )))
+    }
+}
+
+fn materialize_source_snapshot(snapshot: &SourceSnapshot, dest: &Path) -> Result<(), CliError> {
+    fs::create_dir(dest).map_err(|error| CliError::io(dest, &error))?;
+    for (logical_path, source) in snapshot.files() {
+        let path = join_logical(dest, logical_path);
+        let Some(parent) = path.parent() else {
+            return Err(CliError::lock(format!(
+                "frozen source path `{logical_path}` has no parent"
+            )));
+        };
+        fs::create_dir_all(parent).map_err(|error| CliError::io(parent, &error))?;
+        let mut file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| CliError::io(&path, &error))?;
+        file.write_all(source.bytes())
+            .map_err(|error| CliError::io(&path, &error))?;
+        file.sync_all()
+            .map_err(|error| CliError::io(&path, &error))?;
+    }
+    verify_materialized_source_snapshot(snapshot, dest)
+}
+
+fn verify_materialized_source_snapshot(
+    snapshot: &SourceSnapshot,
+    dest: &Path,
+) -> Result<(), CliError> {
+    let metadata = fs::symlink_metadata(dest).map_err(|error| CliError::io(dest, &error))?;
+    if !metadata.is_dir() || source_build_is_link_or_reparse(&metadata) {
+        return Err(CliError::lock(format!(
+            "source build staging root is not a regular directory: {}",
+            dest.display()
+        )));
+    }
+    let authorized = AuthorizedRoot::new(
+        snapshot.source_id().clone(),
+        AuthorizedRootKind::Package,
+        dest.to_path_buf(),
+    )?;
+    let staged = scan_source_snapshot(&authorized, PACKAGE_SCAN_LIMITS)?;
+    if &staged != snapshot {
+        return Err(CliError::lock(format!(
+            "source build staging root {} does not exactly match frozen source {}",
+            dest.display(),
+            snapshot.source_hash()
+        )));
+    }
+    Ok(())
+}
+
+fn safe_source_build_staging_tree(parent: &Path, canonical_parent: &Path, path: &Path) -> bool {
+    if path.parent() != Some(parent)
+        || !path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|name| name.starts_with(".staging-"))
+    {
+        return false;
+    }
+    let Ok(parent_metadata) = fs::symlink_metadata(parent) else {
+        return false;
+    };
+    if !parent_metadata.is_dir() || source_build_is_link_or_reparse(&parent_metadata) {
+        return false;
+    }
+    let Ok(resolved_parent) = fs::canonicalize(parent) else {
+        return false;
+    };
+    if resolved_parent != canonical_parent {
+        return false;
+    }
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    metadata.is_dir()
+        && !source_build_is_link_or_reparse(&metadata)
+        && source_build_tree_contains_only_unlinked_entries(path)
+}
+
+fn source_build_tree_contains_only_unlinked_entries(directory: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            return false;
+        };
+        if source_build_is_link_or_reparse(&metadata) {
+            return false;
+        }
+        if metadata.is_dir() {
+            if !source_build_tree_contains_only_unlinked_entries(&path) {
+                return false;
+            }
+        } else if !metadata.is_file() {
+            return false;
+        }
+    }
+    true
+}
+
+fn source_build_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn command_version_hash(program: &OsString, flag: &str) -> Result<CanonicalHash, CliError> {
+    let output = Command::new(program)
+        .arg(flag)
+        .output()
+        .map_err(|source| CliError::io(Path::new(program), &source))?;
+    if !output.status.success() {
+        return Err(CliError::lock(format!(
+            "build producer `{}` rejected {flag}: {}",
+            program.to_string_lossy(),
+            bounded_diagnostic(&output.stderr)
+        )));
+    }
+    Ok(CanonicalHash::digest(output.stdout))
+}
+
+fn bounded_diagnostic(bytes: &[u8]) -> String {
+    const MAXIMUM_DIAGNOSTIC_BYTES: usize = 8 * 1_024;
+    String::from_utf8_lossy(&bytes[..bytes.len().min(MAXIMUM_DIAGNOSTIC_BYTES)]).into_owned()
+}
+
 fn domains_overlap(left: &BTreeSet<PackageDomain>, right: &BTreeSet<PackageDomain>) -> bool {
     left.iter().any(|domain| right.contains(domain))
 }
@@ -646,8 +1456,9 @@ fn seal_path_lock(
     request: &LockRequest,
     bootstrap: &CompositionBootstrapV1,
     selected: &BTreeMap<PackageName, &PackedPackage>,
+    realized: &BTreeMap<PackageName, RealizedPackage>,
 ) -> Result<LockV1, CliError> {
-    let selected_graph = selected_lock_graph(bootstrap, selected)?;
+    let selected_graph = selected_lock_graph(bootstrap, selected, realized, &request.target)?;
     let mut graph = LockedGameGraph {
         schema_version: LOCK_SCHEMA_VERSION,
         composition_hash: bootstrap.canonical_hash()?,
@@ -676,13 +1487,19 @@ fn seal_path_lock(
     })?;
     let registration_semantic_hash = canonical_json_hash(&registration_image.semantics)?;
     let runtime_image_fingerprint = canonical_json_hash(&runtime_image)?;
+    let build_intent_hash = canonical_json_hash(
+        &realized
+            .values()
+            .map(|row| &row.receipt)
+            .collect::<Vec<_>>(),
+    )?;
     let realizations = BTreeMap::from([(
         request.target.clone(),
         TargetRealizationLockV1 {
             projection: bootstrap.projection,
             target: request.target.clone(),
             toolchain: request.toolchain,
-            build_intent_hash: CanonicalHash::digest(b"build-intent"),
+            build_intent_hash,
             packages: target_packages(&graph),
             engine_build_id: None,
             registration_image_hash: registration_image.image_hash,
@@ -712,6 +1529,8 @@ fn seal_path_lock(
 fn selected_lock_graph(
     bootstrap: &CompositionBootstrapV1,
     selected: &BTreeMap<PackageName, &PackedPackage>,
+    realized: &BTreeMap<PackageName, RealizedPackage>,
+    target: &TargetTriple,
 ) -> Result<SelectedLockGraph, CliError> {
     let mut packages = BTreeMap::new();
     let mut source_objects = BTreeMap::new();
@@ -723,8 +1542,20 @@ fn selected_lock_graph(
         });
     }
     for (name, packed) in selected {
-        let (locked, aliases) =
-            locked_package_from_selected(name, packed, bootstrap, selected, &mut explanation)?;
+        let artifact = realized.get(name).ok_or_else(|| {
+            CliError::lock(format!(
+                "selected package {name} has no realization artifact"
+            ))
+        })?;
+        let (locked, aliases) = locked_package_from_selected(
+            name,
+            packed,
+            artifact,
+            bootstrap,
+            selected,
+            target,
+            &mut explanation,
+        )?;
         if !aliases.is_empty() {
             alias_edges.insert(name.clone(), aliases);
         }
@@ -773,11 +1604,18 @@ fn capability_providers_from_selected(
 fn locked_package_from_selected(
     name: &PackageName,
     packed: &PackedPackage,
+    artifact: &RealizedPackage,
     bootstrap: &CompositionBootstrapV1,
     selected: &BTreeMap<PackageName, &PackedPackage>,
+    target: &TargetTriple,
     explanation: &mut Vec<ResolutionStep>,
 ) -> Result<(LockedPackage, BTreeMap<PackageAlias, LockedAliasEdgeV1>), CliError> {
-    let realization = select_realization(&packed.manifest, &bootstrap.realization_policy)?;
+    let realization = select_realization(
+        &packed.manifest,
+        &bootstrap.realization_policy,
+        &bootstrap.projection_domains,
+        target,
+    )?;
     let mut dependencies = BTreeMap::new();
     let mut aliases = BTreeMap::new();
     for (alias, dependency) in &packed.manifest.dependencies {
@@ -823,8 +1661,12 @@ fn locked_package_from_selected(
             realization: realization.kind,
             realization_id: realization.id.clone(),
             manifest_hash: CanonicalHash::digest(&packed.manifest_bytes),
-            artifact_hash: CanonicalHash::digest(&packed.artifact_bytes),
-            interfaces: BTreeMap::new(),
+            artifact_hash: CanonicalHash::digest(&artifact.bytes),
+            interfaces: realization
+                .interfaces
+                .iter()
+                .map(|(id, requirement)| (id.clone(), requirement.version.clone()))
+                .collect(),
             engine_build_id: realization.engine_build,
             domains: packed.manifest.domains.clone(),
             dependencies,
@@ -838,19 +1680,22 @@ fn locked_package_from_selected(
 fn select_realization<'a>(
     manifest: &'a PackageSourceManifestV1,
     policy: &[RealizationKind],
+    projection_domains: &BTreeSet<PackageDomain>,
+    target: &TargetTriple,
 ) -> Result<&'a ManifestRealizationV1, CliError> {
     for kind in policy {
-        if let Some(found) = manifest
-            .realizations
-            .values()
-            .find(|realization| realization.kind == *kind)
-        {
+        if let Some(found) = manifest.realizations.values().find(|realization| {
+            realization.kind == *kind
+                && domains_overlap(&realization.domains, projection_domains)
+                && (realization.targets.is_empty() || realization.targets.contains(target))
+                && realization.required_features.is_empty()
+        }) {
             return Ok(found);
         }
     }
     Err(CliError::lock(format!(
-        "package {} has no realization matching the bootstrap policy",
-        manifest.name
+        "package {} has no realization matching the bootstrap policy, projection domains, target {target}, and active feature set",
+        manifest.name,
     )))
 }
 
@@ -1086,11 +1931,13 @@ struct EvaluationPolicyReceipt<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+    static SOURCE_BUILD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestDirectory(PathBuf);
 
@@ -1188,7 +2035,7 @@ mod tests {
 
     fn write_fixture_workspace(root: &Path) {
         let package_dir = root.join("packages").join("terrain");
-        fs::create_dir_all(&package_dir)
+        fs::create_dir_all(package_dir.join("data"))
             .unwrap_or_else(|error| panic!("fixture package directory was not created: {error}"));
         fs::write(
             root.join(COMPOSITION_BOOTSTRAP_FILE_NAME),
@@ -1231,12 +2078,439 @@ trust = "data-only"
 default = "package.ncl"
 
 [source_inclusion]
-include = ["package.ncl", "latticeaxiom-package.toml"]
+include = ["data", "package.ncl", "latticeaxiom-package.toml"]
 "#,
         )
         .unwrap_or_else(|error| panic!("package manifest was not written: {error}"));
         fs::write(package_dir.join("package.ncl"), "{}\n")
             .unwrap_or_else(|error| panic!("package nickel was not written: {error}"));
+        fs::write(
+            package_dir.join("data").join("terrain-catalog-v1.json"),
+            b"{\"schema_version\":1,\"terrain\":\"fixture\"}\n",
+        )
+        .unwrap_or_else(|error| panic!("terrain data descriptor was not written: {error}"));
+    }
+
+    fn write_source_build_fixture_workspace(root: &Path) -> PathBuf {
+        let package_dir = root.join("packages").join("source-build");
+        fs::create_dir_all(package_dir.join("src"))
+            .unwrap_or_else(|error| panic!("source-build fixture directory failed: {error}"));
+        fs::write(
+            root.join(COMPOSITION_BOOTSTRAP_FILE_NAME),
+            r#"
+schema_version = 1
+projection = "headless-test"
+projection_domains = ["authoritative"]
+evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1"
+realization_policy = ["native-static"]
+nickel_profile_entry = "profiles/test.ncl"
+
+[roots.source-build]
+version = "=1.0.0"
+realization = { mode = "auto" }
+
+[[sources]]
+kind = "path"
+package = "source-build"
+path = "packages/source-build"
+"#,
+        )
+        .unwrap_or_else(|error| panic!("source-build bootstrap was not written: {error}"));
+        fs::write(
+            package_dir.join(PACKAGE_SOURCE_MANIFEST_FILE_NAME),
+            r#"
+schema_version = 1
+name = "source-build"
+version = "1.0.0"
+domains = ["authoritative"]
+trust = "trusted-native"
+
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["authoritative"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = ["Cargo.lock", "Cargo.toml", "package.ncl", "latticeaxiom-package.toml", "src"]
+"#,
+        )
+        .unwrap_or_else(|error| panic!("source-build package manifest failed: {error}"));
+        fs::write(package_dir.join("package.ncl"), "{}\n")
+            .unwrap_or_else(|error| panic!("source-build Nickel failed: {error}"));
+        fs::write(
+            package_dir.join("Cargo.toml"),
+            r#"[package]
+name = "fixture-source-build"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+"#,
+        )
+        .unwrap_or_else(|error| panic!("source-build Cargo manifest failed: {error}"));
+        fs::write(
+            package_dir.join("Cargo.lock"),
+            r#"# This file is automatically @generated by Cargo.
+# It is not intended for manual editing.
+version = 4
+
+[[package]]
+name = "fixture-source-build"
+version = "0.1.0"
+"#,
+        )
+        .unwrap_or_else(|error| panic!("source-build Cargo lock failed: {error}"));
+        fs::write(
+            package_dir.join("src").join("lib.rs"),
+            "pub fn fixture_state() -> u64 { 41 }\n",
+        )
+        .unwrap_or_else(|error| panic!("source-build Rust source failed: {error}"));
+        package_dir
+    }
+
+    #[test]
+    fn source_build_hashes_package_code_and_freezes_real_artifact_bytes() {
+        let _guard = SOURCE_BUILD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let directory = TestDirectory::create();
+        let package_dir = write_source_build_fixture_workspace(directory.path());
+        let request = LockRequest {
+            workspace_root: directory.path().to_path_buf(),
+            bootstrap_path: PathBuf::from(COMPOSITION_BOOTSTRAP_FILE_NAME),
+            catalog_root: PathBuf::from(CLI_CATALOG_DIRECTORY),
+            lock_path: PathBuf::from(PRODUCT_LOCK_FILE_NAME),
+            target: controller_host_target()
+                .unwrap_or_else(|error| panic!("host target must be supported: {error}")),
+            toolchain: default_toolchain(),
+        };
+        let package_name: PackageName = "source-build"
+            .parse()
+            .unwrap_or_else(|error| panic!("source-build package name must parse: {error}"));
+        let first = check_path_package(&package_dir)
+            .unwrap_or_else(|error| panic!("source-build package must check: {error}"));
+        let (first_lock, _) = lock_workspace(&request)
+            .unwrap_or_else(|error| panic!("initial source-build lock failed: {error}"));
+        let first_artifact_digest = first_lock
+            .realizations
+            .get(&request.target)
+            .and_then(|realization| realization.packages.get(&package_name))
+            .map_or_else(
+                || panic!("source-build target artifact must be locked"),
+                |package| package.artifact_digest,
+            );
+
+        fs::write(package_dir.join("excluded.txt"), "not an input\n")
+            .unwrap_or_else(|error| panic!("excluded source failed: {error}"));
+        let excluded = check_path_package(&package_dir)
+            .unwrap_or_else(|error| panic!("package with excluded file must check: {error}"));
+        assert_eq!(
+            first.snapshot.source_hash(),
+            excluded.snapshot.source_hash()
+        );
+        let (lock, _) = lock_workspace(&request)
+            .unwrap_or_else(|error| panic!("source-build relock failed: {error}"));
+        let portable_package = lock
+            .portable_resolution
+            .packages
+            .get(&package_name)
+            .unwrap_or_else(|| panic!("source-build portable package must be locked"));
+        let target_package = lock
+            .realizations
+            .get(&request.target)
+            .and_then(|realization| realization.packages.get(&package_name))
+            .unwrap_or_else(|| panic!("source-build target artifact must be locked"));
+        assert_eq!(first_artifact_digest, target_package.artifact_digest);
+        assert_ne!(
+            portable_package.source_object_digest,
+            target_package.artifact_digest
+        );
+
+        fs::write(
+            package_dir.join("src").join("lib.rs"),
+            "pub fn fixture_state() -> u64 { 42 }\n",
+        )
+        .unwrap_or_else(|error| panic!("included source mutation failed: {error}"));
+        let changed = check_path_package(&package_dir)
+            .unwrap_or_else(|error| panic!("mutated package must check: {error}"));
+        assert_ne!(first.snapshot.source_hash(), changed.snapshot.source_hash());
+
+        let artifact_path = directory
+            .path()
+            .join(CLI_CATALOG_DIRECTORY)
+            .join(CLI_CAS_DIRECTORY)
+            .join(CAS_REALIZED_ARTIFACT)
+            .join(target_package.artifact_digest.to_string());
+        let artifact = fs::read(&artifact_path)
+            .unwrap_or_else(|error| panic!("realized artifact must exist: {error}"));
+        assert!(artifact.starts_with(b"!<arch>\n"));
+
+        fs::remove_dir_all(&package_dir)
+            .unwrap_or_else(|error| panic!("mutable package removal failed: {error}"));
+        let verify = VerifyRequest {
+            workspace_root: directory.path().to_path_buf(),
+            lock_path: PathBuf::from(PRODUCT_LOCK_FILE_NAME),
+            catalog_root: PathBuf::from(CLI_CATALOG_DIRECTORY),
+        };
+        verify_workspace_frozen(&verify)
+            .unwrap_or_else(|error| panic!("frozen verify must not read mutable package: {error}"));
+        fs::write(&artifact_path, b"tampered-artifact\n")
+            .unwrap_or_else(|error| panic!("artifact tamper failed: {error}"));
+        let error = verify_workspace_frozen(&verify)
+            .err()
+            .unwrap_or_else(|| panic!("tampered artifact must fail frozen verification"));
+        assert!(error.details.contains("artifact") || error.details.contains("mismatch"));
+    }
+
+    #[test]
+    fn source_build_failure_cleans_owned_staging_and_retry_skips_poison() {
+        let _guard = SOURCE_BUILD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let directory = TestDirectory::create();
+        let package_dir = write_source_build_fixture_workspace(directory.path());
+        fs::write(
+            package_dir.join("src").join("lib.rs"),
+            "compile_error!(\"intentional SourceBuild failure\");\n",
+        )
+        .unwrap_or_else(|error| panic!("failing source fixture was not written: {error}"));
+        let request = LockRequest {
+            workspace_root: directory.path().to_path_buf(),
+            bootstrap_path: PathBuf::from(COMPOSITION_BOOTSTRAP_FILE_NAME),
+            catalog_root: PathBuf::from(CLI_CATALOG_DIRECTORY),
+            lock_path: PathBuf::from(PRODUCT_LOCK_FILE_NAME),
+            target: controller_host_target()
+                .unwrap_or_else(|error| panic!("host target must be supported: {error}")),
+            toolchain: default_toolchain(),
+        };
+
+        let build_root = directory.path().join(CLI_CATALOG_DIRECTORY).join("build");
+        fs::create_dir_all(&build_root)
+            .unwrap_or_else(|error| panic!("build root was not created: {error}"));
+        let poisoned_serial = NEXT_SOURCE_BUILD_STAGING_DIRECTORY.load(Ordering::Relaxed);
+        let poisoned =
+            build_root.join(format!(".staging-{}-{poisoned_serial}", std::process::id()));
+        fs::create_dir(&poisoned)
+            .unwrap_or_else(|error| panic!("poisoned staging tree was not created: {error}"));
+        fs::write(
+            poisoned.join("foreign-marker"),
+            b"must remain owned by the test\n",
+        )
+        .unwrap_or_else(|error| panic!("poison marker was not written: {error}"));
+
+        let error = lock_workspace(&request)
+            .err()
+            .unwrap_or_else(|| panic!("intentional compiler failure must reject SourceBuild"));
+        assert!(
+            error.details.contains("SourceBuild failed"),
+            "unexpected SourceBuild diagnostic: {}",
+            error.details
+        );
+        let mut staging_entries = fs::read_dir(&build_root)
+            .unwrap_or_else(|error| panic!("build root must remain readable: {error}"))
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".staging-"))
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>();
+        staging_entries.sort();
+        assert_eq!(
+            staging_entries,
+            vec![
+                poisoned
+                    .file_name()
+                    .unwrap_or_else(|| panic!("poison path must have a file name"))
+                    .to_os_string()
+            ],
+            "failed build must clean only the staging tree it created"
+        );
+
+        fs::write(
+            package_dir.join("src").join("lib.rs"),
+            "pub fn fixture_state() -> u64 { 42 }\n",
+        )
+        .unwrap_or_else(|error| panic!("repaired source fixture was not written: {error}"));
+        lock_workspace(&request)
+            .unwrap_or_else(|error| panic!("SourceBuild retry must succeed: {error}"));
+        assert_eq!(
+            fs::read(poisoned.join("foreign-marker"))
+                .unwrap_or_else(|error| panic!("foreign poison must remain untouched: {error}")),
+            b"must remain owned by the test\n"
+        );
+        fs::remove_dir_all(&poisoned)
+            .unwrap_or_else(|error| panic!("test poison cleanup failed: {error}"));
+        assert!(
+            fs::read_dir(&build_root)
+                .unwrap_or_else(|error| panic!("build root must remain readable: {error}"))
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with(".staging-")),
+            "successful retry must leave no owned staging tree"
+        );
+    }
+
+    #[test]
+    fn cargo_metadata_rejects_local_dependency_outside_staged_source() {
+        let directory = TestDirectory::create();
+        let staged_root = directory.path().join("staged");
+        let escaped_root = directory.path().join("escaped");
+        fs::create_dir_all(staged_root.join("src"))
+            .unwrap_or_else(|error| panic!("staged source directory was not created: {error}"));
+        fs::create_dir_all(escaped_root.join("src"))
+            .unwrap_or_else(|error| panic!("escaped source directory was not created: {error}"));
+        fs::write(
+            staged_root.join("Cargo.toml"),
+            r#"[package]
+name = "staged-primary"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+escaped-local = { path = "../escaped" }
+"#,
+        )
+        .unwrap_or_else(|error| panic!("staged Cargo manifest was not written: {error}"));
+        fs::write(
+            staged_root.join("Cargo.lock"),
+            r#"# This file is automatically @generated by Cargo.
+# It is not intended for manual editing.
+version = 4
+
+[[package]]
+name = "escaped-local"
+version = "0.1.0"
+
+[[package]]
+name = "staged-primary"
+version = "0.1.0"
+dependencies = [
+ "escaped-local",
+]
+"#,
+        )
+        .unwrap_or_else(|error| panic!("staged Cargo lock was not written: {error}"));
+        fs::write(
+            staged_root.join("src").join("lib.rs"),
+            "pub fn staged() {}\n",
+        )
+        .unwrap_or_else(|error| panic!("staged source was not written: {error}"));
+        fs::write(
+            escaped_root.join("Cargo.toml"),
+            r#"[package]
+name = "escaped-local"
+version = "0.1.0"
+edition = "2024"
+publish = false
+"#,
+        )
+        .unwrap_or_else(|error| panic!("escaped Cargo manifest was not written: {error}"));
+        fs::write(
+            escaped_root.join("src").join("lib.rs"),
+            "pub fn escaped() {}\n",
+        )
+        .unwrap_or_else(|error| panic!("escaped source was not written: {error}"));
+
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        let manifest_path = staged_root.join("Cargo.toml");
+        let error = load_cargo_metadata(&cargo, &manifest_path, &staged_root)
+            .err()
+            .unwrap_or_else(|| panic!("external local dependency must fail containment"));
+        assert!(
+            error.details.contains("local Cargo manifest")
+                && error.details.contains("escaped source build root"),
+            "unexpected local dependency diagnostic: {}",
+            error.details
+        );
+    }
+
+    #[test]
+    fn source_build_artifact_must_be_regular_and_below_owned_target() {
+        let directory = TestDirectory::create();
+        let staging_root = directory.path().join("staging");
+        let working_directory = staging_root.join("source");
+        let target_dir = staging_root.join("target");
+        fs::create_dir_all(&working_directory)
+            .unwrap_or_else(|error| panic!("working directory was not created: {error}"));
+        fs::create_dir(&target_dir)
+            .unwrap_or_else(|error| panic!("target directory was not created: {error}"));
+
+        let artifact_path = target_dir.join("libfixture.rlib");
+        fs::write(&artifact_path, b"verified artifact bytes")
+            .unwrap_or_else(|error| panic!("artifact fixture was not written: {error}"));
+        assert_eq!(
+            read_source_build_artifact(
+                &staging_root,
+                &working_directory,
+                &target_dir,
+                &artifact_path,
+            )
+            .unwrap_or_else(|error| panic!("contained artifact must read: {error}")),
+            b"verified artifact bytes"
+        );
+
+        let escaped_path = staging_root.join("escaped.rlib");
+        fs::write(&escaped_path, b"outside target")
+            .unwrap_or_else(|error| panic!("escaped artifact fixture was not written: {error}"));
+        let escaped = read_source_build_artifact(
+            &staging_root,
+            &working_directory,
+            &target_dir,
+            &escaped_path,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("artifact outside owned target must fail"));
+        assert!(
+            escaped.details.contains("Cargo artifact")
+                && escaped.details.contains("escaped source build root"),
+            "unexpected artifact escape diagnostic: {}",
+            escaped.details
+        );
+
+        let directory_error =
+            read_source_build_artifact(&staging_root, &working_directory, &target_dir, &target_dir)
+                .err()
+                .unwrap_or_else(|| panic!("artifact directory must fail regular-file proof"));
+        assert!(
+            directory_error
+                .details
+                .contains("not a regular unlinked file"),
+            "unexpected artifact kind diagnostic: {}",
+            directory_error.details
+        );
+    }
+
+    #[test]
+    fn package_check_reports_missing_source_inclusion_stably() {
+        let directory = TestDirectory::create();
+        let package_dir = write_source_build_fixture_workspace(directory.path());
+        let manifest_path = package_dir.join(PACKAGE_SOURCE_MANIFEST_FILE_NAME);
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|error| panic!("fixture manifest must be readable: {error}"));
+        let missing = manifest.replacen(
+            "\"latticeaxiom-package.toml\", \"src\"]",
+            "\"latticeaxiom-package.toml\", \"src\", \"missing\"]",
+            1,
+        );
+        assert_ne!(manifest, missing, "fixture inclusion row must be replaced");
+        fs::write(&manifest_path, missing)
+            .unwrap_or_else(|error| panic!("fixture manifest mutation failed: {error}"));
+
+        let error = check_path_package(&package_dir)
+            .err()
+            .unwrap_or_else(|| panic!("missing explicit inclusion must fail package check"));
+        assert!(
+            error
+                .details
+                .contains("source inclusion path `missing` is missing, empty, or fully excluded"),
+            "unexpected missing-inclusion diagnostic: {}",
+            error.details
+        );
     }
 
     #[test]

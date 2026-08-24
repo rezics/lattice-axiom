@@ -26,10 +26,11 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    ArtifactIntent, CapabilityProvision, CapabilityRequirement, CompositionParameterSpec,
-    FeatureSpec, InterfaceRequirement, NickelEvaluationLimits, PackageAlias, PackageDomain,
-    PackageRequest, ProfileKind, R0_LIBRARY_PACKAGE_ALIAS, R0_NICKEL_EVALUATION_POLICY,
-    RealizationId, RealizationKind, TrustClass,
+    ArtifactIntent, AuthorizedRoot, CapabilityProvision, CapabilityRequirement,
+    CompositionParameterSpec, FeatureSpec, InterfaceRequirement, NickelEvaluationLimits,
+    PackageAlias, PackageDomain, PackageRequest, ProfileKind, R0_LIBRARY_PACKAGE_ALIAS,
+    R0_NICKEL_EVALUATION_POLICY, RealizationId, RealizationKind, SourceScanError, SourceScanLimits,
+    SourceSnapshot, SourceSnapshotError, TrustClass,
 };
 
 /// Schema version for [`CompositionBootstrapV1`].
@@ -374,6 +375,79 @@ pub struct SourceInclusionPolicyV1 {
     /// Root-relative exclusions subtracted from included directories.
     #[serde(default)]
     pub exclude: BTreeSet<CanonicalLogicalPath>,
+}
+
+/// Applies an explicit package source-inclusion policy to a verified snapshot.
+///
+/// Inclusion and exclusion entries cover either one exact logical path or all
+/// descendants below that path. Exclusion wins. The returned snapshot carries
+/// a newly computed source identity over only the retained file receipts.
+///
+/// # Errors
+///
+/// Returns [`SourceSnapshotError`] if the input snapshot is invalid or the
+/// selected canonical file table cannot be represented on this host.
+pub fn apply_source_inclusion(
+    snapshot: &SourceSnapshot,
+    inclusion: &SourceInclusionPolicyV1,
+) -> Result<SourceSnapshot, SourceSnapshotError> {
+    snapshot.select_files(|logical_path| source_inclusion_selects(inclusion, logical_path))
+}
+
+/// Acquires only files reachable through one package source-inclusion policy.
+///
+/// Directories that cannot contain an included file, including explicitly
+/// excluded subtrees, are pruned before metadata inspection and before source
+/// file/byte budgets are charged. Retained paths use the same canonical hash,
+/// link rejection, collision checks, and limits as a full source scan.
+///
+/// # Errors
+///
+/// Returns [`SourceScanError`] for filesystem failures, invalid retained
+/// paths, links or reparse points on retained paths, collisions, or retained
+/// source-budget violations.
+pub fn scan_included_source_snapshot(
+    root: &AuthorizedRoot,
+    limits: SourceScanLimits,
+    inclusion: &SourceInclusionPolicyV1,
+) -> Result<SourceSnapshot, SourceScanError> {
+    crate::imports::scan_source_snapshot_selected(
+        root,
+        limits,
+        |logical_path| source_inclusion_selects(inclusion, logical_path),
+        |logical_path| source_inclusion_may_descend(inclusion, logical_path),
+    )
+}
+
+fn source_inclusion_selects(inclusion: &SourceInclusionPolicyV1, logical_path: &str) -> bool {
+    logical_path_covered(&inclusion.include, logical_path)
+        && !logical_path_covered(&inclusion.exclude, logical_path)
+}
+
+fn source_inclusion_may_descend(
+    inclusion: &SourceInclusionPolicyV1,
+    logical_directory: &str,
+) -> bool {
+    !logical_path_covered(&inclusion.exclude, logical_directory)
+        && inclusion.include.iter().any(|item| {
+            logical_prefix_covers(item.as_str(), logical_directory)
+                || logical_prefix_covers(logical_directory, item.as_str())
+        })
+}
+
+fn logical_path_covered(prefixes: &BTreeSet<CanonicalLogicalPath>, logical_path: &str) -> bool {
+    prefixes
+        .iter()
+        .any(|item| logical_prefix_covers(item.as_str(), logical_path))
+}
+
+fn logical_prefix_covers(prefix: &str, logical_path: &str) -> bool {
+    logical_path == prefix
+        || logical_path.starts_with(prefix)
+            && logical_path
+                .as_bytes()
+                .get(prefix.len())
+                .is_some_and(|byte| *byte == b'/')
 }
 
 impl PackageSourceManifestV1 {

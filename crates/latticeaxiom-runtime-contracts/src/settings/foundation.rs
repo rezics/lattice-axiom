@@ -32,6 +32,8 @@ pub const DEFAULT_UI_SCALE: &str = "1.0";
 
 /// Inclusive authored maximum UI scale.
 pub const MAX_UI_SCALE: &str = "2.0";
+/// Inclusive authored minimum view-distance request, in chunks.
+pub const MIN_VIEW_DISTANCE_CHUNKS: u32 = 2;
 
 /// Authored default view-distance request, in chunks.
 pub const DEFAULT_VIEW_DISTANCE_CHUNKS: u32 = 8;
@@ -74,12 +76,12 @@ impl UserSettingsProjection {
     }
 }
 
-/// Clamps a requested view-distance to `1..=hard_max_chunks`.
+/// Clamps a requested view-distance to the authored minimum and host maximum.
 #[must_use]
 pub fn clamp_view_distance_chunks(requested: i64, hard_max_chunks: u32) -> u32 {
-    let hard_max = hard_max_chunks.max(1);
-    if requested < 1 {
-        1
+    let hard_max = hard_max_chunks.max(MIN_VIEW_DISTANCE_CHUNKS);
+    if requested < i64::from(MIN_VIEW_DISTANCE_CHUNKS) {
+        MIN_VIEW_DISTANCE_CHUNKS
     } else if requested > i64::from(hard_max) {
         hard_max
     } else {
@@ -231,7 +233,7 @@ fn view_distance_spec() -> SettingSpec {
         declared_by: settings_package_name(),
         schema_version: 1,
         value_type: ValueType::Integer {
-            min: Some(1),
+            min: Some(i64::from(MIN_VIEW_DISTANCE_CHUNKS)),
             max: Some(i64::from(AUTHORED_MAX_VIEW_DISTANCE_CHUNKS)),
             step: Some(1),
         },
@@ -295,11 +297,11 @@ mod tests {
 
     #[test]
     fn view_distance_clamps_zero_and_over_host_max() {
-        assert_eq!(clamp_view_distance_chunks(0, 8), 1);
-        assert_eq!(clamp_view_distance_chunks(1, 8), 1);
+        assert_eq!(clamp_view_distance_chunks(0, 8), 2);
+        assert_eq!(clamp_view_distance_chunks(1, 8), 2);
         assert_eq!(clamp_view_distance_chunks(8, 8), 8);
         assert_eq!(clamp_view_distance_chunks(32, 8), 8);
-        assert_eq!(clamp_view_distance_chunks(4, 0), 1);
+        assert_eq!(clamp_view_distance_chunks(4, 0), 2);
     }
 
     #[test]

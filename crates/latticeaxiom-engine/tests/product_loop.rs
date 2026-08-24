@@ -1,12 +1,17 @@
 //! V1/V2 product-loop, input, and hidden-Terrenia integration coverage.
 #![allow(clippy::expect_used)]
 
-use std::{collections::BTreeSet, fs, io, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs, io,
+    path::PathBuf,
+};
 
 use latticeaxiom_client_ui::{
     GameOverlayV1, GameSurfaceRouter, ROUTE_VOCABULARY_MAJOR, SurfaceCommandV1,
 };
-use latticeaxiom_core::StableId;
+use latticeaxiom_compose::{LOCK_SCHEMA_VERSION, LockedGameGraph, NickelEvaluationLimits};
+use latticeaxiom_core::{CanonicalHash, CapabilityId, PackageName, StableId};
 use latticeaxiom_engine::{HostUserSettings, ProductionMemoryStart, ProductionSurfaceRouter};
 use latticeaxiom_input::{
     ActionCatalogDocumentV1, AuthoritativePlayerActionV1, BindingProfileV1, ClientSurfaceActionV1,
@@ -106,13 +111,16 @@ fn closing_inventory_clears_started_surface_and_unsuppresses_gameplay() {
 
 #[test]
 fn production_lock_graph_does_not_hide_terrenia_or_input() {
-    assert!(ProductionMemoryStart::lock_roots_select_shell([
-        "@latticeaxiom/front-end",
-        "@latticeaxiom/input"
-    ]));
+    let shell = process_selection_graph(&["@latticeaxiom/front-end", "@latticeaxiom/input"]);
     assert!(
-        !ProductionMemoryStart::lock_roots_select_shell(["@latticeaxiom/front-end", "terrenia"]),
-        "a terrenia root must boot the game process, not a hidden host plugin list"
+        ProductionMemoryStart::lock_graph_selects_shell(&shell)
+            .expect("exactly one client-shell provider selects the shell")
+    );
+    let shell_with_game = process_selection_graph(&["@latticeaxiom/front-end", "terrenia"]);
+    assert!(
+        ProductionMemoryStart::lock_graph_selects_shell(&shell_with_game)
+            .expect("exactly one client-shell provider remains authoritative"),
+        "a game root must not override locked client-shell capability evidence"
     );
     assert!(
         compile_input_catalog([], &BindingProfileV1::empty())
@@ -121,6 +129,40 @@ fn production_lock_graph_does_not_hide_terrenia_or_input() {
             .contains("no input-actions provider")
     );
     assert_eq!(INPUT_PACKAGE_NAME, "@latticeaxiom/input");
+}
+
+fn process_selection_graph(roots: &[&str]) -> LockedGameGraph {
+    let package = |value: &str| {
+        value
+            .parse::<PackageName>()
+            .unwrap_or_else(|error| panic!("fixture package `{value}` is canonical: {error}"))
+    };
+    let capability = "latticeaxiom:capability/client-shell@1"
+        .parse::<CapabilityId>()
+        .expect("the client-shell fixture capability is canonical");
+    let mut graph = LockedGameGraph {
+        schema_version: LOCK_SCHEMA_VERSION,
+        composition_hash: CanonicalHash::digest(b"process-selection-composition"),
+        composition_provenance_hash: CanonicalHash::digest(b"process-selection-provenance"),
+        evaluation_policy: "latticeaxiom:nickel-evaluation-policy/r0@1"
+            .parse()
+            .expect("the fixture evaluation policy is canonical"),
+        evaluation_limits: NickelEvaluationLimits::default(),
+        roots: roots.iter().map(|root| package(root)).collect(),
+        packages: BTreeMap::new(),
+        capability_providers: BTreeMap::from([(capability, vec![package("substitute-shell")])]),
+        namespace_grants: BTreeSet::new(),
+        explanation: Vec::new(),
+        graph_hash: CanonicalHash::digest(b"unverified-process-selection-graph"),
+        lock_hash: CanonicalHash::digest(b"unverified-process-selection-lock"),
+    };
+    graph.graph_hash = graph
+        .recompute_graph_hash()
+        .expect("the process-selection fixture graph hashes");
+    graph.lock_hash = graph
+        .recompute_lock_hash()
+        .expect("the process-selection fixture lock hashes");
+    graph
 }
 
 #[test]

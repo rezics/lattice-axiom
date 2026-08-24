@@ -179,6 +179,17 @@ fn runtime_benchmarks(criterion: &mut Criterion) {
         );
     });
 
+    criterion.bench_function(
+        "runtime/capture_32_cubed_plus_halo_global_priority",
+        |bencher| {
+            bencher.iter_batched(
+                || prepared_runtime(&fixture),
+                |mut runtime| black_box(runtime.dispatch_next_any()),
+                BatchSize::SmallInput,
+            );
+        },
+    );
+
     criterion.bench_function("runtime/project_committed_sparse_update", |bencher| {
         bencher.iter_batched(
             || prepared_runtime(&fixture),

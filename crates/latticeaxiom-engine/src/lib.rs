@@ -42,6 +42,8 @@ pub use client::{
 };
 pub use host::{
     ADR_0026_ACTIVE_COVERAGE_M, ADR_0026_CHUNK_EDGE_VOXELS, ADR_0026_RESIDENT_COVERAGE_M,
+    AuthoredContentCatalogSourcesV1, AuthoredContentDisplayCatalogSourcesV1,
+    AuthoredGameplayCatalogSourcesV1, AuthoredPresentationCatalogSourcesV1,
     CaveOccupancyArbitrationV1, CellOccupancyV1, ChildResultV1, ChunkFaceV1, ChunkLifecycle,
     ChunkMeshCursor, ChunkPresentation, ContentDisplayCatalogV1, ContentDisplayLabelV1,
     DerivedQueueSnapshotV1, HOTBAR_SLOTS, HostFluidTickV1, INVENTORY_SLOTS, ProductionHostError,
@@ -50,10 +52,11 @@ pub use host::{
     ProductionSurfaceRouter, ProductionWorldList, ProductionWorldStorage, RenderDeviceLost,
     RequiredCaveEntranceV1, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost,
     SealedWriterHostError, StreamingProfileCountsV1, StreamingProfileEvidenceV1,
-    WorkingSetDiagnosticsV1, WorldgenInspectReportV1, authored_content_catalog,
-    authored_content_display_catalog, authored_gameplay_catalog, coverage_m,
-    empty_gameplay_catalog, lock_selected_gameplay_catalog, radius_for_coverage,
-    sealed_activation_binding,
+    ViewDistanceClampReasonV1, ViewDistanceStatusV1, WorkingSetDiagnosticsV1,
+    WorldgenInspectReportV1, compile_authored_content_catalog,
+    compile_authored_content_display_catalog, compile_authored_gameplay_catalog, coverage_m,
+    empty_gameplay_catalog, lock_selected_content_catalog, lock_selected_content_display_catalog,
+    lock_selected_gameplay_catalog, radius_for_coverage, sealed_activation_binding,
 };
 pub use input::{HostInputError, compile_lock_selected_input, graph_selects_input_actions};
 pub use instance::{
@@ -82,12 +85,14 @@ pub use latticeaxiom_voxel_runtime::{
 #[cfg(feature = "client")]
 pub use playable::{PlayableClientError, run_playable_client};
 pub use prepared::{
-    CallbackContext, CatalogKind, LockVerifiedComposeImages, PreparationError,
-    StructurallyValidatedComposeImages,
+    CallbackContext, CatalogKind, LockVerifiedComposeImages, LockedPackageArtifactError,
+    LockedPackageArtifactStore, PreparationError, StructurallyValidatedComposeImages,
 };
 #[cfg(feature = "client")]
 pub use presentation_fixture::run_temporary_client_presentation_fixture;
-pub use settings::{HostSettingsError, HostUserSettings};
+pub use settings::{
+    HostSettingsCatalog, HostSettingsError, HostUserSettings, compile_lock_selected_settings,
+};
 #[cfg(feature = "client")]
 pub use supervisor::{
     ProductSupervisorError, publish_child_exit, run_product_supervisor_from_workspace,

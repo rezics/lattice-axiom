@@ -6,7 +6,11 @@
 //! packages. This module does not construct [`latticeaxiom_compose::RuntimeImage`],
 //! load native modules, create a Bevy `App`, or open a world writer.
 
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::Arc,
+};
 
 use latticeaxiom_compose::{
     LockActionMode, LockV1, ProductLockError, ProductLockHostReceipts, ProductLockObjects,
@@ -67,6 +71,41 @@ pub enum ProductLockBootError {
     LaunchIntentShellLockMismatch,
 }
 
+/// Immutable artifact objects proven by one frozen product-lock reopen.
+///
+/// Cloning this handle does not copy artifact bytes. Digests still need to be
+/// selected from the corresponding final lock before lookup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedArtifactObjects {
+    objects: Arc<BTreeMap<CanonicalHash, Vec<u8>>>,
+}
+
+impl VerifiedArtifactObjects {
+    fn new(objects: BTreeMap<CanonicalHash, Vec<u8>>) -> Self {
+        Self {
+            objects: Arc::new(objects),
+        }
+    }
+
+    /// Returns exact verified bytes for `digest`, if the final lock required it.
+    #[must_use]
+    pub fn get(&self, digest: CanonicalHash) -> Option<&[u8]> {
+        self.objects.get(&digest).map(Vec::as_slice)
+    }
+
+    /// Returns the number of distinct lock-required artifacts retained.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.objects.len()
+    }
+
+    /// Returns whether no artifact objects were required.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+}
+
 /// Final `latticeaxiom.lock` that has been reopened and fully verified.
 ///
 /// Ordinary launch must obtain this token before constructing a runtime image,
@@ -76,6 +115,7 @@ pub enum ProductLockBootError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReopenedFinalLockV1 {
     lock: LockV1,
+    artifacts: VerifiedArtifactObjects,
 }
 
 impl ReopenedFinalLockV1 {
@@ -96,7 +136,14 @@ impl ReopenedFinalLockV1 {
         host: &HostBuildReceipts,
     ) -> Result<Self, ProductLockBootError> {
         let lock = reopen_product_lock(path)?;
-        Self::verify_reopened(lock, objects, host)
+        verify_reopened(&lock, objects, host)?;
+        Ok(Self {
+            artifacts: VerifiedArtifactObjects::new(retain_borrowed_artifacts(
+                &lock,
+                &objects.artifacts,
+            )),
+            lock,
+        })
     }
 
     /// Reopens `latticeaxiom.lock` and verifies frozen receipts against CAS.
@@ -113,8 +160,16 @@ impl ReopenedFinalLockV1 {
         host: &HostBuildReceipts,
     ) -> Result<Self, ProductLockBootError> {
         let lock = reopen_product_lock(path)?;
-        let objects = product_lock_objects_from_cas(&lock, store)?;
-        Self::verify_reopened(lock, &objects, host)
+        let mut objects = product_lock_objects_from_cas(&lock, store)?;
+        verify_reopened(&lock, &objects, host)?;
+        let required = required_artifact_digests(&lock);
+        objects
+            .artifacts
+            .retain(|digest, _| required.contains(digest));
+        Ok(Self {
+            artifacts: VerifiedArtifactObjects::new(objects.artifacts),
+            lock,
+        })
     }
 
     /// Returns the verified product lock. This is not a resolution receipt.
@@ -129,6 +184,29 @@ impl ReopenedFinalLockV1 {
         self.lock.product_lock_hash
     }
 
+    /// Returns exact bytes of one artifact verified during frozen reopen.
+    ///
+    /// Callers must obtain `digest` from this value's target realization. No
+    /// CAS access or acquisition fallback occurs here.
+    #[must_use]
+    pub fn verified_artifact(&self, digest: CanonicalHash) -> Option<&[u8]> {
+        self.artifacts.get(digest)
+    }
+
+    /// Returns the number of distinct lock-required artifacts retained.
+    #[must_use]
+    pub fn verified_artifact_count(&self) -> usize {
+        self.artifacts.len()
+    }
+
+    /// Returns a cheap immutable handle to all verified artifact objects.
+    ///
+    /// Package-to-digest selection remains sealed in [`Self::product_lock`].
+    #[must_use]
+    pub fn verified_artifacts(&self) -> VerifiedArtifactObjects {
+        self.artifacts.clone()
+    }
+
     /// Rejects a launch intent that does not name this reopened product lock.
     ///
     /// # Errors
@@ -141,16 +219,38 @@ impl ReopenedFinalLockV1 {
         }
         Ok(())
     }
+}
 
-    fn verify_reopened(
-        lock: LockV1,
-        objects: &ProductLockObjects,
-        host: &HostBuildReceipts,
-    ) -> Result<Self, ProductLockBootError> {
-        let receipts = host_receipts(&lock, host)?;
-        verify_product_lock(&lock, objects, &receipts, LockActionMode::Frozen)?;
-        Ok(Self { lock })
-    }
+fn verify_reopened(
+    lock: &LockV1,
+    objects: &ProductLockObjects,
+    host: &HostBuildReceipts,
+) -> Result<(), ProductLockBootError> {
+    let receipts = host_receipts(lock, host)?;
+    verify_product_lock(lock, objects, &receipts, LockActionMode::Frozen)?;
+    Ok(())
+}
+
+fn required_artifact_digests(lock: &LockV1) -> BTreeSet<CanonicalHash> {
+    lock.realizations
+        .values()
+        .flat_map(|realization| {
+            realization
+                .packages
+                .values()
+                .map(|package| package.artifact_digest)
+        })
+        .collect()
+}
+
+fn retain_borrowed_artifacts(
+    lock: &LockV1,
+    artifacts: &BTreeMap<CanonicalHash, Vec<u8>>,
+) -> BTreeMap<CanonicalHash, Vec<u8>> {
+    required_artifact_digests(lock)
+        .into_iter()
+        .filter_map(|digest| artifacts.get(&digest).cloned().map(|bytes| (digest, bytes)))
+        .collect()
 }
 
 fn host_receipts(
@@ -510,6 +610,30 @@ path = "packages/terrain"
     }
 
     #[test]
+    fn frozen_reopen_retains_only_exact_required_artifact_bytes() {
+        let directory = TestDirectory::create();
+        let (_, mut objects, host) = persist_fixture(&directory);
+        let required_bytes = b"terrain-artifact";
+        let required_digest = CanonicalHash::digest(required_bytes);
+        let extra_bytes = b"unlocked-artifact";
+        let extra_digest = CanonicalHash::digest(extra_bytes);
+        objects.artifacts.insert(extra_digest, extra_bytes.to_vec());
+
+        let reopened = succeeded(ReopenedFinalLockV1::reopen_frozen(
+            directory.lock_path(),
+            &objects,
+            &host,
+        ));
+
+        assert_eq!(reopened.verified_artifact_count(), 1);
+        assert_eq!(
+            reopened.verified_artifact(required_digest),
+            Some(required_bytes.as_slice())
+        );
+        assert_eq!(reopened.verified_artifact(extra_digest), None);
+    }
+
+    #[test]
     fn missing_lock_refuses_before_runtime_image() {
         let directory = TestDirectory::create();
         let (_, objects, host) = persist_fixture(&directory);
@@ -550,6 +674,49 @@ path = "packages/terrain"
                 ..
             })) => {}
             other => panic!("missing source must fail frozen reopen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_artifact_receipt_refuses_frozen_reopen() {
+        let directory = TestDirectory::create();
+        let (_, mut objects, host) = persist_fixture(&directory);
+        objects.artifacts.clear();
+
+        match ReopenedFinalLockV1::reopen_frozen(directory.lock_path(), &objects, &host) {
+            Err(ProductLockBootError::ProductLock(ProductLockError::MissingReceipt {
+                receipt: ProductLockReceiptKind::Artifact,
+                package,
+                expected,
+            })) => {
+                assert_eq!(package, Some(package_name("terrain")));
+                assert_eq!(expected, CanonicalHash::digest(b"terrain-artifact"));
+            }
+            other => panic!("missing artifact must fail frozen reopen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tampered_artifact_bytes_refuse_frozen_reopen() {
+        let directory = TestDirectory::create();
+        let (_, mut objects, host) = persist_fixture(&directory);
+        objects.artifacts.insert(
+            CanonicalHash::digest(b"terrain-artifact"),
+            b"tampered-artifact".to_vec(),
+        );
+
+        match ReopenedFinalLockV1::reopen_frozen(directory.lock_path(), &objects, &host) {
+            Err(ProductLockBootError::ProductLock(ProductLockError::ReceiptMismatch {
+                receipt: ProductLockReceiptKind::Artifact,
+                package,
+                expected,
+                actual,
+            })) => {
+                assert_eq!(package, Some(package_name("terrain")));
+                assert_eq!(expected, CanonicalHash::digest(b"terrain-artifact"));
+                assert_eq!(actual, CanonicalHash::digest(b"tampered-artifact"));
+            }
+            other => panic!("tampered artifact must fail frozen reopen, got {other:?}"),
         }
     }
 

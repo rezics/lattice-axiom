@@ -51,7 +51,7 @@ use bevy::{
     prelude::{ClearColor, Color, Mesh},
 };
 use latticeaxiom_compose::LockedGameGraph;
-use latticeaxiom_core::IdentifierError;
+use latticeaxiom_core::{CapabilityId, IdentifierError, PackageName};
 use latticeaxiom_gameplay::{GameplayIdError, GameplayReject};
 use latticeaxiom_player::{
     ActionFrameInbox, ActionFrameInboxError, AuthoritativeTargetInspectRequestV1,
@@ -72,12 +72,18 @@ use latticeaxiom_world_db::WorldDbError;
 use latticeaxiom_worldgen::WorldgenError;
 use thiserror::Error;
 
+const TARGET_INSPECT_SURFACE_CAPABILITY: &str = "latticeaxiom:capability/target-inspect-surface@1";
+const DIAGNOSTIC_REGISTRY_CAPABILITY: &str = "latticeaxiom:capability/diagnostic-registry@1";
+
 pub use catalog::{
-    authored_content_catalog, authored_gameplay_catalog, empty_gameplay_catalog,
-    lock_selected_gameplay_catalog,
+    AuthoredContentCatalogSourcesV1, AuthoredGameplayCatalogSourcesV1,
+    compile_authored_content_catalog, compile_authored_gameplay_catalog, empty_gameplay_catalog,
+    lock_selected_content_catalog, lock_selected_gameplay_catalog,
 };
 pub use display::{
-    ContentDisplayCatalogV1, ContentDisplayLabelV1, authored_content_display_catalog,
+    AuthoredContentDisplayCatalogSourcesV1, AuthoredPresentationCatalogSourcesV1,
+    ContentDisplayCatalogV1, ContentDisplayLabelV1, compile_authored_content_display_catalog,
+    lock_selected_content_display_catalog,
 };
 pub use fluid::HostFluidTickV1;
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
@@ -95,7 +101,7 @@ pub use spine::{
 pub use start::{
     ChildResultV1, ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList,
 };
-pub use stream::ChunkLifecycle;
+pub use stream::{ChunkLifecycle, ViewDistanceClampReasonV1, ViewDistanceStatusV1};
 pub use surface::ProductionSurfaceRouter;
 pub use worldgen::RequiredCaveEntranceV1;
 pub use writer::{SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding};
@@ -206,8 +212,8 @@ pub struct ProductionPlayerPose {
 
 /// Inspect/observability providers selected by the frozen package graph.
 ///
-/// When the lock image does not select `@latticeaxiom/inspect` and
-/// `@latticeaxiom/observability`, the host uses
+/// When neither capability evidence nor a compiled inspect catalog selects
+/// both surfaces, the host uses
 /// [`latticeaxiom_player::HeadlessTargetInspectV1`] from authoritative DDA.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Resource)]
 pub struct ProductionInspectSurface {
@@ -223,22 +229,35 @@ impl ProductionInspectSurface {
     }
 
     fn from_graph(graph: &LockedGameGraph, registration: &CompiledRegistration) -> Self {
+        Self::from_capability_evidence(
+            &graph.capability_providers,
+            !registration.image.observability.inspect.is_empty(),
+        )
+    }
+
+    fn from_capability_evidence(
+        providers: &BTreeMap<CapabilityId, Vec<PackageName>>,
+        compiled_inspect: bool,
+    ) -> Self {
         Self {
-            graph_selected_inspect: package_present(graph, "@latticeaxiom/inspect")
-                || capability_present(graph, "latticeaxiom:capability/target-inspect-surface@1")
-                || !registration.image.observability.inspect.is_empty(),
-            graph_selected_observability: package_present(graph, "@latticeaxiom/observability")
-                || capability_present(graph, "latticeaxiom:capability/diagnostic-registry@1"),
+            graph_selected_inspect: capability_present(
+                providers,
+                TARGET_INSPECT_SURFACE_CAPABILITY,
+            ) || compiled_inspect,
+            graph_selected_observability: capability_present(
+                providers,
+                DIAGNOSTIC_REGISTRY_CAPABILITY,
+            ),
         }
     }
 
-    /// Returns whether the lock graph selected the inspect package or catalog.
+    /// Returns whether a lock capability or compiled catalog selected inspect.
     #[must_use]
     pub const fn graph_selected_inspect(self) -> bool {
         self.graph_selected_inspect
     }
 
-    /// Returns whether the lock graph selected the observability package.
+    /// Returns whether the lock graph selected the diagnostic capability.
     #[must_use]
     pub const fn graph_selected_observability(self) -> bool {
         self.graph_selected_observability
@@ -251,18 +270,62 @@ impl ProductionInspectSurface {
     }
 }
 
-fn package_present(graph: &LockedGameGraph, name: &str) -> bool {
-    graph
-        .packages
-        .keys()
-        .any(|package| package.as_str() == name)
+fn capability_present(
+    providers: &BTreeMap<CapabilityId, Vec<PackageName>>,
+    capability: &str,
+) -> bool {
+    providers.keys().any(|id| id.as_str() == capability)
 }
 
-fn capability_present(graph: &LockedGameGraph, capability: &str) -> bool {
-    graph
-        .capability_providers
-        .keys()
-        .any(|id| id.as_str() == capability)
+#[cfg(test)]
+mod inspect_surface_tests {
+    use super::*;
+
+    fn capabilities(ids: &[&str]) -> BTreeMap<CapabilityId, Vec<PackageName>> {
+        let provider = "@example/provider"
+            .parse::<PackageName>()
+            .expect("test package is canonical");
+        ids.iter()
+            .map(|id| {
+                (
+                    id.parse::<CapabilityId>()
+                        .expect("test capability is canonical"),
+                    vec![provider.clone()],
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inspect_surface_requires_capability_or_compiled_catalog_evidence() {
+        let absent = ProductionInspectSurface::from_capability_evidence(&BTreeMap::new(), false);
+        assert!(!absent.graph_selected_inspect());
+        assert!(!absent.graph_selected_observability());
+        assert!(absent.uses_headless_dto());
+
+        let inspect_only = ProductionInspectSurface::from_capability_evidence(
+            &capabilities(&[TARGET_INSPECT_SURFACE_CAPABILITY]),
+            false,
+        );
+        assert!(inspect_only.graph_selected_inspect());
+        assert!(!inspect_only.graph_selected_observability());
+        assert!(inspect_only.uses_headless_dto());
+
+        let selected = ProductionInspectSurface::from_capability_evidence(
+            &capabilities(&[
+                TARGET_INSPECT_SURFACE_CAPABILITY,
+                DIAGNOSTIC_REGISTRY_CAPABILITY,
+            ]),
+            false,
+        );
+        assert!(!selected.uses_headless_dto());
+
+        let compiled = ProductionInspectSurface::from_capability_evidence(
+            &capabilities(&[DIAGNOSTIC_REGISTRY_CAPABILITY]),
+            true,
+        );
+        assert!(!compiled.uses_headless_dto());
+    }
 }
 
 /// Bevy plugin that spawns chunk colliders and the local player.
@@ -298,62 +361,67 @@ impl Plugin for ProductionHostPlugin {
                 ),
             );
         #[cfg(feature = "client")]
-        app.add_systems(
-            Startup,
-            (
-                spawn_production_hud_if_client,
-                client::spawn_production_client_view,
-                pause::spawn_pause_overlay_if_client,
-                attach_initial_chunk_meshes.after(client::spawn_production_client_view),
+        app.init_resource::<pause::TypedSurfacePress>()
+            .add_observer(pause::view_distance_slider_changed)
+            .add_systems(
+                Startup,
+                (
+                    spawn_production_hud_if_client,
+                    client::spawn_production_client_view,
+                    pause::spawn_pause_overlay_if_client,
+                    attach_initial_chunk_meshes.after(client::spawn_production_client_view),
+                )
+                    .run_if(is_interactive_client),
             )
-                .run_if(is_interactive_client),
-        )
-        .add_systems(
-            Update,
-            (
-                client::sync_production_camera,
-                pause::toggle_pause,
-                pause::sync_pause_overlay,
-                surface::apply_surface_actions,
-                pause::update_cursor_capture,
-                pause::sync_cursor_capture,
-                pause::pause_menu_buttons,
-                pause::sync_pause_menu_page,
-                hud::activate_workbench_from_target,
-                surface::select_hotbar_from_surface,
-                hud::inventory_slot_buttons,
-                hud::recipe_buttons,
-                hud::sync_inventory_overlay,
-                hud::sync_workbench_overlay,
-                hud::sync_slot_pickable,
-                hud::sync_hand_recipe_list,
-                hud::sync_workbench_recipe_list,
+            .add_systems(
+                Update,
+                (
+                    client::sync_production_camera,
+                    pause::toggle_pause,
+                    pause::sync_pause_overlay,
+                    surface::apply_surface_actions,
+                    pause::apply_settings_surface_actions,
+                    pause::update_cursor_capture,
+                    pause::sync_cursor_capture,
+                    pause::pause_menu_buttons,
+                    pause::release_typed_surface_press,
+                    pause::sync_pause_menu_page,
+                    pause::sync_settings_control_focus_visuals,
+                    hud::activate_workbench_from_target,
+                    surface::select_hotbar_from_surface,
+                    hud::inventory_slot_buttons,
+                    hud::recipe_buttons,
+                    hud::sync_inventory_overlay,
+                    hud::sync_workbench_overlay,
+                    hud::sync_slot_pickable,
+                    hud::sync_hand_recipe_list,
+                    hud::sync_workbench_recipe_list,
+                )
+                    .chain()
+                    .run_if(is_interactive_client),
             )
-                .chain()
-                .run_if(is_interactive_client),
-        )
-        .add_systems(
-            FixedFirst,
-            pause::suppress_gameplay_while_paused.before(PlayerSystemSet::SampleInput),
-        )
-        .add_systems(
-            FixedUpdate,
-            pause::freeze_player_while_paused
-                .after(PlayerSystemSet::PrepareMovement)
-                .before(PlayerSystemSet::MoveCapsule),
-        )
-        .add_systems(
-            FixedPostUpdate,
-            (
-                hud::sync_production_inspect_hud
-                    .after(refresh_crosshair_target)
-                    .after(sync_working_set_diagnostics),
-                hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
-                hud::sync_production_status_hud.after(refresh_crosshair_target),
-                hud::sync_production_hotbar_hud.after(refresh_crosshair_target),
-                hud::sync_production_inventory_hud.after(refresh_crosshair_target),
-            ),
-        );
+            .add_systems(
+                FixedFirst,
+                pause::suppress_gameplay_while_paused.before(PlayerSystemSet::SampleInput),
+            )
+            .add_systems(
+                FixedUpdate,
+                pause::freeze_player_while_paused
+                    .after(PlayerSystemSet::PrepareMovement)
+                    .before(PlayerSystemSet::MoveCapsule),
+            )
+            .add_systems(
+                FixedPostUpdate,
+                (
+                    hud::sync_production_inspect_hud
+                        .after(refresh_crosshair_target)
+                        .after(sync_working_set_diagnostics),
+                    hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
+                    hud::sync_production_status_hud.after(refresh_crosshair_target),
+                    hud::sync_production_hotbar_hud.after(refresh_crosshair_target),
+                    hud::sync_production_inventory_hud.after(refresh_crosshair_target),
+                ),
+            );
     }
 
     fn finish(&self, app: &mut App) {
@@ -487,6 +555,37 @@ impl EngineInstance {
         Ok((instance, lease.into_app_created_proof()))
     }
 
+    /// Installs lock-selected user settings before the first client update.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::settings::HostSettingsError`] when the production spine
+    /// is unavailable or initial runtime admission fails.
+    #[cfg(feature = "client")]
+    pub(crate) fn install_user_settings(
+        &mut self,
+        root: std::path::PathBuf,
+        user: crate::settings::HostUserSettings,
+        catalog: crate::settings::HostSettingsCatalog,
+        active_lock: latticeaxiom_core::CanonicalHash,
+    ) -> Result<(), crate::settings::HostSettingsError> {
+        let spine = self
+            .app
+            .world()
+            .get_resource::<ProductionSpine>()
+            .cloned()
+            .ok_or_else(|| crate::settings::HostSettingsError::Runtime {
+                reason: "production spine is unavailable".to_owned(),
+            })?;
+        let state = pause::ProductionSettingsState::new(root, user, catalog, active_lock)?;
+        spine
+            .set_requested_view_distance(state.applied_request())
+            .map_err(|error| crate::settings::HostSettingsError::Runtime {
+                reason: error.to_string(),
+            })?;
+        self.app.world_mut().insert_resource(state);
+        Ok(())
+    }
     /// Enqueues exact headless action frames on the production player inbox.
     ///
     /// # Errors
@@ -554,7 +653,6 @@ pub(super) fn install_production_host(
     #[cfg(feature = "client")]
     {
         app.insert_resource(hud::ProductionHudSurfaces::default())
-            .insert_resource(pause::PauseMenuPage::default())
             .insert_resource(pause::CursorCaptureState::default());
     }
     #[cfg(feature = "client")]
@@ -976,6 +1074,9 @@ pub enum ProductionHostError {
     /// Bevy instance construction failed.
     #[error(transparent)]
     Engine(#[from] EngineInstanceError),
+    /// A lock-selected package artifact failed typed verification or decoding.
+    #[error(transparent)]
+    LockedArtifact(#[from] crate::LockedPackageArtifactError),
     /// A stable identity could not be parsed.
     #[error(transparent)]
     Identity(#[from] IdentifierError),

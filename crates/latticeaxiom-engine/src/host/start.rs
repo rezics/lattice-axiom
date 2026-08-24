@@ -171,39 +171,40 @@ impl ProductionMemoryStart {
         Ok(Self::new(images, graph))
     }
 
-    /// Selects the start-shell process from reopened lock graph roots.
+    /// Selects the client process role from reopened lock capability evidence.
     ///
-    /// True when `roots` contains the front-end root and no non-platform game
-    /// root. Platform roots are namespaced under `@latticeaxiom/`; the game
-    /// package itself is selected by the lock and is never named here.
-    #[must_use]
-    pub fn lock_roots_select_shell<I, S>(roots: I) -> bool
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let mut has_front_end = false;
-        let mut has_game_root = false;
-        for root in roots {
-            let root = root.as_ref();
-            has_front_end |= root == FRONT_END_PACKAGE;
-            has_game_root |= root != FRONT_END_PACKAGE && !root.starts_with(PLATFORM_ROOT_PREFIX);
+    /// An absent `client-shell@1` entry selects the game process. A present
+    /// entry selects the shell only when it contains exactly one provider; the
+    /// provider package name and graph roots do not affect the decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError::InvalidClientShellProviderEvidence`]
+    /// when a present provider vector is empty or contains multiple rows. Also
+    /// returns an identity error if the platform capability constant is invalid.
+    pub fn lock_graph_selects_shell(
+        graph: &LockedGameGraph,
+    ) -> Result<bool, ProductionMemoryStartError> {
+        let capability = CLIENT_SHELL_CAPABILITY.parse::<CapabilityId>()?;
+        let Some(providers) = graph.capability_providers.get(&capability) else {
+            return Ok(false);
+        };
+        match providers.as_slice() {
+            [_] => Ok(true),
+            _ => Err(
+                ProductionMemoryStartError::InvalidClientShellProviderEvidence {
+                    providers: providers.clone(),
+                },
+            ),
         }
-        // Support packages may accompany the shell. Any selected game root,
-        // regardless of its package namespace, means this is the game process.
-        has_front_end && !has_game_root
-    }
-    /// Selects the start-shell process from a reopened locked graph.
-    #[must_use]
-    pub fn lock_graph_selects_shell(graph: &LockedGameGraph) -> bool {
-        Self::lock_roots_select_shell(graph.roots.iter().map(PackageName::as_str))
     }
 
     /// Seals a replacement-process handoff for an exact-ready session world.
     ///
     /// This does not create a Bevy game [`bevy::app::App`] and does not spawn
     /// [`super::ProductionSpine`]. An external supervisor must persist the
-    /// intent and spawn the game process.
+    /// intent and spawn the game process. The caller supplies the exact durable
+    /// settings revision confirmed before the handoff.
     ///
     /// # Errors
     ///
@@ -213,6 +214,7 @@ impl ProductionMemoryStart {
         &self,
         world_id: WorldId,
         now_ms: u64,
+        confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<LaunchHandoff, ProductionMemoryStartError> {
         let record = self
             .flow
@@ -224,6 +226,7 @@ impl ProductionMemoryStart {
             self.images.product_lock_hash(),
             self.images.product_lock_hash(),
             now_ms,
+            confirmed_setting_transaction_revision,
         )
         .map_err(ProductionMemoryStartError::from)
     }
@@ -433,7 +436,8 @@ impl ProductionMemoryStart {
     ///
     /// Durable oracles additionally checkpoint and return a validated
     /// [`ChildResultV1`] through [`Self::save_and_quit_durable`]. Volatile
-    /// references keep the Written close used by V2 tests.
+    /// references keep the Written close used by V2 tests. The caller supplies
+    /// the exact durable settings revision confirmed before exit.
     ///
     /// # Errors
     ///
@@ -443,11 +447,17 @@ impl ProductionMemoryStart {
         world_id: WorldId,
         mut instance: EngineInstance,
         writer: &mut SealedWorldWriterHost,
+        confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<MemoryStartEffect, ProductionMemoryStartError> {
         let _ = apply_game_surface(&mut instance, &SurfaceCommandV1::RequestSaveQuit);
         let _ = apply_game_surface(&mut instance, &SurfaceCommandV1::Confirm);
         if writer.durability_capability() == StorageDurabilityCapabilityV1::WalSyncCheckpoint {
-            let _ = self.save_and_quit_durable(world_id, instance, writer)?;
+            let _ = self.save_and_quit_durable(
+                world_id,
+                instance,
+                writer,
+                confirmed_setting_transaction_revision,
+            )?;
             return Ok(MemoryStartEffect::Shell(ShellEffect::RequestExitWorld));
         }
         self.save_world(world_id, writer)?;
@@ -461,7 +471,7 @@ impl ProductionMemoryStart {
     /// durability, containers, scheduled work, and edited chunks are
     /// published at [`CommitDurabilityV1::Durable`]. A protected checkpoint
     /// is created at that frontier. The writer is closed before the child
-    /// result is sealed.
+    /// result is sealed with the caller's confirmed durable settings revision.
     ///
     /// # Errors
     ///
@@ -473,6 +483,7 @@ impl ProductionMemoryStart {
         world_id: WorldId,
         instance: EngineInstance,
         writer: &mut SealedWorldWriterHost,
+        confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<ChildResultV1, ProductionMemoryStartError> {
         if writer.durability_capability() != StorageDurabilityCapabilityV1::WalSyncCheckpoint {
             return Err(ProductionMemoryStartError::DurableCapabilityRequired);
@@ -499,6 +510,7 @@ impl ProductionMemoryStart {
             world_id,
             frontier.durable().get(),
             checkpoint.receipt().clone(),
+            confirmed_setting_transaction_revision,
         )?;
         self.exit_world(world_id, instance)?;
         Ok(result)
@@ -639,7 +651,8 @@ impl ProductionMemoryStart {
     ///
     /// Canonical reopen discards written-but-not-durable mutations. The sealed
     /// child report uses [`ChildExitKindV1::ShutdownTimeout`] and cannot
-    /// masquerade as Save & Quit. No writer is left active.
+    /// masquerade as Save & Quit. No writer is left active. The caller supplies
+    /// the last durable settings revision confirmed before recovery.
     ///
     /// # Errors
     ///
@@ -649,6 +662,7 @@ impl ProductionMemoryStart {
         &mut self,
         world_id: WorldId,
         writer: &mut SealedWorldWriterHost,
+        confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<ChildExitReportV1, ProductionMemoryStartError> {
         if writer.durability_capability() != StorageDurabilityCapabilityV1::WalSyncCheckpoint {
             return Err(ProductionMemoryStartError::DurableCapabilityRequired);
@@ -690,7 +704,7 @@ impl ProductionMemoryStart {
             exit_kind: ChildExitKindV1::ShutdownTimeout,
             intent_generation: None,
             intent_checksum: None,
-            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+            confirmed_setting_transaction_revision,
             last_written_world: Some(durable),
             last_durable_world: Some(durable),
             shell_lock_hash: self.images.product_lock_hash(),
@@ -709,6 +723,7 @@ impl ProductionMemoryStart {
         world_id: WorldId,
         durable_revision: u64,
         checkpoint: CheckpointReceiptV1,
+        confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<ChildResultV1, ProductionMemoryStartError> {
         let record = self
             .flow
@@ -731,7 +746,7 @@ impl ProductionMemoryStart {
             shell_lock_hash: self.images.product_lock_hash(),
             world_lock_hash: None,
             world_open_plan_hash: None,
-            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+            confirmed_setting_transaction_revision,
         })?;
         let durable =
             DurableWorldRevisionV1::new(world_id, LauncherWorldRevision::new(durable_revision));
@@ -742,7 +757,7 @@ impl ProductionMemoryStart {
             exit_kind: ChildExitKindV1::SaveAndQuit,
             intent_generation: Some(intent.generation()),
             intent_checksum: Some(intent.checksum()),
-            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+            confirmed_setting_transaction_revision,
             last_written_world: Some(durable),
             last_durable_world: Some(durable),
             shell_lock_hash: self.images.product_lock_hash(),
@@ -872,6 +887,14 @@ pub enum ProductionMemoryStartError {
         /// Missing shell capability.
         capability: ShellCapability,
     },
+    /// Present client-shell capability evidence did not identify exactly one provider.
+    #[error(
+        "client-shell capability provider evidence must contain exactly one package when present; found {providers:?}"
+    )]
+    InvalidClientShellProviderEvidence {
+        /// Ordered provider rows retained from the locked graph as failure evidence.
+        providers: Vec<PackageName>,
+    },
     /// The lock graph has no root package to bind to a create intent.
     #[error("lock graph has no root package")]
     NoGraphRoot,
@@ -934,16 +957,15 @@ impl From<WorldShellError> for ProductionMemoryStartError {
     }
 }
 
-/// Logical package name of the package-driven start shell.
-const FRONT_END_PACKAGE: &str = "@latticeaxiom/front-end";
-/// Namespace reserved for platform packages that can accompany the shell.
-const PLATFORM_ROOT_PREFIX: &str = "@latticeaxiom/";
+/// Capability whose exactly-one provider selects the package-driven start shell.
+const CLIENT_SHELL_CAPABILITY: &str = "latticeaxiom:capability/client-shell@1";
 /// Seals [`LaunchHandoff::for_ready_exact`] from a catalog record and lock hashes.
 pub(crate) fn sealed_ready_exact_handoff(
     record: &WorldShellRecord,
     shell_lock_hash: CanonicalHash,
     world_lock_hash: CanonicalHash,
     now_ms: u64,
+    confirmed_setting_transaction_revision: SettingTransactionRevision,
 ) -> Result<LaunchHandoff, LaunchHandoffError> {
     LaunchHandoff::for_ready_exact(
         record,
@@ -953,7 +975,7 @@ pub(crate) fn sealed_ready_exact_handoff(
             expires_at_ms: now_ms.saturating_add(MAX_LAUNCH_INTENT_LIFETIME_MS),
             shell_lock_hash,
             world_lock_hash,
-            confirmed_setting_transaction_revision: SettingTransactionRevision::new(0),
+            confirmed_setting_transaction_revision,
         },
     )
 }
@@ -1092,10 +1114,7 @@ pub(crate) fn shell_graph_from_lock(
     graph: &LockedGameGraph,
 ) -> Result<ClientShellGraph, ProductionMemoryStartError> {
     const CAPABILITIES: [(ShellCapability, &str); 5] = [
-        (
-            ShellCapability::ClientShell,
-            "latticeaxiom:capability/client-shell@1",
-        ),
+        (ShellCapability::ClientShell, CLIENT_SHELL_CAPABILITY),
         (
             ShellCapability::WorldCatalog,
             "latticeaxiom:capability/world-catalog@1",
@@ -1134,9 +1153,9 @@ pub(crate) fn shell_graph_from_lock(
 
 #[cfg(test)]
 mod tests {
-    use super::{FRONT_END_PACKAGE, ProductionMemoryStart, sealed_ready_exact_handoff};
+    use super::sealed_ready_exact_handoff;
     use latticeaxiom_core::{CanonicalHash, WorldId};
-    use latticeaxiom_launcher::LaunchTargetV1;
+    use latticeaxiom_launcher::{LaunchTargetV1, SettingTransactionRevision};
     use latticeaxiom_start_ui::{
         ClientProcessDisposition, LaunchHandoffError, WorldCardMetadata, WorldShellRecord,
     };
@@ -1189,32 +1208,11 @@ mod tests {
     }
 
     #[test]
-    fn lock_roots_select_shell_for_front_end_and_platform_roots() {
-        assert!(ProductionMemoryStart::lock_roots_select_shell([
-            FRONT_END_PACKAGE
-        ]));
-        assert!(!ProductionMemoryStart::lock_roots_select_shell(["game"]));
-        assert!(ProductionMemoryStart::lock_roots_select_shell([
-            FRONT_END_PACKAGE,
-            "@latticeaxiom/input",
-        ]));
-        assert!(!ProductionMemoryStart::lock_roots_select_shell([
-            FRONT_END_PACKAGE,
-            "game",
-        ]));
-        assert!(!ProductionMemoryStart::lock_roots_select_shell([
-            "@latticeaxiom/settings"
-        ]));
-        assert!(!ProductionMemoryStart::lock_roots_select_shell(
-            None::<&str>
-        ));
-    }
-
-    #[test]
     fn continue_ready_exact_seals_replacement_process_handoff() {
         let record = ready_exact_record();
         let lock = CanonicalHash::digest(b"shell-lock");
-        let handoff = sealed_ready_exact_handoff(&record, lock, lock, 1_000)
+        let settings_revision = SettingTransactionRevision::new(7);
+        let handoff = sealed_ready_exact_handoff(&record, lock, lock, 1_000, settings_revision)
             .unwrap_or_else(|error| panic!("ReadyExact handoff: {error}"));
         assert_eq!(
             handoff.intent.target(),
@@ -1226,6 +1224,10 @@ mod tests {
             handoff.disposition,
             ClientProcessDisposition::ExitAfterAtomicIntentPublish
         );
+        assert_eq!(
+            handoff.intent.confirmed_setting_transaction_revision(),
+            settings_revision
+        );
 
         let mut compatible = ready_exact_record();
         if let Some(plan) = compatible.open_plan.as_mut() {
@@ -1233,7 +1235,7 @@ mod tests {
             plan.actions = vec![WorldOpenAction::ResolveCompatibleGraph];
         }
         assert!(matches!(
-            sealed_ready_exact_handoff(&compatible, lock, lock, 1_000),
+            sealed_ready_exact_handoff(&compatible, lock, lock, 1_000, settings_revision),
             Err(LaunchHandoffError::NotReadyExact)
         ));
     }

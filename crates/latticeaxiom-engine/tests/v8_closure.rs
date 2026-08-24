@@ -13,13 +13,39 @@ use latticeaxiom_content::{
 };
 use latticeaxiom_core::StableId;
 use latticeaxiom_engine::{
-    authored_content_catalog, authored_content_display_catalog, authored_gameplay_catalog,
+    AuthoredContentCatalogSourcesV1, AuthoredContentDisplayCatalogSourcesV1,
+    AuthoredGameplayCatalogSourcesV1, AuthoredPresentationCatalogSourcesV1,
+    compile_authored_content_catalog, compile_authored_content_display_catalog,
+    compile_authored_gameplay_catalog,
 };
 use latticeaxiom_voxel_runtime::{FluidRevisionStamp, admit_fluid_completion};
 use latticeaxiom_world_wire::{
     CHUNK_EDGE_V1, FluidPaletteOpenDispositionV1, SOLID_FLUID_PALETTE_SCHEMA_ID_V1,
     classify_fluid_palette_open,
 };
+
+const AUTHORED_BLOCKS_JSON: &str =
+    include_str!("../../../packages/terrenia/blocks/data/authored-catalog-v1.json");
+const AUTHORED_BLOCK_DISPLAY_JSON: &str =
+    include_str!("../../../packages/terrenia/blocks/data/authored-display-v1.json");
+const AUTHORED_RULES_JSON: &str =
+    include_str!("../../../packages/terrenia/gameplay/data/authored-rules-v1.json");
+const AUTHORED_TOOLS_JSON: &str =
+    include_str!("../../../packages/terrenia/tools/data/authored-tools-v1.json");
+const AUTHORED_TOOL_DISPLAY_JSON: &str =
+    include_str!("../../../packages/terrenia/tools/data/authored-display-v1.json");
+const AUTHORED_BIOMES_JSON: &str =
+    include_str!("../../../packages/terrenia/worldgen/data/authored-biomes-v1.json");
+const D7_BIOME_IDS: &str =
+    include_str!("../../../packages/terrenia/worldgen/data/goldens/d7-biome-ids.txt");
+const D9_BLOCK_IDS: &str =
+    include_str!("../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt");
+const FLUID_IDS: &str =
+    include_str!("../../../packages/terrenia/blocks/data/goldens/fluid-ids.txt");
+const PRESENTATION_DISPLAY_JSON: &str =
+    include_str!("../../../packages/terrenia/presentation/data/authored-display-v1.json");
+const PRESENTATION_ASSETS_JSON: &str =
+    include_str!("../../../packages/terrenia/presentation/data/authored-assets-v1.json");
 
 fn activate(target: &'static str, source: InputSource) -> latticeaxiom_client_ui::SemanticCommand {
     surface_command(
@@ -35,7 +61,13 @@ fn stable_id(value: &str) -> StableId {
 
 #[test]
 fn locked_catalog_is_exactly_72_blocks_and_water_lava() {
-    let catalog = authored_content_catalog().expect("D9 catalog compiles");
+    let catalog = compile_authored_content_catalog(AuthoredContentCatalogSourcesV1 {
+        blocks: AUTHORED_BLOCKS_JSON,
+        biomes: AUTHORED_BIOMES_JSON,
+        d7_biome_ids: D7_BIOME_IDS,
+        d9_block_ids: D9_BLOCK_IDS,
+    })
+    .expect("D9 catalog compiles");
     assert_eq!(catalog.blocks().len(), 72);
     let fluids = catalog
         .fluids()
@@ -43,7 +75,13 @@ fn locked_catalog_is_exactly_72_blocks_and_water_lava() {
         .map(|fluid| fluid.header.stable_id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(fluids, ["terrenia:fluid/lava", "terrenia:fluid/water"]);
-    let gameplay = authored_gameplay_catalog().expect("gameplay catalog compiles");
+    let gameplay = compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
+        blocks: AUTHORED_BLOCKS_JSON,
+        rules: AUTHORED_RULES_JSON,
+        tools: AUTHORED_TOOLS_JSON,
+        d9_block_ids: D9_BLOCK_IDS,
+    })
+    .expect("gameplay catalog compiles");
     for id in [
         "terrenia:block/workbench",
         "terrenia:block/furnace",
@@ -61,8 +99,28 @@ fn locked_catalog_is_exactly_72_blocks_and_water_lava() {
 #[test]
 fn omitted_presentation_matches_overlay_and_does_not_enter_content_catalog() {
     let omitted =
-        authored_content_display_catalog(false).expect("omitted presentation catalog compiles");
-    let presented = authored_content_display_catalog(true).expect("presentation catalog compiles");
+        compile_authored_content_display_catalog(AuthoredContentDisplayCatalogSourcesV1 {
+            block_display: AUTHORED_BLOCK_DISPLAY_JSON,
+            tool_display: AUTHORED_TOOL_DISPLAY_JSON,
+            tool_catalog: AUTHORED_TOOLS_JSON,
+            d9_block_ids: D9_BLOCK_IDS,
+            fluid_ids: FLUID_IDS,
+            presentation: None,
+        })
+        .expect("omitted presentation catalog compiles");
+    let presented =
+        compile_authored_content_display_catalog(AuthoredContentDisplayCatalogSourcesV1 {
+            block_display: AUTHORED_BLOCK_DISPLAY_JSON,
+            tool_display: AUTHORED_TOOL_DISPLAY_JSON,
+            tool_catalog: AUTHORED_TOOLS_JSON,
+            d9_block_ids: D9_BLOCK_IDS,
+            fluid_ids: FLUID_IDS,
+            presentation: Some(AuthoredPresentationCatalogSourcesV1 {
+                display: PRESENTATION_DISPLAY_JSON,
+                assets: PRESENTATION_ASSETS_JSON,
+            }),
+        })
+        .expect("presentation catalog compiles");
     assert!(!omitted.includes_presentation());
     assert!(presented.includes_presentation());
     let omitted_ids = omitted.locked_ids().collect::<Vec<_>>();
@@ -72,7 +130,13 @@ fn omitted_presentation_matches_overlay_and_does_not_enter_content_catalog() {
     for id in omitted_ids {
         assert_eq!(omitted.lookup(id), presented.lookup(id), "{id}");
     }
-    let catalog = authored_content_catalog().expect("content catalog compiles");
+    let catalog = compile_authored_content_catalog(AuthoredContentCatalogSourcesV1 {
+        blocks: AUTHORED_BLOCKS_JSON,
+        biomes: AUTHORED_BIOMES_JSON,
+        d7_biome_ids: D7_BIOME_IDS,
+        d9_block_ids: D9_BLOCK_IDS,
+    })
+    .expect("content catalog compiles");
     assert_eq!(catalog.blocks().len(), 72);
     assert_eq!(catalog.fluids().len(), 2);
 }

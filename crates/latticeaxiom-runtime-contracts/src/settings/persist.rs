@@ -1,9 +1,7 @@
 //! Canonical local-settings envelope and old-or-complete-new file protocol.
 
 use std::collections::BTreeMap;
-#[cfg(windows)]
-use std::fs::OpenOptions;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
@@ -30,6 +28,9 @@ pub const LOCAL_SETTINGS_FILE_NAME: &str = "local-settings.v1.json";
 
 /// Sibling temporary file used by the publish protocol.
 pub const LOCAL_SETTINGS_TEMPORARY_FILE_NAME: &str = ".local-settings.v1.json.tmp";
+
+/// Stable sibling lock file used by every cooperating filesystem adapter.
+const LOCAL_SETTINGS_LOCK_FILE_NAME: &str = ".local-settings.v1.lock";
 
 /// Maximum accepted local-settings file size.
 pub const MAX_LOCAL_SETTINGS_BYTES: usize = 1024 * 1024;
@@ -242,6 +243,7 @@ impl LatticeLocalSettingsV1 {
     pub fn reject_pending_restart(&self) -> Self {
         Self {
             pending_restart: None,
+            store_revision: self.store_revision.saturating_next(),
             ..self.clone()
         }
     }
@@ -380,6 +382,46 @@ pub enum LocalSettingsPersistError {
     /// A deterministic one-shot fault was reached.
     #[error("injected local-settings publication fault at {0:?}")]
     Injected(LocalSettingsFaultPoint),
+    /// The visible name was replaced, but containing-directory durability is uncertain.
+    #[error("local settings are visible, but publication durability is uncertain: {reason}")]
+    PublicationDurabilityUncertain {
+        /// Underlying directory-synchronization diagnostic.
+        reason: String,
+    },
+    /// Replacement failed after moving the old file and restoring its backup also failed.
+    #[error("local settings visible-state recovery failed: {reason}")]
+    VisibleRecoveryFailed {
+        /// Replacement and backup-restoration diagnostics.
+        reason: String,
+    },
+    /// Crash recovery selected a complete value, but its directory update is not durable.
+    #[error("local settings recovery durability is uncertain: {reason}")]
+    RecoveryDurabilityUncertain {
+        /// Underlying directory-synchronization diagnostic.
+        reason: String,
+    },
+    /// The proposal was derived from a stale visible store revision.
+    #[error(
+        "local settings revision conflict: current state requires revision {expected}, proposal carries revision {proposed}"
+    )]
+    RevisionConflict {
+        /// Only revision accepted for the next publication.
+        expected: u64,
+        /// Revision carried by the rejected proposal.
+        proposed: u64,
+    },
+    /// No unique successor exists for the visible revision.
+    #[error("local settings store revision {current} is exhausted")]
+    RevisionExhausted {
+        /// Visible saturated revision.
+        current: u64,
+    },
+    /// The visible bytes cannot prove a revision for compare-and-swap.
+    #[error("local settings visible revision is unavailable: {reason}")]
+    RevisionStateUnavailable {
+        /// Decode or schema diagnostic for the visible bytes.
+        reason: String,
+    },
     /// Internal deterministic state was poisoned by a panic.
     #[error("local-settings publisher state is poisoned")]
     StatePoisoned,
@@ -391,6 +433,30 @@ pub enum LocalSettingsPersistError {
         /// Operating-system diagnostic.
         reason: String,
     },
+}
+
+impl LocalSettingsPersistError {
+    /// Returns whether ordinary rollback cannot prove the visible store state.
+    #[must_use]
+    pub const fn publication_state_uncertain(&self) -> bool {
+        matches!(
+            self,
+            Self::Injected(LocalSettingsFaultPoint::DirectorySync)
+                | Self::PublicationDurabilityUncertain { .. }
+                | Self::VisibleRecoveryFailed { .. }
+                | Self::RecoveryDurabilityUncertain { .. }
+        )
+    }
+
+    /// Returns whether the proposed envelope is visible but not crash-durable.
+    #[must_use]
+    pub const fn proposed_value_is_visible_but_durability_uncertain(&self) -> bool {
+        matches!(
+            self,
+            Self::Injected(LocalSettingsFaultPoint::DirectorySync)
+                | Self::PublicationDurabilityUncertain { .. }
+        )
+    }
 }
 
 /// Canonical local-settings persistence protocol.
@@ -479,7 +545,92 @@ pub fn decode_local_settings(bytes: &[u8]) -> Result<LatticeLocalSettingsV1, Iso
             ),
         });
     }
+    if envelope.writer != SettingWriter::LocalUser {
+        return Err(IsolationReason::Corrupt {
+            detail: format!(
+                "local-settings writer must be local-user, found {:?}",
+                envelope.writer
+            ),
+        });
+    }
+    if envelope.transaction_revision.get() > envelope.store_revision.get() {
+        return Err(IsolationReason::Corrupt {
+            detail: "confirmed transaction revision exceeds store revision".to_owned(),
+        });
+    }
+    if let Some(journal) = &envelope.pending_restart {
+        let intended = envelope
+            .transaction_revision
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| IsolationReason::Corrupt {
+                detail: "pending restart cannot advance an exhausted transaction revision"
+                    .to_owned(),
+            })?;
+        if journal.generation != envelope.store_revision.get()
+            || journal.intended_transaction_revision.get() != intended
+        {
+            return Err(IsolationReason::Corrupt {
+                detail: "pending-restart journal revisions do not match the containing envelope"
+                    .to_owned(),
+            });
+        }
+    }
     Ok(envelope)
+}
+
+fn visible_store_revision(
+    bytes: Option<&[u8]>,
+) -> Result<Option<StoreRevision>, LocalSettingsPersistError> {
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    decode_local_settings(bytes)
+        .map(|envelope| Some(envelope.store_revision()))
+        .map_err(
+            |reason| LocalSettingsPersistError::RevisionStateUnavailable {
+                reason: isolation_reason_text(&reason),
+            },
+        )
+}
+
+fn validate_next_store_revision(
+    current: Option<StoreRevision>,
+    proposed: StoreRevision,
+) -> Result<(), LocalSettingsPersistError> {
+    let Some(current) = current else {
+        if proposed.get() == 0 {
+            return Err(LocalSettingsPersistError::RevisionConflict {
+                expected: 1,
+                proposed: 0,
+            });
+        }
+        // An in-memory baseline may not have been published yet. The
+        // exclusive store lock makes this first publication atomic.
+        return Ok(());
+    };
+    let current_value = current.get();
+    let Some(expected) = current_value.checked_add(1) else {
+        return Err(LocalSettingsPersistError::RevisionExhausted {
+            current: current_value,
+        });
+    };
+    if proposed.get() != expected {
+        return Err(LocalSettingsPersistError::RevisionConflict {
+            expected,
+            proposed: proposed.get(),
+        });
+    }
+    Ok(())
+}
+
+fn isolation_reason_text(reason: &IsolationReason) -> String {
+    match reason {
+        IsolationReason::Corrupt { detail } => detail.clone(),
+        IsolationReason::NewerRequired { found, supported } => {
+            format!("local-settings schema version {found} requires newer support than {supported}")
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -637,6 +788,8 @@ impl LocalSettingsStore for DeterministicLocalSettingsStore {
             .state
             .lock()
             .map_err(|_| LocalSettingsPersistError::StatePoisoned)?;
+        let current_revision = visible_store_revision(state.visible.as_deref())?;
+        validate_next_store_revision(current_revision, envelope.store_revision())?;
         state.trace.clear();
         state.temporary = Some(prepared.canonical_bytes.clone());
 
@@ -684,6 +837,11 @@ pub struct FilesystemLocalSettingsStore {
     root: PathBuf,
 }
 
+#[derive(Debug)]
+struct LocalSettingsDirectoryLock {
+    _file: File,
+}
+
 impl FilesystemLocalSettingsStore {
     /// Opens a store in an existing directory.
     ///
@@ -705,6 +863,29 @@ impl FilesystemLocalSettingsStore {
 
     fn temporary_path(&self) -> PathBuf {
         self.root.join(LOCAL_SETTINGS_TEMPORARY_FILE_NAME)
+    }
+
+    fn backup_path(&self) -> PathBuf {
+        self.root.join(backup_file_name())
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.root.join(LOCAL_SETTINGS_LOCK_FILE_NAME)
+    }
+
+    fn acquire_exclusive_lock(
+        &self,
+    ) -> Result<LocalSettingsDirectoryLock, LocalSettingsPersistError> {
+        let path = self.lock_path();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| io_error(&path, &source))?;
+        file.lock().map_err(|source| io_error(&path, &source))?;
+        Ok(LocalSettingsDirectoryLock { _file: file })
     }
 
     fn isolated_path(&self, isolated_id: &str) -> PathBuf {
@@ -742,6 +923,78 @@ impl FilesystemLocalSettingsStore {
         }
     }
 
+    fn remove_file_if_present(path: &Path) -> Result<bool, LocalSettingsPersistError> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(true),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(io_error(path, &source)),
+        }
+    }
+
+    fn sync_recovered_layout(&self) -> Result<(), LocalSettingsPersistError> {
+        self.sync_directory().map_err(|error| {
+            LocalSettingsPersistError::RecoveryDurabilityUncertain {
+                reason: error.to_string(),
+            }
+        })
+    }
+
+    fn validate_backup_bytes(bytes: &[u8]) -> Result<(), LocalSettingsPersistError> {
+        decode_local_settings(bytes).map(|_| ()).map_err(|reason| {
+            LocalSettingsPersistError::VisibleRecoveryFailed {
+                reason: format!(
+                    "backup cannot restore a complete local-settings envelope: {}",
+                    isolation_reason_text(&reason)
+                ),
+            }
+        })
+    }
+
+    fn restore_backup(
+        &self,
+        backup: &Path,
+        visible: &Path,
+        backup_bytes: &[u8],
+    ) -> Result<(), LocalSettingsPersistError> {
+        Self::validate_backup_bytes(backup_bytes)?;
+        fs::rename(backup, visible).map_err(|source| {
+            LocalSettingsPersistError::VisibleRecoveryFailed {
+                reason: format!(
+                    "failed to restore complete backup `{}` to `{}`: {source}",
+                    backup.display(),
+                    visible.display()
+                ),
+            }
+        })?;
+        Self::remove_file_if_present(&self.temporary_path())?;
+        self.sync_recovered_layout()
+    }
+
+    fn recover_interrupted_replacement(&self) -> Result<(), LocalSettingsPersistError> {
+        let backup = self.backup_path();
+        let Some(backup_bytes) = Self::read_regular_file(&backup)? else {
+            return Ok(());
+        };
+        let visible = self.visible_path();
+        let temporary = self.temporary_path();
+        let Some(visible_bytes) = Self::read_regular_file(&visible)? else {
+            return self.restore_backup(&backup, &visible, &backup_bytes);
+        };
+
+        match decode_local_settings(&visible_bytes) {
+            Ok(_) => {
+                Self::remove_file_if_present(&backup)?;
+                Self::remove_file_if_present(&temporary)?;
+                self.sync_recovered_layout()
+            }
+            Err(reason) => {
+                Self::validate_backup_bytes(&backup_bytes)?;
+                self.isolate_bytes(&visible, &visible_bytes, &reason)?;
+                self.restore_backup(&backup, &visible, &backup_bytes)
+            }
+        }
+    }
+
     fn write_temporary(&self, bytes: &[u8]) -> Result<(), LocalSettingsPersistError> {
         let temporary = self.temporary_path();
         match fs::remove_file(&temporary) {
@@ -768,16 +1021,14 @@ impl FilesystemLocalSettingsStore {
     fn sync_directory(&self) -> Result<(), LocalSettingsPersistError> {
         platform_sync_directory(&self.root)
     }
-}
 
-impl LocalSettingsStore for FilesystemLocalSettingsStore {
-    fn load(&self) -> Result<LocalSettingsLoad, LocalSettingsPersistError> {
+    fn load_locked(&self) -> Result<LocalSettingsLoad, LocalSettingsPersistError> {
         let visible = self.visible_path();
         let temporary = self.temporary_path();
         if let Some(bytes) = Self::read_regular_file(&visible)? {
             match decode_local_settings(&bytes) {
                 Ok(envelope) => {
-                    let _ = fs::remove_file(&temporary);
+                    let _ = Self::remove_file_if_present(&temporary);
                     Ok(LocalSettingsLoad {
                         envelope,
                         origin: LocalSettingsOrigin::Complete,
@@ -785,7 +1036,7 @@ impl LocalSettingsStore for FilesystemLocalSettingsStore {
                 }
                 Err(reason) => {
                     let isolated_id = self.isolate_bytes(&visible, &bytes, &reason)?;
-                    let _ = fs::remove_file(&temporary);
+                    let _ = Self::remove_file_if_present(&temporary);
                     Ok(LocalSettingsLoad {
                         envelope: LatticeLocalSettingsV1::empty(),
                         origin: LocalSettingsOrigin::Isolated {
@@ -809,16 +1060,47 @@ impl LocalSettingsStore for FilesystemLocalSettingsStore {
             })
         }
     }
+}
+
+impl LocalSettingsStore for FilesystemLocalSettingsStore {
+    fn load(&self) -> Result<LocalSettingsLoad, LocalSettingsPersistError> {
+        let _lock = self.acquire_exclusive_lock()?;
+        self.recover_interrupted_replacement()?;
+        self.load_locked()
+    }
 
     fn persist(
         &self,
         envelope: &LatticeLocalSettingsV1,
     ) -> Result<LocalSettingsPublishReceipt, LocalSettingsPersistError> {
         let prepared = PreparedLocalSettingsV1::new(envelope)?;
+        let _lock = self.acquire_exclusive_lock()?;
+        self.recover_interrupted_replacement()?;
+        let visible_bytes = Self::read_regular_file(&self.visible_path())?;
+        let current_revision = visible_store_revision(visible_bytes.as_deref())?;
+        validate_next_store_revision(current_revision, envelope.store_revision())?;
         self.write_temporary(&prepared.canonical_bytes)?;
-        self.replace_visible()?;
-        self.sync_directory()?;
-        let _ = fs::remove_file(self.root.join(backup_file_name()));
+        if let Err(error) = self.replace_visible() {
+            if error.publication_state_uncertain() {
+                return Err(error);
+            }
+            if let Err(recovery_sync) = self.sync_directory() {
+                return Err(LocalSettingsPersistError::VisibleRecoveryFailed {
+                    reason: format!(
+                        "replacement failed and the restored directory state could not be synchronized: {error}; {recovery_sync}"
+                    ),
+                });
+            }
+            return Err(error);
+        }
+        if let Err(error) = self.sync_directory() {
+            return Err(LocalSettingsPersistError::PublicationDurabilityUncertain {
+                reason: error.to_string(),
+            });
+        }
+        // The new visible value is already directory-durable. A stale backup is
+        // safe because the next locked load deterministically completes it.
+        let _ = Self::remove_file_if_present(&self.backup_path());
         Ok(LocalSettingsPublishReceipt {
             content_hash: prepared.content_hash,
             published_bytes: prepared.canonical_bytes.len(),
@@ -827,18 +1109,29 @@ impl LocalSettingsStore for FilesystemLocalSettingsStore {
 }
 
 fn replace_existing(temp: &Path, dest: &Path) -> Result<(), LocalSettingsPersistError> {
+    replace_existing_with(temp, dest, |from, to| fs::rename(from, to))
+}
+
+fn replace_existing_with(
+    temp: &Path,
+    dest: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), LocalSettingsPersistError> {
     let backup = dest.with_file_name(backup_file_name());
     let _ = fs::remove_file(&backup);
-    fs::rename(dest, &backup).map_err(|source| io_error(dest, &source))?;
-    match fs::rename(temp, dest) {
-        Ok(()) => {
-            let _ = fs::remove_file(&backup);
-            Ok(())
-        }
-        Err(source) => {
-            let _ = fs::rename(&backup, dest);
-            Err(io_error(dest, &source))
-        }
+    rename(dest, &backup).map_err(|source| io_error(dest, &source))?;
+    match rename(temp, dest) {
+        Ok(()) => Ok(()),
+        Err(source) => match rename(&backup, dest) {
+            Ok(()) => Err(io_error(dest, &source)),
+            Err(restore) => Err(LocalSettingsPersistError::VisibleRecoveryFailed {
+                reason: format!(
+                    "replacement failed for `{}`: {source}; backup restore from `{}` failed: {restore}",
+                    dest.display(),
+                    backup.display()
+                ),
+            }),
+        },
     }
 }
 
@@ -898,13 +1191,17 @@ fn platform_sync_directory(root: &Path) -> Result<(), LocalSettingsPersistError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     fn user_envelope(scale: f64) -> LatticeLocalSettingsV1 {
-        let mut envelope = LatticeLocalSettingsV1::empty();
-        envelope = envelope.with_user_commit(
+        next_user_envelope(&LatticeLocalSettingsV1::empty(), scale)
+    }
+
+    fn next_user_envelope(current: &LatticeLocalSettingsV1, scale: f64) -> LatticeLocalSettingsV1 {
+        current.with_user_commit(
             BTreeMap::from([(
                 match "latticeaxiom:setting/ui-scale".parse() {
                     Ok(id) => id,
@@ -913,8 +1210,7 @@ mod tests {
                 StoredSettingEntryV1::new(1, serde_json::json!(scale)),
             )]),
             BindingProfileV1::empty(),
-        );
-        envelope
+        )
     }
 
     #[test]
@@ -934,7 +1230,7 @@ mod tests {
                 Ok(()) => {}
                 Err(error) => panic!("inject failed: {error}"),
             }
-            let second = user_envelope(2.0);
+            let second = next_user_envelope(&first, 2.0);
             assert!(store.persist(&second).is_err());
             let loaded = match store.load() {
                 Ok(value) => value,
@@ -948,8 +1244,16 @@ mod tests {
             Ok(()) => {}
             Err(error) => panic!("inject failed: {error}"),
         }
-        let second = user_envelope(2.0);
-        assert!(store.persist(&second).is_err());
+        let second = next_user_envelope(&first, 2.0);
+        let error = store
+            .persist(&second)
+            .expect_err("directory-sync fault cannot claim durable publication");
+        assert_eq!(
+            error,
+            LocalSettingsPersistError::Injected(LocalSettingsFaultPoint::DirectorySync)
+        );
+        assert!(error.publication_state_uncertain());
+        assert!(error.proposed_value_is_visible_but_durability_uncertain());
         let loaded = match store.load() {
             Ok(value) => value,
             Err(error) => panic!("load after directory-sync fault failed: {error}"),
@@ -975,6 +1279,67 @@ mod tests {
         };
         assert_eq!(loaded.envelope(), &first);
         assert_eq!(loaded.origin(), &LocalSettingsOrigin::Complete);
+    }
+
+    #[test]
+    fn failed_backup_restore_reports_visible_state_uncertainty() {
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "latticeaxiom-recovery-fault-{}-{serial}",
+            std::process::id()
+        ));
+        let temporary = root.join("temporary-settings.json");
+        let destination = root.join("settings.json");
+        let mut rename_call = 0_u8;
+        let error = replace_existing_with(&temporary, &destination, |_, _| {
+            rename_call += 1;
+            match rename_call {
+                1 => Ok(()),
+                2 => Err(io::Error::other("injected replacement failure")),
+                3 => Err(io::Error::other("injected backup restore failure")),
+                _ => panic!("replace protocol made an unexpected rename call"),
+            }
+        })
+        .expect_err("failed recovery must not be reported as an ordinary I/O rollback");
+
+        assert!(matches!(
+            &error,
+            LocalSettingsPersistError::VisibleRecoveryFailed { reason }
+                if reason.contains("injected replacement failure")
+                    && reason.contains("injected backup restore failure")
+        ));
+        assert!(error.publication_state_uncertain());
+        assert!(!error.proposed_value_is_visible_but_durability_uncertain());
+    }
+
+    #[test]
+    fn successful_backup_restore_remains_an_ordinary_rollback_error() {
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "latticeaxiom-recovery-success-{}-{serial}",
+            std::process::id()
+        ));
+        let temporary = root.join("temporary-settings.json");
+        let destination = root.join("settings.json");
+        let mut rename_call = 0_u8;
+        let error = replace_existing_with(&temporary, &destination, |_, _| {
+            rename_call += 1;
+            match rename_call {
+                1 | 3 => Ok(()),
+                2 => Err(io::Error::other("injected replacement failure")),
+                _ => panic!("replace protocol made an unexpected rename call"),
+            }
+        })
+        .expect_err("a restored old value still reports the replacement failure");
+
+        assert!(matches!(
+            &error,
+            LocalSettingsPersistError::Io { path, reason }
+                if path == &destination.display().to_string()
+                    && reason.contains("injected replacement failure")
+        ));
+        assert!(!error.publication_state_uncertain());
+        assert!(!error.proposed_value_is_visible_but_durability_uncertain());
     }
 
     #[test]

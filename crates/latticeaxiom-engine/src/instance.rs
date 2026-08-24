@@ -5,13 +5,16 @@ use std::{fmt, time::Duration};
 #[cfg(feature = "client")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(feature = "client")]
-use bevy::prelude::{DefaultPlugins, Window, WindowPlugin};
 use bevy::{
     app::{App, FixedLast, PluginsState, ScheduleRunnerPlugin},
     prelude::{MinimalPlugins, PluginGroup, ResMut, Resource},
     tasks::tick_global_task_pools_on_main_thread,
     time::{Fixed, Real, Time, TimeUpdateStrategy, Virtual},
+};
+#[cfg(feature = "client")]
+use bevy::{
+    input_focus::tab_navigation::TabNavigationPlugin,
+    prelude::{DefaultPlugins, Window, WindowPlugin},
 };
 use thiserror::Error;
 
@@ -157,6 +160,7 @@ impl EngineInstance {
                 }),
                 ..WindowPlugin::default()
             }))
+            .add_plugins(TabNavigationPlugin)
             .add_systems(FixedLast, count_fixed_tick);
         host_setup(&mut app);
         finalize_plugins(&mut app);

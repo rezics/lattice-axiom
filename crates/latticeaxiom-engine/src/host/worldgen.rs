@@ -14,12 +14,12 @@ use latticeaxiom_compose::{LockedPackage, PlayableWorldHardLimitsV1};
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_player::PlayerMovementProfileV1;
 use latticeaxiom_runtime_contracts::{
-    CaveConnectivityInspectFactsV1, CaveInspectAxisV1, CaveOwnershipInspectFactsV1,
-    CaveSdfInspectFactsV1, EngineEpoch, EntranceInspectFactsV1, FluidDecisionInspectFactsV1,
-    FluidOccupancyInspectV1, GeologyInspectFactsV1, PlanningSeamInspectFactsV1,
-    PortalInspectFactsV1, PortalInspectFluidV1, ResourceInspectFactsV1, RiverInspectFactsV1,
-    SpawnInspectFactsV1, TerritoryInspectFactsV1, VegetationInspectFactsV1, WorldEpoch,
-    WorldgenInspectBodyV1, WorldgenInspectCollectionV1, WorldgenInspectKindV1,
+    AUTHORED_MAX_VIEW_DISTANCE_CHUNKS, CaveConnectivityInspectFactsV1, CaveInspectAxisV1,
+    CaveOwnershipInspectFactsV1, CaveSdfInspectFactsV1, EngineEpoch, EntranceInspectFactsV1,
+    FluidDecisionInspectFactsV1, FluidOccupancyInspectV1, GeologyInspectFactsV1,
+    PlanningSeamInspectFactsV1, PortalInspectFactsV1, PortalInspectFluidV1, ResourceInspectFactsV1,
+    RiverInspectFactsV1, SpawnInspectFactsV1, TerritoryInspectFactsV1, VegetationInspectFactsV1,
+    WorldEpoch, WorldgenInspectBodyV1, WorldgenInspectCollectionV1, WorldgenInspectKindV1,
     WorldgenInspectLimits, WorldgenInspectQueryV1, WorldgenInspectRecordV1,
     WorldgenInspectReportV1, WorldgenInspectSamplesV1, compile_worldgen_inspect_report,
 };
@@ -101,14 +101,31 @@ pub(super) fn spine_config() -> WorldgenConfigV1 {
     }
 }
 
-/// Returns host streaming clamps. Durable save radius is unused.
+/// Accepted active-chunk ceiling for the desktop reference profile.
+const HOST_MAX_ACTIVE_CHUNKS: u32 = 405;
+/// Concurrent chunk admission stays bounded independently of requested range.
+const HOST_MAX_IN_FLIGHT_CHUNKS: u32 = 8;
+/// Durable save radius remains unused by the in-memory production host.
+const HOST_DURABLE_SAVE_RADIUS_CHUNKS: u32 = 4;
+
+/// Returns host streaming clamps for the authored `2..=32` request contract.
+///
+/// The current 8³ fixture does not claim 32 chunks of effective coverage.
+/// [`super::stream::StreamClamps`] derives the lower effective radius from the
+/// accepted 405-chunk working-set ceiling and reports the binding constraint.
 ///
 /// # Errors
 ///
 /// Returns [`ProductionHostError::InvalidHostLimits`] when a clamp is zero.
 pub(super) fn host_hard_limits() -> Result<PlayableWorldHardLimitsV1, ProductionHostError> {
-    PlayableWorldHardLimitsV1::new(4, 4, 128, 8, 4)
-        .map_err(|_| ProductionHostError::InvalidHostLimits)
+    PlayableWorldHardLimitsV1::new(
+        AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
+        AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
+        HOST_MAX_ACTIVE_CHUNKS,
+        HOST_MAX_IN_FLIGHT_CHUNKS,
+        HOST_DURABLE_SAVE_RADIUS_CHUNKS,
+    )
+    .map_err(|_| ProductionHostError::InvalidHostLimits)
 }
 
 /// Materializes sparse snapshot candidates from the compiled V5 plan.

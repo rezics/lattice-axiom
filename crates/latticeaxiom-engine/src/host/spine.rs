@@ -67,10 +67,11 @@ use latticeaxiom_worldgen::{
 use super::{
     ChunkLifecycle, ChunkMeshCursor, ProductionHostError, ProductionPlayerPose,
     SealedWorldWriterHost,
-    catalog::{authored_content_catalog, host_worldgen_catalog, lock_selected_gameplay_catalog},
+    catalog::{
+        host_worldgen_catalog, lock_selected_content_catalog, lock_selected_gameplay_catalog,
+    },
     display::{
-        ContentDisplayCatalogV1, ContentDisplayLabelV1, authored_content_display_catalog,
-        presentation_package_selected,
+        ContentDisplayCatalogV1, ContentDisplayLabelV1, lock_selected_content_display_catalog,
     },
     fluid::{HostFluidTickV1, tick_resident as tick_resident_fluids},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
@@ -78,8 +79,8 @@ use super::{
     profile::StreamingProfileEvidenceV1,
     session::{DurablePlayerSessionV1, PLAYER_SESSION_ENTITY},
     stream::{
-        InterestClass, LOOK_AHEAD_EXPIRY_TICKS, StreamClamps, chebyshev_xz, desired_chunks,
-        interest_class, prioritize_chunks, retain_protected, sticky_look_ahead,
+        InterestClass, LOOK_AHEAD_EXPIRY_TICKS, StreamClamps, ViewDistanceStatusV1, chebyshev_xz,
+        desired_chunks, interest_class, prioritize_chunks, retain_protected, sticky_look_ahead,
     },
     worldgen::{
         RequiredCaveEntranceV1, compile_host_worldgen_inspect, compile_plan, generate_plan_chunks,
@@ -354,7 +355,7 @@ pub(super) struct PresentationDelta {
 pub(super) struct MeshPresentation {
     pub(super) coordinate: ChunkCoordinate,
     pub(super) origin: Vec3,
-    pub(super) geometry: MeshBuffer<LayerMergeKey>,
+    pub(super) geometry: Arc<MeshBuffer<LayerMergeKey>>,
     pub(super) bounds: Option<Aabb>,
 }
 
@@ -377,7 +378,7 @@ pub(super) struct OccupiedCell {
 struct ChunkDerived {
     mesh_receipt: Option<MeshReceipt>,
     mesh_source: Option<MeshSource>,
-    geometry: Option<MeshBuffer<LayerMergeKey>>,
+    geometry: Option<Arc<MeshBuffer<LayerMergeKey>>>,
     bounds: Option<Aabb>,
     collider: Option<Collider>,
     occupied: Vec<OccupiedCell>,
@@ -572,8 +573,8 @@ impl ProductionSpine {
         )?;
         let dimension = worldgen.dimension.clone();
         let kernel = Arc::new(MemoryTransactionKernel::new());
-        let content = authored_content_catalog()?;
-        let display = authored_content_display_catalog(presentation_package_selected(images))?;
+        let content = lock_selected_content_catalog(images)?;
+        let display = lock_selected_content_display_catalog(images)?;
         let palette = worldgen.palette.clone();
         let solid_palette = compile_host_solid_palette(&content, &palette)?;
         let fluid_palette = compile_host_fluid_palette(&content)?;
@@ -924,12 +925,12 @@ impl ProductionSpine {
     pub(super) fn derived_geometry(
         &self,
         coordinate: ChunkCoordinate,
-    ) -> Option<MeshBuffer<LayerMergeKey>> {
+    ) -> Option<Arc<MeshBuffer<LayerMergeKey>>> {
         self.lock_inner().ok().and_then(|inner| {
             inner
                 .derived
                 .get(&coordinate)
-                .and_then(|derived| derived.geometry.clone())
+                .and_then(|derived| derived.geometry.as_ref().map(Arc::clone))
         })
     }
 
@@ -1155,11 +1156,11 @@ impl ProductionSpine {
         self.lock_inner().ok().map(|inner| inner.clamps.hard_limits)
     }
 
-    /// Returns the player-requested view radius in chunks.
+    /// Returns the player request admitted after the host cap.
     #[must_use]
-    pub fn requested_view_distance(&self) -> u32 {
+    pub fn admitted_view_distance(&self) -> u32 {
         self.lock_inner()
-            .map_or(1, |inner| inner.clamps.requested_view_distance)
+            .map_or(1, |inner| inner.clamps.admitted_view_distance)
     }
 
     /// Returns the interest radius actually admitted after resident-budget clamping.
@@ -1169,7 +1170,15 @@ impl ProductionSpine {
             .map_or(1, |inner| inner.clamps.interest_radius)
     }
 
-    /// Requests a view radius in `1..=hard_limits.view_distance_chunks`.
+    /// Returns the accepted request and its effective host clamp.
+    #[must_use]
+    pub fn view_distance_status(&self) -> Option<ViewDistanceStatusV1> {
+        self.lock_inner()
+            .ok()
+            .map(|inner| inner.clamps.view_distance_status())
+    }
+
+    /// Requests a view radius in `2..=hard_limits.view_distance_chunks`.
     ///
     /// The admitted interest radius may be lower than `chunks` when the
     /// resident budget cannot cover that Chebyshev ring.
@@ -2122,8 +2131,8 @@ impl ProductionSpine {
         let collider_dirty = mem::take(&mut inner.collider_dirty);
         let removals: Vec<ChunkCoordinate> = mem::take(&mut inner.removed).into_iter().collect();
         let edge = f32::from(inner.chunk_edge);
-        let mut mesh_update = Vec::new();
-        let mut collider_update = Vec::new();
+        let mut mesh_update = Vec::with_capacity(mesh_dirty.len());
+        let mut collider_update = Vec::with_capacity(collider_dirty.len());
         for coordinate in mesh_dirty {
             if removals.binary_search(&coordinate).is_ok() {
                 continue;
@@ -2131,7 +2140,7 @@ impl ProductionSpine {
             let Some(derived) = inner.derived.get(&coordinate) else {
                 continue;
             };
-            let Some(geometry) = derived.geometry.clone() else {
+            let Some(geometry) = derived.geometry.as_ref().map(Arc::clone) else {
                 continue;
             };
             mesh_update.push(MeshPresentation {
@@ -2711,6 +2720,7 @@ impl ProductionSpineInner {
             self.chunk_edge,
             FixedTick::new(fixed_tick),
             &self.presentation,
+            derived_requests(priority_with_distance(DerivedPriority::EDIT_TO_VISIBLE, 0)),
         )
         .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         seal_unready_cave_voids(self, coordinate);
@@ -2771,6 +2781,7 @@ impl ProductionSpineInner {
             self.chunk_edge,
             FixedTick::new(0),
             &self.presentation,
+            derived_requests(priority_with_distance(DerivedPriority::EDIT_TO_VISIBLE, 0)),
         )
         .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         seal_unready_cave_voids(self, coordinate);
@@ -3221,9 +3232,11 @@ fn evict_unwanted(
             coordinate,
             EvictionLeaseGeneration::new(inner.eviction_lease),
         )?;
-        inner
-            .runtime
-            .evict_committed(permit, tick, derived_requests())?;
+        inner.runtime.evict_committed(
+            permit,
+            tick,
+            derived_requests(priority_with_distance(DerivedPriority::RETAIN, 0)),
+        )?;
         forget_chunk(inner, coordinate);
         inner.stream_evictions = inner.stream_evictions.saturating_add(1);
     }
@@ -3276,6 +3289,7 @@ fn admit_desired(
                 inner.chunk_edge,
                 tick,
                 &inner.presentation,
+                stream_derived_requests(class, chebyshev_xz(*coordinate, origin)),
             )?;
             inner
                 .lifecycle
@@ -3308,12 +3322,12 @@ fn admit_desired(
         admitted = admitted.saturating_add(1);
     }
     if !hydrate.is_empty() {
-        publish_hydrated(inner, kernel, &hydrate, tick)?;
+        publish_hydrated(inner, kernel, &hydrate, tick, origin, look_ahead)?;
     }
     if generate.is_empty() {
         return Ok(());
     }
-    publish_generated(inner, kernel, &generate, tick)
+    publish_generated(inner, kernel, &generate, tick, origin, look_ahead)
 }
 
 fn publish_hydrated(
@@ -3321,6 +3335,8 @@ fn publish_hydrated(
     kernel: &MemoryTransactionKernel,
     chunks: &[(ChunkCoordinate, PersistedChunkV1)],
     tick: FixedTick,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
     let mut remaining = chunks.iter().collect::<Vec<_>>();
     remaining.sort_by_key(|(coordinate, _)| *coordinate);
@@ -3364,12 +3380,15 @@ fn publish_hydrated(
                 coordinate: *coordinate,
             })?;
         inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
+        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let requests = stream_derived_requests(class, chebyshev_xz(*coordinate, origin));
         project_stored(
             &mut inner.runtime,
             stored,
             inner.chunk_edge,
             tick,
             &inner.presentation,
+            requests,
         )?;
         inner
             .lifecycle
@@ -3384,6 +3403,8 @@ fn publish_generated(
     kernel: &MemoryTransactionKernel,
     coordinates: &[ChunkCoordinate],
     tick: FixedTick,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
     let region = generate_plan_chunks(&inner.plan, coordinates.iter().copied())?;
     let mut mutations = Vec::with_capacity(region.len());
@@ -3432,12 +3453,15 @@ fn publish_generated(
             .ok_or(ProductionHostError::MissingStoredChunk {
                 coordinate: *coordinate,
             })?;
+        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let requests = stream_derived_requests(class, chebyshev_xz(*coordinate, origin));
         project_stored(
             &mut inner.runtime,
             stored,
             inner.chunk_edge,
             tick,
             &inner.presentation,
+            requests,
         )?;
         inner
             .lifecycle
@@ -3503,6 +3527,7 @@ fn project_stored(
     edge: u16,
     tick: FixedTick,
     presentation: &HostPresentationIndex,
+    requests: DerivedRequestSet,
 ) -> Result<(), ProductionHostError> {
     let cells = decode_cells(stored.data().voxels().bytes(), edge, presentation)?;
     let projection = CommittedChunkProjection::from_stored_chunk(
@@ -3512,7 +3537,7 @@ fn project_stored(
         MESH_SEMANTICS,
         COLLIDER_SEMANTICS,
     )?;
-    runtime.project_committed(projection, tick, derived_requests())?;
+    runtime.project_committed(projection, tick, requests)?;
     Ok(())
 }
 
@@ -3696,15 +3721,31 @@ fn dispatch_derived_batch(
     inner: &mut ProductionSpineInner,
     kinds: impl IntoIterator<Item = DerivedKind>,
 ) -> Result<Vec<DerivedInput<HostVoxel>>, ProductionHostError> {
-    let mut inputs = Vec::new();
+    let mut mesh = false;
+    let mut collider = false;
     for kind in kinds {
-        loop {
-            match inner.runtime.dispatch_next(kind)? {
-                DispatchOutcome::Started(input) => inputs.push(input),
-                DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
-                DispatchOutcome::MemoryContractViolation { .. } => {
-                    return Err(ProductionHostError::DerivedMemory);
-                }
+        match kind {
+            DerivedKind::Mesh => mesh = true,
+            DerivedKind::Collider => collider = true,
+        }
+    }
+    let capacity = inner
+        .runtime
+        .admission_snapshot()
+        .cpu_heavy_slots_remaining();
+    let mut inputs = Vec::with_capacity(capacity);
+    loop {
+        let outcome = match (mesh, collider) {
+            (true, true) => inner.runtime.dispatch_next_any()?,
+            (true, false) => inner.runtime.dispatch_next(DerivedKind::Mesh)?,
+            (false, true) => inner.runtime.dispatch_next(DerivedKind::Collider)?,
+            (false, false) => break,
+        };
+        match outcome {
+            DispatchOutcome::Started(input) => inputs.push(input),
+            DispatchOutcome::Empty | DispatchOutcome::Backpressured { .. } => break,
+            DispatchOutcome::MemoryContractViolation { .. } => {
+                return Err(ProductionHostError::DerivedMemory);
             }
         }
     }
@@ -3979,7 +4020,7 @@ fn apply_mesh_derived(
     entry.mesh_receipt = Some(value.receipt);
     entry.mesh_source = Some(value.source);
     entry.bounds = value.geometry.bounds();
-    entry.geometry = Some(value.geometry);
+    entry.geometry = Some(Arc::new(value.geometry));
     inner.mesh_dirty.insert(coordinate);
 }
 
@@ -4516,9 +4557,36 @@ fn runtime_limits(
     )
 }
 
-fn derived_requests() -> DerivedRequestSet {
+const DERIVED_PRIORITY_BUCKET_WIDTH: u16 = 8_192;
+
+fn stream_derived_priority(class: InterestClass, distance: u32) -> DerivedPriority {
+    let priority = match class {
+        InterestClass::Core => DerivedPriority::CORE,
+        InterestClass::Pin => DerivedPriority::EDIT_TO_VISIBLE,
+        InterestClass::Retain => DerivedPriority::RETAIN,
+        InterestClass::Prefetch => DerivedPriority::PREFETCH,
+    };
+    priority_with_distance(priority, distance)
+}
+
+fn priority_with_distance(priority: DerivedPriority, distance: u32) -> DerivedPriority {
+    let maximum_offset = DERIVED_PRIORITY_BUCKET_WIDTH.saturating_sub(1);
+    let offset = u16::try_from(distance.min(u32::from(maximum_offset))).unwrap_or(maximum_offset);
+    DerivedPriority::new(
+        priority
+            .get()
+            .saturating_mul(DERIVED_PRIORITY_BUCKET_WIDTH)
+            .saturating_add(offset),
+    )
+}
+
+fn stream_derived_requests(class: InterestClass, distance: u32) -> DerivedRequestSet {
+    derived_requests(stream_derived_priority(class, distance))
+}
+
+fn derived_requests(priority: DerivedPriority) -> DerivedRequestSet {
     let request = DerivedRequest::new(
-        DerivedPriority::CORE,
+        priority,
         DerivedOwner::new(1),
         DerivedMemoryBudget::new(64 * 1024, 64 * 1024),
     );
@@ -5064,6 +5132,7 @@ fn commit_gameplay_storage(
             inner.chunk_edge,
             FixedTick::new(fixed_tick),
             &inner.presentation,
+            derived_requests(priority_with_distance(DerivedPriority::EDIT_TO_VISIBLE, 0)),
         )
         .map_err(|error| {
             inner.last_stream_error = Some(error.to_string());
@@ -5086,13 +5155,48 @@ fn commit_gameplay_storage(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::{
-        CollisionSemantics, HostVoxel, MAIN_WORLD_APPLY_JOB_CAP, OccupiedBox, OccupiedCell,
-        apply_waiting_derived, compound_collider, merge_occupied_boxes,
+        CollisionSemantics, HostVoxel, InterestClass, MAIN_WORLD_APPLY_JOB_CAP, MeshPresentation,
+        OccupiedBox, OccupiedCell, apply_waiting_derived, compound_collider, merge_occupied_boxes,
+        stream_derived_priority,
     };
+    use bevy::prelude::Vec3;
+    use latticeaxiom_storage::ChunkCoordinate;
+    use latticeaxiom_voxel_mesh::{LayerMergeKey, MeshBuffer};
     use latticeaxiom_voxel_runtime::{
         ApplyAdmission, DerivedApplyBudget, DerivedApplySlice, RuntimeLimits, WallClockNanos,
     };
-    use std::collections::{BTreeSet, VecDeque};
+    use std::{
+        collections::{BTreeSet, VecDeque},
+        sync::Arc,
+    };
+
+    #[test]
+    fn stream_priority_is_class_first_then_near_to_far() {
+        let core_far = stream_derived_priority(InterestClass::Core, u32::MAX);
+        let pin_near = stream_derived_priority(InterestClass::Pin, 0);
+        let retain_near = stream_derived_priority(InterestClass::Retain, 0);
+        let prefetch_near = stream_derived_priority(InterestClass::Prefetch, 0);
+        assert!(core_far < pin_near);
+        assert!(pin_near < retain_near);
+        assert!(retain_near < prefetch_near);
+        assert!(
+            stream_derived_priority(InterestClass::Core, 3)
+                < stream_derived_priority(InterestClass::Core, 4)
+        );
+    }
+
+    #[test]
+    fn cloned_mesh_presentations_share_geometry_storage() {
+        let geometry: Arc<MeshBuffer<LayerMergeKey>> = Arc::new(MeshBuffer::default());
+        let presentation = MeshPresentation {
+            coordinate: ChunkCoordinate::new(1, 2, 3),
+            origin: Vec3::ZERO,
+            geometry,
+            bounds: None,
+        };
+        let cloned = presentation.clone();
+        assert!(Arc::ptr_eq(&presentation.geometry, &cloned.geometry));
+    }
 
     fn cell(x: u16, y: u16, z: u16) -> OccupiedCell {
         OccupiedCell {

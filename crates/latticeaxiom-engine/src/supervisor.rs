@@ -14,8 +14,9 @@ use latticeaxiom_launcher::{
     BootstrapAckV1, BootstrapSafeStateV1, ChildObservationV1, FileChildExitStore,
     FileLaunchIntentStore, LaunchIntentV1, LaunchTargetV1, PriorChildStatusV1, ProcessControl,
     ProcessEpoch, ProcessLaunchRequestV1, ProcessSupervisorIdentityV1, RecoveryBootstrapAckV1,
-    RecoveryChildStatusV1, RecoveryLaunchRequestV1, SpawnFailureV1, SpawnedProcess,
-    SupervisorConfigV1, SupervisorMachine, SupervisorReportV1, TerminationFailureV1,
+    RecoveryChildStatusV1, RecoveryLaunchRequestV1, SettingTransactionRevision, SpawnFailureV1,
+    SpawnedProcess, SupervisorConfigV1, SupervisorMachine, SupervisorReportV1,
+    TerminationFailureV1,
 };
 use thiserror::Error;
 
@@ -50,6 +51,9 @@ pub enum ProductSupervisorError {
     /// The launcher store could not be opened.
     #[error(transparent)]
     Store(#[from] latticeaxiom_launcher::IntentStoreError),
+    /// The durable user-settings journal could not be reopened.
+    #[error(transparent)]
+    Settings(#[from] crate::settings::HostSettingsError),
     /// The engine child executable is missing.
     #[error("supervised engine executable is missing at {path}")]
     MissingEngine {
@@ -65,8 +69,8 @@ pub enum ProductSupervisorError {
 ///
 /// # Errors
 ///
-/// Returns [`ProductSupervisorError`] when locks, CAS, or the launcher store
-/// cannot be opened.
+/// Returns [`ProductSupervisorError`] when locks, CAS, the durable settings
+/// journal, or the launcher store cannot be opened.
 pub fn run_product_supervisor_from_workspace(
     workspace: &Path,
 ) -> Result<SupervisorReportV1, ProductSupervisorError> {
@@ -81,13 +85,23 @@ pub fn run_product_supervisor_from_workspace(
     let mut intent_store = FileLaunchIntentStore::open(&launch_root)?;
     let mut exit_store = FileChildExitStore::open(&launch_root)?;
     let now_ms = unix_now_ms();
+    let settings_revision = load_confirmed_settings_revision(workspace)?;
     let mut supervisor = SupervisorMachine::new(SupervisorConfigV1::new(
         shell_images.product_lock_hash(),
         now_ms,
-        latticeaxiom_launcher::SettingTransactionRevision::new(0),
+        settings_revision,
     ));
     let mut process = OsProcessControl::new(workspace, &launch_root, &shell_lock, &game_lock)?;
     Ok(supervisor.run(&mut intent_store, &mut exit_store, &mut process))
+}
+
+fn load_confirmed_settings_revision(
+    workspace: &Path,
+) -> Result<SettingTransactionRevision, crate::settings::HostSettingsError> {
+    let settings = crate::settings::HostUserSettings::load(workspace.join("run").join("user"))?;
+    Ok(SettingTransactionRevision::new(
+        settings.transaction_revision(),
+    ))
 }
 
 fn load_lock_verified_images_at(
@@ -392,4 +406,67 @@ fn recovery_ack(
         "safe_state": BootstrapSafeStateV1::RecoveryReady,
     });
     serde_json::from_value(wire).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, io, path::PathBuf};
+
+    use latticeaxiom_core::StableId;
+    use latticeaxiom_input::BindingProfileV1;
+
+    use super::load_confirmed_settings_revision;
+    use crate::settings::HostUserSettings;
+
+    #[test]
+    fn supervisor_reopens_the_persisted_settings_revision() {
+        let workspace = TestDirectory::create();
+        let settings_root = workspace.path().join("run").join("user");
+        let mut settings = HostUserSettings::load(&settings_root)
+            .unwrap_or_else(|error| panic!("empty settings load: {error}"));
+        let mut profile = BindingProfileV1::empty();
+        let action = "example:action/supervisor-revision"
+            .parse::<StableId>()
+            .unwrap_or_else(|error| panic!("fixture action is canonical: {error}"));
+        profile.set_override(action, Vec::new());
+        settings
+            .persist_binding_profile(&settings_root, profile)
+            .unwrap_or_else(|error| panic!("settings fixture persists: {error}"));
+
+        let loaded = load_confirmed_settings_revision(workspace.path())
+            .unwrap_or_else(|error| panic!("supervisor settings reopen: {error}"));
+        assert_eq!(loaded.get(), settings.transaction_revision());
+        assert_eq!(loaded.get(), 1);
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn create() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "latticeaxiom-engine-supervisor-settings-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |duration| duration.as_nanos())
+            ));
+            fs::create_dir_all(&path)
+                .unwrap_or_else(|error| panic!("supervisor test directory: {error}"));
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            if let Err(error) = fs::remove_dir_all(&self.0)
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                panic!("supervisor test directory cleanup failed: {error}");
+            }
+        }
+    }
 }

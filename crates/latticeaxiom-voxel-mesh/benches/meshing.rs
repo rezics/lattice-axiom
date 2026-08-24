@@ -5,7 +5,7 @@
     reason = "fixed benchmark fixture invariants must abort the run when violated"
 )]
 
-use std::hint::black_box;
+use std::{hint::black_box, sync::Arc};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use latticeaxiom_voxel_mesh::{
@@ -100,6 +100,36 @@ fn benchmark_meshing(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_geometry_handoff(criterion: &mut Criterion) {
+    let dimensions = PaddedChunk::new([EDGE; 3]).expect("benchmark dimensions are valid");
+    let source = MeshSource::new(
+        ChunkCoordinate::new(-5, 2, -7),
+        SourceEpoch::new(3),
+        SourceRevision::new(11),
+        SourceFingerprint::new([19; 32]),
+    );
+    let voxels = build_corpus(dimensions, Corpus::Checker);
+    let mut mesher = GreedyMesher::new();
+    let mut geometry = MeshBuffer::default();
+    mesher
+        .mesh_into(&voxels, dimensions, source, &mut geometry)
+        .expect("benchmark corpus length matches dimensions");
+    assert_eq!(geometry.quad_count(), 98_304, "checker guard");
+
+    // These are the old owned and current shared presentation handoffs over
+    // identical worst-case chunk geometry; fixture construction is untimed.
+    let shared = Arc::new(geometry.clone());
+    let mut group = criterion.benchmark_group("mesh_presentation_handoff/checker_98304_quads");
+    group.throughput(Throughput::Elements(98_304));
+    group.bench_function("owned_deep_clone", |bencher| {
+        bencher.iter(|| black_box(geometry.clone()));
+    });
+    group.bench_function("shared_arc_clone", |bencher| {
+        bencher.iter(|| black_box(Arc::clone(&shared)));
+    });
+    group.finish();
+}
+
 fn build_corpus(dimensions: PaddedChunk, corpus: Corpus) -> Vec<BenchVoxel> {
     let mut voxels = vec![BenchVoxel::AIR; dimensions.volume_len()];
     for z in 0..EDGE {
@@ -129,5 +159,5 @@ fn build_corpus(dimensions: PaddedChunk, corpus: Corpus) -> Vec<BenchVoxel> {
     voxels
 }
 
-criterion_group!(benches, benchmark_meshing);
+criterion_group!(benches, benchmark_meshing, benchmark_geometry_handoff);
 criterion_main!(benches);

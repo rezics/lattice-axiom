@@ -6,17 +6,18 @@ use std::io;
 use std::path::PathBuf;
 
 use latticeaxiom_compose::{
-    BootstrapManifestError, CapabilityCardinality, CompositionError, ProductLockError,
-    SourceScanError,
+    ArtifactIntent, BootstrapManifestError, CapabilityCardinality, CompositionError,
+    ProductLockError, RealizationKind, RealizedDataRootError, SourceScanError,
 };
 use latticeaxiom_core::{
     CanonicalHash, CanonicalJsonError, CanonicalLogicalPath, CanonicalLogicalPathError,
     CapabilityId, IdentifierError, PackageName, PackageVersion, SourceId, SourceProvenanceError,
-    StableId,
+    StableId, TargetTriple,
 };
 use thiserror::Error;
 
 use crate::cas::CasObjectId;
+use crate::host::HostCompatibilityError;
 use crate::model::{
     BacktrackingFailureV1, CandidateIdentityV1, PreBuildSurface, ResolutionBudget,
     ResolutionLimitsError, ResolutionReceiptError,
@@ -69,6 +70,22 @@ pub enum ResolutionError {
         /// Limits validation failure.
         #[source]
         source: ResolutionLimitsError,
+    },
+    /// Trusted host compatibility evidence is malformed or unsupported.
+    #[error("invalid host compatibility evidence: {source}")]
+    InvalidHostCompatibility {
+        /// Host evidence validation failure.
+        #[source]
+        source: HostCompatibilityError,
+    },
+
+    /// The selected composition target differs from the executing host.
+    #[error("composition target {selected} differs from host target {available}")]
+    HostTargetMismatch {
+        /// Target selected by the composition.
+        selected: TargetTriple,
+        /// Target implemented by the host.
+        available: TargetTriple,
     },
 
     /// An evaluated package violates its typed model invariants.
@@ -662,6 +679,27 @@ pub enum TransactionError {
     MissingPublishedPackage {
         /// Logical package missing from the catalog.
         package: PackageName,
+    },
+    /// A selected realization cannot be materialized by the offline publisher.
+    #[error(
+        "cannot materialize package {package} realization {realization:?} from artifact intent {artifact:?}"
+    )]
+    UnsupportedArtifactMaterialization {
+        /// Package whose selected realization is unsupported.
+        package: PackageName,
+        /// Selected realization kind.
+        realization: RealizationKind,
+        /// Selected artifact intent.
+        artifact: ArtifactIntent,
+    },
+    /// A selected data root could not be encoded as a canonical realized artifact.
+    #[error("could not materialize data root for package {package}: {source}")]
+    RealizedDataRoot {
+        /// Package whose selected data root could not be materialized.
+        package: PackageName,
+        /// Canonical data-root validation or encoding failure.
+        #[source]
+        source: RealizedDataRootError,
     },
     /// A stable identifier required by the transaction is malformed.
     #[error("invalid transaction identifier `{value}`: {source}")]

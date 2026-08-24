@@ -863,23 +863,85 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
     /// Returns [`RuntimeError::CounterOverflow`] if process-local job identity
     /// is exhausted.
     pub fn dispatch_next(&mut self, kind: DerivedKind) -> RuntimeResult<DispatchOutcome<V>> {
-        let in_flight = self.in_flight_jobs();
-        if in_flight >= self.limits.cpu_heavy_concurrency()
-            || in_flight >= self.limits.max_combined_in_flight()
-        {
+        if self.combined_dispatch_full() {
             return Ok(DispatchOutcome::Backpressured {
                 reason: BackpressureReason::InFlightJobs,
             });
         }
-        let global_available = self
-            .limits
-            .max_combined_reserved_bytes()
-            .saturating_sub(self.diagnostics.combined_reserved_bytes);
+        let global_available = self.global_available_derived_bytes();
         let candidate = match self.queues[kind.index()].next_candidate(global_available) {
             Ok(candidate) => candidate,
             Err(None) => return Ok(DispatchOutcome::Empty),
             Err(Some(reason)) => return Ok(DispatchOutcome::Backpressured { reason }),
         };
+        self.start_candidate(kind, candidate)
+    }
+
+    /// Starts the globally highest-priority mesh or collider job.
+    ///
+    /// This prevents a host from starving one derived kind by draining the
+    /// other queue first. Ties use stable chunk coordinates and then
+    /// [`DerivedKind`] order, so identical inputs dispatch deterministically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::CounterOverflow`] if process-local job identity
+    /// is exhausted.
+    pub fn dispatch_next_any(&mut self) -> RuntimeResult<DispatchOutcome<V>> {
+        if self.combined_dispatch_full() {
+            return Ok(DispatchOutcome::Backpressured {
+                reason: BackpressureReason::InFlightJobs,
+            });
+        }
+
+        let global_available = self.global_available_derived_bytes();
+        let mut selected: Option<(DerivedKind, PendingJob)> = None;
+        let mut first_backpressure = None;
+        for kind in DerivedKind::ALL {
+            match self.queues[kind.index()].next_candidate(global_available) {
+                Ok(candidate) => {
+                    let replaces = selected.as_ref().is_none_or(|(selected_kind, current)| {
+                        (candidate.priority, candidate.key.coordinate(), kind)
+                            < (current.priority, current.key.coordinate(), *selected_kind)
+                    });
+                    if replaces {
+                        selected = Some((kind, candidate));
+                    }
+                }
+                Err(Some(reason)) => {
+                    if first_backpressure.is_none() {
+                        first_backpressure = Some(reason);
+                    }
+                }
+                Err(None) => {}
+            }
+        }
+
+        let Some((kind, candidate)) = selected else {
+            return Ok(first_backpressure.map_or(DispatchOutcome::Empty, |reason| {
+                DispatchOutcome::Backpressured { reason }
+            }));
+        };
+        self.start_candidate(kind, candidate)
+    }
+
+    fn combined_dispatch_full(&self) -> bool {
+        let in_flight = self.in_flight_jobs();
+        in_flight >= self.limits.cpu_heavy_concurrency()
+            || in_flight >= self.limits.max_combined_in_flight()
+    }
+
+    fn global_available_derived_bytes(&self) -> u64 {
+        self.limits
+            .max_combined_reserved_bytes()
+            .saturating_sub(self.diagnostics.combined_reserved_bytes)
+    }
+
+    fn start_candidate(
+        &mut self,
+        kind: DerivedKind,
+        candidate: PendingJob,
+    ) -> RuntimeResult<DispatchOutcome<V>> {
         let (samples, actual_input_bytes) = self.capture_halo(candidate.key.coordinate());
         if actual_input_bytes > candidate.input_bytes {
             let removed = self.queues[kind.index()].reject_pending_memory_contract(&candidate.key);

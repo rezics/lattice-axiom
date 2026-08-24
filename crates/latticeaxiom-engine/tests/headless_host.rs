@@ -21,31 +21,34 @@ use latticeaxiom_compose::{
     ManifestProducer, NickelEvaluationLimits, NumericRegistrationId, PRODUCT_LOCK_FILE_NAME,
     PRODUCT_LOCK_PRODUCER_MACHINE, PackageDomain, PackageRequest, ProductLockDraftV1,
     ProductLockError, ProductLockObjects, ProductLockProducerV1, ProductLockReceiptKind,
-    ProfileKind, RealizationId, RealizationKind, RealizationPreference, RegistrationFragment,
-    RegistrationKind, RegistrationManifest, RuntimeBinding, RuntimeImage, SourceCandidate,
-    TargetPackageRealizationV1, TargetRealizationLockV1, TrustClass, persist_product_lock,
+    ProfileKind, RealizationId, RealizationKind, RealizationPreference, RealizedDataRootV1,
+    RegistrationFragment, RegistrationKind, RegistrationManifest, RuntimeBinding, RuntimeImage,
+    SourceCandidate, TargetPackageRealizationV1, TargetRealizationLockV1, TrustClass,
+    persist_product_lock,
 };
 use latticeaxiom_core::{
-    CanonicalHash, CapabilityId, NamespaceGrant, NamespaceGrantPattern, NamespaceGrantor,
-    PackageName, PackageVersion, PackageVersionReq, RegistrationNamespace, SourceId,
-    SourceProvenance, StableId, TargetTriple, canonical_json_bytes,
+    CanonicalHash, CanonicalLogicalPath, CapabilityId, NamespaceGrant, NamespaceGrantPattern,
+    NamespaceGrantor, PackageName, PackageVersion, PackageVersionReq, RegistrationNamespace,
+    SourceId, SourceProvenance, StableId, TargetTriple, canonical_json_bytes,
 };
 use latticeaxiom_engine::{
-    ActionAxis2V1, AuthoritativeTransactionKernel, CellOccupancyV1, ChunkCoordinate, ChunkFaceV1,
-    ChunkLifecycle, ChunkMeshCursor, ChunkPresentation, ChunkRevision, CommandOutcomeV1,
-    ContainerId, DropEntityId, EngineInstance, EngineInstanceError, FluidFlowV1, FluidLevelV1,
-    FluidStateV1, GameplayCatalog, GameplayReject, HOTBAR_SLOTS, HeadlessTargetInspectV1,
-    INVENTORY_SLOTS, ItemId, ItemStackV1, LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE,
-    MeshReceipt, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1, PreparationError,
-    ProductionInspectSurface, ProductionMemoryStart, ProductionSessionPause, ProductionSpine,
-    ProductionWorldList, ProductionWorldStorage, RecipeId, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1,
-    SealedWorldWriterHost, SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages,
-    VerifiedProductLockHash, WorkingSetDiagnosticsV1, WorkstationId, authored_gameplay_catalog,
-    empty_gameplay_catalog,
+    ActionAxis2V1, AuthoredGameplayCatalogSourcesV1, AuthoritativeTransactionKernel,
+    CellOccupancyV1, ChunkCoordinate, ChunkFaceV1, ChunkLifecycle, ChunkMeshCursor,
+    ChunkPresentation, ChunkRevision, CommandOutcomeV1, ContainerId, DropEntityId, EngineInstance,
+    EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayCatalog, GameplayReject,
+    HOTBAR_SLOTS, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1,
+    LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, MeshReceipt, PlayerActionButtonsV1,
+    PlayerActionFrameV1, PlayerActionV1, PreparationError, ProductionInspectSurface,
+    ProductionMemoryStart, ProductionSessionPause, ProductionSpine, ProductionWorldList,
+    ProductionWorldStorage, RecipeId, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost,
+    SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
+    ViewDistanceClampReasonV1, WorkingSetDiagnosticsV1, WorkstationId,
+    compile_authored_gameplay_catalog, empty_gameplay_catalog,
 };
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_launcher::{
     ChildExitKindV1, HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1,
+    SettingTransactionRevision,
 };
 use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1};
 use latticeaxiom_registration::{
@@ -63,6 +66,8 @@ use serde_json::Value;
 
 const FIXED_TIMESTEP: Duration = Duration::from_millis(20);
 const FIXED_STAGE: &str = "latticeaxiom:system-stage/gameplay/fixed@1";
+// These headless fixtures do not install a user-settings journal.
+const EMPTY_SETTINGS_REVISION: SettingTransactionRevision = SettingTransactionRevision::new(0);
 
 #[test]
 fn per_kind_numeric_zero_and_distinct_callback_key_are_accepted() {
@@ -285,6 +290,39 @@ fn reopened_lock_starts_gpu_free_headless_without_re_resolving() {
     assert_eq!(instance.completed_fixed_ticks(), 3);
 }
 
+#[test]
+fn reopened_lock_decodes_exact_package_data_once() {
+    let boot = lock_boot_fixture();
+    let package = boot
+        .graph
+        .roots
+        .iter()
+        .next()
+        .cloned()
+        .expect("fixture graph has a root package");
+    let prepared = boot.prepared();
+    let first = prepared
+        .locked_artifacts()
+        .data_root(&package)
+        .expect("verified data artifact decodes");
+    let second = prepared
+        .locked_artifacts()
+        .data_root(&package)
+        .expect("decoded data artifact is cached");
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+    assert_eq!(first.package(), &package);
+    assert_eq!(first.root().as_str(), "data");
+
+    let path = CanonicalLogicalPath::new("data/authored-catalog-v1.json")
+        .expect("fixture catalog path is canonical");
+    let expected = fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/terrenia/blocks/data/authored-catalog-v1.json"),
+    )
+    .expect("fixture catalog bytes are readable");
+    assert_eq!(first.file(&path), Some(expected.as_slice()));
+}
+
 const SPINE_TIMESTEP: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
 #[test]
@@ -402,10 +440,22 @@ fn production_spine_lock_verified_host_edits_chunk_meshes_not_blocks() {
             (4..=20)
                 .map(idle_frame)
                 .chain(std::iter::once(place_frame(21, &spine)))
-                .chain((22..=50).map(|generation| PlayerActionFrameV1 {
-                    generation,
-                    movement: ActionAxis2V1 { x: 0.0, y: 1.0 },
-                    ..PlayerActionFrameV1::default()
+                // Move orthogonally to the block-edit ray so the movement proof is
+                // independent of the collider that the preceding place just
+                // restored in front of the player. Periodic jump edges use the
+                // same traversal contract as the streaming tests, so authored
+                // one-block relief cannot turn this into a blocked-path probe.
+                .chain((22_u64..=50).map(|generation| {
+                    let mut started = PlayerActionButtonsV1::empty();
+                    if (generation - 22).is_multiple_of(18) {
+                        started.insert(PlayerActionV1::Jump);
+                    }
+                    PlayerActionFrameV1 {
+                        generation,
+                        movement: ActionAxis2V1 { x: 1.0, y: 0.0 },
+                        started,
+                        ..PlayerActionFrameV1::default()
+                    }
                 }))
                 .chain(std::iter::once({
                     let mut started = PlayerActionButtonsV1::empty();
@@ -490,15 +540,17 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
         .expect("inspect surface selection is installed");
     assert!(
         inspect_surface.uses_headless_dto(),
-        "the V2 lock-boot fixture does not select inspect/observability packages"
+        "the V2 fixture has no inspect/diagnostic capability or compiled inspect catalog"
     );
+    let presentation_capability = "latticeaxiom:capability/content-presentation@1"
+        .parse::<CapabilityId>()
+        .expect("presentation capability is canonical");
     assert!(
         !boot
             .graph
-            .packages
-            .keys()
-            .any(|package| package.as_str() == "@terrenia/presentation"),
-        "headless inspect must work when the presentation package is omitted"
+            .capability_providers
+            .contains_key(&presentation_capability),
+        "headless inspect must work when the presentation capability is omitted"
     );
 
     instance
@@ -593,13 +645,15 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
 #[test]
 fn headless_omitting_presentation_does_not_change_world_hash() {
     let boot = lock_boot_fixture();
+    let presentation_capability = "latticeaxiom:capability/content-presentation@1"
+        .parse::<CapabilityId>()
+        .expect("presentation capability is canonical");
     assert!(
         !boot
             .graph
-            .packages
-            .keys()
-            .any(|package| package.as_str() == "@terrenia/presentation"),
-        "the V2 lock-boot fixture omits the presentation package"
+            .capability_providers
+            .contains_key(&presentation_capability),
+        "the V2 lock-boot fixture omits the presentation capability"
     );
 
     let mut omitted = EngineInstance::new_headless_host_from_lock_with_catalog(
@@ -784,23 +838,31 @@ fn requested_view_distance_is_clamped_by_host_limits() {
         .hard_limits()
         .expect("playable host clamps exist")
         .view_distance_chunks;
-    assert!(cap >= 1);
-    let effective_one = spine
+    assert_eq!(cap, 32);
+    let effective_minimum = spine
         .set_requested_view_distance(1)
-        .expect("view distance 1 is admitted");
-    assert_eq!(spine.requested_view_distance(), 1);
-    assert_eq!(effective_one, spine.effective_view_distance());
-    assert!(effective_one <= 1);
+        .expect("undersize view distance clamps to the authored minimum");
+    assert_eq!(spine.admitted_view_distance(), 2);
+    assert_eq!(effective_minimum, spine.effective_view_distance());
+    assert!(effective_minimum <= 2);
     let effective_cap = spine
         .set_requested_view_distance(cap)
         .expect("hard-cap view distance is admitted");
-    assert_eq!(spine.requested_view_distance(), cap);
-    assert_eq!(effective_cap, spine.effective_view_distance());
-    assert!(effective_cap <= cap);
+    assert_eq!(spine.admitted_view_distance(), cap);
+    assert_eq!(effective_cap, 4);
+    let status = spine
+        .view_distance_status()
+        .expect("view-distance status is available");
+    assert_eq!(status.requested_cap(), 32);
+    assert_eq!(status.resident_budget_cap(), 4);
+    assert_eq!(
+        status.clamp_reason(),
+        Some(ViewDistanceClampReasonV1::ResidentBudget)
+    );
     let _ = spine
         .set_requested_view_distance(cap.saturating_add(8))
         .expect("oversize requests clamp");
-    assert_eq!(spine.requested_view_distance(), cap);
+    assert_eq!(spine.admitted_view_distance(), cap);
 }
 
 #[test]
@@ -908,16 +970,12 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
         .expect("production spine is installed")
         .clone();
     let edited = spine.edited_chunks();
-    let sample = spine
+    let (sample, before) = spine
         .resident_chunks()
         .into_iter()
-        .find(|chunk| (chunk.x < 0 || chunk.z < 0) && !edited.contains(chunk))
-        .expect("spawn working set includes a clean negative-coordinate chunk");
-    let before = spine.mesh_cursor(sample);
-    assert!(
-        before.is_some(),
-        "negative chunk {sample:?} must have a mesh receipt before leaving"
-    );
+        .filter(|chunk| (chunk.x < 0 || chunk.z < 0) && !edited.contains(chunk))
+        .find_map(|chunk| spine.mesh_cursor(chunk).map(|cursor| (chunk, cursor)))
+        .expect("spawn working set includes a derived clean negative-coordinate chunk");
     let generation =
         enqueue_look_then_walk(&mut instance, 1, std::f32::consts::FRAC_PI_2, 0.0, 1.0, 720);
     let mut seen = BTreeSet::new();
@@ -962,7 +1020,6 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
         spine.player_pose().translation
     );
     let after = spine.mesh_cursor(sample);
-    let before = before.expect("pre-eviction cursor");
     let after = after.expect("revisited cursor");
     assert_eq!(after.coordinate(), before.coordinate());
     assert_eq!(after.revision(), before.revision());
@@ -1903,7 +1960,7 @@ fn home_preflight_game_save_and_quit_returns_home() {
         .expect("game host starts from the same lock");
     start.pause_session(&mut instance).expect("pause");
     start
-        .save_and_quit(created, instance, &mut writer_host)
+        .save_and_quit(created, instance, &mut writer_host, EMPTY_SETTINGS_REVISION)
         .expect("Save & Quit");
     assert_eq!(start.flow().shell().screen, ShellScreen::Home);
     assert_eq!(start.continue_world_id(), Some(created));
@@ -1965,7 +2022,7 @@ fn durable_save_and_quit_returns_child_result_and_reopens_edits_and_inventory() 
 
     start.pause_session(&mut instance).expect("pause");
     let result = start
-        .save_and_quit_durable(created, instance, &mut writer_host)
+        .save_and_quit_durable(created, instance, &mut writer_host, EMPTY_SETTINGS_REVISION)
         .expect("durable Save & Quit");
     assert_eq!(result.report().exit_kind(), ChildExitKindV1::SaveAndQuit);
     assert!(result.report().last_durable_world().is_some());
@@ -2067,7 +2124,7 @@ fn durable_save_and_quit_restores_unpicked_drops() {
 
     start.pause_session(&mut instance).expect("pause");
     start
-        .save_and_quit_durable(created, instance, &mut writer_host)
+        .save_and_quit_durable(created, instance, &mut writer_host, EMPTY_SETTINGS_REVISION)
         .expect("durable Save & Quit");
     let (continued, mut reopened) = start
         .play_continued_headless(30, SPINE_TIMESTEP)
@@ -2612,6 +2669,87 @@ fn fixed_elapsed(instance: &EngineInstance) -> Duration {
         .get_resource::<Time<Fixed>>()
         .map_or(Duration::ZERO, Time::elapsed)
 }
+fn authored_gameplay_catalog() -> Result<GameplayCatalog, latticeaxiom_engine::ProductionHostError>
+{
+    compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
+        blocks: include_str!("../../../packages/terrenia/blocks/data/authored-catalog-v1.json"),
+        rules: include_str!("../../../packages/terrenia/gameplay/data/authored-rules-v1.json"),
+        tools: include_str!("../../../packages/terrenia/tools/data/authored-tools-v1.json"),
+        d9_block_ids: include_str!(
+            "../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt"
+        ),
+    })
+}
+
+fn fixture_data_artifact(package: &PackageName) -> Vec<u8> {
+    const FILES: &[(&str, &str)] = &[
+        (
+            "data/authored-catalog-v1.json",
+            "packages/terrenia/blocks/data/authored-catalog-v1.json",
+        ),
+        (
+            "data/authored-display-v1.json",
+            "packages/terrenia/blocks/data/authored-display-v1.json",
+        ),
+        (
+            "data/goldens/d7-block-ids.txt",
+            "packages/terrenia/blocks/data/goldens/d7-block-ids.txt",
+        ),
+        (
+            "data/goldens/d9-block-ids.txt",
+            "packages/terrenia/blocks/data/goldens/d9-block-ids.txt",
+        ),
+        (
+            "data/goldens/fluid-ids.txt",
+            "packages/terrenia/blocks/data/goldens/fluid-ids.txt",
+        ),
+        (
+            "data/authored-rules-v1.json",
+            "packages/terrenia/gameplay/data/authored-rules-v1.json",
+        ),
+        (
+            "data/authored-tools-v1.json",
+            "packages/terrenia/tools/data/authored-tools-v1.json",
+        ),
+        (
+            "data/authored-block-bindings-v1.json",
+            "packages/terrenia/worldgen/data/authored-block-bindings-v1.json",
+        ),
+        (
+            "data/authored-biomes-v1.json",
+            "packages/terrenia/worldgen/data/authored-biomes-v1.json",
+        ),
+        (
+            "data/authored-natural-layers-v1.json",
+            "packages/terrenia/worldgen/data/authored-natural-layers-v1.json",
+        ),
+        (
+            "data/goldens/d7-biome-ids.txt",
+            "packages/terrenia/worldgen/data/goldens/d7-biome-ids.txt",
+        ),
+        (
+            "data/goldens/d7-natural-role-ids.txt",
+            "packages/terrenia/worldgen/data/goldens/d7-natural-role-ids.txt",
+        ),
+    ];
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let files = FILES
+        .iter()
+        .map(|(logical_path, workspace_path)| {
+            let bytes = fs::read(workspace.join(workspace_path))
+                .unwrap_or_else(|error| panic!("fixture data file {workspace_path}: {error}"));
+            ((*logical_path).to_owned(), bytes)
+        })
+        .collect();
+    RealizedDataRootV1::from_file_bytes(
+        package.clone(),
+        CanonicalLogicalPath::new("data").expect("fixture data root is canonical"),
+        files,
+    )
+    .expect("fixture data root is valid")
+    .canonical_bytes()
+    .expect("fixture data root canonicalizes")
+}
 
 struct Fixture {
     graph: LockedGameGraph,
@@ -2697,6 +2835,11 @@ fn fixture() -> Fixture {
         fragment: RegistrationFragment {
             registrations: vec![
                 exact_registration(&package, "terrenia:block/alpha", RegistrationKind::Block),
+                exact_registration(
+                    &package,
+                    "terrenia:dimension/terrenia",
+                    RegistrationKind::Dimension,
+                ),
                 exact_registration(&package, system.as_str(), RegistrationKind::System),
             ],
             ..RegistrationFragment::default()
@@ -2736,6 +2879,12 @@ fn fixture() -> Fixture {
             },
         )]),
         provided_capabilities: BTreeSet::from([
+            "latticeaxiom:capability/content-blocks@1"
+                .parse::<CapabilityId>()
+                .expect("content blocks capability is canonical"),
+            "latticeaxiom:capability/worldgen-terrain-provider@2"
+                .parse::<CapabilityId>()
+                .expect("worldgen terrain capability is canonical"),
             "latticeaxiom:capability/sandbox-gameplay@1"
                 .parse::<CapabilityId>()
                 .expect("sandbox gameplay capability is canonical"),
@@ -2745,7 +2894,8 @@ fn fixture() -> Fixture {
         ]),
         semantic_grants: BTreeSet::new(),
     };
-    let artifact_hash = CanonicalHash::digest(b"terrenia-artifact");
+    let artifact = fixture_data_artifact(&package);
+    let artifact_hash = CanonicalHash::digest(&artifact);
     let locked = LockedPackage {
         name: package.clone(),
         version,
@@ -2783,6 +2933,18 @@ fn fixture() -> Fixture {
         roots: BTreeSet::from([package.clone()]),
         packages: BTreeMap::from([(package.clone(), locked)]),
         capability_providers: BTreeMap::from([
+            (
+                "latticeaxiom:capability/content-blocks@1"
+                    .parse::<CapabilityId>()
+                    .expect("content blocks capability is canonical"),
+                vec![package.clone()],
+            ),
+            (
+                "latticeaxiom:capability/worldgen-terrain-provider@2"
+                    .parse::<CapabilityId>()
+                    .expect("worldgen terrain capability is canonical"),
+                vec![package.clone()],
+            ),
             (
                 "latticeaxiom:capability/sandbox-gameplay@1"
                     .parse::<CapabilityId>()
@@ -2856,6 +3018,7 @@ fn exact_registration(
 fn grant_patterns() -> BTreeSet<NamespaceGrantPattern> {
     [
         "terrenia:block/**",
+        "terrenia:dimension/**",
         "terrenia:system/**",
         "terrenia:callback/**",
     ]
@@ -2969,7 +3132,7 @@ fn lock_boot_fixture() -> LockBootFixture {
     let fixture = fixture();
     let directory = TestDirectory::create();
     let source = b"terrenia-source".to_vec();
-    let artifact = b"terrenia-artifact".to_vec();
+    let artifact = fixture_data_artifact(&fixture.package);
     let manifest_bytes = manifest_object_bytes(&fixture.manifest);
     assert_eq!(
         CanonicalHash::digest(&manifest_bytes),

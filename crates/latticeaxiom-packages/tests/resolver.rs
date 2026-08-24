@@ -6,19 +6,21 @@ use std::str::FromStr;
 
 use latticeaxiom_compose::{
     ArtifactIntent, COMPOSITION_SCHEMA_VERSION, CapabilityCardinality, CapabilityProvision,
-    CapabilityRequirement, CompositionPolicy, CompositionSpec, FeatureSpec, NickelEvaluationLimits,
-    PACKAGE_MODEL_VERSION, PackageDependency, PackageDomain, PackageMetadata, PackageRequest,
-    PackageSpec, ProfileKind, R0_NICKEL_EVALUATION_POLICY, RealizationId, RealizationKind,
-    RealizationPreference, RealizationSpec, RegistrationFragment, SourceCandidate, TrustClass,
+    CapabilityRequirement, CompositionPolicy, CompositionSpec, FeatureSpec, InterfaceRequirement,
+    NickelEvaluationLimits, PACKAGE_MODEL_VERSION, PackageDependency, PackageDomain,
+    PackageMetadata, PackageRequest, PackageSpec, ProfileKind, R0_NICKEL_EVALUATION_POLICY,
+    RealizationId, RealizationKind, RealizationPreference, RealizationSpec, RegistrationFragment,
+    SourceCandidate, TrustClass,
 };
 use latticeaxiom_core::{
     CanonicalHash, CapabilityId, NamespaceGrantPattern, NamespaceGrantorRef, PackageName,
-    PackageVersion, PackageVersionReq, SourceId, SourceProvenance,
+    PackageVersion, PackageVersionReq, SourceId, SourceProvenance, StableId,
 };
 use latticeaxiom_packages::{
-    PackageCandidate, PackageResolutionV1, PackageResolver, PackageSourceKind, ResolutionBudget,
-    ResolutionError, ResolutionFailureCodeV1, ResolutionLimits, ResolutionOutcomeV1,
-    ResolutionReasonV1, ResolutionReceiptError, ResolutionReceiptV1, ResolutionSubjectV1,
+    HOST_COMPATIBILITY_SCHEMA_VERSION, HostCompatibilityV1, HostInterfaceV1, PackageCandidate,
+    PackageResolutionV1, PackageResolver, PackageSourceKind, ResolutionBudget, ResolutionError,
+    ResolutionFailureCodeV1, ResolutionLimits, ResolutionOutcomeV1, ResolutionReasonV1,
+    ResolutionReceiptError, ResolutionReceiptV1, ResolutionSubjectV1,
 };
 
 const HOST_TARGET: &str = "x86_64-pc-windows-msvc";
@@ -109,6 +111,55 @@ fn native_realization(label: &str, target: &str, trust: TrustClass) -> Realizati
         trust,
         engine_build: None,
         registration_fragment: CanonicalHash::digest(format!("fragment:{label}:{target}")),
+    }
+}
+
+fn portable_realization(
+    label: &str,
+    interface: &StableId,
+    requirement: &str,
+    optional: bool,
+) -> RealizationSpec {
+    let id = succeeded(RealizationId::new(label));
+    RealizationSpec {
+        id,
+        kind: RealizationKind::PortableNative,
+        domains: authoritative_domains(),
+        targets: BTreeSet::from([parsed(HOST_TARGET)]),
+        interfaces: BTreeMap::from([(
+            interface.clone(),
+            InterfaceRequirement {
+                version: version_requirement(requirement),
+                optional,
+            },
+        )]),
+        required_features: BTreeSet::new(),
+        artifact: ArtifactIntent::SourceBuild,
+        trust: TrustClass::TrustedNative,
+        engine_build: None,
+        registration_fragment: CanonicalHash::digest(format!("fragment:{label}:portable")),
+    }
+}
+
+fn host_compatibility(
+    target: &str,
+    interface: Option<(&StableId, &str, &str)>,
+    engine_build_id: Option<CanonicalHash>,
+) -> HostCompatibilityV1 {
+    let interfaces = interface.map_or_else(BTreeMap::new, |(id, version_value, descriptor)| {
+        BTreeMap::from([(
+            id.clone(),
+            HostInterfaceV1 {
+                version: version(version_value),
+                descriptor_hash: CanonicalHash::digest(descriptor),
+            },
+        )])
+    });
+    HostCompatibilityV1 {
+        schema_version: HOST_COMPATIBILITY_SCHEMA_VERSION,
+        target: parsed(target),
+        engine_build_id,
+        interfaces,
     }
 }
 
@@ -2041,4 +2092,196 @@ fn namespace_authorization_backtracks_and_missing_chain_fails_closed() {
         resolver.resolve(&exact_spec),
         Err(ResolutionError::NamespaceAuthorization { .. })
     ));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn trusted_host_interfaces_gate_portable_resolution_and_frozen_replay() {
+    let interface: StableId = parsed("test:interface/gameplay");
+    let mut required = candidate(
+        "portable-host-gated",
+        "1.0.0",
+        "portable-host-gated",
+        0,
+        PackageSourceKind::Workspace,
+    );
+    let realization = portable_realization("portable", &interface, "=0.1.0", false);
+    required.package.realizations = BTreeMap::from([(realization.id.clone(), realization)]);
+    required.package.trust = TrustClass::TrustedNative;
+    let candidates = vec![required];
+    let mut spec = composition(&candidates);
+    spec.policy.realization_order = vec![RealizationKind::PortableNative];
+    root(&mut spec, "portable-host-gated", "=1.0.0");
+
+    let absent = succeeded(PackageResolver::new(candidates.clone()));
+    assert!(matches!(
+        absent.resolve(&spec),
+        Err(ResolutionError::RealizationUnavailable { .. })
+    ));
+
+    let incompatible_host = host_compatibility(
+        HOST_TARGET,
+        Some((&interface, "0.2.0", "descriptor-v2")),
+        None,
+    );
+    let incompatible = succeeded(PackageResolver::new_with_host_compatibility(
+        candidates.clone(),
+        incompatible_host,
+    ));
+    assert!(matches!(
+        incompatible.resolve(&spec),
+        Err(ResolutionError::RealizationUnavailable { .. })
+    ));
+
+    let host_v1 = host_compatibility(
+        HOST_TARGET,
+        Some((&interface, "0.1.0", "descriptor-v1")),
+        None,
+    );
+    let expected_host_hash = succeeded(host_v1.compatibility_hash());
+    let compatible = succeeded(PackageResolver::new_with_host_compatibility(
+        candidates.clone(),
+        host_v1,
+    ));
+    let initial = succeeded(compatible.resolve(&spec));
+    assert_eq!(
+        initial.receipt.host_compatibility_hash,
+        Some(expected_host_hash)
+    );
+
+    let initial_bytes = succeeded(initial.receipt.canonical_bytes());
+    let mut legacy_value = succeeded(serde_json::from_slice::<serde_json::Value>(&initial_bytes));
+    {
+        let Some(legacy_fields) = legacy_value.as_object_mut() else {
+            panic!("resolution receipts must encode as JSON objects");
+        };
+        legacy_fields.remove("host_compatibility_hash");
+    }
+    let missing_current_field_bytes = succeeded(serde_json::to_vec(&legacy_value));
+    assert!(matches!(
+        ResolutionReceiptV1::from_json_slice(&missing_current_field_bytes),
+        Err(ResolutionReceiptError::NonCanonicalEncoding)
+    ));
+    let Some(legacy_fields) = legacy_value.as_object_mut() else {
+        panic!("resolution receipts must encode as JSON objects");
+    };
+    legacy_fields.insert("schema_version".to_owned(), serde_json::Value::from(1));
+    let legacy_bytes = succeeded(serde_json::to_vec(&legacy_value));
+    assert!(matches!(
+        ResolutionReceiptV1::from_json_slice(&legacy_bytes),
+        Err(ResolutionReceiptError::UnsupportedSchema {
+            found: 1,
+            supported,
+        }) if supported == latticeaxiom_packages::RESOLUTION_RECEIPT_SCHEMA_VERSION
+    ));
+
+    let changed_host = host_compatibility(
+        HOST_TARGET,
+        Some((&interface, "0.1.0", "descriptor-v1-rebuilt")),
+        None,
+    );
+    let changed = succeeded(PackageResolver::new_with_host_compatibility(
+        candidates.clone(),
+        changed_host,
+    ));
+    assert!(matches!(
+        changed.resolve_frozen(&spec, &initial.receipt),
+        Err(ResolutionError::ResolutionReceiptMismatch { .. })
+    ));
+
+    let wrong_target = host_compatibility(
+        "x86_64-unknown-linux-gnu",
+        Some((&interface, "0.1.0", "descriptor-v1")),
+        None,
+    );
+    let wrong_target_resolver = succeeded(PackageResolver::new_with_host_compatibility(
+        candidates,
+        wrong_target,
+    ));
+    assert!(matches!(
+        wrong_target_resolver.resolve(&spec),
+        Err(ResolutionError::HostTargetMismatch { .. })
+    ));
+
+    let mut optional = candidate(
+        "portable-optional",
+        "1.0.0",
+        "portable-optional",
+        0,
+        PackageSourceKind::Workspace,
+    );
+    let optional_realization = portable_realization("portable", &interface, "=0.1.0", true);
+    optional.package.realizations =
+        BTreeMap::from([(optional_realization.id.clone(), optional_realization)]);
+    optional.package.trust = TrustClass::TrustedNative;
+    let optional_candidates = vec![optional];
+    let mut optional_spec = composition(&optional_candidates);
+    optional_spec.policy.realization_order = vec![RealizationKind::PortableNative];
+    root(&mut optional_spec, "portable-optional", "=1.0.0");
+    let optional_resolver = succeeded(PackageResolver::new(optional_candidates));
+    let optional_resolution = succeeded(optional_resolver.resolve(&optional_spec));
+    assert_eq!(optional_resolution.receipt.host_compatibility_hash, None);
+}
+
+#[test]
+fn engine_coupled_realization_requires_exact_trusted_host_build() {
+    let required_build = CanonicalHash::digest(b"engine-build-required");
+    let mut package = candidate(
+        "engine-coupled",
+        "1.0.0",
+        "engine-coupled",
+        0,
+        PackageSourceKind::Workspace,
+    );
+    let id = succeeded(RealizationId::new("engine-coupled"));
+    let realization = RealizationSpec {
+        id: id.clone(),
+        kind: RealizationKind::EngineCoupledNative,
+        domains: authoritative_domains(),
+        targets: BTreeSet::from([parsed(HOST_TARGET)]),
+        interfaces: BTreeMap::new(),
+        required_features: BTreeSet::new(),
+        artifact: ArtifactIntent::SourceBuild,
+        trust: TrustClass::TrustedNative,
+        engine_build: Some(required_build),
+        registration_fragment: CanonicalHash::digest(b"engine-coupled-fragment"),
+    };
+    package.package.realizations = BTreeMap::from([(id, realization)]);
+    package.package.trust = TrustClass::TrustedNative;
+    let candidates = vec![package];
+    let mut spec = composition(&candidates);
+    spec.policy.realization_order = vec![RealizationKind::EngineCoupledNative];
+    root(&mut spec, "engine-coupled", "=1.0.0");
+
+    let absent = succeeded(PackageResolver::new(candidates.clone()));
+    assert!(matches!(
+        absent.resolve(&spec),
+        Err(ResolutionError::RealizationUnavailable { .. })
+    ));
+
+    let wrong = host_compatibility(
+        HOST_TARGET,
+        None,
+        Some(CanonicalHash::digest(b"engine-build-wrong")),
+    );
+    let wrong_resolver = succeeded(PackageResolver::new_with_host_compatibility(
+        candidates.clone(),
+        wrong,
+    ));
+    assert!(matches!(
+        wrong_resolver.resolve(&spec),
+        Err(ResolutionError::RealizationUnavailable { .. })
+    ));
+
+    let exact = host_compatibility(HOST_TARGET, None, Some(required_build));
+    let exact_resolver = succeeded(PackageResolver::new_with_host_compatibility(
+        candidates, exact,
+    ));
+    let resolution = succeeded(exact_resolver.resolve(&spec));
+    assert_eq!(
+        resolved_package(&resolution, "engine-coupled")
+            .realization
+            .engine_build_id,
+        Some(required_build)
+    );
 }

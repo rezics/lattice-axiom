@@ -14,18 +14,20 @@ use latticeaxiom_render_contracts::{
     AuthoredTerrainLayerDocumentV1, CompiledTerrainLayerTableV1, LockedContentPresentationV1,
     PresentationPresenceV1, TERRAIN_LAYER_TABLE_SCHEMA_MAJOR, TerrainFaceV1,
     TerrainLayerCompileInputV1, TerrainLayerLimitsV1, TerrainMaterialPolicyV1,
-    compile_terrain_layer_table,
+    VoxelSamplerPolicyV1, compile_terrain_layer_table,
 };
 use latticeaxiom_voxel_mesh::{Face, FaceDescriptor, FaceOcclusion, LayerMergeKey, MeshGroup};
 use serde::Deserialize;
 
-use super::ProductionHostError;
+use super::{
+    ProductionHostError,
+    catalog::required_data_text,
+    display::{
+        AUTHORED_PRESENTATION_ASSETS_PATH, AUTHORED_PRESENTATION_LAYERS_PATH,
+        presentation_data_root,
+    },
+};
 use crate::LockVerifiedComposeImages;
-
-const AUTHORED_LAYERS_JSON: &str =
-    include_str!("../../../../packages/terrenia/presentation/data/authored-layers-v1.json");
-const AUTHORED_ASSETS_JSON: &str =
-    include_str!("../../../../packages/terrenia/presentation/data/authored-assets-v1.json");
 
 /// Compact face presentation copied onto each halo sample.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,25 +184,44 @@ fn compile_locked_layer_table(
     images: &LockVerifiedComposeImages,
     catalog: &ContentCatalogV1,
 ) -> Result<CompiledTerrainLayerTableV1, ProductionHostError> {
-    let document: AuthoredTerrainLayerDocumentV1 = serde_json::from_str(AUTHORED_LAYERS_JSON)
-        .map_err(|source| ProductionHostError::InvalidAuthoredCatalog {
-            name: "authored-layers",
-            source,
-        })?;
-    let presence = if presentation_selected(images) {
-        PresentationPresenceV1::Present
-    } else {
-        PresentationPresenceV1::Omitted
-    };
+    let presentation = presentation_data_root(images)?;
+    let (presence, declarations, available_layers, sampler, claims_authoritative) =
+        match presentation.as_deref() {
+            Some(data) => {
+                let document: AuthoredTerrainLayerDocumentV1 = serde_json::from_str(
+                    required_data_text(data, AUTHORED_PRESENTATION_LAYERS_PATH)?,
+                )
+                .map_err(|source| ProductionHostError::InvalidAuthoredCatalog {
+                    name: "authored-layers",
+                    source,
+                })?;
+                let available_layers =
+                    available_layers(required_data_text(data, AUTHORED_PRESENTATION_ASSETS_PATH)?)?;
+                (
+                    PresentationPresenceV1::Present,
+                    document.layers,
+                    available_layers,
+                    document.sampler,
+                    document.authoritative,
+                )
+            }
+            None => (
+                PresentationPresenceV1::Omitted,
+                Vec::new(),
+                BTreeSet::new(),
+                VoxelSamplerPolicyV1::TERRAIN_V1,
+                false,
+            ),
+        };
     compile_terrain_layer_table(
         TerrainLayerCompileInputV1 {
             schema_major: TERRAIN_LAYER_TABLE_SCHEMA_MAJOR,
             presence,
             content: locked_content(catalog),
-            declarations: document.layers,
-            available_layers: available_layers()?,
-            sampler: document.sampler,
-            claims_authoritative: document.authoritative,
+            declarations,
+            available_layers,
+            sampler,
+            claims_authoritative,
         },
         TerrainLayerLimitsV1::default(),
     )
@@ -222,23 +243,13 @@ fn locked_content(catalog: &ContentCatalogV1) -> Vec<LockedContentPresentationV1
         .collect()
 }
 
-fn presentation_selected(images: &LockVerifiedComposeImages) -> bool {
-    images
-        .images()
-        .graph()
-        .packages
-        .keys()
-        .any(|package| package.as_str() == "@terrenia/presentation")
-}
-
-fn available_layers() -> Result<BTreeSet<StableId>, ProductionHostError> {
-    let file: AuthoredAssetsFile =
-        serde_json::from_str(AUTHORED_ASSETS_JSON).map_err(|source| {
-            ProductionHostError::InvalidAuthoredCatalog {
-                name: "presentation-assets",
-                source,
-            }
-        })?;
+fn available_layers(source: &str) -> Result<BTreeSet<StableId>, ProductionHostError> {
+    let file: AuthoredAssetsFile = serde_json::from_str(source).map_err(|source| {
+        ProductionHostError::InvalidAuthoredCatalog {
+            name: "presentation-assets",
+            source,
+        }
+    })?;
     let mut layers = BTreeSet::new();
     for asset in file.assets {
         if matches!(

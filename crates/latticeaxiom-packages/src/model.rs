@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current schema version for resolver-stage resolution receipts.
-pub const RESOLUTION_RECEIPT_SCHEMA_VERSION: u32 = 1;
+pub const RESOLUTION_RECEIPT_SCHEMA_VERSION: u32 = 2;
 
 /// Current schema version for resolver-stage build intents.
 pub const BUILD_INTENT_SCHEMA_VERSION: u32 = 1;
@@ -593,6 +593,9 @@ pub struct ResolutionReceiptV1 {
     pub profile_kind: ProfileKind,
     /// Exact target.
     pub target: TargetTriple,
+    /// Exact trusted host compatibility evidence used during selection.
+    #[serde(default)]
+    pub host_compatibility_hash: Option<CanonicalHash>,
     /// Versioned Nickel evaluation policy.
     pub evaluation_policy: StableId,
     /// Exact effective evaluator limits.
@@ -681,6 +684,9 @@ impl ResolutionReceiptV1 {
     /// schema, malformed structure, or a mismatched hash.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self, ResolutionReceiptError> {
         let receipt = serde_json::from_slice::<Self>(bytes)?;
+        if receipt.schema_version != RESOLUTION_RECEIPT_SCHEMA_VERSION {
+            receipt.validate()?;
+        }
         if receipt.canonical_bytes()?.as_slice() != bytes {
             return Err(ResolutionReceiptError::NonCanonicalEncoding);
         }
@@ -1702,6 +1708,7 @@ struct ResolutionIdentity<'a> {
     profile: &'a StableId,
     profile_kind: ProfileKind,
     target: &'a TargetTriple,
+    host_compatibility_hash: Option<CanonicalHash>,
     roots: &'a BTreeSet<PackageName>,
     packages: BTreeMap<&'a PackageName, ResolutionPackageIdentity<'a>>,
     capabilities: &'a BTreeMap<CapabilityId, CapabilityResolutionReceiptV1>,
@@ -1717,6 +1724,7 @@ impl<'a> From<&'a ResolutionReceiptV1> for ResolutionIdentity<'a> {
             profile: &receipt.profile,
             profile_kind: receipt.profile_kind,
             target: &receipt.target,
+            host_compatibility_hash: receipt.host_compatibility_hash,
             roots: &receipt.roots,
             namespace_grants: &receipt.namespace_grants,
             packages: receipt
@@ -1763,6 +1771,7 @@ struct ReceiptIdentity<'a> {
     profile: &'a StableId,
     profile_kind: ProfileKind,
     target: &'a TargetTriple,
+    host_compatibility_hash: Option<CanonicalHash>,
     evaluation_policy: &'a StableId,
     evaluation_limits: NickelEvaluationLimits,
     roots: &'a BTreeSet<PackageName>,
@@ -1783,6 +1792,7 @@ impl<'a> From<&'a ResolutionReceiptV1> for ReceiptIdentity<'a> {
             profile: &receipt.profile,
             profile_kind: receipt.profile_kind,
             target: &receipt.target,
+            host_compatibility_hash: receipt.host_compatibility_hash,
             evaluation_policy: &receipt.evaluation_policy,
             evaluation_limits: receipt.evaluation_limits,
             roots: &receipt.roots,
