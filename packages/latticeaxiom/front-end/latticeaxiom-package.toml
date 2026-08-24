@@ -60,4 +60,12 @@ trust = "data-only"
 default = "package.ncl"
 
 [source_inclusion]
-include = ["package.ncl", "latticeaxiom-package.toml"]
+include = [
+  "Cargo.toml",
+  "README.md",
+  "data",
+  "latticeaxiom-package.toml",
+  "package.ncl",
+  "src",
+  "tests",
+]

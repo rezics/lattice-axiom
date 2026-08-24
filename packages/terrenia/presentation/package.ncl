@@ -6,6 +6,8 @@ let registration = latticeaxiom.registration in
 fun kernel_receipts =>
 let package_provenance = kernel_receipts.package_provenance in
 let registration_fragment_hash = kernel_receipts.registration_fragment_hash in
+let presentation_capability =
+  "latticeaxiom:capability/content-presentation@1" in
 let fragment = registration.constructors.fragment {} in
 
 package.make {
@@ -15,6 +17,14 @@ package.make {
     display_name = "Terrenia Presentation",
     documentation = null,
     license = "MIT OR Apache-2.0",
+  },
+  provides = {
+    "latticeaxiom:capability/content-presentation@1" = {
+      capability = presentation_capability,
+      version = "1.0.0",
+      cardinality = "exactly-one",
+      domains = ["client"],
+    },
   },
   realizations = {
     data = {

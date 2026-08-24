@@ -4060,6 +4060,7 @@ dependencies = [
 name = "latticeaxiom-engine"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
  "avian3d",
  "bevy",
  "latticeaxiom-abi",
@@ -4075,6 +4076,7 @@ dependencies = [
  "latticeaxiom-registration",
  "latticeaxiom-render-contracts",
  "latticeaxiom-runtime-contracts",
+ "latticeaxiom-settings-ui",
  "latticeaxiom-start-ui",
  "latticeaxiom-storage",
  "latticeaxiom-voxel-mesh",
@@ -4226,6 +4228,7 @@ dependencies = [
  "latticeaxiom-core",
  "latticeaxiom-launcher",
  "latticeaxiom-runtime-contracts",
+ "latticeaxiom-settings-ui",
  "latticeaxiom-world-catalog",
  "latticeaxiom-world-db",
  "serde",

@@ -1,0 +1,25 @@
+[package]
+name = "latticeaxiom-start-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-client-ui.workspace = true
+latticeaxiom-core.workspace = true
+latticeaxiom-launcher.workspace = true
+latticeaxiom-runtime-contracts.workspace = true
+latticeaxiom-settings-ui.workspace = true
+latticeaxiom-world-catalog.workspace = true
+latticeaxiom-world-db.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

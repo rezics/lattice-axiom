@@ -12,15 +12,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use latticeaxiom_compose::{
-    AuthorizedRoot, AuthorizedRootKind, CapabilityCardinality, CompositionError, GameProfileSpec,
-    NICKEL_LIBRARY_CONTRACT_MAJOR, NickelEvaluationLimits, PACKAGE_MODEL_VERSION, PackageAlias,
-    PackageDomain, PackageSpec, ProfileKind, R0_AUTHORING_CORPUS_MAJOR, R0_LIBRARY_PACKAGE_ALIAS,
+    AuthorizedRoot, AuthorizedRootKind, BootstrapSourceProviderV1, CapabilityCardinality,
+    CompositionBootstrapV1, CompositionError, GameProfileSpec, NICKEL_LIBRARY_CONTRACT_MAJOR,
+    NickelEvaluationLimits, PACKAGE_MODEL_VERSION, PackageAlias, PackageDomain, PackageSpec,
+    ProfileKind, R0_AUTHORING_CORPUS_MAJOR, R0_LIBRARY_PACKAGE_ALIAS, RealizationKind,
     SourceAddress, SourceClosureError, SourceClosureRequest, SourceRootGrant, SourceScanLimits,
-    SourceSnapshot, TrustedStagedEvaluation, TrustedStagedEvaluationError,
+    SourceSnapshot, TrustClass, TrustedStagedEvaluation, TrustedStagedEvaluationError,
     evaluate_trusted_staged_nickel_function, evaluate_trusted_staged_package, scan_source_snapshot,
 };
 use latticeaxiom_core::{
-    CanonicalHash, NamespaceGrantPattern, PackageName, SourceId, SourceProvenance,
+    CanonicalHash, CapabilityId, NamespaceGrantPattern, PackageName, SourceId, SourceProvenance,
     canonical_json_bytes, canonical_json_hash,
 };
 use serde::{Deserialize, Serialize};
@@ -32,85 +33,16 @@ const PROFILE_SOURCE_ID: &str = "latticeaxiom:source/shipped-profiles";
 const FIXTURE_PREFIX: &str = "latticeaxiom-shipped-source-fixture";
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct PackageSource {
-    logical_dir: &'static str,
-    source_id: &'static str,
-    package_name: &'static str,
+    logical_dir: String,
+    source_id: String,
+    package_name: PackageName,
 }
 
-const PACKAGE_SOURCES: [PackageSource; 14] = [
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/settings",
-        source_id: "latticeaxiom:source/settings",
-        package_name: "@latticeaxiom/settings",
-    },
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/input",
-        source_id: "latticeaxiom:source/input",
-        package_name: "@latticeaxiom/input",
-    },
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/settings-ui",
-        source_id: "latticeaxiom:source/settings-ui",
-        package_name: "@latticeaxiom/settings-ui",
-    },
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/observability",
-        source_id: "latticeaxiom:source/observability",
-        package_name: "@latticeaxiom/observability",
-    },
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/inspect",
-        source_id: "latticeaxiom:source/inspect",
-        package_name: "@latticeaxiom/inspect",
-    },
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/dev-tools",
-        source_id: "latticeaxiom:source/dev-tools",
-        package_name: "@latticeaxiom/dev-tools",
-    },
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/front-end",
-        source_id: "latticeaxiom:source/front-end",
-        package_name: "@latticeaxiom/front-end",
-    },
-    PackageSource {
-        logical_dir: "packages/latticeaxiom/world-library",
-        source_id: "latticeaxiom:source/world-library",
-        package_name: "@latticeaxiom/world-library",
-    },
-    PackageSource {
-        logical_dir: "packages/terrenia/main",
-        source_id: "terrenia:source/main",
-        package_name: "terrenia",
-    },
-    PackageSource {
-        logical_dir: "packages/terrenia/blocks",
-        source_id: "terrenia:source/blocks",
-        package_name: "@terrenia/blocks",
-    },
-    PackageSource {
-        logical_dir: "packages/terrenia/worldgen",
-        source_id: "terrenia:source/worldgen",
-        package_name: "@terrenia/worldgen",
-    },
-    PackageSource {
-        logical_dir: "packages/terrenia/gameplay",
-        source_id: "terrenia:source/gameplay",
-        package_name: "@terrenia/gameplay",
-    },
-    PackageSource {
-        logical_dir: "packages/terrenia/tools",
-        source_id: "terrenia:source/tools",
-        package_name: "@terrenia/tools",
-    },
-    PackageSource {
-        logical_dir: "packages/terrenia/presentation",
-        source_id: "terrenia:source/presentation",
-        package_name: "@terrenia/presentation",
-    },
-];
+const MAX_SHIPPED_NAMESPACES: usize = 16;
+const MAX_PACKAGES_PER_NAMESPACE: usize = 64;
+const MAX_WORKSPACE_MEMBERS: usize = 128;
 
 const PROFILE_SOURCES: [(&str, ProfileKind); 4] = [
     ("shell.ncl", ProfileKind::ClientShell),
@@ -122,14 +54,15 @@ const PROFILE_SOURCES: [(&str, ProfileKind); 4] = [
 #[test]
 fn shipped_packages_use_verified_alias_closures_and_raw_entry_provenance() {
     let library = library_snapshot();
+    let package_sources = package_sources();
     let package_snapshots = package_snapshots();
-    assert_non_overlapping_package_roots();
+    assert_non_overlapping_package_roots(&package_sources);
 
     let mut evaluated = BTreeMap::new();
-    for source in PACKAGE_SOURCES {
-        let expected_name = package_name(source.package_name);
+    for source in &package_sources {
+        let expected_name = &source.package_name;
         let snapshot = package_snapshots
-            .get(&expected_name)
+            .get(expected_name)
             .expect("every shipped package has a snapshot");
         let result = evaluate_package(snapshot, &library);
         let package = result.value;
@@ -138,7 +71,7 @@ fn shipped_packages_use_verified_alias_closures_and_raw_entry_provenance() {
             .unwrap_or_else(|error| panic!("{} is invalid: {error}", package.name));
 
         assert_eq!(package.model_version, PACKAGE_MODEL_VERSION);
-        assert_eq!(package.name, expected_name);
+        assert_eq!(&package.name, expected_name);
         assert_eq!(package.version.to_string(), "0.1.0");
         assert_eq!(package.trust, latticeaxiom_compose::TrustClass::DataOnly);
         assert_eq!(
@@ -179,12 +112,6 @@ fn shipped_packages_use_verified_alias_closures_and_raw_entry_provenance() {
         }
         assert!(
             package
-                .requires
-                .values()
-                .all(|row| row.cardinality == CapabilityCardinality::ExactlyOne)
-        );
-        assert!(
-            package
                 .provides
                 .values()
                 .all(|row| row.cardinality == CapabilityCardinality::ExactlyOne)
@@ -193,6 +120,7 @@ fn shipped_packages_use_verified_alias_closures_and_raw_entry_provenance() {
     }
 
     validate_shipped_package_delegations(&evaluated);
+    validate_terrenia_presentation_capability(&evaluated);
 
     let settings_name = package_name("@latticeaxiom/settings");
     let settings_snapshot = package_snapshots
@@ -206,6 +134,60 @@ fn shipped_packages_use_verified_alias_closures_and_raw_entry_provenance() {
         canonical_json_bytes(&first.value).expect("settings output is canonical"),
         canonical_json_bytes(&second.value).expect("settings output is canonical")
     );
+}
+
+#[test]
+fn authored_inventory_and_license_policy_cover_derived_workspace_sets() {
+    let workspace_members = workspace_member_paths();
+    let package_paths = package_sources()
+        .into_iter()
+        .map(|source| (source.package_name.to_string(), source.logical_dir))
+        .collect::<BTreeMap<_, _>>();
+
+    let inventory_path = workspace_path("fixtures/playable/crate-package-inventory.json");
+    let inventory_text = fs::read_to_string(&inventory_path)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", inventory_path.display()));
+    let inventory = serde_json::from_str::<CratePackageInventory>(&inventory_text)
+        .unwrap_or_else(|error| panic!("could not parse {}: {error}", inventory_path.display()));
+    assert_eq!(
+        inventory.schema,
+        "latticeaxiom.v1-crate-package-inventory.v1"
+    );
+    assert!(
+        !inventory.baseline_commit.trim().is_empty(),
+        "inventory baseline commit cannot be empty"
+    );
+    assert_eq!(
+        inventory_paths(&inventory.crates, "crate"),
+        workspace_members,
+        "crate inventory must exactly cover workspace members"
+    );
+    assert_eq!(
+        inventory_paths(&inventory.packages, "package"),
+        package_paths,
+        "package inventory must exactly cover shipped package.ncl roots"
+    );
+
+    let about_path = workspace_path("supply-chain/about.toml");
+    let about_text = fs::read_to_string(&about_path)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", about_path.display()));
+    let about = toml::from_str::<toml::Value>(&about_text)
+        .unwrap_or_else(|error| panic!("could not parse {}: {error}", about_path.display()));
+    let about_table = about
+        .as_table()
+        .expect("supply-chain/about.toml has a top-level table");
+    for crate_name in workspace_members.keys() {
+        let accepted = about_table
+            .get(crate_name)
+            .and_then(|entry| entry.get("accepted"))
+            .and_then(toml::Value::as_array)
+            .unwrap_or_else(|| panic!("{crate_name} lacks an explicit accepted-license row"));
+        assert_eq!(
+            accepted.as_slice(),
+            [toml::Value::String("AGPL-3.0-only".to_owned())],
+            "{crate_name} must explicitly retain the workspace license"
+        );
+    }
 }
 
 #[test]
@@ -283,6 +265,81 @@ fn shipped_profiles_bind_whole_root_and_raw_file_receipts_separately() {
         authoritative_by_profile.get("headless.ncl"),
         authoritative_by_profile.get("test.ncl"),
         "headless and test must expose the same authoritative package candidates"
+    );
+}
+
+#[test]
+fn root_bootstrap_matches_its_evaluated_nickel_profile() {
+    let library = library_snapshot();
+    let profiles = scan_workspace_root(PROFILE_SOURCE_ID, AuthorizedRootKind::Test, "profiles");
+    let snapshots = package_snapshots();
+    let binder = profile_receipt_binder(&snapshots);
+    let bootstrap_path = workspace_path("latticeaxiom.toml");
+    let bootstrap_text = fs::read_to_string(&bootstrap_path)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", bootstrap_path.display()));
+    let bootstrap =
+        CompositionBootstrapV1::from_toml_str(&bootstrap_text).unwrap_or_else(|error| {
+            panic!(
+                "{} must parse as a composition bootstrap: {error}",
+                bootstrap_path.display()
+            )
+        });
+    let nickel_entry = bootstrap
+        .nickel_profile_entry
+        .as_str()
+        .strip_prefix("profiles/")
+        .expect("the shipped root bootstrap Nickel entry is rooted in profiles/");
+    let profile = evaluate_profile(&profiles, nickel_entry, &library, &binder).value;
+
+    profile
+        .validate()
+        .unwrap_or_else(|error| panic!("profile {nickel_entry} is invalid: {error}"));
+    assert_eq!(bootstrap.projection, profile.projection);
+    assert_eq!(bootstrap.projection_domains, profile.projection_domains);
+    assert_eq!(bootstrap.roots, profile.roots);
+    assert_eq!(bootstrap.features, profile.features);
+    assert_eq!(bootstrap.parameters, profile.parameters);
+    assert_eq!(bootstrap.realization_policy, profile.realization_policy);
+    assert_eq!(bootstrap.evaluation_policy, profile.evaluation_policy);
+    assert_eq!(bootstrap.evaluation_limits, profile.evaluation_limits);
+    assert_eq!(bootstrap.realization_policy, [RealizationKind::Data]);
+    assert_eq!(profile.policy.maximum_trust, TrustClass::DataOnly);
+
+    let bootstrap_sources = bootstrap
+        .sources
+        .iter()
+        .map(|source| match source {
+            BootstrapSourceProviderV1::Path { package, path } => (package.clone(), path.as_str()),
+            _ => panic!(
+                "shipped root bootstrap source {} must be a path",
+                source.package()
+            ),
+        })
+        .collect::<BTreeMap<_, _>>();
+    for candidate in &profile.source_universe {
+        assert_eq!(
+            bootstrap_sources.get(&candidate.package).copied(),
+            Some(candidate.path.as_str()),
+            "Nickel source {} must match its root-bootstrap package and path authorization",
+            candidate.package
+        );
+    }
+    let nickel_source_packages = profile
+        .source_universe
+        .iter()
+        .map(|candidate| candidate.package.clone())
+        .collect::<BTreeSet<_>>();
+    for root in profile.roots.keys() {
+        assert!(
+            nickel_source_packages.contains(root),
+            "Nickel root {root} must have a source candidate"
+        );
+    }
+    assert!(
+        profile
+            .roots
+            .contains_key(&package_name("@latticeaxiom/input")),
+        "the dedicated-server profile must select the data-only input action catalog"
     );
 }
 
@@ -499,6 +556,37 @@ fn validate_shipped_package_delegations(packages: &BTreeMap<PackageName, Package
             "unexpected direct-dependency namespace delegation set for {name}"
         );
     }
+}
+
+fn validate_terrenia_presentation_capability(packages: &BTreeMap<PackageName, PackageSpec>) {
+    let capability = "latticeaxiom:capability/content-presentation@1"
+        .parse::<CapabilityId>()
+        .expect("content-presentation capability is canonical");
+    let presentation_name = package_name("@terrenia/presentation");
+    let presentation = packages
+        .get(&presentation_name)
+        .expect("Terrenia presentation is shipped");
+    let provision = presentation
+        .provides
+        .get(&capability)
+        .expect("Terrenia presentation provides content-presentation");
+    assert_eq!(provision.capability, capability);
+    assert_eq!(provision.version.to_string(), "1.0.0");
+    assert_eq!(provision.cardinality, CapabilityCardinality::ExactlyOne);
+    assert_eq!(provision.domains, BTreeSet::from([PackageDomain::Client]));
+
+    let root = packages
+        .get(&package_name("terrenia"))
+        .expect("Terrenia root is shipped");
+    let requirement = root
+        .requires
+        .get(&capability)
+        .expect("Terrenia root requires content-presentation");
+    assert_eq!(requirement.capability, capability);
+    assert_eq!(requirement.provider.as_ref(), Some(&presentation_name));
+    assert_eq!(requirement.cardinality, CapabilityCardinality::ExactlyOne);
+    assert_eq!(requirement.domains, BTreeSet::from([PackageDomain::Client]));
+    assert!(requirement.version.matches(&provision.version));
 }
 
 fn validate_profile_namespace_authority(
@@ -787,16 +875,286 @@ fn single_root_request(snapshot: &SourceSnapshot, entry_path: &str) -> SourceClo
     }
 }
 
+fn workspace_member_paths() -> BTreeMap<String, String> {
+    let workspace_root = canonical_workspace_root();
+    let root_manifest = workspace_root.join("Cargo.toml");
+    assert_canonical_file_within(&root_manifest, &workspace_root);
+    let root_text = fs::read_to_string(&root_manifest)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", root_manifest.display()));
+    let root = toml::from_str::<toml::Value>(&root_text)
+        .unwrap_or_else(|error| panic!("could not parse {}: {error}", root_manifest.display()));
+    let members = root
+        .get("workspace")
+        .and_then(|workspace| workspace.get("members"))
+        .and_then(toml::Value::as_array)
+        .expect("workspace.members is an array");
+    assert!(
+        members.len() <= MAX_WORKSPACE_MEMBERS,
+        "workspace member count exceeds {MAX_WORKSPACE_MEMBERS}"
+    );
+
+    let mut paths = BTreeMap::new();
+    for member in members {
+        let declared = member
+            .as_str()
+            .expect("every workspace member is an explicit string path");
+        assert!(
+            !declared.contains('*') && !declared.contains('?'),
+            "workspace completeness requires explicit member paths, found {declared}"
+        );
+        let canonical_member = fs::canonicalize(workspace_root.join(declared))
+            .unwrap_or_else(|error| panic!("could not canonicalize member {declared}: {error}"));
+        assert!(
+            canonical_member.starts_with(&workspace_root),
+            "workspace member {declared} escapes the workspace"
+        );
+        let member_manifest = canonical_member.join("Cargo.toml");
+        assert_canonical_file_within(&member_manifest, &canonical_member);
+        let member_text = fs::read_to_string(&member_manifest).unwrap_or_else(|error| {
+            panic!("could not read {}: {error}", member_manifest.display())
+        });
+        let member_value = toml::from_str::<toml::Value>(&member_text).unwrap_or_else(|error| {
+            panic!("could not parse {}: {error}", member_manifest.display())
+        });
+        let crate_name = member_value
+            .get("package")
+            .and_then(|package| package.get("name"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{} lacks package.name", member_manifest.display()));
+        let logical_dir = logical_workspace_dir(&workspace_root, &canonical_member);
+        assert_eq!(
+            logical_dir,
+            declared.replace('\\', "/"),
+            "workspace member path must already be canonical"
+        );
+        assert!(
+            paths.insert(crate_name.to_owned(), logical_dir).is_none(),
+            "duplicate workspace crate name {crate_name}"
+        );
+    }
+    paths
+}
+
+fn inventory_paths(rows: &[InventoryRow], category: &str) -> BTreeMap<String, String> {
+    let workspace_root = canonical_workspace_root();
+    let mut paths = BTreeMap::new();
+    for row in rows {
+        assert!(
+            matches!(row.disposition.as_str(), "reuse" | "adapt"),
+            "{} has an unknown disposition {}",
+            row.name,
+            row.disposition
+        );
+        assert!(
+            !row.v1_role.trim().is_empty() && !row.notes.trim().is_empty(),
+            "{} must document role and ownership notes",
+            row.name
+        );
+        let canonical = fs::canonicalize(workspace_root.join(&row.path)).unwrap_or_else(|error| {
+            panic!("could not canonicalize {category} {}: {error}", row.path)
+        });
+        assert!(
+            canonical.starts_with(&workspace_root),
+            "{category} {} escapes the workspace",
+            row.path
+        );
+        assert_eq!(
+            logical_workspace_dir(&workspace_root, &canonical),
+            row.path,
+            "{category} {} path is not canonical",
+            row.name
+        );
+        assert!(
+            paths.insert(row.name.clone(), row.path.clone()).is_none(),
+            "duplicate {category} inventory name {}",
+            row.name
+        );
+    }
+    paths
+}
+
+fn package_sources() -> Vec<PackageSource> {
+    let workspace_root = canonical_workspace_root();
+    let packages_root = fs::canonicalize(workspace_root.join("packages"))
+        .expect("the shipped packages root is canonicalizable");
+    assert!(
+        packages_root.starts_with(&workspace_root),
+        "the shipped packages root must remain inside the workspace"
+    );
+
+    let mut by_name = BTreeMap::new();
+    let mut source_ids = BTreeSet::new();
+    for namespace in bounded_child_directories(
+        &packages_root,
+        MAX_SHIPPED_NAMESPACES,
+        "shipped package namespaces",
+    ) {
+        for root in bounded_child_directories(
+            &namespace,
+            MAX_PACKAGES_PER_NAMESPACE,
+            "shipped packages in one namespace",
+        ) {
+            let entry = root.join("package.ncl");
+            let manifest = root.join("latticeaxiom-package.toml");
+            let has_entry = entry.is_file();
+            let has_manifest = manifest.is_file();
+            assert_eq!(
+                has_entry,
+                has_manifest,
+                "{} must carry package.ncl and latticeaxiom-package.toml together",
+                root.display()
+            );
+            if !has_entry {
+                continue;
+            }
+
+            assert_canonical_file_within(&entry, &root);
+            assert_canonical_file_within(&manifest, &root);
+            let logical_dir = logical_workspace_dir(&workspace_root, &root);
+            let manifest_text = fs::read_to_string(&manifest)
+                .unwrap_or_else(|error| panic!("could not read {}: {error}", manifest.display()));
+            let manifest_value = toml::from_str::<toml::Value>(&manifest_text)
+                .unwrap_or_else(|error| panic!("could not parse {}: {error}", manifest.display()));
+            let raw_name = manifest_value
+                .get("name")
+                .and_then(toml::Value::as_str)
+                .unwrap_or_else(|| panic!("{} lacks a string package name", manifest.display()));
+            let package_name = package_name(raw_name);
+            let source_id = package_source_id(&package_name);
+            assert!(
+                source_ids.insert(source_id.clone()),
+                "derived source ID {source_id} is not unique"
+            );
+            let previous = by_name.insert(
+                package_name.clone(),
+                PackageSource {
+                    logical_dir,
+                    source_id,
+                    package_name,
+                },
+            );
+            assert!(
+                previous.is_none(),
+                "duplicate shipped package name {raw_name}"
+            );
+        }
+    }
+
+    assert!(
+        !by_name.is_empty(),
+        "the shipped package set cannot be empty"
+    );
+    by_name.into_values().collect()
+}
+
+fn bounded_child_directories(root: &Path, maximum_entries: usize, label: &str) -> Vec<PathBuf> {
+    let canonical_root = fs::canonicalize(root)
+        .unwrap_or_else(|error| panic!("could not canonicalize {}: {error}", root.display()));
+    let entries = fs::read_dir(&canonical_root)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", canonical_root.display()))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|error| {
+            panic!("could not enumerate {}: {error}", canonical_root.display())
+        });
+    assert!(
+        entries.len() <= maximum_entries,
+        "{label} exceeds the bounded entry limit {maximum_entries}"
+    );
+
+    let mut directories = Vec::new();
+    for entry in entries {
+        let file_type = entry.file_type().unwrap_or_else(|error| {
+            panic!("could not inspect {}: {error}", entry.path().display())
+        });
+        assert!(
+            !file_type.is_symlink(),
+            "{} must not be a symlink",
+            entry.path().display()
+        );
+        if !file_type.is_dir() {
+            continue;
+        }
+        let canonical = fs::canonicalize(entry.path()).unwrap_or_else(|error| {
+            panic!("could not canonicalize {}: {error}", entry.path().display())
+        });
+        assert!(
+            canonical.starts_with(&canonical_root),
+            "{} escapes {}",
+            canonical.display(),
+            canonical_root.display()
+        );
+        directories.push(canonical);
+    }
+    directories.sort();
+    directories
+}
+
+fn assert_canonical_file_within(path: &Path, root: &Path) {
+    let metadata = fs::symlink_metadata(path)
+        .unwrap_or_else(|error| panic!("could not inspect {}: {error}", path.display()));
+    assert!(
+        metadata.file_type().is_file(),
+        "{} must be a regular file",
+        path.display()
+    );
+    let canonical = fs::canonicalize(path)
+        .unwrap_or_else(|error| panic!("could not canonicalize {}: {error}", path.display()));
+    assert!(
+        canonical.starts_with(root),
+        "{} escapes package root {}",
+        canonical.display(),
+        root.display()
+    );
+}
+
+fn canonical_workspace_root() -> PathBuf {
+    fs::canonicalize(WORKSPACE_ROOT)
+        .unwrap_or_else(|error| panic!("could not canonicalize {WORKSPACE_ROOT}: {error}"))
+}
+
+fn logical_workspace_dir(workspace_root: &Path, canonical_path: &Path) -> String {
+    canonical_path
+        .strip_prefix(workspace_root)
+        .unwrap_or_else(|_| {
+            panic!(
+                "{} escapes workspace {}",
+                canonical_path.display(),
+                workspace_root.display()
+            )
+        })
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .expect("workspace package paths are UTF-8")
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn package_source_id(package: &PackageName) -> String {
+    let unscoped = package
+        .as_str()
+        .strip_prefix('@')
+        .unwrap_or(package.as_str());
+    let (owner, leaf) = unscoped
+        .split_once('/')
+        .map_or((unscoped, "main"), |(owner, leaf)| (owner, leaf));
+    let value = format!("{owner}:source/{leaf}");
+    let _ = source_id(&value);
+    value
+}
 fn package_snapshots() -> BTreeMap<PackageName, SourceSnapshot> {
-    PACKAGE_SOURCES
-        .iter()
+    package_sources()
+        .into_iter()
         .map(|source| {
             let snapshot = scan_workspace_root(
-                source.source_id,
+                &source.source_id,
                 AuthorizedRootKind::Package,
-                source.logical_dir,
+                &source.logical_dir,
             );
-            (package_name(source.package_name), snapshot)
+            (source.package_name, snapshot)
         })
         .collect()
 }
@@ -827,7 +1185,7 @@ fn scan_root(source: &str, kind: AuthorizedRootKind, root: &Path) -> SourceSnaps
     scan_source_snapshot(
         &authorized,
         SourceScanLimits {
-            maximum_files: 128,
+            maximum_files: 4_096,
             maximum_bytes: 4 * 1024 * 1024,
         },
     )
@@ -863,10 +1221,10 @@ fn entry_provenance(snapshot: &SourceSnapshot, logical_path: &str) -> SourceProv
     .expect("canonical snapshot paths produce canonical provenance")
 }
 
-fn assert_non_overlapping_package_roots() {
-    let roots = PACKAGE_SOURCES
+fn assert_non_overlapping_package_roots(sources: &[PackageSource]) {
+    let roots = sources
         .iter()
-        .map(|source| workspace_path(source.logical_dir))
+        .map(|source| workspace_path(&source.logical_dir))
         .collect::<Vec<_>>();
     for left in 0..roots.len() {
         for right in left + 1..roots.len() {
@@ -881,12 +1239,12 @@ fn assert_non_overlapping_package_roots() {
 }
 
 fn logical_dir(package: &PackageName) -> String {
-    PACKAGE_SOURCES
-        .iter()
-        .find(|source| package_name(source.package_name) == *package)
+    package_sources()
+        .into_iter()
+        .find(|source| source.package_name == *package)
         .map_or_else(
             || panic!("no shipped logical directory for {package}"),
-            |source| source.logical_dir.to_owned(),
+            |source| source.logical_dir,
         )
 }
 
@@ -909,6 +1267,25 @@ fn package_name(value: &str) -> PackageName {
     value
         .parse()
         .unwrap_or_else(|error| panic!("invalid package name {value}: {error}"))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CratePackageInventory {
+    schema: String,
+    baseline_commit: String,
+    crates: Vec<InventoryRow>,
+    packages: Vec<InventoryRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InventoryRow {
+    name: String,
+    path: String,
+    disposition: String,
+    v1_role: String,
+    notes: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

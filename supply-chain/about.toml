@@ -23,6 +23,9 @@ workarounds = ["ring", "rustls", "rustix"]
 [latticeaxiom-abi]
 accepted = ["AGPL-3.0-only"]
 
+[latticeaxiom-client-ui]
+accepted = ["AGPL-3.0-only"]
+
 [latticeaxiom-compose]
 accepted = ["AGPL-3.0-only"]
 
@@ -39,6 +42,10 @@ accepted = ["AGPL-3.0-only"]
 accepted = ["AGPL-3.0-only"]
 
 [latticeaxiom-gameplay]
+accepted = ["AGPL-3.0-only"]
+
+[latticeaxiom-input]
+# Package-local crate owned by packages/latticeaxiom/input.
 accepted = ["AGPL-3.0-only"]
 
 [latticeaxiom-launcher]
@@ -65,7 +72,12 @@ accepted = ["AGPL-3.0-only"]
 [latticeaxiom-sdk-macros]
 accepted = ["AGPL-3.0-only"]
 
+[latticeaxiom-settings-ui]
+# Package-local crate owned by packages/latticeaxiom/settings-ui.
+accepted = ["AGPL-3.0-only"]
+
 [latticeaxiom-start-ui]
+# Package-local crate owned by packages/latticeaxiom/front-end.
 accepted = ["AGPL-3.0-only"]
 
 [latticeaxiom-storage]

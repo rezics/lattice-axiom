@@ -4,6 +4,12 @@ version = "0.1.0"
 domains = ["client"]
 trust = "data-only"
 
+[provides."latticeaxiom:capability/content-presentation@1"]
+capability = "latticeaxiom:capability/content-presentation@1"
+version = "1.0.0"
+cardinality = "exactly-one"
+domains = ["client"]
+
 [realizations.data]
 id = "data"
 kind = "data"

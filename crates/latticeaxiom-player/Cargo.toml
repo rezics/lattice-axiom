@@ -27,7 +27,7 @@ client-input = [
 avian3d = { workspace = true, default-features = false, features = ["3d", "default-collider", "f32", "parallel", "parry-f32"] }
 bevy = { workspace = true, features = ["bevy_log", "multi_threaded", "std"] }
 latticeaxiom-gameplay = { path = "../latticeaxiom-gameplay" }
-latticeaxiom-input = { path = "../latticeaxiom-input" }
+latticeaxiom-input.workspace = true
 leafwing-input-manager = { workspace = true, optional = true, default-features = false }
 thiserror.workspace = true
 

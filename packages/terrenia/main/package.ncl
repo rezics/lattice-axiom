@@ -12,6 +12,8 @@ let worldgen_capability =
 in
 let gameplay_capability = "latticeaxiom:capability/sandbox-gameplay@1" in
 let tools_capability = "latticeaxiom:capability/sandbox-tools@1" in
+let presentation_capability =
+  "latticeaxiom:capability/content-presentation@1" in
 let fragment = registration.constructors.fragment {
   registrations = [{
     id = dimension_id,
@@ -85,6 +87,13 @@ package.make {
       provider = "@terrenia/tools",
       cardinality = "exactly-one",
       domains = ["authoritative"],
+    },
+    "latticeaxiom:capability/content-presentation@1" = {
+      capability = presentation_capability,
+      version = "^1.0.0",
+      provider = "@terrenia/presentation",
+      cardinality = "exactly-one",
+      domains = ["client"],
     },
   },
   realizations = {

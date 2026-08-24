@@ -10,6 +10,13 @@
       "notes": "Engine-independent; v1 is not ABI 1.0. Keep generated C/Rust layouts as the sole layout source. Does not load libraries or wrap Bevy types. A later loader/SDK consumes these DTOs; do not add a parallel ABI crate."
     },
     {
+      "name": "latticeaxiom-client-ui",
+      "path": "crates/latticeaxiom-client-ui",
+      "disposition": "adapt",
+      "v1_role": "Bevy-independent semantic view models and interaction drafts for the HUD, inventory, crafting, inspect, loading, and overlays.",
+      "notes": "Generic platform crate owned by the host UI boundary. It is the compatibility bridge from package-authored shell, presentation, and settings data to the Bevy adapter, but owns no App, renderer, input authority, gameplay authority, or package-specific catalog."
+    },
+    {
       "name": "latticeaxiom-compose",
       "path": "crates/latticeaxiom-compose",
       "disposition": "adapt",
@@ -32,10 +39,10 @@
     },
     {
       "name": "latticeaxiom-dual-fixture",
-      "path": "crates/latticeaxiom-dual-fixture",
-      "disposition": "reuse",
-      "v1_role": "Headless D1 static-versus-portable dual-realization conformance fixture for one gameplay row kernel.",
-      "notes": "Not a production host and not Terrenia content. Keep as dual-path evidence; do not promote it into a playable world or replace it with a second kernel. It does not load native libraries."
+      "path": "packages/example/dual-gameplay",
+      "disposition": "adapt",
+      "v1_role": "Package-local D1 static-versus-portable dual-realization conformance fixture for one gameplay row kernel.",
+      "notes": "The Cargo crate now lives inside the logical package source root and participates in source inclusion. It remains transitional evidence: the portable behavior harness does not load native libraries, and an rlib is not the final lock-specific NativeStatic product executable."
     },
     {
       "name": "latticeaxiom-engine",
@@ -49,7 +56,14 @@
       "path": "crates/latticeaxiom-gameplay",
       "disposition": "adapt",
       "v1_role": "Host-agnostic sandbox kernel for inventory, mining, tools, recipes, drops, placement, and authoritative transactions.",
-      "notes": "Reuse GameplayKernel, GameplayPlanV1, and catalog-bound identity semantics. Add runtime integration and world-wire codecs later; do not embed Terrenia defaults in the host. ReferencePlanApplier is not a storage receipt."
+      "notes": "GameplayKernel and GameplayPlanV1 are integrated by the production host, which applies bounded plans to loaded chunks and commits through the storage transaction boundary. This crate remains the generic mechanics owner: Terrenia rules and tools stay package-authored, ReferencePlanApplier is not a storage receipt, and durable world codecs remain outside this crate."
+    },
+    {
+      "name": "latticeaxiom-input",
+      "path": "packages/latticeaxiom/input",
+      "disposition": "adapt",
+      "v1_role": "Package-local typed action catalog, binding profile, input context, and headless logical-input contracts.",
+      "notes": "The Cargo crate is colocated with the logical @latticeaxiom/input package while retaining its independent latticeaxiom-input crate name. Workspace dependency inheritance is a compile-time compatibility bridge; the package realization remains data-only until a frozen, receipt-injected native dependency closure exists."
     },
     {
       "name": "latticeaxiom-launcher",
@@ -90,8 +104,8 @@
       "name": "latticeaxiom-runtime-contracts",
       "path": "crates/latticeaxiom-runtime-contracts",
       "disposition": "reuse",
-      "v1_role": "Pure-data validators for graph-selected settings and observability catalogs.",
-      "notes": "Operates on latticeaxiom-compose DTOs. Settings and observability are selected exactly once by the graph. No Bevy, UI, or persistence in this crate."
+      "v1_role": "Pure-data validation, binding, local persistence, and apply-transaction contracts for graph-selected settings plus observability catalogs.",
+      "notes": "Operates on latticeaxiom-compose DTOs. Settings and observability are selected by graph capabilities. Local user/device settings use the canonical old-or-complete-new publication protocol here; world persistence remains outside this crate. It owns no Bevy App, UI, renderer, or callback runtime."
     },
     {
       "name": "latticeaxiom-sdk",
@@ -108,11 +122,18 @@
       "notes": "Keep as the only registration-IR macro crate. Pair with latticeaxiom-sdk; do not invent a second macro surface."
     },
     {
+      "name": "latticeaxiom-settings-ui",
+      "path": "packages/latticeaxiom/settings-ui",
+      "disposition": "adapt",
+      "v1_role": "Typed settings catalog projection, transaction surface, and accessibility contracts for client and tools.",
+      "notes": "The Cargo crate is colocated with the logical @latticeaxiom/settings-ui package while retaining its independent latticeaxiom-settings-ui crate name. Its platform dependencies resolve through workspace contracts; the package realization remains data-only until native build trust is explicitly authorized."
+    },
+    {
       "name": "latticeaxiom-start-ui",
-      "path": "crates/latticeaxiom-start-ui",
+      "path": "packages/latticeaxiom/front-end",
       "disposition": "adapt",
       "v1_role": "Headless semantic contracts for the client shell, world library, create/continue, loading stages, settings, and launch handoff.",
-      "notes": "Complete v1 lifecycle and recovery surfaces here. Contains no renderer; an engine-client adapter may project into Bevy UI. Do not add a parallel shell crate."
+      "notes": "The Cargo crate is colocated with the logical @latticeaxiom/front-end package while retaining its independent latticeaxiom-start-ui crate name. Contains no renderer; an engine-client adapter may project into Bevy UI. Do not add a parallel shell crate."
     },
     {
       "name": "latticeaxiom-storage",
@@ -180,88 +201,151 @@
   ],
   "packages": [
     {
+      "name": "@example/dual-gameplay",
+      "path": "packages/example/dual-gameplay",
+      "disposition": "adapt",
+      "v1_role": "Data-only shipped conformance package for the package-local gameplay implementation's static-versus-portable equivalence fixtures.",
+      "notes": "The colocated Cargo crate, benches, and tests are development evidence included in the source snapshot, not executable package realizations. The shipped package exposes only its nonempty tests/fixtures DataRoot at data-only trust; workspace dependency inheritance is a compile-time compatibility bridge."
+    },
+    {
       "name": "@latticeaxiom/dev-tools",
       "path": "packages/latticeaxiom/dev-tools",
       "disposition": "adapt",
       "v1_role": "Optional graph-selected developer workbench (debug-workbench capability).",
-      "notes": "D0 data-only skeleton. Client/tool domain; omit from the headless product lock unless selected. Must contain no Terrenia defaults."
+      "notes": "Owns a package-purpose descriptor and the client/tool debug-workbench capability. It is omitted from headless unless selected and contains no Terrenia defaults or host fallback implementation."
     },
     {
       "name": "@latticeaxiom/front-end",
       "path": "packages/latticeaxiom/front-end",
       "disposition": "adapt",
       "v1_role": "Package-driven client shell root aggregating world-library, settings-ui, and observability.",
-      "notes": "D0 data-only skeleton. Completes start/create/continue/loading UX through the graph, not a host plugin list. Do not hide Terrenia in this package."
+      "notes": "Code-bearing package source root for start/create/continue/loading semantics. Cargo.toml, src, and tests participate in source inclusion; executable SourceBuild selection still requires an explicitly trusted, receipt-closed build policy. Do not hide Terrenia in this package."
+    },
+    {
+      "name": "@latticeaxiom/input",
+      "path": "packages/latticeaxiom/input",
+      "disposition": "adapt",
+      "v1_role": "Typed action catalog, bindings, input contexts, compilation, and headless logical-input contracts.",
+      "notes": "Owns its Rust crate, canonical action-catalog data, package manifests, and tests in one source root. Its shipped realization remains data-only; workspace dependency inheritance is the compile-time compatibility bridge and does not authorize a native package build."
     },
     {
       "name": "@latticeaxiom/inspect",
       "path": "packages/latticeaxiom/inspect",
       "disposition": "adapt",
       "v1_role": "Optional client target-inspect surface over the diagnostic registry.",
-      "notes": "D0 data-only skeleton. Graph-selected; headless may omit it without changing authoritative registration or world hash."
+      "notes": "Owns a package-purpose descriptor and target-inspect capability. It is graph-selected; headless may omit it without changing authoritative registration or world hash."
     },
     {
       "name": "@latticeaxiom/observability",
       "path": "packages/latticeaxiom/observability",
       "disposition": "adapt",
       "v1_role": "Exactly-one diagnostic-registry provider for client, headless, and tool profiles.",
-      "notes": "D0 data-only skeleton required by the v1 client/headless profile. Fill the catalog here; do not duplicate diagnostics in host crates."
+      "notes": "Owns the graph-selected diagnostic-registry capability and its package-purpose data. The host consumes the selected locked artifact and must not select this provider by package-name fallback."
+    },
+    {
+      "name": "@latticeaxiom/progress",
+      "path": "packages/latticeaxiom/progress",
+      "disposition": "adapt",
+      "v1_role": "Generic authoritative/client progress-graph capability and canonical graph data.",
+      "notes": "Platform package owning progress graph data, not Terrenia chapters. Content packages such as @terrenia/journey depend on this capability rather than embedding a second progress runtime."
+    },
+    {
+      "name": "@latticeaxiom/relations",
+      "path": "packages/latticeaxiom/relations",
+      "disposition": "adapt",
+      "v1_role": "Generic authoritative relation-kind graph and relations-graph capability.",
+      "notes": "Platform data package for typed relationships between content identities. It owns generic relation kinds; game-specific relation rows remain in their content packages."
     },
     {
       "name": "@latticeaxiom/settings",
       "path": "packages/latticeaxiom/settings",
       "disposition": "adapt",
       "v1_role": "Exactly-one settings-registry provider for client, headless, and tool profiles.",
-      "notes": "D0 data-only skeleton required by the v1 client/headless profile. View distance and related settings are selected here and clamped by host limits; they are not a substitute for the v1 world-session contract."
+      "notes": "Owns the canonical user settings catalog, including the requested 2..32 chunk view-distance range. The graph selects this provider and the host reports admitted/effective limits; UI and host must not duplicate the catalog or silently narrow its authored range."
     },
     {
       "name": "@latticeaxiom/settings-ui",
       "path": "packages/latticeaxiom/settings-ui",
       "disposition": "adapt",
       "v1_role": "Client/tool settings surface over the settings registry.",
-      "notes": "D0 data-only skeleton. Omit in headless without changing authoritative registration. Delegates settings-registry to @latticeaxiom/settings."
+      "notes": "Owns its Rust implementation, authored vocabulary data, package manifests, and tests in one source root. Omit in headless without changing authoritative registration. Delegates settings-registry to @latticeaxiom/settings; its realization and trust remain data-only pending explicit native build authorization."
     },
     {
       "name": "@latticeaxiom/world-library",
       "path": "packages/latticeaxiom/world-library",
       "disposition": "adapt",
       "v1_role": "World catalog, create/continue, and recovery surface capability.",
-      "notes": "D0 data-only skeleton. Consumes latticeaxiom-world-catalog contracts and does not open a world writer."
+      "notes": "Owns canonical world-catalog surface-state data. It consumes latticeaxiom-world-catalog contracts and never opens a world writer; the launcher/host compatibility bridge performs the typed handoff."
     },
     {
       "name": "@terrenia/blocks",
       "path": "packages/terrenia/blocks",
       "disposition": "adapt",
       "v1_role": "Terrenia block and fluid catalog, block-item mappings, physical/selection/collision semantics, and worldgen roles.",
-      "notes": "Authored 72-block and two-fluid data exists; package.ncl registration is still the D0 empty fragment. Contains no generic inventory or mining implementation. Do not copy this catalog into host crates. Narrow terrenia:item/** when @terrenia/tools is added."
+      "notes": "Owns the authored 72-block/two-fluid catalog, semantic registry, display source, and stable-ID goldens. Contains no generic inventory or mining implementation; @terrenia/tools owns tool-item identities, and the host loads this package's selected locked DataRoot instead of copying catalogs."
     },
     {
       "name": "@terrenia/gameplay",
       "path": "packages/terrenia/gameplay",
       "disposition": "adapt",
       "v1_role": "Terrenia drops, placement rules, recipes, and workstation/furnace/container bindings using host-agnostic sandbox contracts.",
-      "notes": "Authored rules exist; registration is still empty and there is no @terrenia/tools dependency yet. Add that graph edge and non-overlapping namespace delegation. Do not embed mechanics in host crates. @terrenia/tools does not exist at this baseline."
+      "notes": "Owns authored gameplay rules and has an explicit @terrenia/tools dependency plus sandbox-tools capability requirement. Generic mechanics remain in latticeaxiom-gameplay; the host compiles this selected locked data rather than embedding Terrenia rule defaults."
+    },
+    {
+      "name": "@terrenia/journey",
+      "path": "packages/terrenia/journey",
+      "disposition": "adapt",
+      "v1_role": "Terrenia chapter and quest content over the generic progress graph.",
+      "notes": "Owns canonical chapter-page data and consumes @latticeaxiom/progress. Journey content does not own the generic progress runtime or host UI."
+    },
+    {
+      "name": "@terrenia/metallurgy",
+      "path": "packages/terrenia/metallurgy",
+      "disposition": "adapt",
+      "v1_role": "Copper-first material and alloy table providing the Terrenia metallurgy capability.",
+      "notes": "Owns copper, annealed copper, bronze, and brass identities and material data. Science may consume this capability through its optional metallurgy feature; the host owns no metal enum."
     },
     {
       "name": "@terrenia/presentation",
       "path": "packages/terrenia/presentation",
       "disposition": "adapt",
       "v1_role": "Client-only textures, materials, icons, display metadata, render registrations, and HUD fragments.",
-      "notes": "Placeholder assets exist; registration is still D0 empty. Headless omits this package without changing authoritative registration or world hash."
+      "notes": "Owns the complete authored asset table, content display, natural layers, textures, and deterministic fallbacks selected by the content-presentation capability. Headless omits this package without changing authoritative registration or world hash."
+    },
+    {
+      "name": "@terrenia/science",
+      "path": "packages/terrenia/science",
+      "disposition": "adapt",
+      "v1_role": "Terrenia voltage and science-processing recipe graph with optional metallurgy integration.",
+      "notes": "Owns science-processing and voltage state data, not mana. Its optional default metallurgy feature consumes @terrenia/metallurgy without transferring material ownership to the host."
+    },
+    {
+      "name": "@terrenia/thaumaturgy",
+      "path": "packages/terrenia/thaumaturgy",
+      "disposition": "adapt",
+      "v1_role": "Terrenia mana state data and thaumaturgy capability.",
+      "notes": "Owns mana as a distinct state-property identity from science voltage. It is package-authored data and does not introduce a host-side magic enum."
+    },
+    {
+      "name": "@terrenia/tools",
+      "path": "packages/terrenia/tools",
+      "disposition": "adapt",
+      "v1_role": "Terrenia wooden/stone tool and item catalog providing sandbox-tools.",
+      "notes": "Owns stick and tool item identities, durability, class/tier predicates, display rows, and the intrinsic no-item hand fallback. It depends on @terrenia/blocks; runtime mining mechanics remain in latticeaxiom-gameplay."
     },
     {
       "name": "@terrenia/worldgen",
       "path": "packages/terrenia/worldgen",
       "disposition": "adapt",
       "v1_role": "Exactly-one Terrenia terrain provider: generation configuration, territories, caves, hydrology, geology, resources, vegetation, and role bindings.",
-      "notes": "Block-binding data exists; package.ncl registration is still D0 empty. Requires @terrenia/blocks. Complete the v1 plan in this package, not as a host fallback dimension."
+      "notes": "Owns authored biome, block-binding, natural-layer, and stable-ID data and requires @terrenia/blocks. The generic algorithms live in latticeaxiom-worldgen and latticeaxiom-territory; the host must not synthesize a fallback Terrenia dimension."
     },
     {
       "name": "terrenia",
       "path": "packages/terrenia/main",
       "disposition": "adapt",
       "v1_role": "Replaceable dimension root and namespace owner aggregating the Terrenia authoritative closure.",
-      "notes": "D0 data-only skeleton. The host must not contain a hidden Terrenia plugin list. Narrow terrenia:item/** before v1 worlds are created and delegate tool namespaces to a future @terrenia/tools package. @terrenia/presentation remains client-domain."
+      "notes": "Owns the dimension registration and aggregates blocks, worldgen, gameplay, tools, and client-only presentation by explicit dependencies and capabilities. The host must not contain a hidden Terrenia plugin list or package-name fallback; headless projection omits presentation."
     }
   ]
 }

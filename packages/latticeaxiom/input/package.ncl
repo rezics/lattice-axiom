@@ -1,4 +1,5 @@
-# Graph-selected action catalog and default bindings.
+# Graph-selected action catalog and default bindings. The colocated Rust crate
+# remains a workspace compatibility bridge, not an advertised native realization.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in

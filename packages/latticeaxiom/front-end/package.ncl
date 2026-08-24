@@ -1,4 +1,4 @@
-# D0 pure-data skeleton for the package-driven client shell root.
+# Package-composed client shell with package-local Rust implementation.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in
@@ -29,7 +29,7 @@ package.make {
   metadata = {
     display_name = "Lattice Axiom Client Shell",
     documentation = null,
-    license = "MIT OR Apache-2.0",
+    license = "AGPL-3.0-only",
   },
   dependencies = {
     "@latticeaxiom/world-library" = {

@@ -1,4 +1,6 @@
-# D0 pure-data skeleton for the package-composed settings surface.
+# Data realization contract for the package-composed settings surface. The
+# package-local Rust crate is source-receipted but remains outside SourceBuild
+# until its native trust policy is explicitly authorized.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in
