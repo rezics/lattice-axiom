@@ -13,16 +13,17 @@ use bevy::{
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     input_focus::tab_navigation::{NavAction, TabGroup, TabIndex, TabNavigation},
     input_focus::{FocusCause, InputFocus, InputFocusVisible},
+    picking::hover::Hovered,
     prelude::{
-        AlignItems, BackgroundColor, BorderColor, BorderRadius, Button, Changed, Color, Commands,
-        Component, Display, Entity, FlexDirection, GlobalZIndex, Interaction, JustifyContent,
-        MessageWriter, Name, Node, Pickable, PositionType, Query, Res, ResMut, Resource, Text,
-        TextColor, UiRect, Val, With, Without,
+        AlignItems, BackgroundColor, BorderColor, BorderRadius, Color, Commands, Component,
+        Display, Entity, FlexDirection, GlobalZIndex, JustifyContent, MessageWriter, Name, Node,
+        Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
+        Without,
     },
-    ui::FocusPolicy,
+    ui::{FocusPolicy, Pressed},
     ui_widgets::{
-        SetSliderValue, Slider, SliderPrecision, SliderRange, SliderStep, SliderThumb, SliderValue,
-        SliderValueChange, TrackClick, ValueChange,
+        Activate, Button, SetSliderValue, Slider, SliderPrecision, SliderRange, SliderStep,
+        SliderThumb, SliderValue, SliderValueChange, TrackClick, ValueChange,
     },
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
 };
@@ -553,10 +554,6 @@ pub(super) struct ViewDistanceSlider;
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ViewDistanceSliderThumb;
 
-/// One-frame latch that releases an Interaction pulse after button handling.
-#[derive(Debug, Default, Resource)]
-pub(super) struct TypedSurfacePress(Option<Entity>);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SurfaceSliderInput {
     Absent,
@@ -780,6 +777,7 @@ fn spawn_pause_button(
             action,
             Name::new(label),
             accessibility_node(AccessKitRole::Button, label),
+            Hovered::default(),
             Node {
                 width: Val::Px(240.0),
                 height: Val::Px(44.0),
@@ -788,7 +786,7 @@ fn spawn_pause_button(
                 justify_content: JustifyContent::Center,
                 ..Node::default()
             },
-            BackgroundColor(button_color(Interaction::None, false)),
+            BackgroundColor(button_color(false, false, false)),
         ))
         .with_children(|button| {
             button.spawn((
@@ -892,8 +890,7 @@ pub(super) fn apply_settings_surface_actions(
         Or<(With<ViewDistanceSlider>, With<PauseMenuAction>)>,
     >,
     sliders: Query<'_, '_, (Entity, Ref<'_, SliderValue>, &Node), With<ViewDistanceSlider>>,
-    mut buttons: Query<'_, '_, (&PauseMenuAction, &Node, &mut Interaction), With<Button>>,
-    mut typed_press: ResMut<'_, TypedSurfacePress>,
+    buttons: Query<'_, '_, (&PauseMenuAction, &Node), With<Button>>,
     mut commands: Commands<'_, '_>,
 ) {
     let showing_settings = pause.is_paused()
@@ -1004,17 +1001,21 @@ pub(super) fn apply_settings_surface_actions(
 
     // Navigation and activation in one generation never click the newly moved
     // focus target. The next generation must explicitly confirm it.
+    // Native Enter/Space on a focused `ui_widgets::Button` already emits
+    // `Activate`; surface keyboard must not fire a second time.
+    let native_button_key = keyboard.as_ref().is_some_and(|keyboard| {
+        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space)
+    });
     if activate
         && slider_input == SurfaceSliderInput::Absent
         && focus_input == SurfaceFocusInput::Absent
+        && !native_button_key
         && let Some(focused) = focus.as_ref().and_then(|focus| focus.get())
-        && let Ok((action, node, mut interaction)) = buttons.get_mut(focused)
+        && let Ok((action, node)) = buttons.get(focused)
         && node.display != Display::None
         && settings_tab_index(*action).is_some()
-        && *interaction != Interaction::Pressed
     {
-        *interaction = Interaction::Pressed;
-        typed_press.0 = Some(focused);
+        commands.trigger(Activate { entity: focused });
     }
 
     // Settings is an exclusive input context. Once a recognized edge enters a
@@ -1022,34 +1023,21 @@ pub(super) fn apply_settings_surface_actions(
     frame.clear();
 }
 
-/// Releases the one-frame Interaction pulse after the existing button system.
-///
-/// This keeps pointer and typed activation on the same action path without
-/// leaving a controller-activated button stuck in `Pressed`.
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn release_typed_surface_press(
-    mut typed_press: ResMut<'_, TypedSurfacePress>,
-    mut interactions: Query<'_, '_, &mut Interaction, With<Button>>,
-) {
-    let Some(entity) = typed_press.0.take() else {
-        return;
-    };
-    if let Ok(mut interaction) = interactions.get_mut(entity)
-        && *interaction == Interaction::Pressed
-    {
-        *interaction = Interaction::None;
-    }
-}
 /// Synchronizes a visible focus indicator for pointer, keyboard, and gamepad.
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_settings_control_focus_visuals(
     focus: Option<Res<'_, InputFocus>>,
-    mut buttons: Query<'_, '_, (Entity, &Interaction, &mut BackgroundColor), With<PauseMenuAction>>,
+    mut buttons: Query<
+        '_,
+        '_,
+        (Entity, &Hovered, Has<Pressed>, &mut BackgroundColor),
+        With<PauseMenuAction>,
+    >,
     mut sliders: Query<'_, '_, (Entity, &mut BorderColor), With<ViewDistanceSlider>>,
 ) {
     let focused = focus.as_ref().and_then(|focus| focus.get());
-    for (entity, interaction, mut background) in &mut buttons {
-        let desired = button_color(*interaction, focused == Some(entity));
+    for (entity, hovered, pressed, mut background) in &mut buttons {
+        let desired = button_color(pressed, hovered.get(), focused == Some(entity));
         if background.0 != desired {
             background.0 = desired;
         }
@@ -1170,74 +1158,66 @@ pub(super) fn freeze_player_while_paused(
     }
 }
 
-/// Applies Resume and Quit from the pause overlay buttons.
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-#[allow(clippy::type_complexity)] // Button interaction query is one pause-menu mapping.
-pub(super) fn pause_menu_buttons(
-    mut interactions: Query<
-        '_,
-        '_,
-        (&Interaction, &PauseMenuAction),
-        (Changed<Interaction>, With<Button>),
-    >,
+/// Applies Resume, Settings, Apply, Undo, Back, and Quit from widget activation.
+#[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
+pub(super) fn pause_menu_activated(
+    activate: On<'_, '_, Activate>,
+    actions: Query<'_, '_, &PauseMenuAction, With<Button>>,
     mut pause: ResMut<'_, ProductionSessionPause>,
     mut settings: Option<ResMut<'_, ProductionSettingsState>>,
     spine: Option<Res<'_, ProductionSpine>>,
     mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
     mut exits: MessageWriter<'_, AppExit>,
 ) {
-    for (interaction, action) in &mut interactions {
-        if *interaction != Interaction::Pressed {
-            continue;
+    let Ok(action) = actions.get(activate.entity) else {
+        return;
+    };
+    match action {
+        PauseMenuAction::Resume => {
+            if let Some(router) = router.as_mut()
+                && router
+                    .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
+                    .is_ok()
+            {
+                pause.set(false);
+            }
         }
-        match action {
-            PauseMenuAction::Resume => {
-                if let Some(router) = router.as_mut()
-                    && router
-                        .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
-                        .is_ok()
-                {
-                    pause.set(false);
-                }
+        PauseMenuAction::Settings => {
+            if let Some(router) = router.as_mut()
+                && router
+                    .apply(&latticeaxiom_client_ui::SurfaceCommandV1::OpenSettings)
+                    .is_ok()
+                && let Some(settings) = settings.as_mut()
+            {
+                settings.begin_edit();
             }
-            PauseMenuAction::Settings => {
-                if let Some(router) = router.as_mut()
-                    && router
-                        .apply(&latticeaxiom_client_ui::SurfaceCommandV1::OpenSettings)
-                        .is_ok()
-                    && let Some(settings) = settings.as_mut()
-                {
-                    settings.begin_edit();
-                }
+        }
+        PauseMenuAction::Back => {
+            if let Some(router) = router.as_mut()
+                && router
+                    .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
+                    .is_ok()
+                && let Some(settings) = settings.as_mut()
+            {
+                settings.rollback_draft();
             }
-            PauseMenuAction::Back => {
-                if let Some(router) = router.as_mut()
-                    && router
-                        .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
-                        .is_ok()
-                    && let Some(settings) = settings.as_mut()
-                {
-                    settings.rollback_draft();
-                }
+        }
+        PauseMenuAction::Apply => {
+            if let (Some(settings), Some(spine)) = (settings.as_mut(), spine.as_ref()) {
+                settings.apply(spine);
             }
-            PauseMenuAction::Apply => {
-                if let (Some(settings), Some(spine)) = (settings.as_mut(), spine.as_ref()) {
-                    settings.apply(spine);
-                }
+        }
+        PauseMenuAction::Undo => {
+            if let Some(settings) = settings.as_mut() {
+                settings.reset_draft();
             }
-            PauseMenuAction::Undo => {
-                if let Some(settings) = settings.as_mut() {
-                    settings.reset_draft();
-                }
+        }
+        PauseMenuAction::Quit => {
+            if let Some(router) = router.as_mut() {
+                let _ = router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::RequestSaveQuit);
+                let _ = router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::Confirm);
             }
-            PauseMenuAction::Quit => {
-                if let Some(router) = router.as_mut() {
-                    let _ =
-                        router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::RequestSaveQuit);
-                    let _ = router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::Confirm);
-                }
-                exits.write(AppExit::Success);
-            }
+            exits.write(AppExit::Success);
         }
     }
 }
@@ -1377,12 +1357,15 @@ pub(super) fn sync_pause_menu_page(
     }
 }
 
-const fn button_color(interaction: Interaction, focused: bool) -> Color {
-    match interaction {
-        Interaction::Pressed => Color::srgb(0.18, 0.42, 0.36),
-        Interaction::Hovered => Color::srgb(0.16, 0.22, 0.20),
-        Interaction::None if focused => Color::srgb(0.13, 0.28, 0.24),
-        Interaction::None => Color::srgb(0.08, 0.11, 0.10),
+const fn button_color(pressed: bool, hovered: bool, focused: bool) -> Color {
+    if pressed {
+        Color::srgb(0.18, 0.42, 0.36)
+    } else if hovered {
+        Color::srgb(0.16, 0.22, 0.20)
+    } else if focused {
+        Color::srgb(0.13, 0.28, 0.24)
+    } else {
+        Color::srgb(0.08, 0.11, 0.10)
     }
 }
 
@@ -1509,8 +1492,8 @@ mod tests {
         assert_eq!(settings_tab_index(PauseMenuAction::Quit), None);
 
         assert_ne!(
-            button_color(Interaction::None, true),
-            button_color(Interaction::None, false)
+            button_color(false, false, true),
+            button_color(false, false, false)
         );
 
         let button = accessibility_node(AccessKitRole::Button, "Apply");

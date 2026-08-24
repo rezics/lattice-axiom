@@ -1,14 +1,15 @@
 //! Production HUD: crosshair, inspect, status, hotbar, and inventory.
 
 use bevy::{
+    ecs::observer::On,
     ecs::query::QueryFilter,
     prelude::{
-        AlignItems, BackgroundColor, BorderColor, Button, Changed, Children, Color, Commands,
-        Component, Display, FlexDirection, FlexWrap, GlobalZIndex, Interaction, JustifyContent,
-        Name, Node, Overflow, Pickable, PositionType, Query, Res, ResMut, Resource, Text,
-        TextColor, UiRect, Val, With, Without,
+        AlignItems, BackgroundColor, BorderColor, Children, Color, Commands, Component, Display,
+        FlexDirection, FlexWrap, GlobalZIndex, JustifyContent, Name, Node, Overflow, Pickable,
+        PositionType, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With, Without,
     },
     ui::FocusPolicy,
+    ui_widgets::{Activate, Button, ScrollArea},
 };
 use latticeaxiom_gameplay::{ContainerId, RecipeId, SlotIndex, WorkstationId};
 use latticeaxiom_player::{
@@ -438,6 +439,7 @@ fn spawn_workbench_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                         overflow: Overflow::scroll(),
                         ..Node::default()
                     },
+                    ScrollArea,
                     BackgroundColor(Color::srgba(0.07, 0.09, 0.08, 0.94)),
                 ))
                 .with_children(|panel| {
@@ -684,72 +686,57 @@ pub(super) fn sync_slot_pickable(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-#[allow(clippy::type_complexity)] // Slot button queries are one click-to-swap mapping.
-pub(super) fn inventory_slot_buttons(
+#[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
+pub(super) fn inventory_slot_activated(
+    activate: On<'_, '_, Activate>,
     pause: Res<'_, ProductionSessionPause>,
     mut surfaces: ResMut<'_, ProductionHudSurfaces>,
     spine: Res<'_, ProductionSpine>,
     inventory: Query<
         '_,
         '_,
-        (&Interaction, &ProductionInventorySlot),
-        (
-            Changed<Interaction>,
-            With<Button>,
-            Without<ProductionHotbarSlot>,
-        ),
+        &ProductionInventorySlot,
+        (With<Button>, Without<ProductionHotbarSlot>),
     >,
-    hotbar: Query<
-        '_,
-        '_,
-        (&Interaction, &ProductionHotbarSlot),
-        (
-            Changed<Interaction>,
-            With<Button>,
-            Without<ProductionInventorySlot>,
-        ),
-    >,
+    hotbar: Query<'_, '_, &ProductionHotbarSlot, (With<Button>, Without<ProductionInventorySlot>)>,
 ) {
     if pause.is_paused() || !surfaces.inventory_panel_open() {
         return;
     }
-    for (interaction, slot) in &inventory {
-        if *interaction == Interaction::Pressed
-            && let Some((from, to)) = surfaces.click_slot(slot.0)
-        {
-            let _ = spine.move_stack(SlotIndex::new(from), SlotIndex::new(to));
-        }
-    }
-    for (interaction, slot) in &hotbar {
-        if *interaction == Interaction::Pressed
-            && let Some((from, to)) = surfaces.click_slot(slot.0)
-        {
-            let _ = spine.move_stack(SlotIndex::new(from), SlotIndex::new(to));
-        }
+    let slot = inventory
+        .get(activate.entity)
+        .map(|slot| slot.0)
+        .ok()
+        .or_else(|| hotbar.get(activate.entity).ok().map(|slot| slot.0));
+    if let Some(slot) = slot
+        && let Some((from, to)) = surfaces.click_slot(slot)
+    {
+        let _ = spine.move_stack(SlotIndex::new(from), SlotIndex::new(to));
     }
 }
 
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn recipe_buttons(
+#[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
+pub(super) fn recipe_activated(
+    activate: On<'_, '_, Activate>,
     pause: Res<'_, ProductionSessionPause>,
     surfaces: Res<'_, ProductionHudSurfaces>,
     spine: Res<'_, ProductionSpine>,
-    buttons: Query<'_, '_, (&Interaction, &ProductionRecipeButton), Changed<Interaction>>,
+    buttons: Query<'_, '_, &ProductionRecipeButton, With<Button>>,
 ) {
     if pause.is_paused() || !surfaces.inventory_open() {
         return;
     }
-    for (interaction, button) in &buttons {
-        if *interaction != Interaction::Pressed || button.recipe.is_empty() {
-            continue;
-        }
-        let Ok(recipe) = RecipeId::parse(&button.recipe) else {
-            continue;
-        };
-        let workstation = button.workbench.then_some(HOST_WORKBENCH_CONTAINER);
-        let _receipt = spine.craft_recipe(&recipe, workstation);
+    let Ok(button) = buttons.get(activate.entity) else {
+        return;
+    };
+    if button.recipe.is_empty() {
+        return;
     }
+    let Ok(recipe) = RecipeId::parse(&button.recipe) else {
+        return;
+    };
+    let workstation = button.workbench.then_some(HOST_WORKBENCH_CONTAINER);
+    let _receipt = spine.craft_recipe(&recipe, workstation);
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.

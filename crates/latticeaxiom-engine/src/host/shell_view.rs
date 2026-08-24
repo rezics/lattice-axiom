@@ -1,4 +1,4 @@
-//! Bevy Text/Button adapter for the package-driven start shell.
+//! Bevy `ui_widgets` adapter for the package-driven start shell.
 //!
 //! This process hosts only the start-ui semantic tree. Continue/Play of a
 //! `ReadyExact` world seals [`LaunchHandoff::for_ready_exact`] and requests
@@ -8,13 +8,18 @@
 
 use bevy::{
     app::{App, AppExit, Plugin, Startup, Update},
+    ecs::observer::On,
+    ecs::query::Has,
     ecs::schedule::IntoScheduleConfigs,
     input::{ButtonInput, keyboard::KeyCode},
+    picking::hover::Hovered,
     prelude::{
-        AlignItems, BackgroundColor, Button, Camera2d, Changed, ClearColor, Color, Commands,
-        Component, Entity, FlexDirection, Interaction, JustifyContent, MessageWriter, Name, Node,
-        Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
+        AlignItems, BackgroundColor, Camera2d, ClearColor, Color, Commands, Component, Entity,
+        FlexDirection, JustifyContent, MessageWriter, Name, Node, Query, Res, ResMut, Resource,
+        Text, TextColor, UiRect, Val, With,
     },
+    ui::Pressed,
+    ui_widgets::{Activate, Button},
 };
 use latticeaxiom_core::WorldId;
 use latticeaxiom_launcher::{
@@ -56,16 +61,23 @@ struct ShellControl {
     id: SemanticNodeId,
 }
 
-/// Bevy plugin that projects the start-ui semantic tree as Text/Button nodes.
+/// Bevy plugin that projects the start-ui semantic tree as `ui_widgets` nodes.
 #[derive(Clone, Copy, Debug, Default)]
 struct ClientShellPlugin;
 
 impl Plugin for ClientShellPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_shell_camera).add_systems(
-            Update,
-            (shell_button_clicks, shell_keyboard, rebuild_shell_view).chain(),
-        );
+        app.add_observer(shell_control_activated)
+            .add_systems(Startup, spawn_shell_camera)
+            .add_systems(
+                Update,
+                (
+                    shell_keyboard,
+                    rebuild_shell_view,
+                    sync_shell_control_visuals,
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -73,7 +85,7 @@ impl EngineInstance {
     /// Builds the process's sole interactive client as a package-driven start shell.
     ///
     /// The App renders [`latticeaxiom_start_ui::StartShellModel::semantic_tree`]
-    /// with Bevy Text/Button nodes. Continue/Play of a `ReadyExact` world seals
+    /// with Bevy `ui_widgets` nodes. Continue/Play of a `ReadyExact` world seals
     /// [`LaunchHandoff::for_ready_exact`] and exits. This constructor does not
     /// spawn [`super::ProductionSpine`] and does not enter Playing in this App.
     ///
@@ -246,6 +258,7 @@ fn spawn_control(
                 id: node.id.clone(),
             },
             Name::new(node.name.clone()),
+            Hovered::default(),
             Node {
                 width: Val::Px(480.0),
                 min_height: Val::Px(44.0),
@@ -254,11 +267,7 @@ fn spawn_control(
                 justify_content: JustifyContent::Center,
                 ..Node::default()
             },
-            BackgroundColor(control_color(if is_focused {
-                Interaction::Hovered
-            } else {
-                Interaction::None
-            })),
+            BackgroundColor(control_color(false, is_focused)),
         ))
         .with_children(|button| {
             button.spawn((
@@ -269,50 +278,56 @@ fn spawn_control(
         });
 }
 
-const fn control_color(interaction: Interaction) -> Color {
-    match interaction {
-        Interaction::Pressed => Color::srgb(0.18, 0.42, 0.36),
-        Interaction::Hovered => Color::srgb(0.16, 0.22, 0.20),
-        Interaction::None => Color::srgb(0.08, 0.11, 0.10),
+const fn control_color(pressed: bool, hovered: bool) -> Color {
+    if pressed {
+        Color::srgb(0.18, 0.42, 0.36)
+    } else if hovered {
+        Color::srgb(0.16, 0.22, 0.20)
+    } else {
+        Color::srgb(0.08, 0.11, 0.10)
     }
 }
 
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-#[allow(clippy::type_complexity)] // Button interaction query is one shell-control mapping.
-fn shell_button_clicks(
+#[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
+fn shell_control_activated(
+    activate: On<'_, '_, Activate>,
     mut commands: Commands<'_, '_>,
     mut session: ResMut<'_, ClientShellSession>,
     mut exits: MessageWriter<'_, AppExit>,
-    mut interactions: Query<
+    controls: Query<'_, '_, &ShellControl, With<Button>>,
+) {
+    let Ok(control) = controls.get(activate.entity) else {
+        return;
+    };
+    let target = control.id.clone();
+    apply_shell_command(
+        &mut commands,
+        &mut session,
+        &mut exits,
+        &SemanticCommand {
+            target,
+            action: SemanticActionId::Activate,
+            source: InputSource::Keyboard,
+        },
+    );
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn sync_shell_control_visuals(
+    session: Res<'_, ClientShellSession>,
+    mut controls: Query<
         '_,
         '_,
-        (&Interaction, &ShellControl, &mut BackgroundColor),
-        (Changed<Interaction>, With<Button>),
+        (&ShellControl, &Hovered, Has<Pressed>, &mut BackgroundColor),
+        With<Button>,
     >,
 ) {
-    let mut pressed = None;
-    for (interaction, control, mut background) in &mut interactions {
+    for (control, hovered, pressed, mut background) in &mut controls {
         let focused = session.focused.as_ref() == Some(&control.id);
-        background.0 = control_color(if *interaction == Interaction::None && focused {
-            Interaction::Hovered
-        } else {
-            *interaction
-        });
-        if *interaction == Interaction::Pressed {
-            pressed = Some(control.id.clone());
+        let desired = control_color(pressed, hovered.get() || focused);
+        if background.0 != desired {
+            background.0 = desired;
         }
-    }
-    if let Some(target) = pressed {
-        apply_shell_command(
-            &mut commands,
-            &mut session,
-            &mut exits,
-            &SemanticCommand {
-                target,
-                action: SemanticActionId::Activate,
-                source: InputSource::Keyboard,
-            },
-        );
     }
 }
 

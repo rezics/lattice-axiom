@@ -3,13 +3,17 @@
 use avian3d::prelude::LinearVelocity;
 use bevy::{
     app::AppExit,
+    ecs::observer::On,
+    ecs::query::Has,
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    picking::hover::Hovered,
     prelude::{
-        AlignItems, BackgroundColor, Button, Changed, Color, Commands, Component, Display,
-        FlexDirection, GlobalZIndex, Interaction, JustifyContent, MessageWriter, Name, Node,
-        Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
+        AlignItems, BackgroundColor, Color, Commands, Component, Display, FlexDirection,
+        GlobalZIndex, JustifyContent, MessageWriter, Name, Node, Pickable, PositionType, Query,
+        Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
     },
-    ui::FocusPolicy,
+    ui::{FocusPolicy, Pressed},
+    ui_widgets::{Activate, Button},
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
 };
 use latticeaxiom_player::{ActionFrameInbox, D2Player};
@@ -111,6 +115,7 @@ fn spawn_pause_button(
             Button,
             action,
             Name::new(label),
+            Hovered::default(),
             Node {
                 width: Val::Px(240.0),
                 height: Val::Px(44.0),
@@ -118,7 +123,7 @@ fn spawn_pause_button(
                 justify_content: JustifyContent::Center,
                 ..Node::default()
             },
-            BackgroundColor(button_color(Interaction::None)),
+            BackgroundColor(button_color(false, false)),
         ))
         .with_children(|button| {
             button.spawn((
@@ -225,36 +230,47 @@ pub(super) fn freeze_player_while_paused(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-#[allow(clippy::type_complexity)] // Button interaction query is one pause-menu mapping.
-pub(super) fn pause_menu_buttons(
-    mut interactions: Query<
-        '_,
-        '_,
-        (&Interaction, &PauseMenuAction, &mut BackgroundColor),
-        (Changed<Interaction>, With<Button>),
-    >,
+#[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
+pub(super) fn pause_menu_activated(
+    activate: On<'_, '_, Activate>,
+    actions: Query<'_, '_, &PauseMenuAction, With<Button>>,
     mut pause: ResMut<'_, PlayablePause>,
     mut exits: MessageWriter<'_, AppExit>,
 ) {
-    for (interaction, action, mut background) in &mut interactions {
-        background.0 = button_color(*interaction);
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        match action {
-            PauseMenuAction::Resume => pause.set(false),
-            PauseMenuAction::Quit => {
-                exits.write(AppExit::Success);
-            }
+    let Ok(action) = actions.get(activate.entity) else {
+        return;
+    };
+    match action {
+        PauseMenuAction::Resume => pause.set(false),
+        PauseMenuAction::Quit => {
+            exits.write(AppExit::Success);
         }
     }
 }
 
-const fn button_color(interaction: Interaction) -> Color {
-    match interaction {
-        Interaction::Pressed => Color::srgb(0.18, 0.42, 0.36),
-        Interaction::Hovered => Color::srgb(0.16, 0.22, 0.20),
-        Interaction::None => Color::srgb(0.08, 0.11, 0.10),
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn sync_pause_button_visuals(
+    mut buttons: Query<
+        '_,
+        '_,
+        (&Hovered, Has<Pressed>, &mut BackgroundColor),
+        With<PauseMenuAction>,
+    >,
+) {
+    for (hovered, pressed, mut background) in &mut buttons {
+        let desired = button_color(pressed, hovered.get());
+        if background.0 != desired {
+            background.0 = desired;
+        }
+    }
+}
+
+const fn button_color(pressed: bool, hovered: bool) -> Color {
+    if pressed {
+        Color::srgb(0.18, 0.42, 0.36)
+    } else if hovered {
+        Color::srgb(0.16, 0.22, 0.20)
+    } else {
+        Color::srgb(0.08, 0.11, 0.10)
     }
 }

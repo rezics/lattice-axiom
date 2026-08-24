@@ -178,6 +178,11 @@ impl LockedPackageArtifactStore {
         })
     }
 
+    /// Returns lock-selected data-realization package names in stable order.
+    pub(crate) fn data_package_names(&self) -> impl Iterator<Item = &PackageName> {
+        self.inner.data_roots.keys()
+    }
+
     /// Decodes one lock-selected data realization using the stable artifact schema.
     ///
     /// # Errors

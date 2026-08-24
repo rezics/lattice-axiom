@@ -58,6 +58,7 @@ const D7_BLOCK_IDS_PATH: &str = "data/goldens/d7-block-ids.txt";
 const D7_BIOME_IDS_PATH: &str = "data/goldens/d7-biome-ids.txt";
 const D7_NATURAL_ROLE_IDS_PATH: &str = "data/goldens/d7-natural-role-ids.txt";
 const D9_BLOCK_IDS_PATH: &str = "data/goldens/d9-block-ids.txt";
+const PACKAGE_PURPOSE_PATH: &str = "data/package-purpose-v1.json";
 
 pub(super) fn required_provider_data(
     images: &LockVerifiedComposeImages,
@@ -781,20 +782,36 @@ impl ExactlyOneDimensionRegistration {
                 id: "exactly-one".to_owned(),
             });
         };
-        let mut dimensions = table.keys();
-        let Some(dimension) = dimensions.next() else {
-            return Err(ProductionHostError::MissingCatalogDefinition {
-                kind: "dimension-registration",
-                id: "exactly-one".to_owned(),
-            });
-        };
-        if dimensions.next().is_some() {
-            return Err(ProductionHostError::AmbiguousDimension);
-        }
-        Ok(Self(dimension.clone()))
+        Self::from_registration_ids(table.keys())
     }
 
-    #[cfg(test)]
+    /// Selects exactly one lock-selected realized `package-purpose` dimension.
+    ///
+    /// Production reopen still binds a placeholder empty registration image.
+    /// Dimension identity therefore comes from receipt-verified data roots
+    /// until the lock compiles a populated registration image.
+    fn from_lock_selected_purposes(
+        images: &LockVerifiedComposeImages,
+    ) -> Result<Self, ProductionHostError> {
+        let path = CanonicalLogicalPath::new(PACKAGE_PURPOSE_PATH).map_err(|_| {
+            ProductionHostError::InvalidCatalogField {
+                field: "package-purpose-path",
+            }
+        })?;
+        let mut dimensions = BTreeSet::new();
+        for name in images.locked_artifacts().data_package_names() {
+            let data = images.locked_artifacts().data_root(name)?;
+            let Some(bytes) = data.file(&path) else {
+                continue;
+            };
+            let Some(purpose) = dimension_purpose_from_descriptor(name, bytes)? else {
+                continue;
+            };
+            dimensions.insert(purpose);
+        }
+        Self::from_registration_ids(dimensions.iter())
+    }
+
     fn from_registration_ids<'a>(
         ids: impl IntoIterator<Item = &'a StableId>,
     ) -> Result<Self, ProductionHostError> {
@@ -819,8 +836,67 @@ impl ExactlyOneDimensionRegistration {
 fn resolve_dimension(
     images: &LockVerifiedComposeImages,
 ) -> Result<DimensionId, ProductionHostError> {
-    ExactlyOneDimensionRegistration::from_registration_image(images.images().registration())?
-        .into_dimension()
+    match ExactlyOneDimensionRegistration::from_registration_image(images.images().registration()) {
+        Ok(selected) => selected.into_dimension(),
+        Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "dimension-registration",
+            ..
+        }) => {
+            ExactlyOneDimensionRegistration::from_lock_selected_purposes(images)?.into_dimension()
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+enum PackagePurposeSchemaV1 {
+    #[serde(rename = "latticeaxiom.package-purpose.v1")]
+    V1,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum PackagePurposeKindV1 {
+    Capability,
+    Dimension,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct PackagePurposeDescriptorV1 {
+    package: PackageName,
+    purpose: StableId,
+    purpose_kind: PackagePurposeKindV1,
+    schema: PackagePurposeSchemaV1,
+}
+
+fn dimension_purpose_from_descriptor(
+    package: &PackageName,
+    bytes: &[u8],
+) -> Result<Option<StableId>, ProductionHostError> {
+    let descriptor: PackagePurposeDescriptorV1 =
+        serde_json::from_slice(bytes).map_err(|source| {
+            ProductionHostError::InvalidAuthoredCatalog {
+                name: "package-purpose",
+                source,
+            }
+        })?;
+    if descriptor.package != *package {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "package-purpose-owner",
+            id: descriptor.package.to_string(),
+        });
+    }
+    if descriptor.purpose_kind != PackagePurposeKindV1::Dimension {
+        return Ok(None);
+    }
+    if descriptor.purpose.kind() != "dimension" {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "dimension-registration",
+            id: descriptor.purpose.to_string(),
+        });
+    }
+    Ok(Some(descriptor.purpose))
 }
 
 fn d7_golden_block_ids(source: &str) -> Result<BTreeSet<StableId>, ProductionHostError> {
@@ -1581,7 +1657,7 @@ mod tests {
     use super::{
         AuthoredContentCatalogSourcesV1, AuthoredGameplayCatalogSourcesV1,
         authored_catalog_block_ids, compile_authored_content_catalog,
-        compile_authored_gameplay_catalog, parse_json_object,
+        compile_authored_gameplay_catalog, dimension_purpose_from_descriptor, parse_json_object,
     };
     use latticeaxiom_content::ContentCatalogV1;
     use latticeaxiom_gameplay::{
@@ -1681,6 +1757,58 @@ mod tests {
                 .into_dimension()
                 .expect("the substitute registration converts to a dimension ID");
         assert_eq!(dimension.as_str(), "substitute:dimension/sky");
+    }
+
+    #[test]
+    fn shipped_terrenia_package_purpose_selects_the_dimension() {
+        let package = "terrenia"
+            .parse()
+            .expect("the Terrenia package name is canonical");
+        let purpose = dimension_purpose_from_descriptor(
+            &package,
+            include_bytes!("../../../../packages/terrenia/main/data/package-purpose-v1.json"),
+        )
+        .expect("the shipped purpose document is valid")
+        .expect("the Terrenia root purpose is a dimension");
+        assert_eq!(purpose.as_str(), "terrenia:dimension/terrenia");
+        super::ExactlyOneDimensionRegistration::from_registration_ids([&purpose])
+            .expect("one realized dimension purpose is exactly-one")
+            .into_dimension()
+            .expect("the realized purpose converts to a dimension ID");
+    }
+
+    #[test]
+    fn capability_package_purpose_is_not_a_dimension() {
+        let package = "@latticeaxiom/observability"
+            .parse()
+            .expect("the observability package name is canonical");
+        let purpose = dimension_purpose_from_descriptor(
+            &package,
+            include_bytes!(
+                "../../../../packages/latticeaxiom/observability/data/package-purpose-v1.json"
+            ),
+        )
+        .expect("capability purpose documents remain valid");
+        assert_eq!(purpose, None);
+    }
+
+    #[test]
+    fn package_purpose_owner_mismatch_fails_closed() {
+        let package = "@terrenia/blocks"
+            .parse()
+            .expect("the blocks package name is canonical");
+        let error = dimension_purpose_from_descriptor(
+            &package,
+            include_bytes!("../../../../packages/terrenia/main/data/package-purpose-v1.json"),
+        )
+        .expect_err("a purpose document cannot change its owning package");
+        assert!(matches!(
+            error,
+            super::ProductionHostError::MissingCatalogDefinition {
+                kind: "package-purpose-owner",
+                ref id,
+            } if id == "terrenia"
+        ));
     }
 
     #[test]

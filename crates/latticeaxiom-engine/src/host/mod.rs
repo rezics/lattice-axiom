@@ -361,8 +361,10 @@ impl Plugin for ProductionHostPlugin {
                 ),
             );
         #[cfg(feature = "client")]
-        app.init_resource::<pause::TypedSurfacePress>()
-            .add_observer(pause::view_distance_slider_changed)
+        app.add_observer(pause::view_distance_slider_changed)
+            .add_observer(pause::pause_menu_activated)
+            .add_observer(hud::inventory_slot_activated)
+            .add_observer(hud::recipe_activated)
             .add_systems(
                 Startup,
                 (
@@ -383,14 +385,10 @@ impl Plugin for ProductionHostPlugin {
                     pause::apply_settings_surface_actions,
                     pause::update_cursor_capture,
                     pause::sync_cursor_capture,
-                    pause::pause_menu_buttons,
-                    pause::release_typed_surface_press,
                     pause::sync_pause_menu_page,
                     pause::sync_settings_control_focus_visuals,
                     hud::activate_workbench_from_target,
                     surface::select_hotbar_from_surface,
-                    hud::inventory_slot_buttons,
-                    hud::recipe_buttons,
                     hud::sync_inventory_overlay,
                     hud::sync_workbench_overlay,
                     hud::sync_slot_pickable,

@@ -56,6 +56,7 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(input::PlayableInputPlugin::new(placement_content))
+        .add_observer(pause::pause_menu_activated)
         .add_systems(
             Startup,
             (
@@ -73,7 +74,7 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
                 pause::sync_pause_overlay,
                 pause::update_cursor_capture,
                 pause::sync_cursor_capture,
-                pause::pause_menu_buttons,
+                pause::sync_pause_button_visuals,
             ),
         )
         .add_systems(
