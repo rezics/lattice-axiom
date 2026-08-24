@@ -4,7 +4,7 @@ document_id: meta.repository-and-package-layout
 document_status: active
 document_type: meta
 tracks_implementation: false
-updated: 2026-08-23
+updated: 2026-08-24
 decision:
   - ../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../decisions/0010-nickel-driven-package-system.md
@@ -19,11 +19,31 @@ decision:
 
 ## 迁移事实基线
 
-本页对照 implementation commit `45fe974546e6d5fa61b8ea4bf4d736fce612565d`。实现仓当前有
-28 个 Cargo workspace crates 与 20 个 logical package source roots；它们不是一一对应关系。该commit的
-`packages/`大多还是data-only skeleton，package-owned Rust implementation则位于顶层`crates/`并由engine
-固定依赖。这是[决策0034](../decisions/0034-freeze-package-local-code-and-locked-source-realization.md)
-要消除的迁移起点，不是目标layout。
+本页以 implementation commit `45fe974546e6d5fa61b8ea4bf4d736fce612565d` 为迁移起点；当前实现证据由
+`502a262` 与 `a93d213` 提供。实现仓仍有 28 个 Cargo workspace crates，但已经有 21 个 logical package
+source roots；它们不是一一对应关系。四个 code-bearing package root（dual gameplay、front-end、input、
+settings-ui）现在同时持有 manifest、Rust source 与 data；其余 pure-data roots 不创建空 crate。这是
+[决策0034](../decisions/0034-freeze-package-local-code-and-locked-source-realization.md) 所要求的
+package-first 迁移结果。
+
+### 2026-08-24 implementation evidence
+
+- `packages/example/dual-gameplay/`、`packages/latticeaxiom/front-end/`、`packages/latticeaxiom/input/`
+  与 `packages/latticeaxiom/settings-ui/` 是 workspace members，代码与 package manifest/data 同根维护；
+- `latticeaxiom-compose` 从冻结 CAS source closure 生成 package-bound `RealizedDataRootV1`，NativeStatic
+  staging 只接受受控 crate/package 路径，production host 只消费 lock-selected data roots；
+- settings surface 的 catalog、slider、draft/apply/undo/cancel、safe-restart 与 persistence revision
+  由 package/runtime contracts 共同拥有，pause 只做 Bevy projection；view-distance 是 typed `2..=32`
+  slider，requested、admitted、effective 与 clamp reason 分开表达；
+- host/input/catalog、voxel dispatch 与 mesh presentation 保持 capability/receipt 边界、bounded queues、
+  stable ordering 与 shared mesh storage；
+- reproducible checks：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、
+  `cargo test -p latticeaxiom-compose --all-targets --all-features`、`cargo test -p latticeaxiom-packages --all-targets --all-features`、
+  `cargo test -p latticeaxiom-engine --all-targets --features client`、`cargo test -p latticeaxiom-engine --all-targets --no-default-features`、
+  `cargo test -p latticeaxiom-settings-ui --all-targets --all-features` 与 `cargo test -p latticeaxiom-start-ui --all-targets --all-features` 均通过。
+
+这些证据证明 package-local code 已进入 source/build/runtime closure；尚未证明 native static 已成为所有产品 profile 的默认 realization，
+也未把 effective view-distance 32 标记为性能 certified。后两项继续由 roadmap gate 管理。
 
 ```text
 lattice-axiom-demo/

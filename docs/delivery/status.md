@@ -4,7 +4,7 @@ document_id: delivery.status
 document_status: active
 document_type: index
 tracks_implementation: false
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Implementation status
