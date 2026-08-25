@@ -10,7 +10,9 @@ requirements:
   - SETTINGS-REGISTRY-001
   - SETTINGS-TRANSACTION-001
   - SETTINGS-PERSISTENCE-001
-updated: 2026-08-22
+  - SETTINGS-CATALOG-001
+  - SETTINGS-PACKAGE-OWNERSHIP-001
+updated: 2026-08-24
 ---
 
 # `@latticeaxiom/settings`
@@ -25,9 +27,16 @@ updated: 2026-08-22
 apply transaction 与保存迁移语义。它不拥有 Bevy widget、screen routing 或任意 package 的
 setting ID。
 
+## Settings contribution
+
+No user-configurable settings。本 package 是 registry/transaction/persistence foundation，不拥有
+玩家偏好或其他 package 的 setting ID。registry 自己的 recovery、import/export、reset 和 orphan
+管理是 typed operations，不伪装成可持久化设置。
+
 ## 规范
 
 - [设置与配置契约](settings-and-configuration.md)
+- [Shipped settings catalog](shipped-settings-catalog.md)
 - [Settings UI package](../settings-ui/README.md)
 
 ## Implementation mapping

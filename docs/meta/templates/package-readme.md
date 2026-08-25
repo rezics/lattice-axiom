@@ -26,6 +26,13 @@ updated: YYYY-MM-DD
 
 列出提供和消费的 versioned capabilities，以及依赖的 logical packages。
 
+## Settings contribution
+
+列出 package 拥有的 stable setting IDs、category、default/constraint、scope/authority、apply impact、
+availability 与 primary catalog 链接。没有用户可配置 consumer 时必须明确写
+`No user-configurable settings` 及理由；composition/new-world inputs、内部调参与 hard policy
+不得伪装成 runtime settings。
+
 ## 规范
 
 链接本目录单一问题页面，不复制其 MUST 条款。

@@ -4,7 +4,7 @@ document_id: meta.documentation-organization
 document_status: active
 document_type: meta
 tracks_implementation: false
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # 文档组织与追踪契约
@@ -67,6 +67,12 @@ docs/packages/latticeaxiom/settings/
 只有已有内容时才新增子页。提议中的 package 可以建立目录，但 `README.md` 必须明确
 标为 `proposed`，requirements 的实现状态保持 `not-started`，不得让目录存在本身成为
 package 已被接受或已被实现的证据。
+
+每个 package README 还必须包含 `Settings contribution`。有设置时列 stable IDs、category、
+default/constraint、scope/authority、apply impact、availability 与 primary catalog；没有真实
+consumer 时明确写 `No user-configurable settings` 及理由。settings surface 负责呈现不等于拥有
+所有 setting IDs；composition/new-world parameters、内部调参、安全 hard limits 与 typed operations
+必须与 runtime setting 分开。
 
 ## Frontmatter 契约
 

@@ -4,7 +4,7 @@ document_id: docs.index
 document_status: active
 document_type: index
 tracks_implementation: false
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # Lattice Axiom 文档
@@ -44,7 +44,8 @@ storage 与 rendering 契约按 platform system 组织。ADR 保存“为什么�
 - [front-end](packages/latticeaxiom/front-end/README.md)：client shell 与 world launch routing
 - [world-library](packages/latticeaxiom/world-library/README.md)：world catalog、preflight 与恢复操作
 - [settings](packages/latticeaxiom/settings/README.md)：typed registry、scope 与 apply transaction
-- [settings-ui](packages/latticeaxiom/settings-ui/README.md)：client/tool settings surface
+- [settings-ui](packages/latticeaxiom/settings-ui/README.md)：官方推荐的分层 client/tool settings surface
+- [client-presentation](packages/latticeaxiom/client-presentation/README.md)：通用 display、Video、Audio 与 presentation accessibility settings
 - [observability](packages/latticeaxiom/observability/README.md)：diagnostic registry 与 report
 - [inspect](packages/latticeaxiom/inspect/README.md)：玩家 target inspect surface
 - [dev-tools](packages/latticeaxiom/dev-tools/README.md)：开发者诊断 workbench

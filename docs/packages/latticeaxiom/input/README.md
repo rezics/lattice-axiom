@@ -8,7 +8,7 @@ owners:
 tracks_implementation: true
 requirements:
   - INPUT-PACKAGE-001
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # `@latticeaxiom/input`
@@ -30,10 +30,26 @@ updated: 2026-08-22
 - 区分 authoritative gameplay action 与 client surface action；
 - 不读取 Bevy physical input，不取代 Leafwing，也不进入 authoritative fixed tick。
 
+## Settings contribution
+
+- Mouse：`mouse-sensitivity`、`invert-mouse-x/y`、`raw-mouse-input`、
+  `scroll-sensitivity`、`discrete-scroll`；
+- interaction modes：`attack-mode`、`use-mode`，以及对应 feature 存在时的
+  `sneak-mode`、`sprint-mode`、`sprint-window`；
+- Gamepad：horizontal/vertical look sensitivity、invert x/y、deadzone、response curve、
+  vibration，以及设备支持时的 gyro enable/sensitivity；
+- Controls rows：locked action catalog 中每个 rebindable action 的 default/effective bindings、
+  conflicts、clear 与 reset；standard gamepad 固定映射在开放 rebind 前也必须可查看。
+
+所有 IDs 使用 `latticeaxiom:setting/input/*`；完整 defaults、constraints、scope 与 action
+coverage 见 [shipped settings catalog](../settings/shipped-settings-catalog.md)。package 不维护
+第二份手写 Controls 菜单。
+
 ## 规范
 
 - [Input binding 与 context](../../../platform/input/input-binding-and-contexts.md)
 - [ADR 0033](../../../decisions/0033-freeze-input-actions-bindings-and-contexts.md)
+- [Shipped settings catalog](../settings/shipped-settings-catalog.md)
 
 ## Implementation mapping
 

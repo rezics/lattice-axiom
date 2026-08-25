@@ -42,8 +42,10 @@ package-first 迁移结果。
   `cargo test -p latticeaxiom-engine --all-targets --features client`、`cargo test -p latticeaxiom-engine --all-targets --no-default-features`、
   `cargo test -p latticeaxiom-settings-ui --all-targets --all-features` 与 `cargo test -p latticeaxiom-start-ui --all-targets --all-features` 均通过。
 
-这些证据证明 package-local code 已进入 source/build/runtime closure；尚未证明 native static 已成为所有产品 profile 的默认 realization，
-也未把 effective view-distance 32 标记为性能 certified。后两项继续由 roadmap gate 管理。
+这些证据证明 package-local code 已进入 source/build/runtime closure；它们不证明完整shipped settings
+catalog、全部分层surface或`@latticeaxiom/client-presentation`已经实现。当前也尚未证明native static
+已成为所有产品profile的默认realization，或把effective view-distance 32标记为性能certified。
+这些缺口继续由roadmap gate管理。
 
 ```text
 lattice-axiom-demo/
@@ -117,6 +119,10 @@ worldgen、gameplay、tools 与 presentation。front-end、world-library、progr
 metallurgy、science 与 thaumaturgy 已有 source manifest，但不在这份 lock。完整导航见
 [logical package index](../packages/README.md)。
 
+`@latticeaxiom/client-presentation`已有accepted package contract，用来统一拥有跨shell/world的
+Accessibility、Audio与Video设置，但目前没有implementation source manifest，也不在当前lock；不能把
+settings-ui中的少数demo controls当成该package已经实现。
+
 “在 lock”只证明 source/manifest/graph/realization 被选择，不证明 capability consumer 或完整产品
 journey 已实现。
 
@@ -162,10 +168,12 @@ world、checkpoint、crash marker、external acquired package 与本地 lease �
 ## 迁移顺序
 
 1. 先把`@example/dual-gameplay`做成真实package-root Cargo source，并从CAS建立static／portable artifacts；
-2. 再迁移settings、settings-ui、input、front-end、world-library、observability、inspect与dev-tools；
+2. 再迁移settings、settings-ui、client-presentation、input、front-end、world-library、observability、
+   inspect与dev-tools，并以shipped catalog验证package ownership；
 3. 拆分generic platform worldgen／gameplay／render contract与Terrenia-specific policy后迁移product code；
 4. 最后删除engine里的product Cargo dependencies、features与手写plugin／setting/provider fallback；
-5. 设置surface只消费compiled catalog，并在性能证据通过后扩大effective view-distance profile。
+5. 设置surface只消费compiled catalog；完成全部固定分类、分层layout与controls后，才在性能证据通过时
+   扩大effective view-distance profile。
 
 阶段完成不能以“新graph路径存在但旧engine路径仍可运行”证明；compatibility bridge必须列出owner、
 适用package与删除gate。

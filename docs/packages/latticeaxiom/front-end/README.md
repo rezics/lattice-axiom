@@ -8,7 +8,7 @@ owners:
 tracks_implementation: true
 requirements:
   - FRONTEND-SHELL-001
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # `@latticeaxiom/front-end`
@@ -23,6 +23,15 @@ updated: 2026-08-22
 本 package 拥有 shell state、routing、loading/error surface 与 launch intent 的用户流程。它不
 扫描 world 目录、不打开 writer、不拥有 settings registry，也不把 Terrenia 内容写死在 UI。
 
+## Settings contribution
+
+- `latticeaxiom:setting/gameplay/pause-on-focus-loss`：bool，default true，user scope，
+  local-user authority，Immediate。
+
+本 package 只拥有 shell/game route 与窗口 focus 交互的偏好。background FPS、background audio、
+window mode 与 Video/Audio rows 属于 `@latticeaxiom/client-presentation`；world launch、profile
+选择与 package graph 是 operation/composition，不伪装成 runtime setting。
+
 ## 规范
 
 - [Shell 与 world lifecycle 组合](world-lifecycle-and-start-ui.md)
@@ -30,6 +39,7 @@ updated: 2026-08-22
   承担，front-end 只保留 shell 责任。
 - [Launcher supervisor](../../../platform/launcher/supervisor-loop.md)
 - [Client surface routing](../../../platform/client-ui/game-surface-state.md)
+- [Shipped settings catalog](../settings/shipped-settings-catalog.md)
 
 ## Implementation mapping
 

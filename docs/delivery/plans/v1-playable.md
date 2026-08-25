@@ -7,14 +7,14 @@ tracks_implementation: true
 requirements:
   - DELIVERY-V1-001
   - DELIVERY-PLAYABILITY-CLOSURE-001
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # Lattice Axiom v1 Playable Delivery Plan
 
 Status: active; sparse infinite streaming precedes durability; sealed writer activation is authorized for v1 playable  
 Repository baseline: `0c38407` (`feat(engine): add playable host and dual fixture`)  
-Date: 2026-08-21
+Date: 2026-08-24
 
 ## 1. Purpose
 
@@ -166,12 +166,14 @@ ClientShellGraph
 ├── @latticeaxiom/world-library
 ├── @latticeaxiom/settings
 ├── @latticeaxiom/settings-ui
+├── @latticeaxiom/client-presentation
 ├── @latticeaxiom/input
 └── @latticeaxiom/observability
 
 LockedGameGraph client projection
 ├── @terrenia/presentation
 ├── @latticeaxiom/settings-ui
+├── @latticeaxiom/client-presentation
 ├── @latticeaxiom/inspect
 └── selected presentation/dev surfaces
 ```
@@ -181,7 +183,8 @@ LockedGameGraph client projection
 | `@latticeaxiom/front-end` | Shell route, loading/recovery and launch intent | Client-shell only; never opens a world writer |
 | `@latticeaxiom/world-library` | Bounded catalog, preflight and recovery actions | Reads headers first; package/world code stays unopened during listing |
 | `@latticeaxiom/settings` | Typed effective values, transaction and owning-scope persistence | Exactly-one in shell/game graphs; authoritative settings remain identical in client/headless |
-| `@latticeaxiom/settings-ui` | Accessible mechanical settings projection | Client/tool only; no parallel validation or persistence semantics |
+| `@latticeaxiom/settings-ui` | Recommended layered settings foundation: mechanical rows, declarative subpages and gated specialized editors | Client/tool only; alternative provider must satisfy the same complete surface capability and cannot create parallel validation or persistence |
+| `@latticeaxiom/client-presentation` | Cross-shell/world display, Video, Audio and presentation-accessibility settings | Client-only exactly-one settings owner; headless omission causes no authoritative difference |
 | `@latticeaxiom/input` | Stable action catalog, default bindings and user binding profile | Exactly-one in shell/game graphs; physical adapters do not own defaults |
 | `@latticeaxiom/observability` | Typed diagnostic registry and reports | Exactly-one; collection remains subscription/budget controlled |
 | `terrenia` | Replaceable dimension root and namespace owner | Aggregates the authoritative closure; no concrete Terrenia fallback in the host |
@@ -378,10 +381,10 @@ single source of contract truth; this table owns only delivery order and exit ev
 | A4 locked registration | exactly-one input-actions provider from reopened product lock; no `include_str!` production catalog | V2 | `INPUT-PACKAGE-001` |
 | B1 UI foundation | shared theme, widgets, focus, a11y and semantic projection crate | V2 | `CLIENT-UI-001` |
 | B2 route migration | shell, pause, inventory and workbench consume one typed surface router | V2/V8 | `CLIENT-SURFACE-STATE-001` |
-| B3 settings surface | typed categories, Controls capture/conflicts and apply/preview/rollback | V8 | `SETTINGS-SURFACE-001`, `SETTINGS-TRANSACTION-001` |
+| B3 settings surface | complete shipped catalog, layered categories/subpages, Controls capture/conflicts and apply/preview/rollback | V8 | `SETTINGS-SURFACE-001`, `SETTINGS-SURFACE-LAYERING-001`, `SETTINGS-SURFACE-CONTROLS-001`, `SETTINGS-CATALOG-001`, `SETTINGS-PACKAGE-OWNERSHIP-001`, `CLIENT-PRESENTATION-SETTINGS-001`, `SETTINGS-TRANSACTION-001` |
 | B4 UI gates | scale, IME/CJK, keyboard, mouse, gamepad and AccessKit automation | V8/V9 | `CLIENT-UI-001` |
 | C1 product loop | non-Bevy supervisor and `task play` shell→world→shell smoke | V1 | `LAUNCHER-SUPERVISOR-001`, `LAUNCHER-RESULT-001` |
-| C2 user durability | UI scale, view distance and bindings survive replacement-process restart | V2 | `SETTINGS-PERSISTENCE-001` |
+| C2 user durability | UI scale, audio/video preferences, view distance and bindings survive replacement-process restart | V2/V8 | `SETTINGS-PERSISTENCE-001`, `SETTINGS-CATALOG-001` |
 | C3 world durability | RocksDB writer, checkpoint, crash recovery and durable Save & Quit | V3 | `WORLD-STORAGE-001` |
 | D cleanup | fixture frozen, orphan runtime path removed, no parallel UI/input/catalog path | V0/V2/V8 | `DELIVERY-PLAYABILITY-CLOSURE-001` |
 
@@ -463,7 +466,8 @@ Deliverables:
 - Add the headless-first input crate and lock-selected `@latticeaxiom/input` catalog; compile gameplay and client
   surface maps from effective bindings. Remove business-action `ButtonInput<KeyCode>` and private shell maps.
 - Add `ActiveInputContextStack` and the typed game surface router. Playing, inventory/workbench, pause and the
-  minimal settings route must derive suppression, cursor and focus mechanically.
+  initial settings route must derive suppression, cursor and focus mechanically; it is an incremental V2 slice, not
+  the complete V8 settings catalog or final information architecture.
 - Add the shared client UI foundation (theme tokens, focus, typed button/list/modal primitives, semantic
   projection and AccessKit helpers). V2 visuals may remain plain, but no production surface may add another
   widget/focus root.
@@ -665,8 +669,11 @@ Deliverables:
   pause/save/exit, recovery actions, settings, inspect, and performance presets.
 - Migrate shell, pause, inventory/workbench and settings to the shared UI system and typed route; remove private
   focus managers, pause/input latches and hand-built settings pages.
-- Complete all fixed settings categories, Controls key capture/conflict UI, preview/apply/rollback, restart impact
-  and in-game scope filtering.
+- Complete the shipped settings catalog and every owning package's explicit contribution/no-settings declaration.
+- Complete all fixed settings categories, Video General/Quality/Performance/Advanced subpages, Controls key
+  capture/conflict UI, preview/apply/rollback, restart impact and in-game scope filtering.
+- Use `@latticeaxiom/settings-ui` as the recommended layered foundation; any selected alternative
+  `settings-surface@1` provider must pass the same complete-catalog, fallback, transaction and accessibility gates.
 - Client-only presentation package remains removable in headless mode.
 
 Exit gate:
@@ -683,6 +690,8 @@ Exit gate:
   IME/CJK fixtures.
 - Every modal/overlay transition has one focus owner and one input context derivation; stale async epochs cannot
   reopen a closed surface.
+- Every baseline catalog row is reachable and every feature-conditional row is registered only with a real consumer;
+  package-owned values have one registry/persistence path and no package-private settings menu or config truth.
 
 ### V9 — Freeze budgets, harden faults, and release v1
 

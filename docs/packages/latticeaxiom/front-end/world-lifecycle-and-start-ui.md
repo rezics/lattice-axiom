@@ -8,7 +8,7 @@ owners:
 tracks_implementation: true
 requirements:
   - FRONTEND-SHELL-001
-updated: 2026-08-22
+updated: 2026-08-24
 decision:
   - ../../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
   - ../../../decisions/0027-freeze-authoritative-world-and-persistence-contract.md
@@ -29,7 +29,8 @@ ClientShellGraph
   @latticeaxiom/front-end
   @latticeaxiom/world-library
   @latticeaxiom/settings
-  @latticeaxiom/settings-ui
+  @latticeaxiom/settings-ui        # recommended settings-surface@1 provider
+  @latticeaxiom/client-presentation
   @latticeaxiom/observability
 
 LockedGameGraph
@@ -48,9 +49,11 @@ Home 顺序固定为 Continue、Worlds、New World、Packages/Profiles、Setting
 Quit。Continue 只对 ready-exact world 可用；其他状态进入明确的 preflight/recovery flow。
 
 Worlds 和 New World 的资料、操作与诊断来自
-[`@latticeaxiom/world-library`](../world-library/catalog-and-preflight.md)。Settings 使用
-[`@latticeaxiom/settings-ui`](../settings-ui/settings-surface.md)。package 只能贡献 typed rows/
-fragments，不能占据绝对屏幕坐标或替换安全操作。
+[`@latticeaxiom/world-library`](../world-library/catalog-and-preflight.md)。Settings 使用 graph 选择的
+exactly-one `settings-surface@1` provider；官方默认推荐
+[`@latticeaxiom/settings-ui`](../settings-ui/settings-surface.md)。普通 package 贡献 typed rows 或
+declarative sections/subpages；通过显式 editor capability 的复杂页面仍必须复用 route、transaction、
+focus、accessibility 与 generic fallback，不能占据绝对屏幕坐标或替换安全操作。
 
 ## Launch 与返回
 

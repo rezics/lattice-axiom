@@ -8,7 +8,7 @@ owners:
 tracks_implementation: true
 requirements:
   - CLIENT-UI-001
-updated: 2026-08-22
+updated: 2026-08-24
 decision:
   - ../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md
   - ../../decisions/0033-freeze-input-actions-bindings-and-contexts.md
@@ -34,11 +34,17 @@ latticeaxiom-ui/
 ├── widgets            button、toggle、slider、cycle、list、text、modal、toast
 ├── key-capture        InputBindingV1 捕获与冲突确认
 ├── semantic-projection headless semantic tree → Bevy entity tree
-├── forms              typed SettingSpec → widget row
+├── forms              typed SettingSpec → widget row／generic fallback
+├── settings-layout    category、section、subpage、preset 与 detail projection
+├── editor-host        versioned specialized editor capability 与故障隔离
 └── a11y               AccessKit semantics 与检查 helpers
 ```
 
-package 贡献 typed row/fragment，不能提供任意 widgets、system callbacks 或绝对屏幕坐标。
+package 的默认贡献是 typed row/fragment；复杂设置可以贡献 host 可验证的 declarative layout。
+只有满足 [settings surface layering](../../packages/latticeaxiom/settings-ui/settings-surface.md) gate 的
+真实 consumer 才能通过 versioned editor capability 使用受限 callback。普通 package 仍不能提供
+任意 widgets、raw Bevy systems、绝对屏幕坐标或第二个 root；specialized editor 失败必须回到
+generic rows。
 
 ## 两种投影
 
@@ -63,17 +69,21 @@ unwind、cursor/focus/context 派生统一由
 - IME、CJK fallback、鼠标、纯键盘和手柄完整可操作；
 - semantic tree snapshot 和 AccessKit node 自动检查；
 - shell/pause/settings 不再各自实现 focus、theme 与 input latch；
+- declarative settings subpage 与 specialized editor 使用同一 route epoch、focus、transaction 与
+  AccessKit contract，并有 generic row fallback；
 - headless profile 可完全省略 client UI crate，而 authoritative registration 不变。
 
 ## 失败行为
 
 - required widget/control vocabulary major 不支持时，在 surface 建立前 fail closed；
-- optional fragment 不支持时显示 bounded diagnostic，不执行 package callback/widget code；
+- optional fragment/layout 不支持时显示 bounded diagnostic；specialized editor 不支持或失败时使用
+  generic rows，不执行未验证 package widget code；
 - layout、focus 或 projection 失败保持 gameplay suppressed，并提供 Back/Quit safety action；
 - package 不得贡献 raw Bevy systems、absolute coordinates、rich-text executable content 或第二个 root。
 
 ## 相关文件
 
 - [Client surface routing](game-surface-state.md)
+- [分层 settings surface](../../packages/latticeaxiom/settings-ui/settings-surface.md)
 - [ADR 0025](../../decisions/0025-freeze-client-shell-settings-observability-and-player-contracts.md)
 - [ADR 0033](../../decisions/0033-freeze-input-actions-bindings-and-contexts.md)

@@ -4,7 +4,7 @@ document_id: project.development-strategy
 document_status: accepted
 document_type: overview
 tracks_implementation: false
-updated: 2026-08-19
+updated: 2026-08-24
 decision:
   - ../decisions/0014-adopt-bevy-upstream-first.md
   - ../decisions/0018-package-kernel-from-first-vertical-slice.md
@@ -157,7 +157,10 @@ AI 不单独决定 public ABI。任何「方便先暴露整个 World／RenderDev
 - **Bevy 快速演进**：Cargo lock、migration branch、portable old binaries、engine-coupled rebuild 与 performance gates。
 - **生态 plugin 风险**：记录版本、license、维护、fallback；以薄 adapter 隔离产品语义。
 - **范围膨胀**：核心 graph 与分发规模分开；registry／hot unload／WASM 不进入首阶段。
-- **surface碎片化**：package贡献typed settings／fragments／visualizers，由基础package统一布局、权限与预算；不各画一套菜单／HUD。
+- **surface碎片化**：package贡献typed settings／declarative layout／fragments／visualizers，默认由官方基础
+  统一route、transaction、权限、focus、accessibility与预算；真实复杂consumer可用有generic fallback的
+  versioned specialized editor。产品也可选择完整的alternative surface provider，但不能各自建立菜单、
+  配置真相或apply路径。
 - **存档先改后救**：Continue只接受ReadyExact；升级先preflight与checkpoint／clone，delete先进trash。
 - **native 安全误解**：UI／docs 明确 trusted code；ABI validation 不宣传为 sandbox。
 

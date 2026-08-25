@@ -30,6 +30,7 @@ path, product entry and reproducible checks. All other states remain conservativ
 | [體素地形渲染與區塊流送修復計畫](plans/voxel-terrain-rendering-recovery.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
 | [第一個套件驅動的 Bevy 可玩 demo 路線圖](roadmaps/first-demo.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
 | [套件驅動的 Bevy 執行期整合路線](roadmaps/game-engine.md) | `delivery` | `in-progress` | 0/1 | `653556ba7df5` |
+| [@latticeaxiom/client-presentation](../packages/latticeaxiom/client-presentation/README.md) | `@latticeaxiom/client-presentation` | `not-started` | 0/1 | — |
 | [@latticeaxiom/dev-tools](../packages/latticeaxiom/dev-tools/README.md) | `@latticeaxiom/dev-tools` | `in-progress` | 0/1 | `653556ba7df5` |
 | [Developer diagnostic workbench](../packages/latticeaxiom/dev-tools/debug-workbench.md) | `@latticeaxiom/dev-tools` | `in-progress` | 0/1 | `653556ba7df5` |
 | [@latticeaxiom/front-end](../packages/latticeaxiom/front-end/README.md) | `@latticeaxiom/front-end` | `in-progress` | 0/1 | `653556ba7df5` |
@@ -41,10 +42,11 @@ path, product entry and reproducible checks. All other states remain conservativ
 | [Diagnostic registry 与报告](../packages/latticeaxiom/observability/registry-and-reports.md) | `@latticeaxiom/observability` | `in-progress` | 0/1 | `653556ba7df5` |
 | [@latticeaxiom/progress](../packages/latticeaxiom/progress/README.md) | `@latticeaxiom/progress` | `scaffolded` | 0/1 | `653556ba7df5` |
 | [@latticeaxiom/relations](../packages/latticeaxiom/relations/README.md) | `@latticeaxiom/relations` | `scaffolded` | 0/1 | `653556ba7df5` |
-| [@latticeaxiom/settings-ui](../packages/latticeaxiom/settings-ui/README.md) | `@latticeaxiom/settings-ui` | `scaffolded` | 0/1 | `653556ba7df5` |
-| [Typed settings surface](../packages/latticeaxiom/settings-ui/settings-surface.md) | `@latticeaxiom/settings-ui` | `scaffolded` | 0/1 | `653556ba7df5` |
-| [@latticeaxiom/settings](../packages/latticeaxiom/settings/README.md) | `@latticeaxiom/settings` | `in-progress` | 0/3 | `653556ba7df5` |
+| [@latticeaxiom/settings-ui](../packages/latticeaxiom/settings-ui/README.md) | `@latticeaxiom/settings-ui` | `scaffolded` | 0/3 | `653556ba7df5` |
+| [分层 typed settings surface](../packages/latticeaxiom/settings-ui/settings-surface.md) | `@latticeaxiom/settings-ui` | `scaffolded` | 0/3 | `653556ba7df5` |
+| [@latticeaxiom/settings](../packages/latticeaxiom/settings/README.md) | `@latticeaxiom/settings` | `in-progress` | 0/5 | `653556ba7df5` |
 | [Package settings registry 与 transaction](../packages/latticeaxiom/settings/settings-and-configuration.md) | `@latticeaxiom/settings` | `in-progress` | 0/3 | `653556ba7df5` |
+| [Shipped settings catalog 与 package ownership](../packages/latticeaxiom/settings/shipped-settings-catalog.md) | `@latticeaxiom/settings` | `not-started` | 0/2 | — |
 | [@latticeaxiom/world-library](../packages/latticeaxiom/world-library/README.md) | `@latticeaxiom/world-library` | `in-progress` | 0/1 | `653556ba7df5` |
 | [World catalog、preflight 与恢复](../packages/latticeaxiom/world-library/catalog-and-preflight.md) | `@latticeaxiom/world-library` | `in-progress` | 0/1 | `653556ba7df5` |
 | [@terrenia/blocks](../packages/terrenia/blocks/README.md) | `@terrenia/blocks` | `in-progress` | 0/1 | `653556ba7df5` |

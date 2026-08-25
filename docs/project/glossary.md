@@ -4,7 +4,7 @@ document_id: project.glossary
 document_status: active
 document_type: reference
 tracks_implementation: false
-updated: 2026-08-20
+updated: 2026-08-24
 ---
 
 # 詞彙表
@@ -96,6 +96,9 @@ updated: 2026-08-20
 | 词汇 | 本项目中的意思 |
 | --- | --- |
 | `SettingSpec` | package以stable ID注册的typed setting schema；声明scope、authority、default、constraint、apply impact、migration与localization，不是任意UI widget。 |
+| `SettingsLayoutSpec` | package对既有typed rows声明category、section／subpage、group、dependency、summary与preset关系的受验证布局资料；不含任意widget tree、绝对坐标或独立persistence。 |
+| settings editor capability | 机械row／declarative layout无法表达真实consumer时使用的versioned specialized editor契约；必须有generic fallback、typed command/event、accessibility与预算证据。 |
+| settings surface provider | exactly-one消费完整compiled settings catalog与统一transaction的客户端surface；官方`@latticeaxiom/settings-ui`是推荐基础，替代provider不得只显示自己的package或建立第二套配置真相。 |
 | composition parameter | 在resolve／lock前改变dependency、feature、realization或provider的profile输入；不能伪装成runtime setting热改graph。 |
 | effective setting | registry按spec允许的scope／authority规则解析出的当前typed值，带default／user／world／session provenance。 |
 | diagnostic item | package注册的结构化info／metric资料源；由subscription、permission与budget控制，不是package直接绘制的文字行。 |

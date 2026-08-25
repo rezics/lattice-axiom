@@ -6,7 +6,7 @@ document_type: roadmap
 tracks_implementation: true
 requirements:
   - DELIVERY-FIRST-DEMO-001
-updated: 2026-08-23
+updated: 2026-08-24
 decision:
   - ../../decisions/0008-static-and-dynamic-realizations-share-one-graph.md
   - ../../decisions/0014-adopt-bevy-upstream-first.md
@@ -85,7 +85,8 @@ D11 remains a post-baseline biome expansion track after V9.
 - package SemVer、capability／realization resolution与包含source／manifest／toolchain／artifact receipts的精确产品lock；
 - `RegistrationManifest`／`RegistrationImage`；
 - Nickel-authored SemanticTag／Map／Predicate／Role 与 locked fallback ContentBundle；
-- package-injected `SettingSpec`、observability items与统一settings／inspect／dev-tools surfaces；
+- package-injected `SettingSpec`、observability items，以及官方推荐、可分层扩展的
+  settings／inspect／dev-tools surfaces；替代settings surface仍消费同一registry与transaction；
 - graph-selected `@latticeaxiom/input` action catalog、user binding profile与统一input context stack；
 - `NativeStatic` 与 `PortableNative` ABI `0.x`；
 - Bevy `0.19.x` architecture baseline与精确 `0.19.1` first implementation；manifests／Cargo lock记录version、source、checksum，manifests／profile／build receipt记录features；
@@ -192,7 +193,8 @@ D1 不是空 `hello_plugin`；system 必须读写 gameplay-shaped data并发 com
 - Leafwing `0.21`作为adoption-gated physical adapter；`@latticeaxiom/input` defaults + user profile编译
   gameplay/client surface maps，headless注入相同Lattice `PlayerActionV1`／authoritative command DTO；
 - `latticeaxiom-ui` shared theme/widgets/focus/semantic projection与typed shell/game surface router；
-- user-scope UI scale、view distance与binding profile canonical atomic persistence；
+- user-scope UI scale、view distance与binding profile作为V2代表性值完成canonical atomic persistence；
+  它们不是V8完整settings范围的上限；
 - walk／look／jump、raycast、break／place；
 - `@latticeaxiom/inspect`显示target block名称、icon、owner与technical StableId；
 - Performance preset与chunk Grid／Lifecycle／Mesh／Collision visualizers；
@@ -415,6 +417,12 @@ D3／D4的精确内容与后续40／72方块范围见[Terrenia 方块内容规�
 - solid occupancy与fluid state的versioned palette／snapshot encoding，water／lava的有限level／flow state、
   collision／selection／inspect与最小有界流动规则；
 - 完整Terrenia presentation assets；headless省略presentation package时权威registration与world hash不变。
+- `@latticeaxiom/client-presentation`贡献跨shell/world的Accessibility、Audio与Video
+  General／Quality／Performance／Advanced设置；`@latticeaxiom/input`机械投影全部rebindable actions；
+- `@latticeaxiom/settings-ui`以category → section/subpage → row → detail → transaction bar提供推荐基础，
+  并为真实复杂consumer提供declarative layout、gated specialized editor与generic fallback；
+- shipped package closure中的每个package都在自身README与compiled registration中明确列出setting rows，
+  或明确声明没有用户可配置runtime setting；完整目录由`SETTINGS-CATALOG-001`冻结。
 
 ### 自动出场门禁
 
@@ -429,6 +437,12 @@ D3／D4的精确内容与后续40／72方块范围见[Terrenia 方块内容规�
 - 72内容随机采样的break／drop／pickup／place round-trip不产生missing definition，工具门槛、collision、
   selection与occlusion均与definition schema一致；
 - water／lava更新有每tick cell、queue depth与in-flight bytes硬上限，stale fluid task不覆盖新chunk revision。
+- Accessibility、Controls、Audio、Video、Interface、Gameplay、World、Packages与Developer固定分类均可达；
+  Video子页、键鼠／手柄设置、全部rebindable actions、package rows、搜索、详情与reset操作通过golden；
+- baseline rows全部存在，feature-conditional rows只在真实consumer存在时出现；每项owner、default、
+  constraint、scope、authority与apply impact可追溯，且不存在package私有配置真相或第二套apply路径；
+- 官方surface与任一候选alternative `settings-surface@1` provider都必须覆盖完整catalog、transaction、
+  failure fallback、800×600／scale 2.0、键鼠／手柄与AccessKit验收。
 
 ## D10：Sandbox Completion
 
@@ -525,6 +539,9 @@ D0–D6完成第一個package-driven playable vertical slice；只有D0–D10全
 - [Terrenia 方块内容规划](../../packages/terrenia/blocks/catalog.md)
 - [Terrenia 科学／魔法双轨与关系包](../plans/terrenia-science-magic-and-relations.md)
 - [Package 设置与配置](../../packages/latticeaxiom/settings/settings-and-configuration.md)
+- [Shipped settings catalog](../../packages/latticeaxiom/settings/shipped-settings-catalog.md)
+- [分层 settings surface](../../packages/latticeaxiom/settings-ui/settings-surface.md)
+- [Client presentation settings owner](../../packages/latticeaxiom/client-presentation/README.md)
 - [Input binding 与 context stack](../../platform/input/input-binding-and-contexts.md)
 - [Shared client UI system](../../platform/client-ui/ui-system.md)
 - [Client surface routing](../../platform/client-ui/game-surface-state.md)

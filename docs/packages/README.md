@@ -4,7 +4,7 @@ document_id: packages.index
 document_status: active
 document_type: index
 tracks_implementation: false
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # Logical packages
@@ -21,7 +21,8 @@ manifest 尚不存在。
 | [`@latticeaxiom/front-end`](latticeaxiom/front-end/README.md) | 已声明 | client shell 与 launch routing |
 | [`@latticeaxiom/world-library`](latticeaxiom/world-library/README.md) | 已声明 | world catalog、preflight、恢复动作 |
 | [`@latticeaxiom/settings`](latticeaxiom/settings/README.md) | 当前 lock | typed settings registry |
-| [`@latticeaxiom/settings-ui`](latticeaxiom/settings-ui/README.md) | 当前 lock | settings surface |
+| [`@latticeaxiom/settings-ui`](latticeaxiom/settings-ui/README.md) | 当前 lock | 官方推荐的分层 settings surface |
+| [`@latticeaxiom/client-presentation`](latticeaxiom/client-presentation/README.md) | 已接受，待 manifest/lock | 通用 display、Video、Audio 与 presentation accessibility settings |
 | [`@latticeaxiom/observability`](latticeaxiom/observability/README.md) | 当前 lock | diagnostic registry |
 | [`@latticeaxiom/inspect`](latticeaxiom/inspect/README.md) | 当前 lock | target inspect surface |
 | [`@latticeaxiom/dev-tools`](latticeaxiom/dev-tools/README.md) | 当前 lock | debug workbench |
