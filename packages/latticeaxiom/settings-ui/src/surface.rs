@@ -534,6 +534,12 @@ impl SettingsSurfaceModel {
             .collect()
     }
 
+    /// Returns the NFC search query used by [`Self::visible_rows`].
+    #[must_use]
+    pub fn search(&self) -> &str {
+        &self.search
+    }
+
     /// Updates the search query used by [`Self::visible_rows`].
     pub fn set_search(&mut self, query: impl Into<String>) {
         self.search = query.into().nfc().collect();

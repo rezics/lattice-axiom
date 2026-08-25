@@ -35,7 +35,8 @@ use latticeaxiom_player::{
 };
 use latticeaxiom_runtime_contracts::view_distance_setting_id;
 use latticeaxiom_settings_ui::{
-    SettingsDurabilityDomain, SettingsIntegerSliderState, SettingsSurfaceApplyResolution,
+    MemorySettingsHost, SettingsDurabilityDomain, SettingsIntegerSliderState, SettingsPageCommand,
+    SettingsPageOpen, SettingsPageSession, SettingsSurfaceApplyResolution,
     SettingsSurfaceAuthority, SettingsSurfaceCommand, SettingsSurfaceModel, SettingsSurfaceOutcome,
     SettingsSurfaceScope,
 };
@@ -97,6 +98,9 @@ pub(super) struct ProductionSettingsState {
     catalog: HostSettingsCatalog,
     active_lock: CanonicalHash,
     surface: SettingsSurfaceModel,
+    page: SettingsPageSession,
+    page_host: MemorySettingsHost,
+    page_generation: u64,
     view_distance: StableId,
     runtime_request: u32,
     publication: SettingsPublicationState,
@@ -124,17 +128,69 @@ impl ProductionSettingsState {
             u32::try_from(slider.applied).map_err(|_| HostSettingsError::CatalogUnavailable {
                 reason: "applied view distance is outside the chunk-distance domain".to_owned(),
             })?;
+        let mut page_host = MemorySettingsHost::new();
+        for effective in snapshot.values().values() {
+            page_host.seed(effective.id.clone(), effective.value.clone());
+        }
+        let page = SettingsPageSession::open(SettingsPageOpen::in_game(true), &page_host).map_err(
+            |error| HostSettingsError::CatalogUnavailable {
+                reason: error.to_string(),
+            },
+        )?;
         Ok(Self {
             root,
             user,
             catalog,
             active_lock,
             surface,
+            page,
+            page_host,
+            page_generation: 0,
             view_distance,
             runtime_request,
             publication: SettingsPublicationState::Confirmed,
             diagnostic: None,
         })
+    }
+
+    pub(super) const fn page(&self) -> &SettingsPageSession {
+        &self.page
+    }
+
+    pub(super) const fn page_host(&self) -> &MemorySettingsHost {
+        &self.page_host
+    }
+
+    pub(super) const fn page_generation(&self) -> u64 {
+        self.page_generation
+    }
+
+    pub(super) fn set_compact(&mut self, compact: bool) {
+        if self.page.compact() == compact {
+            return;
+        }
+        self.page.set_compact(compact);
+        self.page_generation = self.page_generation.saturating_add(1);
+    }
+
+    pub(super) fn handle_page(&mut self, command: SettingsPageCommand) {
+        if self.publication == SettingsPublicationState::SafeProcessRestartRequired {
+            self.diagnostic = Some(SAFE_PROCESS_RESTART_REQUIRED.to_owned());
+            return;
+        }
+        if let SettingsPageCommand::SetValue { setting, value } = &command
+            && setting == &self.view_distance
+            && let Some(chunks) = integer_to_slider_f32(value)
+        {
+            self.set_draft_from_slider(chunks);
+        }
+        match self.page.handle(command, &mut self.page_host) {
+            Ok(_) => {
+                self.page_generation = self.page_generation.saturating_add(1);
+                self.diagnostic = None;
+            }
+            Err(error) => self.diagnostic = Some(error.to_string()),
+        }
     }
 
     fn begin_edit(&mut self) {
@@ -149,6 +205,13 @@ impl ProductionSettingsState {
             }
             Err(error) => self.diagnostic = Some(error.to_string()),
         }
+        if let Err(error) = self
+            .page
+            .handle(SettingsPageCommand::BeginEdit, &mut self.page_host)
+        {
+            self.diagnostic = Some(error.to_string());
+        }
+        self.page_generation = self.page_generation.saturating_add(1);
     }
 
     fn rollback_draft(&mut self) {
@@ -163,6 +226,10 @@ impl ProductionSettingsState {
             Ok(_) => Some("Settings surface returned an invalid cancel outcome".to_owned()),
             Err(error) => Some(error.to_string()),
         };
+        let _ = self
+            .page
+            .handle(SettingsPageCommand::Cancel, &mut self.page_host);
+        self.page_generation = self.page_generation.saturating_add(1);
     }
 
     fn reset_draft(&mut self) {
@@ -175,6 +242,13 @@ impl ProductionSettingsState {
             Ok(_) => Some("Settings surface returned an invalid undo outcome".to_owned()),
             Err(error) => Some(error.to_string()),
         };
+        if let Err(error) = self
+            .page
+            .handle(SettingsPageCommand::Undo, &mut self.page_host)
+        {
+            self.diagnostic = Some(error.to_string());
+        }
+        self.page_generation = self.page_generation.saturating_add(1);
     }
 
     pub(super) const fn applied_request(&self) -> u32 {
@@ -359,6 +433,34 @@ impl ProductionSettingsState {
             self.diagnostic = Some(SAFE_PROCESS_RESTART_REQUIRED.to_owned());
             return;
         }
+        if let Some(chunks) = self.page.surface().draft_value(&self.view_distance)
+            && let Some(chunks) = integer_to_slider_f32(chunks)
+        {
+            self.set_draft_from_slider(chunks);
+        }
+        if self.surface.is_dirty() {
+            self.apply_lock_catalog(spine);
+        }
+        match self
+            .page
+            .handle(SettingsPageCommand::Apply, &mut self.page_host)
+        {
+            Ok(_) => {
+                self.page_generation = self.page_generation.saturating_add(1);
+                if self.diagnostic.is_none() {
+                    self.diagnostic = Some("Settings applied".to_owned());
+                }
+            }
+            Err(error) => {
+                self.page_generation = self.page_generation.saturating_add(1);
+                if self.diagnostic.is_none() {
+                    self.diagnostic = Some(error.to_string());
+                }
+            }
+        }
+    }
+
+    fn apply_lock_catalog(&mut self, spine: &ProductionSpine) {
         let request = match self.surface.handle(SettingsSurfaceCommand::Apply) {
             Ok(SettingsSurfaceOutcome::ApplyRequested(request)) => request,
             Ok(_) => {
@@ -488,6 +590,23 @@ impl ProductionSettingsState {
     }
 }
 
+fn integer_to_slider_f32(value: &serde_json::Value) -> Option<f32> {
+    i16::try_from(value.as_i64()?).ok().map(f32::from)
+}
+
+fn slider_json_from_widget(value: f32) -> Option<serde_json::Value> {
+    let rounded = value.round();
+    if !rounded.is_finite() {
+        return None;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Bevy slider widgets are bounded to the i16 setting domain"
+    )]
+    let as_i16 = i16::try_from(rounded as i32).ok()?;
+    Some(serde_json::Value::from(i64::from(as_i16)))
+}
+
 fn validate_view_distance_slider(
     state: SettingsIntegerSliderState,
 ) -> Result<(), HostSettingsError> {
@@ -603,13 +722,13 @@ const fn surface_focus_input(previous: bool, next: bool) -> SurfaceFocusInput {
     }
 }
 
-const VIEW_DISTANCE_TAB_INDEX: i32 = 0;
+const VIEW_DISTANCE_TAB_INDEX: i32 = 580;
 
 const fn settings_tab_index(action: PauseMenuAction) -> Option<i32> {
     match action {
-        PauseMenuAction::Apply => Some(1),
-        PauseMenuAction::Undo => Some(2),
-        PauseMenuAction::Back => Some(3),
+        PauseMenuAction::Apply => Some(1000),
+        PauseMenuAction::Undo => Some(1001),
+        PauseMenuAction::Back => Some(1002),
         PauseMenuAction::Resume | PauseMenuAction::Settings | PauseMenuAction::Quit => None,
     }
 }
@@ -629,7 +748,7 @@ pub(super) fn spawn_pause_overlay_if_client(
 
 fn spawn_pause_overlay(
     commands: &mut Commands<'_, '_>,
-    settings: Option<&ProductionSettingsState>,
+    _settings: Option<&ProductionSettingsState>,
 ) {
     commands
         .spawn((
@@ -665,9 +784,7 @@ fn spawn_pause_overlay(
             ));
             spawn_pause_button(overlay, PauseMenuAction::Resume, "Resume");
             spawn_pause_button(overlay, PauseMenuAction::Settings, "Settings");
-            if let Some(settings) = settings {
-                spawn_view_distance_slider(overlay, settings);
-            }
+            super::settings_view::spawn_settings_page(overlay);
             spawn_pause_button(overlay, PauseMenuAction::Apply, "Apply");
             spawn_pause_button(overlay, PauseMenuAction::Undo, "Undo changes");
             spawn_pause_button(overlay, PauseMenuAction::Back, "Back");
@@ -675,7 +792,7 @@ fn spawn_pause_overlay(
             overlay.spawn((
                 PauseSettingsHint,
                 Name::new("Pause hint"),
-                Text::new("Esc resumes · Settings: render distance"),
+                Text::new("Esc resumes · Settings opens the full catalog"),
                 ui_text_font(16.0),
                 TextColor(Color::srgb(0.72, 0.74, 0.68)),
                 Node {
@@ -686,6 +803,10 @@ fn spawn_pause_overlay(
         });
 }
 
+#[allow(
+    dead_code,
+    reason = "kept as the catalog-proved Bevy slider widget fixture"
+)]
 fn spawn_view_distance_slider(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
     settings: &ProductionSettingsState,
@@ -852,6 +973,12 @@ pub(super) fn view_distance_slider_changed(
         return;
     };
     settings.set_draft_from_slider(change.value);
+    if let Some(value) = slider_json_from_widget(change.value) {
+        settings.handle_page(SettingsPageCommand::SetValue {
+            setting: view_distance_setting_id(),
+            value,
+        });
+    }
     if let Ok(state) = settings.slider()
         && let Some((value, _, _, _)) = slider_widget_values(state)
     {
@@ -884,10 +1011,15 @@ pub(super) fn apply_settings_surface_actions(
         (
             Entity,
             Has<ViewDistanceSlider>,
+            Has<super::settings_view::SettingsPageControl>,
             Option<&PauseMenuAction>,
             &Node,
         ),
-        Or<(With<ViewDistanceSlider>, With<PauseMenuAction>)>,
+        Or<(
+            With<ViewDistanceSlider>,
+            With<PauseMenuAction>,
+            With<super::settings_view::SettingsPageControl>,
+        )>,
     >,
     sliders: Query<'_, '_, (Entity, Ref<'_, SliderValue>, &Node), With<ViewDistanceSlider>>,
     buttons: Query<'_, '_, (&PauseMenuAction, &Node), With<Button>>,
@@ -899,9 +1031,11 @@ pub(super) fn apply_settings_surface_actions(
         });
     let focused_before = focus.as_ref().and_then(|focus| focus.get());
     let focused_settings_control = focused_before.is_some_and(|focused| {
-        controls.get(focused).is_ok_and(|(_, slider, action, _)| {
-            slider || action.is_some_and(|action| settings_tab_index(*action).is_some())
-        })
+        controls
+            .get(focused)
+            .is_ok_and(|(_, slider, page, action, _)| {
+                slider || page || action.is_some_and(|action| settings_tab_index(*action).is_some())
+            })
     });
     if !showing_settings {
         if focused_settings_control {
@@ -919,9 +1053,10 @@ pub(super) fn apply_settings_surface_actions(
     let focused_control_is_visible = focused_before.is_some_and(|focused| {
         controls
             .get(focused)
-            .is_ok_and(|(_, slider, action, node)| {
+            .is_ok_and(|(_, slider, page, action, node)| {
                 node.display != Display::None
                     && (slider
+                        || page
                         || action.is_some_and(|action| settings_tab_index(*action).is_some()))
             })
     });
@@ -1483,10 +1618,10 @@ mod tests {
             SurfaceFocusInput::Cancelled
         );
 
-        assert_eq!(VIEW_DISTANCE_TAB_INDEX, 0);
-        assert_eq!(settings_tab_index(PauseMenuAction::Apply), Some(1));
-        assert_eq!(settings_tab_index(PauseMenuAction::Undo), Some(2));
-        assert_eq!(settings_tab_index(PauseMenuAction::Back), Some(3));
+        assert_eq!(VIEW_DISTANCE_TAB_INDEX, 580);
+        assert_eq!(settings_tab_index(PauseMenuAction::Apply), Some(1000));
+        assert_eq!(settings_tab_index(PauseMenuAction::Undo), Some(1001));
+        assert_eq!(settings_tab_index(PauseMenuAction::Back), Some(1002));
         assert_eq!(settings_tab_index(PauseMenuAction::Resume), None);
         assert_eq!(settings_tab_index(PauseMenuAction::Settings), None);
         assert_eq!(settings_tab_index(PauseMenuAction::Quit), None);

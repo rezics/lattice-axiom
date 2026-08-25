@@ -24,6 +24,8 @@ mod pause;
 mod profile;
 mod session;
 #[cfg(feature = "client")]
+mod settings_view;
+#[cfg(feature = "client")]
 mod shell_view;
 mod spine;
 mod start;
@@ -363,6 +365,8 @@ impl Plugin for ProductionHostPlugin {
         #[cfg(feature = "client")]
         app.add_observer(pause::view_distance_slider_changed)
             .add_observer(pause::pause_menu_activated)
+            .add_observer(settings_view::settings_page_activated)
+            .add_observer(settings_view::settings_integer_slider_changed)
             .add_observer(hud::inventory_slot_activated)
             .add_observer(hud::recipe_activated)
             .add_systems(
@@ -386,6 +390,8 @@ impl Plugin for ProductionHostPlugin {
                     pause::update_cursor_capture,
                     pause::sync_cursor_capture,
                     pause::sync_pause_menu_page,
+                    settings_view::sync_settings_page,
+                    settings_view::sync_settings_page_visibility,
                     pause::sync_settings_control_focus_visuals,
                     hud::activate_workbench_from_target,
                     surface::select_hotbar_from_surface,
