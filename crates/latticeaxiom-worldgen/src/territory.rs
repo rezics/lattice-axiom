@@ -114,7 +114,7 @@ impl TerritoryQueryV1 {
         self.winner
     }
 
-    /// Returns the terrain style in the nearest adjacent planning cell.
+    /// Returns the highest-ranked available style that did not win this cell.
     #[must_use]
     pub const fn runner_up(&self) -> TerrainStyleV1 {
         self.runner_up
@@ -229,6 +229,11 @@ impl TerritorySamplerV1 {
 
     pub(crate) fn query(&self, x: i64, z: i64) -> TerritoryQueryV1 {
         let sample = self.sample(x, z);
+        let runner_up = if sample.adjacent_style == sample.winner {
+            self.runner_up_style(sample.cell_x, sample.cell_z, sample.winner)
+        } else {
+            sample.adjacent_style
+        };
         let side_byte = [side_discriminant(sample.side)];
         let provenance = domain_hash(
             TRANSITION_DOMAIN,
@@ -246,7 +251,7 @@ impl TerritorySamplerV1 {
         TerritoryQueryV1 {
             domain_id: self.cell_id(sample.cell_x, sample.cell_z),
             winner: sample.winner,
-            runner_up: sample.adjacent_style,
+            runner_up,
             boundary_distance_voxels: sample.boundary_distance_voxels,
             transition: TransitionMetadataV1 {
                 provider_id: self.transition.provider_stable_id().clone(),
@@ -425,8 +430,7 @@ impl TerritorySamplerV1 {
     }
 
     fn style_for_cell(&self, cell_x: i64, cell_z: i64) -> TerrainStyleV1 {
-        let temperature = climate_field(self.temperature_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS);
-        let humidity = climate_field(self.humidity_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS);
+        let (temperature, humidity) = self.climate_for_cell(cell_x, cell_z);
         let aridity = temperature.saturating_sub(humidity.div_euclid(3));
         if self.boreal.is_some() {
             if temperature < -96 && humidity > -320 {
@@ -441,6 +445,56 @@ impl TerritorySamplerV1 {
         } else {
             TerrainStyleV1::TemperateWoodland
         }
+    }
+
+    fn runner_up_style(&self, cell_x: i64, cell_z: i64, winner: TerrainStyleV1) -> TerrainStyleV1 {
+        if self.boreal.is_none() {
+            return match winner {
+                TerrainStyleV1::TemperateWoodland => TerrainStyleV1::AridBadlands,
+                TerrainStyleV1::AridBadlands | TerrainStyleV1::BorealWetland => {
+                    TerrainStyleV1::TemperateWoodland
+                }
+            };
+        }
+        let (temperature, humidity) = self.climate_for_cell(cell_x, cell_z);
+        let aridity = temperature.saturating_sub(humidity.div_euclid(3));
+        let arid_score = aridity
+            .saturating_sub(96)
+            .max(humidity.saturating_neg().saturating_sub(384));
+        let boreal_score = temperature
+            .saturating_neg()
+            .saturating_sub(96)
+            .min(humidity.saturating_add(320));
+        match winner {
+            TerrainStyleV1::TemperateWoodland => {
+                if boreal_score > arid_score {
+                    TerrainStyleV1::BorealWetland
+                } else {
+                    TerrainStyleV1::AridBadlands
+                }
+            }
+            TerrainStyleV1::AridBadlands => {
+                if boreal_score > 0 {
+                    TerrainStyleV1::BorealWetland
+                } else {
+                    TerrainStyleV1::TemperateWoodland
+                }
+            }
+            TerrainStyleV1::BorealWetland => {
+                if arid_score > 0 {
+                    TerrainStyleV1::AridBadlands
+                } else {
+                    TerrainStyleV1::TemperateWoodland
+                }
+            }
+        }
+    }
+
+    fn climate_for_cell(&self, cell_x: i64, cell_z: i64) -> (i64, i64) {
+        (
+            climate_field(self.temperature_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS),
+            climate_field(self.humidity_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS),
+        )
     }
 
     fn raw_height(&self, style: TerrainStyleV1, x: i64, z: i64) -> i32 {

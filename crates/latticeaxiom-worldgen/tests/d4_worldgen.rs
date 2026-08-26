@@ -738,12 +738,17 @@ fn climate_selector_clusters_neighboring_planning_cells() {
         .saturating_mul(i64::from(plan.config().planning_cell_edge_chunks));
     let mut matching_neighbors = 0_u32;
     let mut inspected_neighbors = 0_u32;
+    let mut same_style_boundaries = 0_u32;
     let mut styles = BTreeSet::new();
     for cell_z in -32_i64..=32 {
         for cell_x in -32_i64..=32 {
             let center_x = cell_x.saturating_mul(edge).saturating_add(edge / 2);
             let center_z = cell_z.saturating_mul(edge).saturating_add(edge / 2);
-            let style = plan.territory_query(center_x, center_z).winner();
+            let query = plan.territory_query(center_x, center_z);
+            let style = query.winner();
+            assert_ne!(query.runner_up(), style);
+            same_style_boundaries = same_style_boundaries
+                .saturating_add(u32::from(query.transition().adjacent_style() == style));
             styles.insert(style);
             for (neighbor_x, neighbor_z) in [
                 (center_x.saturating_add(edge), center_z),
@@ -766,6 +771,10 @@ fn climate_selector_clusters_neighboring_planning_cells() {
     assert!(
         matching_neighbors.saturating_mul(100) >= inspected_neighbors.saturating_mul(75),
         "climate selector did not form coherent regions: {matching_neighbors}/{inspected_neighbors} matching neighbors"
+    );
+    assert!(
+        same_style_boundaries > 0,
+        "fixture must exercise a climate region interior"
     );
 }
 
