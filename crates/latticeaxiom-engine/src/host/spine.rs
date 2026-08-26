@@ -437,6 +437,17 @@ pub(super) struct ColliderPresentation {
     pub(super) coordinate: ChunkCoordinate,
     pub(super) origin: Vec3,
     pub(super) collider: Collider,
+    pub(super) generation: ColliderGeneration,
+}
+
+/// In-session identity for one accepted collider presentation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct ColliderGeneration(u64);
+
+impl ColliderGeneration {
+    const fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
 }
 
 /// Occupied interior cell used only to build a chunk collider.
@@ -453,6 +464,7 @@ struct ChunkDerived {
     geometry: Option<Arc<MeshBuffer<LayerMergeKey>>>,
     bounds: Option<Aabb>,
     collider: Option<Collider>,
+    collider_generation: ColliderGeneration,
     revision: ChunkRevision,
 }
 
@@ -1648,6 +1660,7 @@ impl ProductionSpine {
                 coordinate,
                 origin: chunk_origin(coordinate, edge),
                 collider,
+                generation: derived.collider_generation,
             });
         }
         refresh_lifecycle(&mut inner);
@@ -2392,6 +2405,7 @@ impl ProductionSpine {
                 coordinate,
                 origin: chunk_origin(coordinate, edge),
                 collider,
+                generation: derived.collider_generation,
             });
         }
         Ok(PresentationDelta {
@@ -4565,6 +4579,7 @@ fn apply_collider_derived(
         .or_insert_with(|| empty_derived(revision));
     entry.revision = revision;
     entry.collider = value.collider;
+    entry.collider_generation = entry.collider_generation.next();
     inner.collider_dirty.insert(coordinate);
 }
 
@@ -4575,6 +4590,7 @@ fn empty_derived(revision: ChunkRevision) -> ChunkDerived {
         geometry: None,
         bounds: None,
         collider: None,
+        collider_generation: ColliderGeneration::default(),
         revision,
     }
 }
@@ -5429,6 +5445,7 @@ fn seal_unready_cave_voids(inner: &mut ProductionSpineInner, coordinate: ChunkCo
     entry.revision = revision;
     if entry.mesh_receipt.is_none() {
         entry.collider = compound_collider(&occupied);
+        entry.collider_generation = entry.collider_generation.next();
         inner.collider_dirty.insert(coordinate);
     }
 }

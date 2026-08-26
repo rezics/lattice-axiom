@@ -122,7 +122,7 @@ use crate::{
     EngineInstance, EngineInstanceError, LockVerifiedComposeImages, VerifiedProductLockHash,
 };
 
-use self::spine::ColliderPresentation;
+use self::spine::{ColliderGeneration, ColliderPresentation};
 
 /// Cursor capturing derived mesh identity before an authoritative edit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +158,10 @@ pub struct ChunkPresentation {
     /// Canonical chunk coordinate presented by this entity.
     pub coordinate: ChunkCoordinate,
 }
+
+/// Last host collider generation applied to one chunk presentation entity.
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+struct ChunkColliderGeneration(ColliderGeneration);
 
 /// In-session pause latch for a production host.
 ///
@@ -707,6 +711,7 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
                 ChunkPresentation {
                     coordinate: update.coordinate,
                 },
+                ChunkColliderGeneration(update.generation),
                 avian3d::prelude::RigidBody::Static,
                 update.collider,
                 Transform::from_translation(update.origin),
@@ -728,6 +733,7 @@ fn sync_chunk_stream(
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::too_many_arguments)] // Collider identity is a separate read-only ECS query.
 #[allow(clippy::type_complexity)] // Player-capsule collider mapping is one safety query.
 fn sync_collider_safety(
     tick: Res<'_, PlayerFixedTick>,
@@ -737,6 +743,7 @@ fn sync_collider_safety(
     chunks: Query<'_, '_, (Entity, &ChunkPresentation)>,
     mut transforms: Query<'_, '_, &mut Transform>,
     mut colliders: Query<'_, '_, &mut avian3d::prelude::Collider>,
+    collider_generations: Query<'_, '_, &ChunkColliderGeneration>,
 ) {
     if pause.is_some_and(|pause| pause.is_paused()) {
         return;
@@ -753,10 +760,12 @@ fn sync_collider_safety(
         .map(|update| update.coordinate)
         .collect::<BTreeSet<_>>();
     for (entity, presentation) in &chunks {
-        if !active.contains(&presentation.coordinate) && colliders.get_mut(entity).is_ok() {
-            commands
-                .entity(entity)
-                .remove::<(avian3d::prelude::RigidBody, avian3d::prelude::Collider)>();
+        if !active.contains(&presentation.coordinate) && collider_generations.get(entity).is_ok() {
+            commands.entity(entity).remove::<(
+                avian3d::prelude::RigidBody,
+                avian3d::prelude::Collider,
+                ChunkColliderGeneration,
+            )>();
         }
     }
     for update in updates {
@@ -764,6 +773,7 @@ fn sync_collider_safety(
             &mut commands,
             &mut transforms,
             &mut colliders,
+            &collider_generations,
             &mut by_coordinate,
             update,
         );
@@ -801,6 +811,7 @@ fn sync_chunk_colliders(
     chunks: Query<'_, '_, (Entity, &ChunkPresentation)>,
     mut transforms: Query<'_, '_, &mut Transform>,
     mut colliders: Query<'_, '_, &mut avian3d::prelude::Collider>,
+    collider_generations: Query<'_, '_, &ChunkColliderGeneration>,
     #[cfg(feature = "client")] mut meshes: Option<ResMut<'_, Assets<Mesh>>>,
     #[cfg(feature = "client")] material: Option<Res<'_, chunk_mesh::ProductionTerrainMaterials>>,
     #[cfg(feature = "client")] palette: Option<Res<'_, chunk_mesh::ProductionTerrainPalette>>,
@@ -823,6 +834,7 @@ fn sync_chunk_colliders(
             &mut commands,
             &mut transforms,
             &mut colliders,
+            &collider_generations,
             &mut by_coordinate,
             update,
         );
@@ -867,19 +879,31 @@ fn apply_collider_update(
     commands: &mut Commands<'_, '_>,
     transforms: &mut Query<'_, '_, &mut Transform>,
     colliders: &mut Query<'_, '_, &mut avian3d::prelude::Collider>,
+    collider_generations: &Query<'_, '_, &ChunkColliderGeneration>,
     by_coordinate: &mut BTreeMap<ChunkCoordinate, Entity>,
     update: ColliderPresentation,
 ) {
     if let Some(&entity) = by_coordinate.get(&update.coordinate) {
+        if collider_generations
+            .get(entity)
+            .is_ok_and(|generation| generation.0 == update.generation)
+        {
+            return;
+        }
         if let Ok(mut transform) = transforms.get_mut(entity) {
             transform.translation = update.origin;
         }
         if let Ok(mut existing) = colliders.get_mut(entity) {
             *existing = update.collider;
-        } else {
             commands
                 .entity(entity)
-                .insert((avian3d::prelude::RigidBody::Static, update.collider));
+                .insert(ChunkColliderGeneration(update.generation));
+        } else {
+            commands.entity(entity).insert((
+                ChunkColliderGeneration(update.generation),
+                avian3d::prelude::RigidBody::Static,
+                update.collider,
+            ));
         }
         return;
     }
@@ -888,6 +912,7 @@ fn apply_collider_update(
             ChunkPresentation {
                 coordinate: update.coordinate,
             },
+            ChunkColliderGeneration(update.generation),
             avian3d::prelude::RigidBody::Static,
             update.collider,
             Transform::from_translation(update.origin),
