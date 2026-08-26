@@ -366,7 +366,11 @@ pub(super) struct ProductionSpineInner {
     look_ahead_axis: [i32; 2],
     look_ahead_tick: u64,
     last_reconciled_tick: Option<u64>,
-    last_desired: BTreeSet<ChunkCoordinate>,
+    last_desired: Arc<BTreeSet<ChunkCoordinate>>,
+    last_desired_key: Option<DesiredChunkCacheKey>,
+    reconciled_desired_key: Option<DesiredChunkCacheKey>,
+    edited_pin_revision: EditedPinRevision,
+    desired_chunk_set_rebuilds: u64,
     stream_admissions: u64,
     stream_evictions: u64,
     spawn_center: Vec3,
@@ -383,6 +387,19 @@ pub(super) struct ProductionSpineInner {
     /// Full `sync_interest` calls; schedule tests lock one per fixed tick.
     interest_reconciliations: u64,
 }
+
+/// Inputs that uniquely determine the desired resident chunk set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DesiredChunkCacheKey {
+    origin: ChunkCoordinate,
+    clamps: StreamClamps,
+    look_ahead: [i32; 2],
+    edited_pin_revision: EditedPinRevision,
+}
+
+/// Revision of edited chunks that must remain pinned in the resident set.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct EditedPinRevision(u64);
 
 /// Admission and core clocks used by retain/grace eviction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -754,7 +771,11 @@ impl ProductionSpine {
             look_ahead_axis: [0, 0],
             look_ahead_tick: 0,
             last_reconciled_tick: None,
-            last_desired: BTreeSet::new(),
+            last_desired: Arc::new(BTreeSet::new()),
+            last_desired_key: None,
+            reconciled_desired_key: None,
+            edited_pin_revision: EditedPinRevision::default(),
+            desired_chunk_set_rebuilds: 0,
             stream_admissions: 0,
             stream_evictions: 0,
             spawn_center,
@@ -907,7 +928,7 @@ impl ProductionSpine {
             durability,
         )?;
         if durability == CommitDurabilityV1::Durable {
-            self.lock_inner()?.edited.clear();
+            self.lock_inner()?.clear_edited_chunks();
         }
         Ok(outcome)
     }
@@ -991,7 +1012,7 @@ impl ProductionSpine {
                 replacement,
             )],
         ))?;
-        inner.edited.insert(spawn_chunk);
+        inner.insert_edited_chunk(spawn_chunk);
         Ok(())
     }
 
@@ -1483,6 +1504,16 @@ impl ProductionSpine {
     pub fn interest_reconciliation_count(&self) -> u64 {
         self.lock_inner()
             .map_or(0, |inner| inner.interest_reconciliations)
+    }
+
+    /// Number of full desired-chunk set constructions since materialization.
+    ///
+    /// Fixed ticks that keep the same chunk origin, distance contract,
+    /// look-ahead axis, and edited pins reuse the previous immutable set.
+    #[must_use]
+    pub fn desired_chunk_set_rebuild_count(&self) -> u64 {
+        self.lock_inner()
+            .map_or(0, |inner| inner.desired_chunk_set_rebuilds)
     }
 
     /// Chunks admitted into the working set since materialization.
@@ -2397,6 +2428,28 @@ struct SelectableHit {
 }
 
 impl ProductionSpineInner {
+    fn insert_edited_chunk(&mut self, coordinate: ChunkCoordinate) {
+        if self.edited.insert(coordinate) {
+            self.advance_edited_pin_revision();
+        }
+    }
+
+    fn clear_edited_chunks(&mut self) {
+        if !self.edited.is_empty() {
+            self.edited.clear();
+            self.advance_edited_pin_revision();
+        }
+    }
+
+    fn advance_edited_pin_revision(&mut self) {
+        let Some(next) = self.edited_pin_revision.0.checked_add(1) else {
+            self.edited_pin_revision = EditedPinRevision::default();
+            self.last_desired_key = None;
+            return;
+        };
+        self.edited_pin_revision = EditedPinRevision(next);
+    }
+
     fn resident_coordinates(&self) -> Vec<ChunkCoordinate> {
         self.lifecycle
             .iter()
@@ -2877,7 +2930,7 @@ impl ProductionSpineInner {
         let stored = published
             .chunk(&key)
             .ok_or(BlockEditRejectV1::StorageUnavailable)?;
-        self.edited.insert(coordinate);
+        self.insert_edited_chunk(coordinate);
         project_stored(
             &mut self.runtime,
             stored,
@@ -2938,7 +2991,7 @@ impl ProductionSpineInner {
         let stored = published
             .chunk(&key)
             .ok_or(BlockEditRejectV1::StorageUnavailable)?;
-        self.edited.insert(coordinate);
+        self.insert_edited_chunk(coordinate);
         project_stored(
             &mut self.runtime,
             stored,
@@ -3258,7 +3311,7 @@ fn fill_working_set(
 ) -> Result<(), ProductionHostError> {
     let limit = inner.clamps.max_resident();
     for _ in 0..limit {
-        let desired = desired_chunks(origin, inner.clamps, look_ahead, &inner.edited);
+        let (desired, _) = cached_desired_chunks(inner, origin, look_ahead);
         if desired
             .iter()
             .all(|coordinate| inner.runtime.is_resident(*coordinate))
@@ -3303,14 +3356,14 @@ fn sync_working_set(
     tick: FixedTick,
     admission: WorldgenAdmission,
 ) -> Result<(), ProductionHostError> {
-    let desired = desired_chunks(origin, inner.clamps, look_ahead, &inner.edited);
+    let (desired, desired_key) = cached_desired_chunks(inner, origin, look_ahead);
     refresh_residency(inner, origin, look_ahead, tick);
-    let needs_mutate = inner.last_desired != desired
+    let needs_mutate = inner.reconciled_desired_key != Some(desired_key)
         || desired
             .iter()
             .any(|coordinate| !inner.runtime.is_resident(*coordinate));
     if needs_mutate {
-        evict_unwanted(inner, origin, look_ahead, &desired, tick, false)?;
+        evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, false)?;
         let needs_capacity = desired
             .iter()
             .any(|coordinate| !inner.runtime.is_resident(*coordinate))
@@ -3319,13 +3372,37 @@ fn sync_working_set(
             // Retain is a latency optimization, not permission to deadlock
             // admission at the hard resident cap. Dirty and pinned chunks stay
             // protected; only clean retained chunks may be released here.
-            evict_unwanted(inner, origin, look_ahead, &desired, tick, true)?;
+            evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, true)?;
         }
-        let ordered = prioritize_chunks(&desired, origin, look_ahead);
+        let ordered = prioritize_chunks(desired.as_ref(), origin, look_ahead);
         admit_desired(inner, kernel, origin, look_ahead, &ordered, tick, admission)?;
-        inner.last_desired.clone_from(&desired);
+        inner.reconciled_desired_key = Some(desired_key);
     }
     Ok(())
+}
+
+fn cached_desired_chunks(
+    inner: &mut ProductionSpineInner,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
+) -> (Arc<BTreeSet<ChunkCoordinate>>, DesiredChunkCacheKey) {
+    let key = DesiredChunkCacheKey {
+        origin,
+        clamps: inner.clamps,
+        look_ahead,
+        edited_pin_revision: inner.edited_pin_revision,
+    };
+    if inner.last_desired_key != Some(key) {
+        inner.last_desired = Arc::new(desired_chunks(
+            origin,
+            inner.clamps,
+            look_ahead,
+            &inner.edited,
+        ));
+        inner.last_desired_key = Some(key);
+        inner.desired_chunk_set_rebuilds = inner.desired_chunk_set_rebuilds.saturating_add(1);
+    }
+    (Arc::clone(&inner.last_desired), key)
 }
 
 fn refresh_residency(
@@ -3911,7 +3988,6 @@ fn forget_chunk(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
     inner.mesh_dirty.remove(&coordinate);
     inner.collider_dirty.remove(&coordinate);
     inner.residency.remove(&coordinate);
-    inner.last_desired.remove(&coordinate);
     inner.removed.insert(coordinate);
 }
 
@@ -5549,7 +5625,7 @@ fn commit_gameplay_storage(
         .reference_snapshot(inner.world)
         .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
     for chunk in pending.keys() {
-        inner.edited.insert(chunk.coordinate);
+        inner.insert_edited_chunk(chunk.coordinate);
         let key = ChunkKey::new(inner.world, chunk.dimension.clone(), chunk.coordinate);
         let stored = published
             .chunk(&key)

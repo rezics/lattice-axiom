@@ -825,7 +825,7 @@ fn production_host_exposes_working_set_diagnostics() {
 
 #[test]
 fn requested_view_distance_is_clamped_by_host_limits() {
-    let instance =
+    let mut instance =
         EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
             .expect("production spine starts from the reopened lock");
     let spine = instance
@@ -869,6 +869,15 @@ fn requested_view_distance_is_clamped_by_host_limits() {
         .set_requested_view_distance(cap.saturating_add(8))
         .expect("oversize requests clamp");
     assert_eq!(spine.admitted_view_distance(), cap);
+    let rebuilds_before = spine.desired_chunk_set_rebuild_count();
+    instance
+        .advance_fixed_ticks(1)
+        .expect("distance change is reconciled");
+    assert_eq!(
+        spine.desired_chunk_set_rebuild_count(),
+        rebuilds_before.saturating_add(1),
+        "an effective interest contract change rebuilds the desired set once"
+    );
 }
 
 #[test]
@@ -1163,6 +1172,7 @@ fn at_most_one_interest_reconciliation_per_fixed_tick() {
         .clone();
 
     let before = spine.interest_reconciliation_count();
+    let rebuilds_before = spine.desired_chunk_set_rebuild_count();
     instance
         .advance_fixed_ticks(TICKS)
         .expect("fixed ticks advance");
@@ -1171,6 +1181,11 @@ fn at_most_one_interest_reconciliation_per_fixed_tick() {
         observed,
         u64::from(TICKS),
         "interest reconciliation ran {observed} times across {TICKS} fixed ticks"
+    );
+    assert_eq!(
+        spine.desired_chunk_set_rebuild_count(),
+        rebuilds_before,
+        "idle fixed ticks must reuse the immutable desired-chunk set"
     );
 }
 
