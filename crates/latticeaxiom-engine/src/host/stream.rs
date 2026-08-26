@@ -671,7 +671,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn clamps() -> StreamClamps {
-        let limits = PlayableWorldHardLimitsV1::new(2, 2, 64, 4, 2).expect("nonzero clamps");
+        let limits = PlayableWorldHardLimitsV1::new(2, 2, 64, 64, 4, 2).expect("nonzero clamps");
         StreamClamps::new(
             limits,
             &WorldgenConfigV1 {
@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn nonzero_distance_types_reject_an_unrepresentable_resident_budget() {
-        let limits = PlayableWorldHardLimitsV1::new(2, 2, 1, 1, 1).expect("nonzero clamps");
+        let limits = PlayableWorldHardLimitsV1::new(2, 2, 1, 1, 1, 1).expect("nonzero clamps");
         let result = StreamClamps::new(
             limits,
             &WorldgenConfigV1 {
@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn requested_view_distance_is_admitted_and_budgeted() {
-        let limits = PlayableWorldHardLimitsV1::new(4, 4, 128, 8, 4).expect("nonzero clamps");
+        let limits = PlayableWorldHardLimitsV1::new(4, 4, 128, 128, 8, 4).expect("nonzero clamps");
         let mut clamps = StreamClamps::new(
             limits,
             &WorldgenConfigV1 {
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn desktop_request_cap_reports_resident_budget_clamp() {
-        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 8, 4)
+        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 405, 8, 4)
             .expect("desktop request clamps are nonzero");
         let mut clamps = StreamClamps::new(
             limits,
@@ -795,7 +795,7 @@ mod tests {
 
     #[test]
     fn host_cap_changes_admitted_and_effective_without_mutating_requested_draft() {
-        let limits = PlayableWorldHardLimitsV1::new(4, 4, 128, 8, 4).expect("nonzero clamps");
+        let limits = PlayableWorldHardLimitsV1::new(4, 4, 128, 128, 8, 4).expect("nonzero clamps");
         let mut clamps = StreamClamps::new(
             limits,
             &WorldgenConfigV1 {
@@ -849,7 +849,7 @@ mod tests {
 
     #[test]
     fn tall_world_streams_a_bounded_vertical_window() {
-        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 8, 4)
+        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 405, 8, 4)
             .expect("desktop request clamps are nonzero");
         let clamps = StreamClamps::new(
             limits,

@@ -124,6 +124,7 @@ pub(super) fn host_hard_limits() -> Result<PlayableWorldHardLimitsV1, Production
         AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
         AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
         HOST_MAX_ACTIVE_CHUNKS,
+        HOST_MAX_ACTIVE_CHUNKS,
         HOST_MAX_IN_FLIGHT_CHUNKS,
         HOST_DURABLE_SAVE_RADIUS_CHUNKS,
     )

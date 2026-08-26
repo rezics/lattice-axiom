@@ -218,6 +218,8 @@ pub struct PlayableWorldHardLimitsV1 {
     pub view_distance_chunks: u32,
     /// Inclusive chunk radius the host may generate around the player.
     pub generation_radius_chunks: u32,
+    /// Maximum chunks eligible for authoritative simulation at once.
+    pub max_active_chunks: u32,
     /// Maximum chunks retained in the resident working set.
     pub max_resident_chunks: u32,
     /// Maximum chunks that may be generating or meshing at once.
@@ -235,6 +237,7 @@ pub struct PlayableWorldHardLimitsV1 {
 struct PlayableWorldHardLimitsWireV1 {
     view_distance_chunks: u32,
     generation_radius_chunks: u32,
+    max_active_chunks: u32,
     max_resident_chunks: u32,
     max_in_flight_chunks: u32,
     max_save_radius_chunks: u32,
@@ -249,6 +252,7 @@ impl PlayableWorldHardLimitsV1 {
     pub fn new(
         view_distance_chunks: u32,
         generation_radius_chunks: u32,
+        max_active_chunks: u32,
         max_resident_chunks: u32,
         max_in_flight_chunks: u32,
         max_save_radius_chunks: u32,
@@ -256,6 +260,7 @@ impl PlayableWorldHardLimitsV1 {
         let limits = Self {
             view_distance_chunks,
             generation_radius_chunks,
+            max_active_chunks,
             max_resident_chunks,
             max_in_flight_chunks,
             max_save_radius_chunks,
@@ -278,6 +283,11 @@ impl PlayableWorldHardLimitsV1 {
         if self.generation_radius_chunks == 0 {
             return Err(PlayableWorldSessionError::ZeroLimit {
                 field: "generation_radius_chunks",
+            });
+        }
+        if self.max_active_chunks == 0 {
+            return Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_active_chunks",
             });
         }
         if self.max_resident_chunks == 0 {
@@ -306,6 +316,7 @@ impl TryFrom<PlayableWorldHardLimitsWireV1> for PlayableWorldHardLimitsV1 {
         Self::new(
             value.view_distance_chunks,
             value.generation_radius_chunks,
+            value.max_active_chunks,
             value.max_resident_chunks,
             value.max_in_flight_chunks,
             value.max_save_radius_chunks,
@@ -615,31 +626,37 @@ mod tests {
     #[test]
     fn playable_world_session_rejects_zero_hard_limit() {
         assert_eq!(
-            PlayableWorldHardLimitsV1::new(0, 12, 64, 4, 16),
+            PlayableWorldHardLimitsV1::new(0, 12, 32, 64, 4, 16),
             Err(PlayableWorldSessionError::ZeroLimit {
                 field: "view_distance_chunks",
             })
         );
         assert_eq!(
-            PlayableWorldHardLimitsV1::new(8, 0, 64, 4, 16),
+            PlayableWorldHardLimitsV1::new(8, 0, 32, 64, 4, 16),
             Err(PlayableWorldSessionError::ZeroLimit {
                 field: "generation_radius_chunks",
             })
         );
         assert_eq!(
-            PlayableWorldHardLimitsV1::new(8, 12, 0, 4, 16),
+            PlayableWorldHardLimitsV1::new(8, 12, 0, 64, 4, 16),
+            Err(PlayableWorldSessionError::ZeroLimit {
+                field: "max_active_chunks",
+            })
+        );
+        assert_eq!(
+            PlayableWorldHardLimitsV1::new(8, 12, 32, 0, 4, 16),
             Err(PlayableWorldSessionError::ZeroLimit {
                 field: "max_resident_chunks",
             })
         );
         assert_eq!(
-            PlayableWorldHardLimitsV1::new(8, 12, 64, 0, 16),
+            PlayableWorldHardLimitsV1::new(8, 12, 32, 64, 0, 16),
             Err(PlayableWorldSessionError::ZeroLimit {
                 field: "max_in_flight_chunks",
             })
         );
         assert_eq!(
-            PlayableWorldHardLimitsV1::new(8, 12, 64, 4, 0),
+            PlayableWorldHardLimitsV1::new(8, 12, 32, 64, 4, 0),
             Err(PlayableWorldSessionError::ZeroLimit {
                 field: "max_save_radius_chunks",
             })
@@ -648,6 +665,7 @@ mod tests {
         let zeroed = PlayableWorldHardLimitsV1 {
             view_distance_chunks: 0,
             generation_radius_chunks: 12,
+            max_active_chunks: 32,
             max_resident_chunks: 64,
             max_in_flight_chunks: 4,
             max_save_radius_chunks: 16,
@@ -717,7 +735,7 @@ mod tests {
     }
 
     fn fixture_limits() -> PlayableWorldHardLimitsV1 {
-        PlayableWorldHardLimitsV1::new(8, 12, 64, 4, 16)
+        PlayableWorldHardLimitsV1::new(8, 12, 32, 64, 4, 16)
             .unwrap_or_else(|error| panic!("valid fixture limits were rejected: {error}"))
     }
 }

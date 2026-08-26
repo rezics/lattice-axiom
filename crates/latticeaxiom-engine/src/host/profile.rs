@@ -236,7 +236,8 @@ mod tests {
 
     #[test]
     fn thirty_two_cubed_baseline_reports_matching_coverage_without_claiming_the_d2_gate() {
-        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 8, 4).expect("nonzero clamps");
+        let limits =
+            PlayableWorldHardLimitsV1::new(32, 32, 405, 405, 8, 4).expect("nonzero clamps");
         let evidence = StreamingProfileEvidenceV1::for_spine_config(limits).expect("clamps");
         assert_eq!(evidence.chunk_edge_voxels, 32);
         assert_eq!(evidence.requested_render_distance_chunks, 8);
