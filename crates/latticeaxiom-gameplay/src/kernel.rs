@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use latticeaxiom_storage::{ChunkCommitReceipt, PublicationReceipt};
+
 use crate::{
     BreakProgressKey, BreakProgressV1, ChangedDomains, ChunkRevision, CommandEnvelopeV1,
     CommandOutcomeV1, CommitReceipt, ContainerId, ContinuationId, DimensionChunkKey, DropEntityId,
@@ -942,6 +944,41 @@ impl ReferencePlanApplier {
         &mut self,
         receipt: &CommitReceipt,
     ) -> Result<(), GameplayReject> {
+        self.observe_storage_receipt(StorageReceiptView {
+            transaction_id: receipt.transaction_id(),
+            world: receipt.world(),
+            world_revision: receipt.world_revision(),
+            chunks: receipt.chunks(),
+        })
+    }
+
+    /// Reconciles scale-sensitive atomic publication evidence for the pending
+    /// plan without requiring a full-world reference hash.
+    ///
+    /// Validation is identical to [`Self::observe_storage_commit`]: the
+    /// publication must name the pending world and transaction, advance the
+    /// exact next world revision, and cover every staged chunk and domain.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a publication when no plan is pending or any world,
+    /// transaction, revision, chunk, or changed-domain field disagrees.
+    pub fn observe_storage_publication(
+        &mut self,
+        receipt: &PublicationReceipt,
+    ) -> Result<(), GameplayReject> {
+        self.observe_storage_receipt(StorageReceiptView {
+            transaction_id: receipt.transaction_id(),
+            world: receipt.world(),
+            world_revision: receipt.world_revision(),
+            chunks: receipt.chunks(),
+        })
+    }
+
+    fn observe_storage_receipt(
+        &mut self,
+        receipt: StorageReceiptView<'_>,
+    ) -> Result<(), GameplayReject> {
         let pending = self
             .pending_storage_commit
             .as_ref()
@@ -1153,16 +1190,24 @@ fn validate_pending_runtime_receipt(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct StorageReceiptView<'receipt> {
+    transaction_id: TransactionId,
+    world: crate::WorldId,
+    world_revision: crate::WorldRevision,
+    chunks: &'receipt [ChunkCommitReceipt],
+}
+
 fn validate_storage_commit_header(
     world: crate::WorldId,
     state: &ReferenceGameplayState,
     pending: &PendingStorageCommit,
-    receipt: &CommitReceipt,
+    receipt: StorageReceiptView<'_>,
 ) -> Result<crate::WorldRevision, GameplayReject> {
-    if receipt.world() != world {
+    if receipt.world != world {
         return Err(GameplayReject::StorageCommitMismatch { resource: "world" });
     }
-    if receipt.transaction_id() != pending.transaction_id {
+    if receipt.transaction_id != pending.transaction_id {
         return Err(GameplayReject::StorageCommitMismatch {
             resource: "transaction_id",
         });
@@ -1180,12 +1225,12 @@ fn validate_storage_commit_header(
         .ok_or(GameplayReject::RevisionOverflow {
             counter: "storage_world_revision",
         })?;
-    if receipt.world_revision() != next_world_revision {
+    if receipt.world_revision != next_world_revision {
         return Err(GameplayReject::StorageCommitMismatch {
             resource: "world_revision",
         });
     }
-    if receipt.chunks().len() != pending.chunks.len() {
+    if receipt.chunks.len() != pending.chunks.len() {
         return Err(GameplayReject::StorageCommitMismatch { resource: "chunks" });
     }
     Ok(next_world_revision)
@@ -1195,11 +1240,11 @@ fn reconcile_storage_chunks(
     world: crate::WorldId,
     state: &ReferenceGameplayState,
     pending: &PendingStorageCommit,
-    receipt: &CommitReceipt,
+    receipt: StorageReceiptView<'_>,
 ) -> Result<Vec<(DimensionChunkKey, crate::ChunkRevision)>, GameplayReject> {
-    let mut reconciled = Vec::with_capacity(receipt.chunks().len());
+    let mut reconciled = Vec::with_capacity(receipt.chunks.len());
     let mut seen = BTreeSet::new();
-    for chunk_receipt in receipt.chunks() {
+    for chunk_receipt in receipt.chunks {
         let key = chunk_receipt.key();
         if key.world != world {
             return Err(GameplayReject::StorageCommitMismatch {

@@ -545,7 +545,7 @@ impl FixtureAuthority {
                 )
             })
             .collect();
-        let storage_receipt = match self.storage.commit(WorldTransaction::new(
+        let storage_receipt = match self.storage.publish(WorldTransaction::new(
             transaction_id,
             self.gameplay.world(),
             base_world_revision,
@@ -554,7 +554,7 @@ impl FixtureAuthority {
             Ok(receipt) => receipt,
             Err(error) => panic!("fixture storage commit failed: {error}"),
         };
-        if let Err(error) = self.gameplay.observe_storage_commit(&storage_receipt) {
+        if let Err(error) = self.gameplay.observe_storage_publication(&storage_receipt) {
             panic!("fixture storage receipt reconciliation failed: {error}");
         }
         for chunk_receipt in storage_receipt.chunks() {

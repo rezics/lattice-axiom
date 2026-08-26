@@ -38,9 +38,9 @@ use latticeaxiom_runtime_contracts::{
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
     ChunkMutation, ChunkRevision, ChunkRevisionExpectation, ContinuationId, DimensionId,
-    MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion,
-    PersistentEntityId, PublicationReceipt, StoredChunk, TransactionId, VersionedPayload,
-    WorldRevision, WorldTransaction,
+    MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion, PersistentEntityId,
+    PublicationReceipt, StoredChunk, TransactionId, VersionedPayload, WorldRevision,
+    WorldTransaction,
 };
 use latticeaxiom_voxel_mesh::{
     Aabb, Face, FaceDescriptor, GreedyMesher, LayerMergeKey, MeshBuffer, MeshReceipt, MeshSource,
@@ -2929,20 +2929,27 @@ impl ProductionSpineInner {
         &mut self,
         kernel: &MemoryTransactionKernel,
     ) -> Result<(), GameplayReject> {
-        let snapshot = kernel.reference_snapshot(self.world).map_err(|_| {
+        let world_revision = kernel.world_frontier(self.world).map_err(|_| {
             GameplayReject::StorageCommitMismatch {
-                resource: "snapshot",
+                resource: "world_frontier",
             }
         })?;
-        let mut loaded = BTreeMap::new();
-        for (key, stored) in snapshot.chunks() {
-            loaded.insert(
-                DimensionChunkKey::new(key.dimension.clone(), key.coordinate),
-                stored.revision(),
-            );
-        }
+        let loaded = self
+            .resident_coordinates()
+            .into_iter()
+            .filter_map(|coordinate| {
+                self.runtime
+                    .chunk_revisions(coordinate)
+                    .map(|(_, revision, _)| {
+                        (
+                            DimensionChunkKey::new(self.dimension.clone(), coordinate),
+                            revision,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
         if let Some(gameplay) = self.gameplay.as_mut() {
-            gameplay.sync_loaded_world(snapshot.revision(), loaded)?;
+            gameplay.sync_loaded_world(world_revision, loaded)?;
         }
         Ok(())
     }
@@ -5838,14 +5845,16 @@ fn commit_gameplay_storage(
         Some(chunks) if !chunks.is_empty() => chunks.clone(),
         _ => return Ok(()),
     };
-    let snapshot = kernel
-        .reference_snapshot(inner.world)
+    let base_world_revision = kernel
+        .world_frontier(inner.world)
         .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
     let mut mutations = Vec::new();
+    let mut committed_cells = BTreeMap::new();
     for (chunk, domains) in &pending {
         let key = ChunkKey::new(inner.world, chunk.dimension.clone(), chunk.coordinate);
-        let stored = snapshot
-            .chunk(&key)
+        let stored = kernel
+            .read_chunk(&key)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?
             .ok_or(BlockEditRejectV1::StorageUnavailable)?;
         let mut cells = if inner.runtime.is_resident(chunk.coordinate) {
             runtime_chunk_cells(inner, chunk.coordinate)
@@ -5919,12 +5928,13 @@ fn commit_gameplay_storage(
             declared,
             replacement,
         ));
+        committed_cells.insert(chunk.clone(), cells);
     }
     let receipt = kernel
-        .commit(WorldTransaction::new(
+        .publish(WorldTransaction::new(
             transaction_id,
             inner.world,
-            snapshot.revision(),
+            base_world_revision,
             mutations,
         ))
         .map_err(|error| {
@@ -5935,26 +5945,21 @@ fn commit_gameplay_storage(
         .gameplay
         .as_mut()
         .ok_or(BlockEditRejectV1::ContentUnavailable)?
-        .observe_storage_commit(&receipt)
+        .observe_storage_publication(&receipt)
         .map_err(|error| {
             inner.last_stream_error = Some(error.to_string());
             BlockEditRejectV1::StorageUnavailable
         })?;
-    let published = kernel
-        .reference_snapshot(inner.world)
-        .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-    for chunk in pending.keys() {
+    for (chunk, cells) in committed_cells {
         inner.insert_edited_chunk(chunk.coordinate);
         let key = ChunkKey::new(inner.world, chunk.dimension.clone(), chunk.coordinate);
-        let stored = published
-            .chunk(&key)
-            .ok_or(BlockEditRejectV1::StorageUnavailable)?;
-        project_stored(
+        project_publication_receipt(
             &mut inner.runtime,
-            stored,
+            &receipt,
+            key,
             inner.chunk_edge,
+            cells,
             FixedTick::new(fixed_tick),
-            &inner.presentation,
             derived_requests(priority_with_distance(DerivedPriority::EDIT_TO_VISIBLE, 0)),
         )
         .map_err(|error| {

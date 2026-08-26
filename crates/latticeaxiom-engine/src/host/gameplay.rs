@@ -18,7 +18,7 @@ use latticeaxiom_gameplay::{
     TransactionId, TransferCommandV1, WorkstationId, WorldId, WorldRevision,
 };
 use latticeaxiom_player::BlockEditRejectV1;
-use latticeaxiom_storage::{ChangedDomains, CommitReceipt};
+use latticeaxiom_storage::{ChangedDomains, PublicationReceipt};
 
 /// Player inventory size used by the production host.
 pub const INVENTORY_SLOTS: usize = 36;
@@ -281,11 +281,11 @@ impl ProductionGameplay {
         self.applier.pending_storage_chunks()
     }
 
-    pub(super) fn observe_storage_commit(
+    pub(super) fn observe_storage_publication(
         &mut self,
-        receipt: &CommitReceipt,
+        receipt: &PublicationReceipt,
     ) -> Result<(), GameplayReject> {
-        self.applier.observe_storage_commit(receipt)
+        self.applier.observe_storage_publication(receipt)
     }
 
     pub(super) fn sync_loaded_world(
