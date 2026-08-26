@@ -3539,7 +3539,6 @@ fn admit_desired(
     let mut generate = Vec::new();
     let mut hydrate = Vec::new();
     let mut admitted = 0_usize;
-    let snapshot = kernel.reference_snapshot(inner.world)?;
     let world_view = inner
         .world_store
         .as_ref()
@@ -3571,11 +3570,11 @@ fn admit_desired(
             break;
         }
         let key = ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate);
-        if let Some(stored) = snapshot.chunk(&key) {
+        if let Some(stored) = kernel.read_chunk(&key)? {
             inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
             project_stored(
                 &mut inner.runtime,
-                stored,
+                &stored,
                 inner.chunk_edge,
                 tick,
                 &inner.presentation,
