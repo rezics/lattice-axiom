@@ -37,10 +37,10 @@ use latticeaxiom_runtime_contracts::{
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
-    ChunkMutation, ChunkRevision, ChunkRevisionExpectation, CommitReceipt, ContinuationId,
-    DimensionId, MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion,
-    PersistentEntityId, StoredChunk, TransactionId, VersionedPayload, WorldRevision,
-    WorldTransaction,
+    ChunkMutation, ChunkRevision, ChunkRevisionExpectation, ContinuationId, DimensionId,
+    MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion,
+    PersistentEntityId, PublicationReceipt, StoredChunk, TransactionId, VersionedPayload,
+    WorldRevision, WorldTransaction,
 };
 use latticeaxiom_voxel_mesh::{
     Aabb, Face, FaceDescriptor, GreedyMesher, LayerMergeKey, MeshBuffer, MeshReceipt, MeshSource,
@@ -4029,7 +4029,7 @@ fn publish_generated_cells(
         return Ok(());
     }
     let base_revision = kernel.world_frontier(inner.world)?;
-    let receipt = kernel.commit(WorldTransaction::new(
+    let receipt = kernel.publish(WorldTransaction::new(
         TransactionId::from_u128(inner.next_transaction),
         inner.world,
         base_revision,
@@ -4040,7 +4040,7 @@ fn publish_generated_cells(
         let key = ChunkKey::new(inner.world, inner.dimension.clone(), coordinate);
         let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &inner.edited);
         let requests = stream_derived_requests(class, coordinate, origin);
-        project_commit_receipt(
+        project_publication_receipt(
             &mut inner.runtime,
             &receipt,
             key,
@@ -4054,16 +4054,16 @@ fn publish_generated_cells(
     Ok(())
 }
 
-fn project_commit_receipt(
+fn project_publication_receipt(
     runtime: &mut VoxelRuntime<HostVoxel>,
-    receipt: &CommitReceipt,
+    receipt: &PublicationReceipt,
     key: ChunkKey,
     edge: u16,
     cells: Vec<HostVoxel>,
     tick: FixedTick,
     requests: DerivedRequestSet,
 ) -> Result<(), ProductionHostError> {
-    let projection = CommittedChunkProjection::from_commit_receipt(
+    let projection = CommittedChunkProjection::from_publication_receipt(
         receipt,
         key,
         edge,
