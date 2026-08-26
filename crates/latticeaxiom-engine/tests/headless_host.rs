@@ -3599,6 +3599,7 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
 
     seed_tool(&spine, 0, "terrenia:item/stone-pickaxe", 131);
     seed_tool(&spine, 1, "terrenia:item/stone-shovel", 131);
+    seed_tool(&spine, 2, "terrenia:item/stone-pickaxe", 131);
 
     let mut generation = 1_u64;
     generation = walk_toward_column(
@@ -3735,6 +3736,9 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
 
     seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
     seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
+    seed_tool(&spine, 2, "terrenia:item/wooden-pickaxe", 59);
+    seed_tool(&spine, 3, "terrenia:item/wooden-pickaxe", 59);
+    seed_tool(&spine, 4, "terrenia:item/wooden-pickaxe", 59);
     let (_, dirt_pos, dirt_item) = first_resident_soil(&spine);
     gather_until_inventory_has(&spine, dirt_pos, &dirt_item, 1);
     seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
@@ -5058,52 +5062,48 @@ fn open_required_entrance_shaft(
     aperture: latticeaxiom_gameplay::BlockPosition,
 ) {
     let mut opened = 0_u32;
-    for dz in -1..=1 {
-        for dx in -1..=1 {
-            let mut y = surface.y.saturating_add(8);
-            while y >= aperture.y {
-                let position = latticeaxiom_gameplay::BlockPosition {
-                    x: surface.x.saturating_add(dx),
-                    y,
-                    z: surface.z.saturating_add(dz),
-                };
-                if spine
-                    .cave_occupancy_arbitration(
-                        i64::from(position.x),
-                        i64::from(position.y),
-                        i64::from(position.z),
-                    )
-                    .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
-                {
-                    y -= 1;
-                    continue;
-                }
-                if mine_cover_cell(spine, position) {
-                    opened = opened.saturating_add(1);
-                    y -= 1;
-                    continue;
-                }
-                if spine
-                    .inspect_occupancy(position)
-                    .ok()
-                    .is_some_and(|occupancy| {
-                        occupancy.solid.is_none()
-                            || occupancy
-                                .solid
-                                .as_ref()
-                                .is_some_and(|block| block.as_str().ends_with("/air"))
-                    })
-                {
-                    y -= 1;
-                    continue;
-                }
-                panic!(
-                    "required entrance cover {position:?} did not break, reject={:?}, gameplay={:?}",
-                    spine.last_reject(),
-                    spine.last_gameplay_reject()
-                );
-            }
+    let mut y = surface.y.saturating_add(8);
+    while y >= aperture.y {
+        let position = latticeaxiom_gameplay::BlockPosition {
+            x: surface.x,
+            y,
+            z: surface.z,
+        };
+        if spine
+            .cave_occupancy_arbitration(
+                i64::from(position.x),
+                i64::from(position.y),
+                i64::from(position.z),
+            )
+            .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
+        {
+            y -= 1;
+            continue;
         }
+        if mine_cover_cell(spine, position) {
+            opened = opened.saturating_add(1);
+            y -= 1;
+            continue;
+        }
+        if spine
+            .inspect_occupancy(position)
+            .ok()
+            .is_some_and(|occupancy| {
+                occupancy.solid.is_none()
+                    || occupancy
+                        .solid
+                        .as_ref()
+                        .is_some_and(|block| block.as_str().ends_with("/air"))
+            })
+        {
+            y -= 1;
+            continue;
+        }
+        panic!(
+            "required entrance cover {position:?} did not break, reject={:?}, gameplay={:?}",
+            spine.last_reject(),
+            spine.last_gameplay_reject()
+        );
     }
     assert!(
         opened > 0,
@@ -5115,7 +5115,7 @@ fn mine_cover_cell(
     spine: &ProductionSpine,
     position: latticeaxiom_gameplay::BlockPosition,
 ) -> bool {
-    for slot in [1_u16, 0_u16] {
+    for slot in [1_u16, 0_u16, 2_u16, 3_u16, 4_u16] {
         spine
             .select_hotbar_slot(slot)
             .expect("cover-mining tool is selected");

@@ -1998,6 +1998,9 @@ impl GenerationPlanV1 {
             .saturating_add(radius);
         for anchor_z in minimum_z..=maximum_z {
             for anchor_x in minimum_x..=maximum_x {
+                if !natural.may_have_tree_anchor(anchor_x, anchor_z) {
+                    continue;
+                }
                 let sample = self.territory.sample(anchor_x, anchor_z);
                 let style = self
                     .territory

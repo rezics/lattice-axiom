@@ -672,6 +672,11 @@ impl NaturalSamplerV1 {
         true
     }
 
+    pub(crate) fn may_have_tree_anchor(&self, x: i64, z: i64) -> bool {
+        let maximum_threshold = self.config.pine_threshold_per_1024.max(14);
+        Self::sample_threshold(self.tree_seed, x, 0, z, maximum_threshold)
+    }
+
     pub(crate) fn ground_cover_role(
         &self,
         x: i64,
@@ -787,15 +792,12 @@ impl NaturalSamplerV1 {
     }
 
     fn is_tree_candidate(&self, x: i64, z: i64, style: TerrainStyleV1) -> bool {
-        if self.in_river_channel(x, z) {
-            return false;
-        }
         let threshold = match style {
             TerrainStyleV1::TemperateWoodland => 14,
             TerrainStyleV1::BorealWetland => self.config.pine_threshold_per_1024,
             TerrainStyleV1::AridBadlands => return false,
         };
-        Self::sample_threshold(self.tree_seed, x, 0, z, threshold)
+        Self::sample_threshold(self.tree_seed, x, 0, z, threshold) && !self.in_river_channel(x, z)
     }
 
     fn tree_rank(&self, x: i64, z: i64) -> u64 {

@@ -1,4 +1,7 @@
-//! Reproducible CPU diagnostics for deterministic D4 chunk generation.
+//! Reproducible worker-throughput diagnostics for deterministic chunk generation.
+//!
+//! These measurements do not define the main-loop frame budget; the host runs
+//! generation on Bevy's task pool and bounds result application separately.
 
 #![allow(
     clippy::expect_used,
@@ -15,8 +18,8 @@ use latticeaxiom_worldgen::{
     D4RoleVocabularyV1, DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
     HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
     NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, WorldSeedV1, WorldgenConfigV1,
-    WorldgenLimitsV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
+    WorldgenConfigV1, WorldgenLimitsV1,
 };
 
 const ROLE_TARGETS: [(D4MaterialRoleV1, &str); 16] = [
@@ -100,6 +103,7 @@ fn generation_benchmarks(c: &mut Criterion) {
                 .expect("32-cubic natural benchmark chunk must remain valid")
         });
     });
+    production_boreal_benchmark(c);
     let hydrology_32 = hydrology_fixture_plan_with_edge(32);
     let hydrology_coordinate = surface_chunk(&hydrology_32, -3, 5);
     c.bench_function(
@@ -130,6 +134,31 @@ fn generation_benchmarks(c: &mut Criterion) {
         });
     });
     terrain_query_benchmarks(c, &plan);
+}
+
+fn production_boreal_benchmark(c: &mut Criterion) {
+    let plan = production_boreal_fixture_plan();
+    let coordinate = surface_chunk_with_style(&plan, TerrainStyleV1::BorealWetland);
+    let adjacent = AdjacentEpochSnapshotV1::all_unassigned(PlanningCellCoordinateV1::from_chunk(
+        coordinate,
+        plan.config().planning_cell_edge_chunks,
+    ))
+    .expect("production boreal benchmark adjacency is representable");
+    c.bench_function(
+        "v5_production_boreal_chunk_32_cubic_snapshot_candidate",
+        |bencher| {
+            bencher.iter(|| {
+                plan.generate(ChunkGenerationRequestV1::new(
+                    black_box(coordinate),
+                    None,
+                    CellEpochStateV1::Unassigned,
+                    adjacent.clone(),
+                    Vec::new(),
+                ))
+                .expect("production boreal benchmark chunk must remain valid")
+            });
+        },
+    );
 }
 
 fn terrain_query_benchmarks(c: &mut Criterion, plan: &GenerationPlanV1) {
@@ -283,6 +312,30 @@ fn natural_fixture_plan_with_options(
     )
 }
 
+fn production_boreal_fixture_plan() -> GenerationPlanV1 {
+    natural_fixture_plan_with_config(
+        WorldgenConfigV1 {
+            chunk_edge_voxels: 32,
+            planning_cell_edge_chunks: 2,
+            transition_width_voxels: 16,
+            height_noise_scale_voxels: 32,
+            world_floor_y: -64,
+            world_ceiling_y: 319,
+            temperate_base_height: 80,
+            temperate_relief: 112,
+            arid_base_height: 88,
+            arid_relief: 128,
+            ..WorldgenConfigV1::default()
+        },
+        NaturalLayerConfigV1 {
+            boreal_base_height: 80,
+            boreal_relief: 112,
+            ..NaturalLayerConfigV1::default()
+        },
+        false,
+    )
+}
+
 fn natural_fixture_plan_with_config(
     config: WorldgenConfigV1,
     natural_config: NaturalLayerConfigV1,
@@ -367,6 +420,24 @@ fn surface_chunk(plan: &GenerationPlanV1, chunk_x: i32, chunk_z: i32) -> ChunkCo
             .div_euclid(i32::from(plan.config().chunk_edge_voxels)),
         chunk_z,
     )
+}
+
+fn surface_chunk_with_style(plan: &GenerationPlanV1, expected: TerrainStyleV1) -> ChunkCoordinate {
+    let edge = i64::from(plan.config().chunk_edge_voxels);
+    for chunk_z in -128_i32..=128 {
+        for chunk_x in -128_i32..=128 {
+            let world_x = i64::from(chunk_x)
+                .saturating_mul(edge)
+                .saturating_add(edge / 2);
+            let world_z = i64::from(chunk_z)
+                .saturating_mul(edge)
+                .saturating_add(edge / 2);
+            if plan.territory_query(world_x, world_z).winner() == expected {
+                return surface_chunk(plan, chunk_x, chunk_z);
+            }
+        }
+    }
+    panic!("benchmark corpus has no {expected:?} surface chunk")
 }
 
 fn stable_id(value: &str) -> StableId {

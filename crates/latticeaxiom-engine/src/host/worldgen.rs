@@ -238,9 +238,6 @@ fn natural_layer_config(
     let mut config = NaturalLayerConfigV1::default();
     config.boreal_base_height = spine.temperate_base_height;
     config.boreal_relief = spine.temperate_relief.max(1);
-    config.river_incision_voxels = 0;
-    config.pine_threshold_per_1024 = 0;
-    config.moss_threshold_per_1024 = 0;
     config.validate(spine)?;
     Ok(config)
 }
@@ -1194,9 +1191,9 @@ mod tests {
         ChunkGenerationRequestV1, D4MaterialRoleV1, D7_NATURAL_BLOCK_COUNT, DimensionId,
         ExistingSnapshotEvidenceV1, GenerationPlanInputV1, GenerationPlanV1,
         HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
-        NaturalLayerInputV1, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1, PlanActivationIdV1,
-        PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1,
-        WorldgenLimitsV1,
+        NaturalLayerConfigV1, NaturalLayerInputV1, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1,
+        PlanActivationIdV1, PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
+        WorldgenConfigV1, WorldgenLimitsV1,
     };
 
     const AUTHORED_BINDINGS_JSON: &str =
@@ -1223,6 +1220,26 @@ mod tests {
             64,
             "planning cells preserve the authored 64-meter physical scale"
         );
+    }
+
+    #[test]
+    fn production_natural_layer_keeps_rivers_and_boreal_vegetation_enabled() {
+        let spine = spine_config();
+        let config = natural_layer_config(&spine).expect("production natural config fits spine");
+        let defaults = NaturalLayerConfigV1::default();
+
+        assert_eq!(config.river_incision_voxels, defaults.river_incision_voxels);
+        assert_eq!(
+            config.pine_threshold_per_1024,
+            defaults.pine_threshold_per_1024
+        );
+        assert_eq!(
+            config.moss_threshold_per_1024,
+            defaults.moss_threshold_per_1024
+        );
+        assert!(config.river_incision_voxels > 0);
+        assert!(config.pine_threshold_per_1024 > 0);
+        assert!(config.moss_threshold_per_1024 > 0);
     }
 
     #[test]
