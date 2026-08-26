@@ -80,7 +80,8 @@ use super::{
     session::{DurablePlayerSessionV1, PLAYER_SESSION_ENTITY},
     stream::{
         InterestClass, LOOK_AHEAD_EXPIRY_TICKS, StreamClamps, ViewDistanceStatusV1, chebyshev_xz,
-        desired_chunks, interest_class, prioritize_chunks, retain_protected, sticky_look_ahead,
+        desired_chunks, interest_class, is_render_chunk, prioritize_chunks, retain_protected,
+        sticky_look_ahead,
     },
     worldgen::{
         RequiredCaveEntranceV1, compile_host_worldgen_inspect, compile_plan, generate_plan_chunks,
@@ -156,6 +157,34 @@ impl WorkingSetDiagnosticsV1 {
             reserved_bytes: diagnostics.combined_reserved_bytes(),
             byte_budget: diagnostics.byte_budget(),
         }
+    }
+
+    fn from_inner(inner: &ProductionSpineInner) -> Self {
+        let mut snapshot = Self::from_runtime(inner.runtime.diagnostics());
+        snapshot.visible = count_u32(
+            inner
+                .render_scope
+                .iter()
+                .filter(|coordinate| {
+                    inner
+                        .derived
+                        .get(coordinate)
+                        .is_some_and(|derived| derived.geometry.is_some())
+                })
+                .count(),
+        );
+        snapshot.active = count_u32(
+            inner
+                .render_scope
+                .iter()
+                .filter(|coordinate| {
+                    inner.derived.get(coordinate).is_some_and(|derived| {
+                        derived.geometry.is_some() && derived.collider.is_some()
+                    })
+                })
+                .count(),
+        );
+        snapshot
     }
 
     /// Resident committed projections.
@@ -319,6 +348,7 @@ pub(super) struct ProductionSpineInner {
     mesh_dirty: BTreeSet<ChunkCoordinate>,
     collider_dirty: BTreeSet<ChunkCoordinate>,
     removed: BTreeSet<ChunkCoordinate>,
+    render_scope: BTreeSet<ChunkCoordinate>,
     waiting_derived: VecDeque<ComputedDerived>,
     in_flight_tasks: Vec<Task<ComputedDerived>>,
     pending_worldgen: VecDeque<WorldgenInput>,
@@ -706,6 +736,7 @@ impl ProductionSpine {
             mesh_dirty: BTreeSet::new(),
             collider_dirty: BTreeSet::new(),
             removed: BTreeSet::new(),
+            render_scope: BTreeSet::new(),
             waiting_derived: VecDeque::new(),
             in_flight_tasks: Vec::new(),
             pending_worldgen: VecDeque::new(),
@@ -1007,6 +1038,9 @@ impl ProductionSpine {
         coordinate: ChunkCoordinate,
     ) -> Option<Arc<MeshBuffer<LayerMergeKey>>> {
         self.lock_inner().ok().and_then(|inner| {
+            if !inner.render_scope.contains(&coordinate) {
+                return None;
+            }
             inner
                 .derived
                 .get(&coordinate)
@@ -1020,7 +1054,10 @@ impl ProductionSpine {
         match self.lock_inner() {
             Ok(inner) => {
                 let mut faces = BTreeSet::new();
-                for derived in inner.derived.values() {
+                for coordinate in &inner.render_scope {
+                    let Some(derived) = inner.derived.get(coordinate) else {
+                        continue;
+                    };
                     if let Some(geometry) = &derived.geometry {
                         faces.extend(geometry.iter().map(|(_, face, _)| face));
                     }
@@ -1062,6 +1099,22 @@ impl ProductionSpine {
                         )
                         .then_some(*coordinate)
                     })
+                    .collect()
+            },
+        )
+    }
+
+    /// Returns resident chunks currently inside the full-resolution render scope.
+    #[must_use]
+    pub fn render_scoped_chunks(&self) -> BTreeSet<ChunkCoordinate> {
+        self.lock_inner().map_or_else(
+            |_| BTreeSet::new(),
+            |inner| {
+                inner
+                    .render_scope
+                    .iter()
+                    .copied()
+                    .filter(|coordinate| inner.runtime.is_resident(*coordinate))
                     .collect()
             },
         )
@@ -1277,7 +1330,7 @@ impl ProductionSpine {
     pub fn working_set_diagnostics(&self) -> WorkingSetDiagnosticsV1 {
         self.lock_inner().map_or_else(
             |_| WorkingSetDiagnosticsV1::default(),
-            |inner| WorkingSetDiagnosticsV1::from_runtime(inner.runtime.diagnostics()),
+            |inner| WorkingSetDiagnosticsV1::from_inner(&inner),
         )
     }
 
@@ -1288,7 +1341,7 @@ impl ProductionSpine {
     pub fn streaming_profile_evidence(&self) -> Option<StreamingProfileEvidenceV1> {
         let inner = self.lock_inner().ok()?;
         let requested = u32::try_from(inner.last_desired.len()).unwrap_or(u32::MAX);
-        let diagnostics = WorkingSetDiagnosticsV1::from_runtime(inner.runtime.diagnostics());
+        let diagnostics = WorkingSetDiagnosticsV1::from_inner(&inner);
         Some(StreamingProfileEvidenceV1::capture(
             inner.clamps,
             inner.plan.config(),
@@ -2241,7 +2294,9 @@ impl ProductionSpine {
         let mut mesh_update = Vec::with_capacity(mesh_dirty.len());
         let mut collider_update = Vec::with_capacity(collider_dirty.len());
         for coordinate in mesh_dirty {
-            if removals.binary_search(&coordinate).is_ok() {
+            if removals.binary_search(&coordinate).is_ok()
+                || !inner.render_scope.contains(&coordinate)
+            {
                 continue;
             }
             let Some(derived) = inner.derived.get(&coordinate) else {
@@ -2258,7 +2313,9 @@ impl ProductionSpine {
             });
         }
         for coordinate in collider_dirty {
-            if removals.binary_search(&coordinate).is_ok() {
+            if removals.binary_search(&coordinate).is_ok()
+                || !inner.render_scope.contains(&coordinate)
+            {
                 continue;
             }
             let Some(derived) = inner.derived.get(&coordinate) else {
@@ -3040,7 +3097,7 @@ impl ProductionSpineInner {
         let block_id = self
             .block_id(hit.voxel)
             .ok_or(TargetInspectRejectV1::ContentUnavailable)?;
-        let occupancy = WorkingSetDiagnosticsV1::from_runtime(self.runtime.diagnostics());
+        let occupancy = WorkingSetDiagnosticsV1::from_inner(self);
         let label = self.display.lookup(block_id.as_str());
         let mut inspect = HeadlessTargetInspectV1::new(
             ClientTargetObservationV1 {
@@ -3291,6 +3348,40 @@ fn refresh_residency(
             }
             InterestClass::Retain | InterestClass::Prefetch => {}
         }
+        reconcile_render_scope(
+            inner,
+            coordinate,
+            is_render_chunk(coordinate, origin, inner.clamps),
+        );
+    }
+}
+
+fn reconcile_render_scope(
+    inner: &mut ProductionSpineInner,
+    coordinate: ChunkCoordinate,
+    should_render: bool,
+) {
+    let was_rendered = inner.render_scope.contains(&coordinate);
+    match (was_rendered, should_render) {
+        (false, true) => {
+            inner.render_scope.insert(coordinate);
+            inner.removed.remove(&coordinate);
+            if let Some(derived) = inner.derived.get(&coordinate) {
+                if derived.geometry.is_some() {
+                    inner.mesh_dirty.insert(coordinate);
+                }
+                if derived.collider.is_some() {
+                    inner.collider_dirty.insert(coordinate);
+                }
+            }
+        }
+        (true, false) => {
+            inner.render_scope.remove(&coordinate);
+            inner.mesh_dirty.remove(&coordinate);
+            inner.collider_dirty.remove(&coordinate);
+            inner.removed.insert(coordinate);
+        }
+        (false, false) | (true, true) => {}
     }
 }
 
@@ -3398,6 +3489,7 @@ fn admit_desired(
             .saturating_add(generate.len())
             .saturating_add(hydrate.len());
         let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let render_scoped = is_render_chunk(*coordinate, origin, inner.clamps);
         if class == InterestClass::Prefetch && upcoming >= high_water {
             continue;
         }
@@ -3419,7 +3511,7 @@ fn admit_desired(
                 .lifecycle
                 .insert(*coordinate, ChunkLifecycle::Resident);
             seal_unready_cave_voids(inner, *coordinate);
-            remember_admission(inner, *coordinate, class, tick);
+            remember_admission(inner, *coordinate, class, render_scoped, tick);
             admitted = admitted.saturating_add(1);
             continue;
         }
@@ -3431,7 +3523,7 @@ fn admit_desired(
         {
             inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
             hydrate.push((*coordinate, persisted));
-            remember_admission(inner, *coordinate, class, tick);
+            remember_admission(inner, *coordinate, class, render_scoped, tick);
             admitted = admitted.saturating_add(1);
             continue;
         }
@@ -3442,7 +3534,7 @@ fn admit_desired(
             .lifecycle
             .insert(*coordinate, ChunkLifecycle::Generate);
         generate.push(*coordinate);
-        remember_admission(inner, *coordinate, class, tick);
+        remember_admission(inner, *coordinate, class, render_scoped, tick);
         admitted = admitted.saturating_add(1);
     }
     if !hydrate.is_empty() {
@@ -3795,6 +3887,7 @@ fn remember_admission(
     inner: &mut ProductionSpineInner,
     coordinate: ChunkCoordinate,
     class: InterestClass,
+    render_scoped: bool,
     tick: FixedTick,
 ) {
     let now = tick.get();
@@ -3807,11 +3900,13 @@ fn remember_admission(
         },
     );
     inner.stream_admissions = inner.stream_admissions.saturating_add(1);
+    reconcile_render_scope(inner, coordinate, render_scoped);
 }
 
 fn forget_chunk(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
     inner.lifecycle.remove(&coordinate);
     inner.worldgen_tickets.remove(&coordinate);
+    inner.render_scope.remove(&coordinate);
     inner.derived.remove(&coordinate);
     inner.mesh_dirty.remove(&coordinate);
     inner.collider_dirty.remove(&coordinate);
@@ -3829,7 +3924,9 @@ fn refresh_lifecycle(inner: &mut ProductionSpineInner) {
         ) {
             continue;
         }
-        let next = if !inner.derived.contains_key(&coordinate) {
+        let next = if !inner.render_scope.contains(&coordinate)
+            || !inner.derived.contains_key(&coordinate)
+        {
             ChunkLifecycle::Resident
         } else if cave_entry_ready_inner(inner, coordinate) {
             ChunkLifecycle::Active

@@ -393,7 +393,7 @@ pub(super) fn interest_class(
     if pins.contains(&chunk) {
         return InterestClass::Pin;
     }
-    if is_core_chunk(chunk, origin, clamps) {
+    if is_render_chunk(chunk, origin, clamps) {
         return InterestClass::Core;
     }
     if is_prefetch_chunk(chunk, origin, clamps, look_ahead) {
@@ -566,7 +566,11 @@ fn look_ahead_column(
     Some((x, z))
 }
 
-fn is_core_chunk(chunk: ChunkCoordinate, origin: ChunkCoordinate, clamps: StreamClamps) -> bool {
+pub(super) fn is_render_chunk(
+    chunk: ChunkCoordinate,
+    origin: ChunkCoordinate,
+    clamps: StreamClamps,
+) -> bool {
     chunk.y >= clamps.vertical_min_chunk
         && chunk.y <= clamps.vertical_max_chunk
         && chebyshev_xz(chunk, origin) <= clamps.effective_render_distance()

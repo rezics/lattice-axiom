@@ -1080,11 +1080,30 @@ fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
         let diagnostics = spine.working_set_diagnostics();
         let queues = spine.derived_queue_snapshot();
         let worldgen = spine.worldgen_queue_snapshot();
+        let rendered = spine.render_scoped_chunks();
+        let player_chunk =
+            chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
+        let render_distance = spine.effective_view_distance();
         let resident = usize::try_from(diagnostics.resident()).unwrap_or(usize::MAX);
         high_resident = high_resident.max(resident);
         assert!(
             resident <= max_resident,
             "resident {resident} exceeded cap {max_resident}"
+        );
+        assert!(
+            rendered.iter().all(|coordinate| {
+                coordinate
+                    .x
+                    .abs_diff(player_chunk.x)
+                    .max(coordinate.z.abs_diff(player_chunk.z))
+                    <= render_distance
+            }),
+            "render scope escaped effective distance {render_distance}: player {player_chunk:?}"
+        );
+        assert!(
+            rendered.len() <= resident,
+            "rendered {} exceeded resident {resident}",
+            rendered.len()
         );
         let in_flight = usize::try_from(diagnostics.in_flight()).unwrap_or(usize::MAX);
         assert!(
