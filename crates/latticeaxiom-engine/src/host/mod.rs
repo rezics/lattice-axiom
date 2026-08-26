@@ -2,8 +2,9 @@
 //!
 //! This module is the production Bevy world session. It starts from a
 //! reopened [`LockVerifiedComposeImages`], streams a bounded working set
-//! around the local player, and presents one Avian collider plus CPU mesh per
-//! chunk. [`MemoryTransactionKernel`] remains the session cache. Durable Save
+//! around the local player, presents CPU meshes at render distance, and keeps
+//! Avian colliders local to the player capsule. [`MemoryTransactionKernel`]
+//! remains the session cache. Durable Save
 //! & Quit activates a sealed [`SealedWorldWriterHost`] only after exact lock,
 //! catalog, world-header, and lease receipts match. It must not be confused
 //! with the `playable` development fixture.
@@ -34,7 +35,10 @@ mod surface;
 mod worldgen;
 mod writer;
 
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use avian3d::PhysicsPlugins;
 use bevy::{
@@ -744,6 +748,17 @@ fn sync_collider_safety(
         .iter()
         .map(|(entity, presentation)| (presentation.coordinate, entity))
         .collect::<BTreeMap<_, _>>();
+    let active = updates
+        .iter()
+        .map(|update| update.coordinate)
+        .collect::<BTreeSet<_>>();
+    for (entity, presentation) in &chunks {
+        if !active.contains(&presentation.coordinate) && colliders.get_mut(entity).is_ok() {
+            commands
+                .entity(entity)
+                .remove::<(avian3d::prelude::RigidBody, avian3d::prelude::Collider)>();
+        }
+    }
     for update in updates {
         apply_collider_update(
             &mut commands,

@@ -100,6 +100,10 @@ const VOXEL_SCHEMA_VERSION: u32 = 2;
 const CELL_OCCUPANCY_BYTES: usize = 4;
 /// One generated chunk is published per fixed slice so commits and projection stay bounded.
 const WORLDGEN_APPLY_JOB_CAP: usize = 1;
+/// Halo capture stays bounded even when many Bevy worker slots become free together.
+const DERIVED_DISPATCH_JOB_CAP: usize = 4;
+/// Physics colliders are materialized only around the player, not at render distance.
+const COLLIDER_INTEREST_RADIUS_CHUNKS: u32 = 1;
 const WORLD_ID: &str = "00000000-0000-4000-8000-0000000000b1";
 const REACH_MM: u16 = 5_000;
 /// Portal SDF is doubled-voxel Chebyshev minus radius and is biased one unit
@@ -1602,11 +1606,27 @@ impl ProductionSpine {
     ) -> Result<Vec<ColliderPresentation>, ProductionHostError> {
         let tick = FixedTick::new(fixed_tick);
         let (occupied, edge) = {
-            let inner = self.lock_inner()?;
+            let mut inner = self.lock_inner()?;
             let translation = inner.player_pose.translation;
             let mut occupied = player_occupied_chunks(translation, inner.chunk_edge)?;
-            if let Some(chunk) = translation_chunk(translation, inner.chunk_edge) {
-                occupied.insert(chunk);
+            if let Some(origin) = translation_chunk(translation, inner.chunk_edge) {
+                occupied.insert(origin);
+                let priority = derived_request(DerivedPriority::COLLIDER_SAFETY);
+                for &coordinate in &occupied {
+                    if inner.runtime.is_resident(coordinate)
+                        && !matches!(
+                            inner.runtime.collider_safety(coordinate),
+                            Some(ColliderSafetyState::Ready { .. })
+                        )
+                    {
+                        inner.runtime.request_derived(
+                            coordinate,
+                            DerivedKind::Collider,
+                            tick,
+                            priority,
+                        )?;
+                    }
+                }
             }
             (occupied, f32::from(inner.chunk_edge))
         };
@@ -2332,6 +2352,8 @@ impl ProductionSpine {
         let collider_dirty = mem::take(&mut inner.collider_dirty);
         let removals: Vec<ChunkCoordinate> = mem::take(&mut inner.removed).into_iter().collect();
         let edge = f32::from(inner.chunk_edge);
+        let collider_scope =
+            player_occupied_chunks(inner.player_pose.translation, inner.chunk_edge)?;
         let mut mesh_update = Vec::with_capacity(mesh_dirty.len());
         let mut collider_update = Vec::with_capacity(collider_dirty.len());
         for coordinate in mesh_dirty {
@@ -2356,6 +2378,7 @@ impl ProductionSpine {
         for coordinate in collider_dirty {
             if removals.binary_search(&coordinate).is_ok()
                 || !inner.render_scope.contains(&coordinate)
+                || !collider_scope.contains(&coordinate)
             {
                 continue;
             }
@@ -3579,12 +3602,11 @@ fn admit_desired(
                 inner.chunk_edge,
                 tick,
                 &inner.presentation,
-                stream_derived_requests(class, chebyshev_xz(*coordinate, origin)),
+                stream_derived_requests(class, *coordinate, origin),
             )?;
             inner
                 .lifecycle
                 .insert(*coordinate, ChunkLifecycle::Resident);
-            seal_unready_cave_voids(inner, *coordinate);
             remember_admission(inner, *coordinate, class, render_scoped, tick);
             admitted = admitted.saturating_add(1);
             continue;
@@ -3819,7 +3841,7 @@ fn publish_hydrated(
             })?;
         inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
         let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
-        let requests = stream_derived_requests(class, chebyshev_xz(*coordinate, origin));
+        let requests = stream_derived_requests(class, *coordinate, origin);
         project_stored(
             &mut inner.runtime,
             stored,
@@ -3831,7 +3853,6 @@ fn publish_hydrated(
         inner
             .lifecycle
             .insert(*coordinate, ChunkLifecycle::Resident);
-        seal_unready_cave_voids(inner, *coordinate);
     }
     Ok(())
 }
@@ -3935,7 +3956,7 @@ fn publish_generated_cells(
             .remove(&coordinate)
             .ok_or(ProductionHostError::MissingGeneratedChunk { coordinate })?;
         let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &inner.edited);
-        let requests = stream_derived_requests(class, chebyshev_xz(coordinate, origin));
+        let requests = stream_derived_requests(class, coordinate, origin);
         project_commit_receipt(
             &mut inner.runtime,
             &receipt,
@@ -3946,7 +3967,6 @@ fn publish_generated_cells(
             requests,
         )?;
         inner.lifecycle.insert(coordinate, ChunkLifecycle::Resident);
-        seal_unready_cave_voids(inner, coordinate);
     }
     Ok(())
 }
@@ -4238,9 +4258,10 @@ fn dispatch_derived_batch(
     let capacity = inner
         .runtime
         .admission_snapshot()
-        .cpu_heavy_slots_remaining();
+        .cpu_heavy_slots_remaining()
+        .min(DERIVED_DISPATCH_JOB_CAP);
     let mut inputs = Vec::with_capacity(capacity);
-    loop {
+    while inputs.len() < capacity {
         let outcome = match (mesh, collider) {
             (true, true) => inner.runtime.dispatch_next_any()?,
             (true, false) => inner.runtime.dispatch_next(DerivedKind::Mesh)?,
@@ -4600,11 +4621,121 @@ struct OccupiedBox {
 
 /// Deterministic greedy merge of occupied cells into axis-aligned cuboids.
 ///
-/// Cells are visited in local `(x, y, z)` order via [`BTreeSet`]. Each unused
-/// cell grows along `+X`, then `+Y` while every x-run in the rectangle stays
-/// occupied, then `+Z` while every xy-slab stays occupied. The cuboids never
-/// overlap and cover exactly the input occupancy set.
+/// Standard chunk-local coordinates use a bounded dense occupancy bitmap.
+/// Cells are visited in `(x, y, z)` order. Each unused cell grows along `+X`,
+/// then `+Y` while every x-run in the rectangle stays occupied, then `+Z`
+/// while every xy-slab stays occupied. The cuboids never overlap and cover
+/// exactly the input occupancy set. Out-of-contract sparse coordinates retain
+/// the ordered-set reference path.
 fn merge_occupied_boxes(occupied: &[OccupiedCell]) -> Vec<OccupiedBox> {
+    let Some(dimensions) = dense_collider_dimensions(occupied) else {
+        return merge_sparse_occupied_boxes(occupied);
+    };
+    let volume = dimensions[0]
+        .saturating_mul(dimensions[1])
+        .saturating_mul(dimensions[2]);
+    let mut remaining = vec![false; volume];
+    for cell in occupied {
+        let local = cell.local.map(usize::from);
+        remaining[dense_collider_index(dimensions, local)] = true;
+    }
+    let mut boxes = Vec::new();
+    for x in 0..dimensions[0] {
+        for y in 0..dimensions[1] {
+            for z in 0..dimensions[2] {
+                let origin = [x, y, z];
+                if !remaining[dense_collider_index(dimensions, origin)] {
+                    continue;
+                }
+                let merged = grow_dense_occupied_box(&remaining, dimensions, origin);
+                clear_dense_occupied_box(&mut remaining, dimensions, merged);
+                boxes.push(merged);
+            }
+        }
+    }
+    boxes
+}
+
+const MAX_DENSE_COLLIDER_EDGE: usize = 64;
+
+fn dense_collider_dimensions(occupied: &[OccupiedCell]) -> Option<[usize; 3]> {
+    let mut maximum = [0_usize; 3];
+    for cell in occupied {
+        for (axis, value) in cell.local.into_iter().enumerate() {
+            maximum[axis] = maximum[axis].max(usize::from(value));
+        }
+    }
+    let dimensions = maximum.map(|value| value.saturating_add(1));
+    dimensions
+        .iter()
+        .all(|&dimension| dimension <= MAX_DENSE_COLLIDER_EDGE)
+        .then_some(dimensions)
+}
+
+const fn dense_collider_index(dimensions: [usize; 3], local: [usize; 3]) -> usize {
+    local[0]
+        .saturating_mul(dimensions[1])
+        .saturating_add(local[1])
+        .saturating_mul(dimensions[2])
+        .saturating_add(local[2])
+}
+
+fn dense_cell_is_occupied(remaining: &[bool], dimensions: [usize; 3], local: [usize; 3]) -> bool {
+    remaining[dense_collider_index(dimensions, local)]
+}
+
+fn grow_dense_occupied_box(
+    remaining: &[bool],
+    dimensions: [usize; 3],
+    origin: [usize; 3],
+) -> OccupiedBox {
+    let [x0, y0, z0] = origin;
+    let mut size_x = 1_usize;
+    while x0.saturating_add(size_x) < dimensions[0]
+        && dense_cell_is_occupied(remaining, dimensions, [x0 + size_x, y0, z0])
+    {
+        size_x = size_x.saturating_add(1);
+    }
+
+    let mut size_y = 1_usize;
+    while y0.saturating_add(size_y) < dimensions[1]
+        && (0..size_x)
+            .all(|dx| dense_cell_is_occupied(remaining, dimensions, [x0 + dx, y0 + size_y, z0]))
+    {
+        size_y = size_y.saturating_add(1);
+    }
+
+    let mut size_z = 1_usize;
+    while z0.saturating_add(size_z) < dimensions[2]
+        && (0..size_y).all(|dy| {
+            (0..size_x).all(|dx| {
+                dense_cell_is_occupied(remaining, dimensions, [x0 + dx, y0 + dy, z0 + size_z])
+            })
+        })
+    {
+        size_z = size_z.saturating_add(1);
+    }
+
+    OccupiedBox {
+        origin: origin.map(|value| u16::try_from(value).unwrap_or(u16::MAX)),
+        size: [size_x, size_y, size_z].map(|value| u16::try_from(value).unwrap_or(u16::MAX)),
+    }
+}
+
+fn clear_dense_occupied_box(remaining: &mut [bool], dimensions: [usize; 3], merged: OccupiedBox) {
+    let origin = merged.origin.map(usize::from);
+    let size = merged.size.map(usize::from);
+    for dz in 0..size[2] {
+        for dy in 0..size[1] {
+            for dx in 0..size[0] {
+                let local = [origin[0] + dx, origin[1] + dy, origin[2] + dz];
+                remaining[dense_collider_index(dimensions, local)] = false;
+            }
+        }
+    }
+}
+
+fn merge_sparse_occupied_boxes(occupied: &[OccupiedCell]) -> Vec<OccupiedBox> {
     let mut remaining: BTreeSet<[u16; 3]> = occupied.iter().map(|cell| cell.local).collect();
     let mut boxes = Vec::new();
     while let Some(origin) = remaining.first().copied() {
@@ -5100,17 +5231,35 @@ fn priority_with_distance(priority: DerivedPriority, distance: u32) -> DerivedPr
     )
 }
 
-fn stream_derived_requests(class: InterestClass, distance: u32) -> DerivedRequestSet {
-    derived_requests(stream_derived_priority(class, distance))
+fn stream_derived_requests(
+    class: InterestClass,
+    coordinate: ChunkCoordinate,
+    origin: ChunkCoordinate,
+) -> DerivedRequestSet {
+    let request = derived_request(stream_derived_priority(
+        class,
+        chebyshev_xz(coordinate, origin),
+    ));
+    if chebyshev_xz(coordinate, origin) <= COLLIDER_INTEREST_RADIUS_CHUNKS
+        && coordinate.y.abs_diff(origin.y) <= COLLIDER_INTEREST_RADIUS_CHUNKS
+    {
+        DerivedRequestSet::new(request, request)
+    } else {
+        DerivedRequestSet::mesh_only(request)
+    }
 }
 
 fn derived_requests(priority: DerivedPriority) -> DerivedRequestSet {
-    let request = DerivedRequest::new(
+    let request = derived_request(priority);
+    DerivedRequestSet::new(request, request)
+}
+
+fn derived_request(priority: DerivedPriority) -> DerivedRequest {
+    DerivedRequest::new(
         priority,
         DerivedOwner::new(1),
         DerivedMemoryBudget::new(64 * 1024, 64 * 1024),
-    );
-    DerivedRequestSet::new(request, request)
+    )
 }
 fn chunk_changed_domains(current: Option<&ChunkData>, replacement: &ChunkData) -> ChangedDomains {
     let Some(current) = current else {
@@ -5263,7 +5412,10 @@ fn cave_entry_ready_inner(inner: &ProductionSpineInner, coordinate: ChunkCoordin
 }
 
 fn seal_unready_cave_voids(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
-    if cave_entry_ready_inner(inner, coordinate) {
+    if matches!(
+        inner.runtime.collider_safety(coordinate),
+        Some(ColliderSafetyState::Ready { .. })
+    ) {
         return;
     }
     let Some((_, revision, _)) = inner.runtime.chunk_revisions(coordinate) else {
@@ -5354,10 +5506,30 @@ fn player_occupied_chunks(
     edge: u16,
 ) -> Result<BTreeSet<ChunkCoordinate>, ProductionHostError> {
     let _ = translation_chunk(translation, edge).ok_or(ProductionHostError::InvalidPlayerPose)?;
-    Ok(player_sample_cells(translation)
-        .iter()
-        .map(|&[x, y, z]| world_chunk(x, y, z, edge))
-        .collect())
+    let profile = PlayerMovementProfileV1::default();
+    let radius = profile.capsule_radius_m();
+    let half_height = profile.capsule_total_height_m() * 0.5;
+    let minimum = world_chunk(
+        f32_floor_i64(translation.x - radius),
+        f32_floor_i64(translation.y - half_height),
+        f32_floor_i64(translation.z - radius),
+        edge,
+    );
+    let maximum = world_chunk(
+        f32_floor_i64(translation.x + radius),
+        f32_floor_i64(translation.y + half_height),
+        f32_floor_i64(translation.z + radius),
+        edge,
+    );
+    let mut chunks = BTreeSet::new();
+    for y in minimum.y..=maximum.y {
+        for z in minimum.z..=maximum.z {
+            for x in minimum.x..=maximum.x {
+                chunks.insert(ChunkCoordinate::new(x, y, z));
+            }
+        }
+    }
+    Ok(chunks)
 }
 
 fn startup_safety_chunks(
@@ -5707,7 +5879,7 @@ mod tests {
     use super::{
         CollisionSemantics, HostVoxel, InterestClass, MAIN_WORLD_APPLY_JOB_CAP, MeshPresentation,
         OccupiedBox, OccupiedCell, apply_waiting_derived, compound_collider, merge_occupied_boxes,
-        stream_derived_priority,
+        player_occupied_chunks, stream_derived_priority,
     };
     use bevy::prelude::Vec3;
     use latticeaxiom_storage::ChunkCoordinate;
@@ -5746,6 +5918,19 @@ mod tests {
         };
         let cloned = presentation.clone();
         assert!(Arc::ptr_eq(&presentation.geometry, &cloned.geometry));
+    }
+
+    #[test]
+    fn collider_safety_covers_every_chunk_overlapped_by_the_player_capsule() {
+        let occupied = player_occupied_chunks(Vec3::new(7.9, 8.0, 7.9), 8)
+            .expect("finite player pose maps to chunks");
+        assert_eq!(occupied.len(), 8);
+        assert!(occupied.contains(&ChunkCoordinate::new(0, 0, 0)));
+        assert!(occupied.contains(&ChunkCoordinate::new(1, 1, 1)));
+
+        let centered = player_occupied_chunks(Vec3::new(4.0, 4.0, 4.0), 8)
+            .expect("finite centered pose maps to one chunk");
+        assert_eq!(centered, BTreeSet::from([ChunkCoordinate::new(0, 0, 0)]));
     }
 
     fn cell(x: u16, y: u16, z: u16) -> OccupiedCell {
