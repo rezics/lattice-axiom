@@ -27,10 +27,11 @@ use latticeaxiom_storage::ChunkCoordinate;
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkFaceV1,
     D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyOccupancyCandidateV1,
-    MAX_BOUNDED_REGION_CHUNKS, NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, SpawnLocationV1,
-    SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1,
-    WorldgenError, WorldgenLimitsV1, required_spawn_chunks, select_safe_spawn_prefer_style,
+    HydrologyOccupancyConfigV1, MAX_BOUNDED_REGION_CHUNKS, NaturalLayerConfigV1,
+    NaturalLayerInputV1, PlanActivationIdV1, ProviderGenerationIdentityV1, ProviderOfferV1,
+    ProviderSlotV1, SpawnLocationV1, SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainStyleV1,
+    WorldSeedV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, required_spawn_chunks,
+    select_safe_spawn_prefer_style,
 };
 
 use super::{
@@ -69,7 +70,7 @@ pub(super) fn compile_plan(
         natural_offers,
     ))
     .with_cave_topology_layer(catalog.cave_topology_layer(&config)?)
-    .with_hydrology_occupancy(catalog.hydrology_occupancy()?);
+    .with_hydrology_occupancy(catalog.hydrology_occupancy(hydrology_occupancy_config())?);
     Ok(GenerationPlanV1::compile(input)?)
 }
 
@@ -96,13 +97,27 @@ pub(super) fn spine_config() -> WorldgenConfigV1 {
         world_floor_y: -64,
         world_ceiling_y: 319,
         // The official 26.2 Overworld uses sea level 63 inside a -64..=319
-        // column. This waterless reference profile keeps its nominal land
-        // above that datum while reserving the upper column for rare peaks.
+        // column. Nominal land stays above that datum while low terrain is
+        // filled independently by the hydrology occupancy layer.
         temperate_base_height: 80,
         temperate_relief: 112,
         arid_base_height: 88,
         arid_relief: 128,
         ..WorldgenConfigV1::default()
+    }
+}
+
+/// Returns the bounded production hydrology profile.
+#[must_use]
+pub(super) fn hydrology_occupancy_config() -> HydrologyOccupancyConfigV1 {
+    HydrologyOccupancyConfigV1 {
+        sea_level_y: Some(63),
+        // A 32-cubic chunk can be entirely below sea level. The candidate is
+        // still generated and consumed on a background worker, and concurrent
+        // worldgen admission independently bounds aggregate memory.
+        max_cells_per_chunk: 32 * 32 * 32,
+        max_in_flight_bytes: 8 * 1_024 * 1_024,
+        ..HydrologyOccupancyConfigV1::default()
     }
 }
 
@@ -288,11 +303,8 @@ const fn provider_revision(slot: ProviderSlotV1) -> u32 {
         | ProviderSlotV1::StyleSelector
         | ProviderSlotV1::TemperateTerrain
         | ProviderSlotV1::AridTerrain => 9,
-        ProviderSlotV1::Geology
-        | ProviderSlotV1::Hydrology
-        | ProviderSlotV1::Resources
-        | ProviderSlotV1::Vegetation => 2,
-        ProviderSlotV1::BorealTerrain => 3,
+        ProviderSlotV1::Geology | ProviderSlotV1::Resources | ProviderSlotV1::Vegetation => 2,
+        ProviderSlotV1::Hydrology | ProviderSlotV1::BorealTerrain => 3,
         ProviderSlotV1::GenerationCoordinator => 7,
     }
 }
@@ -1177,9 +1189,9 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        compile_host_worldgen_inspect, generate_plan_chunks, natural_layer_config,
-        occupancy_candidate_is_current, provider_offers, required_cave_entrance, spawn_center,
-        spine_config, validated_spawn,
+        compile_host_worldgen_inspect, generate_plan_chunks, hydrology_occupancy_config,
+        natural_layer_config, occupancy_candidate_is_current, provider_offers,
+        required_cave_entrance, spawn_center, spine_config, validated_spawn,
     };
     use latticeaxiom_core::CanonicalHash;
     use latticeaxiom_runtime_contracts::{
@@ -1189,8 +1201,8 @@ mod tests {
     use latticeaxiom_worldgen::{
         AuthoredWorldgenBindingsV1, CellEpochStateV1, ChunkFaceV1, ChunkGenerationOutcomeV1,
         ChunkGenerationRequestV1, D4MaterialRoleV1, D7_NATURAL_BLOCK_COUNT, DimensionId,
-        ExistingSnapshotEvidenceV1, GenerationPlanInputV1, GenerationPlanV1,
-        HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
+        ExistingSnapshotEvidenceV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyFlowV1,
+        HydrologyFluidBindingsV1, HydrologyOccupancyInputV1, HydrologyOccupancyKindV1,
         NaturalLayerConfigV1, NaturalLayerInputV1, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1,
         PlanActivationIdV1, PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
         WorldgenConfigV1, WorldgenLimitsV1,
@@ -1240,6 +1252,70 @@ mod tests {
         assert!(config.river_incision_voxels > 0);
         assert!(config.pine_threshold_per_1024 > 0);
         assert!(config.moss_threshold_per_1024 > 0);
+    }
+
+    #[test]
+    fn production_hydrology_uses_minecraft_scale_sea_level_with_bounded_memory() {
+        let spine = spine_config();
+        let config = hydrology_occupancy_config();
+
+        config
+            .validate_for_world(&spine)
+            .expect("production sea level fits the world column");
+        assert_eq!(config.sea_level_y, Some(63));
+        assert_eq!(
+            config.max_cells_per_chunk,
+            u32::from(spine.chunk_edge_voxels).pow(3)
+        );
+        assert_eq!(config.max_in_flight_bytes, 8 * 1_024 * 1_024);
+    }
+
+    #[test]
+    fn production_lowlands_materialize_still_water_at_sea_level() {
+        let plan = occupancy_plan(0, false);
+        let (x, z, surface_y) = (-2_048_i64..=2_048)
+            .step_by(8)
+            .find_map(|z| {
+                (-2_048_i64..=2_048).step_by(8).find_map(|x| {
+                    let surface_y = plan.terrain_height(x, z);
+                    let in_channel = plan
+                        .river_sample(x, z)
+                        .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel);
+                    (surface_y < 63 && !in_channel).then_some((x, z, surface_y))
+                })
+            })
+            .expect("production terrain contains non-river lowlands below sea level");
+        assert_eq!(
+            plan.hydrology_occupancy_sample(x, i64::from(surface_y) + 1, z)
+                .expect("lowest surface-water sample")
+                .kind(),
+            HydrologyOccupancyKindV1::SurfaceWater
+        );
+        let sample = plan
+            .hydrology_occupancy_sample(x, 63, z)
+            .expect("production hydrology sample");
+        assert_eq!(sample.kind(), HydrologyOccupancyKindV1::SurfaceWater);
+        assert_eq!(sample.flow(), HydrologyFlowV1::Still);
+
+        let edge = i64::from(plan.config().chunk_edge_voxels);
+        let coordinate = ChunkCoordinate::new(
+            i32::try_from(x.div_euclid(edge)).expect("sample chunk X fits"),
+            63_i32.div_euclid(i32::from(plan.config().chunk_edge_voxels)),
+            i32::try_from(z.div_euclid(edge)).expect("sample chunk Z fits"),
+        );
+        let candidate = plan
+            .hydrology_occupancy_candidate(coordinate)
+            .expect("lowland occupancy candidate stays within production budgets");
+        let local = [
+            u16::try_from(x.rem_euclid(edge)).expect("local X fits"),
+            u16::try_from(63_i64.rem_euclid(edge)).expect("local Y fits"),
+            u16::try_from(z.rem_euclid(edge)).expect("local Z fits"),
+        ];
+        assert!(candidate.cells().iter().any(|cell| {
+            [cell.x(), cell.y(), cell.z()] == local
+                && cell.kind() == HydrologyOccupancyKindV1::SurfaceWater
+                && cell.flow() == HydrologyFlowV1::Still
+        }));
     }
 
     #[test]
@@ -1476,30 +1552,38 @@ mod tests {
         let mut present = BTreeSet::new();
         let mut styles = BTreeSet::new();
         let edge = i32::from(plan.config().planning_cell_edge_chunks);
-        for cell_z in -2_i32..=2 {
-            for cell_x in -2_i32..=2 {
+        let mut sampled_cells = (-2_i32..=2)
+            .flat_map(|cell_z| (-2_i32..=2).map(move |cell_x| (cell_x, cell_z)))
+            .collect::<BTreeSet<_>>();
+        for cell_z in -8_i32..=8 {
+            for cell_x in -8_i32..=8 {
                 let world_x = i64::from(cell_x)
                     * i64::from(plan.config().chunk_edge_voxels)
                     * i64::from(plan.config().planning_cell_edge_chunks);
                 let world_z = i64::from(cell_z)
                     * i64::from(plan.config().chunk_edge_voxels)
                     * i64::from(plan.config().planning_cell_edge_chunks);
-                styles.insert(plan.territory_query(world_x, world_z).winner());
-                let chunk_x = cell_x.saturating_mul(edge);
-                let chunk_z = cell_z.saturating_mul(edge);
-                for y in 0..=3 {
-                    let coordinate = ChunkCoordinate::new(chunk_x, y, chunk_z);
-                    let region = generate_plan_chunks(&plan, [coordinate]).expect("cell generates");
-                    let candidate = region.candidate(coordinate).expect("cell candidate");
-                    for block in candidate.draft().palette() {
-                        present.insert(block.as_str().to_owned());
-                    }
+                let style = plan.territory_query(world_x, world_z).winner();
+                if styles.insert(style) {
+                    sampled_cells.insert((cell_x, cell_z));
                 }
             }
         }
         assert!(styles.contains(&TerrainStyleV1::TemperateWoodland));
         assert!(styles.contains(&TerrainStyleV1::AridBadlands));
         assert!(styles.contains(&TerrainStyleV1::BorealWetland));
+        for (cell_x, cell_z) in sampled_cells {
+            let chunk_x = cell_x.saturating_mul(edge);
+            let chunk_z = cell_z.saturating_mul(edge);
+            for y in 0..=3 {
+                let coordinate = ChunkCoordinate::new(chunk_x, y, chunk_z);
+                let region = generate_plan_chunks(&plan, [coordinate]).expect("cell generates");
+                let candidate = region.candidate(coordinate).expect("cell candidate");
+                for block in candidate.draft().palette() {
+                    present.insert(block.as_str().to_owned());
+                }
+            }
+        }
         let golden = D7_BLOCK_IDS
             .lines()
             .filter(|line| !line.is_empty())
@@ -1560,15 +1644,14 @@ mod tests {
         );
         assert!(
             accounting.cells_occupied()
-                <= u64::from(HydrologyOccupancyConfigV1::default().max_cells_per_chunk)
+                <= u64::from(hydrology_occupancy_config().max_cells_per_chunk)
         );
         assert!(
-            accounting.queue_depth()
-                <= u64::from(HydrologyOccupancyConfigV1::default().max_queue_depth)
+            accounting.queue_depth() <= u64::from(hydrology_occupancy_config().max_queue_depth)
         );
         assert!(
             accounting.in_flight_bytes()
-                <= u64::from(HydrologyOccupancyConfigV1::default().max_in_flight_bytes)
+                <= u64::from(hydrology_occupancy_config().max_in_flight_bytes)
         );
     }
 
@@ -1674,7 +1757,7 @@ mod tests {
                 natural,
             ))
             .with_hydrology_occupancy(HydrologyOccupancyInputV1::new(
-                HydrologyOccupancyConfigV1::default(),
+                hydrology_occupancy_config(),
                 HydrologyFluidBindingsV1::new(
                     "fixture:fluid/water".parse().expect("fixture water"),
                     "fixture:fluid/lava".parse().expect("fixture lava"),

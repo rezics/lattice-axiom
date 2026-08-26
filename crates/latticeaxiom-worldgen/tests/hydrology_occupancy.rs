@@ -263,7 +263,7 @@ fn drainage_aquifer_and_lava_never_mix_in_one_cell() {
                             Some("fixture:fluid/water")
                         );
                     }
-                    HydrologyOccupancyKindV1::Aquifer => {
+                    HydrologyOccupancyKindV1::SurfaceWater | HydrologyOccupancyKindV1::Aquifer => {
                         saw_water = true;
                         assert_eq!(
                             sample.fluid().map(StableId::as_str),
@@ -290,6 +290,69 @@ fn drainage_aquifer_and_lava_never_mix_in_one_cell() {
         saw_water && saw_lava,
         "fixture seed must place both water and lava"
     );
+}
+
+#[test]
+fn sea_level_fills_only_open_surface_columns_with_still_water() {
+    let config = HydrologyOccupancyConfigV1 {
+        sea_level_y: Some(30),
+        max_cells_per_chunk: 32_768,
+        max_in_flight_bytes: 8 * 1_024 * 1_024,
+        ..HydrologyOccupancyConfigV1::default()
+    };
+    let plan = occupancy_plan_with_config(42, false, config);
+    let (x, z, surface_y) = (-128_i64..=128)
+        .flat_map(|z| (-128_i64..=128).map(move |x| (x, z)))
+        .find_map(|(x, z)| {
+            let surface_y = plan.terrain_height(x, z);
+            let in_channel = plan
+                .river_sample(x, z)
+                .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel);
+            (surface_y < 30 && !in_channel).then_some((x, z, surface_y))
+        })
+        .expect("fixture contains non-river terrain below sea level");
+
+    for y in i64::from(surface_y).saturating_add(1)..=30 {
+        let sample = plan
+            .hydrology_occupancy_sample(x, y, z)
+            .expect("hydrology sample");
+        assert_eq!(sample.kind(), HydrologyOccupancyKindV1::SurfaceWater);
+        assert_eq!(sample.flow(), latticeaxiom_worldgen::HydrologyFlowV1::Still);
+        assert_eq!(
+            sample.fluid().map(StableId::as_str),
+            Some("fixture:fluid/water")
+        );
+    }
+    assert_ne!(
+        plan.hydrology_occupancy_sample(x, i64::from(surface_y), z)
+            .expect("surface sample")
+            .kind(),
+        HydrologyOccupancyKindV1::SurfaceWater
+    );
+    assert_ne!(
+        plan.hydrology_occupancy_sample(x, 31, z)
+            .expect("above-sea sample")
+            .kind(),
+        HydrologyOccupancyKindV1::SurfaceWater
+    );
+}
+
+#[test]
+fn sea_level_must_stay_inside_the_world_column() {
+    let world = WorldgenConfigV1::default();
+    for sea_level_y in [world.world_floor_y - 1, world.world_ceiling_y + 1] {
+        let config = HydrologyOccupancyConfigV1 {
+            sea_level_y: Some(sea_level_y),
+            ..HydrologyOccupancyConfigV1::default()
+        };
+        assert!(matches!(
+            config.validate_for_world(&world),
+            Err(WorldgenError::InvalidHydrologyOccupancy {
+                field: "sea_level_y",
+                ..
+            })
+        ));
+    }
 }
 
 #[test]

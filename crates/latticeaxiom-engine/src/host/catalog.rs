@@ -454,8 +454,8 @@ impl HostWorldgenCatalog {
     /// Returns [`ProductionHostError`] when occupancy configuration is invalid.
     pub(super) fn hydrology_occupancy(
         &self,
+        config: HydrologyOccupancyConfigV1,
     ) -> Result<HydrologyOccupancyInputV1, ProductionHostError> {
-        let config = HydrologyOccupancyConfigV1::default();
         config.validate()?;
         Ok(HydrologyOccupancyInputV1::new(
             config,

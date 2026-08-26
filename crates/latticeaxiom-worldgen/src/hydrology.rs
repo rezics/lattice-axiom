@@ -1,9 +1,9 @@
 //! Package-owned V6 hydrology occupancy on the existing V4 coordinator.
 //!
-//! Underground drainage, aquifer tables, and initial water/lava occupancy are
-//! coordinate queries. The module emits versioned candidates; it never opens a
-//! writer, never runs D9 dynamic flow, and never edits cave topology. Snapshot
-//! bytes stay owned by the D4 materializer.
+//! Surface water, underground drainage, aquifer tables, and initial water/lava
+//! occupancy are coordinate queries. The module emits versioned candidates; it
+//! never opens a writer, never runs D9 dynamic flow, and never edits cave
+//! topology. Snapshot bytes stay owned by the D4 materializer.
 
 use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_bytes};
 use latticeaxiom_storage::{ChunkCoordinate, DimensionId};
@@ -27,6 +27,8 @@ const CANDIDATE_SCHEMA: &str = "latticeaxiom:hydrology-occupancy-candidate@1";
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HydrologyOccupancyConfigV1 {
+    /// Inclusive global surface-water level, or `None` for no ocean fill.
+    pub sea_level_y: Option<i32>,
     /// Coarse aquifer basin cell edge in voxels.
     pub aquifer_cell_edge_voxels: u16,
     /// Depth below the river-adjusted surface of the water table.
@@ -48,6 +50,7 @@ pub struct HydrologyOccupancyConfigV1 {
 impl Default for HydrologyOccupancyConfigV1 {
     fn default() -> Self {
         Self {
+            sea_level_y: None,
             aquifer_cell_edge_voxels: 32,
             aquifer_depth_voxels: 12,
             aquifer_threshold_per_1024: 640,
@@ -122,6 +125,30 @@ impl HydrologyOccupancyConfigV1 {
             67_108_864,
         )?;
         Ok(())
+    }
+
+    /// Validates surface-water bounds against one closed world column.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorldgenError::InvalidHydrologyOccupancy`] when an enabled
+    /// sea level is outside the inclusive world floor and ceiling.
+    pub fn validate_for_world(&self, world: &WorldgenConfigV1) -> WorldgenResult<()> {
+        self.validate()?;
+        match self.sea_level_y {
+            Some(sea_level_y)
+                if sea_level_y < world.world_floor_y || sea_level_y > world.world_ceiling_y =>
+            {
+                Err(WorldgenError::InvalidHydrologyOccupancy {
+                    field: "sea_level_y",
+                    reason: format!(
+                        "must stay inside world column {}..={}, got {sea_level_y}",
+                        world.world_floor_y, world.world_ceiling_y
+                    ),
+                })
+            }
+            Some(_) | None => Ok(()),
+        }
     }
 
     /// Returns canonical compact JSON with defaults materialized.
@@ -298,6 +325,8 @@ pub enum HydrologyOccupancyKindV1 {
     Empty,
     /// Surface river channel above the incised bed.
     SurfaceChannel,
+    /// Standing ocean water above terrain and at or below sea level.
+    SurfaceWater,
     /// Underground drainage shaft beneath a river column.
     Drainage,
     /// Aquifer fill of a final cave void.
@@ -313,6 +342,7 @@ impl HydrologyOccupancyKindV1 {
         match self {
             Self::Empty => "empty",
             Self::SurfaceChannel => "surface-channel",
+            Self::SurfaceWater => "surface-water",
             Self::Drainage => "drainage",
             Self::Aquifer => "aquifer",
             Self::LavaPool => "lava-pool",
@@ -608,6 +638,7 @@ pub(crate) struct HydrologySamplerV1 {
     hydrology: ProviderGenerationIdentityV1,
     world_floor_y: i32,
     world_ceiling_y: i32,
+    sea_level_y: Option<i32>,
     river_incision_voxels: u16,
 }
 
@@ -634,7 +665,7 @@ impl HydrologySamplerV1 {
         natural: &NaturalSamplerV1,
         layer: HydrologyOccupancyInputV1,
     ) -> WorldgenResult<Self> {
-        layer.config.validate()?;
+        layer.config.validate_for_world(spine)?;
         let occupancy_hash = HydrologyOccupancyHashV1::from_hash(domain_hash(
             OCCUPANCY_DOMAIN,
             &[
@@ -663,6 +694,7 @@ impl HydrologySamplerV1 {
             hydrology: natural.hydrology_identity().clone(),
             world_floor_y: spine.world_floor_y,
             world_ceiling_y: spine.world_ceiling_y,
+            sea_level_y: layer.config.sea_level_y,
             river_incision_voxels: natural.config().river_incision_voxels,
         })
     }
@@ -783,11 +815,10 @@ impl HydrologySamplerV1 {
         }
         let kind = occupancy_kind(
             y,
-            column.surface_y,
+            self.sea_level_y,
             self.river_incision_voxels,
             cave_allows_fluid,
-            column.drainage.is_connected(),
-            column.aquifer,
+            column,
             self.lava_occupies(x, y, z, column.style, column.aquifer.lava_table_y),
         );
         match kind {
@@ -799,6 +830,7 @@ impl HydrologySamplerV1 {
                 flow: self.initial_flow(x, y, z, cave_allows_fluid, column, kind),
             },
             HydrologyOccupancyKindV1::SurfaceChannel
+            | HydrologyOccupancyKindV1::SurfaceWater
             | HydrologyOccupancyKindV1::Drainage
             | HydrologyOccupancyKindV1::Aquifer => HydrologyOccupancySampleV1 {
                 kind,
@@ -818,17 +850,22 @@ impl HydrologySamplerV1 {
         column: HydrologyColumnV1,
         kind: HydrologyOccupancyKindV1,
     ) -> HydrologyFlowV1 {
+        if matches!(
+            kind,
+            HydrologyOccupancyKindV1::SurfaceChannel | HydrologyOccupancyKindV1::SurfaceWater
+        ) {
+            return HydrologyFlowV1::Still;
+        }
         let below = y.saturating_sub(1);
         if below < i64::from(self.world_floor_y) {
             return HydrologyFlowV1::Still;
         }
         let below_kind = occupancy_kind(
             below,
-            column.surface_y,
+            self.sea_level_y,
             self.river_incision_voxels,
             cave_allows_fluid,
-            column.drainage.is_connected(),
-            column.aquifer,
+            column,
             self.lava_occupies(x, below, z, column.style, column.aquifer.lava_table_y),
         );
         if fluid_family(kind) == fluid_family(below_kind)
@@ -1076,26 +1113,28 @@ pub(crate) fn hydrology_face_hash(
 
 fn occupancy_kind(
     y: i64,
-    surface_y: i32,
+    sea_level_y: Option<i32>,
     incision: u16,
     cave_allows_fluid: bool,
-    drains: bool,
-    aquifer: AquiferSampleV1,
+    column: HydrologyColumnV1,
     lava: bool,
 ) -> HydrologyOccupancyKindV1 {
-    let surface = i64::from(surface_y);
+    let surface = i64::from(column.surface_y);
     let channel_top = surface.saturating_add(i64::from(incision));
-    if lava && cave_allows_fluid && y <= i64::from(aquifer.lava_table_y) {
+    if lava && cave_allows_fluid && y <= i64::from(column.aquifer.lava_table_y) {
         return HydrologyOccupancyKindV1::LavaPool;
     }
-    if y > surface && y <= channel_top && drains {
+    if y > surface && y <= channel_top && column.drainage.is_connected() {
         return HydrologyOccupancyKindV1::SurfaceChannel;
     }
-    if cave_allows_fluid && y <= surface && y > i64::from(aquifer.lava_table_y) {
-        if drains {
+    if sea_level_y.is_some_and(|sea_level_y| y > surface && y <= i64::from(sea_level_y)) {
+        return HydrologyOccupancyKindV1::SurfaceWater;
+    }
+    if cave_allows_fluid && y <= surface && y > i64::from(column.aquifer.lava_table_y) {
+        if column.drainage.is_connected() {
             return HydrologyOccupancyKindV1::Drainage;
         }
-        if aquifer.present && y <= i64::from(aquifer.water_table_y) {
+        if column.aquifer.present && y <= i64::from(column.aquifer.water_table_y) {
             return HydrologyOccupancyKindV1::Aquifer;
         }
     }
@@ -1106,6 +1145,7 @@ fn fluid_family(kind: HydrologyOccupancyKindV1) -> u8 {
     match kind {
         HydrologyOccupancyKindV1::Empty => 0,
         HydrologyOccupancyKindV1::SurfaceChannel
+        | HydrologyOccupancyKindV1::SurfaceWater
         | HydrologyOccupancyKindV1::Drainage
         | HydrologyOccupancyKindV1::Aquifer => 1,
         HydrologyOccupancyKindV1::LavaPool => 2,

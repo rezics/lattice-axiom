@@ -22,8 +22,9 @@
 //! planning on the same coordinator. The optional V6 cave-topology layer adds
 //! domain-owned corridors, a bounded branch contributor, and passability
 //! receipts without replacing D4 occupancy. The optional V6 hydrology occupancy
-//! layer adds underground drainage, aquifer tables, and initial water/lava
-//! occupancy candidates without changing snapshot schema.
+//! layer adds sea-level surface water, underground drainage, aquifer tables,
+//! and initial water/lava occupancy candidates without changing snapshot
+//! schema.
 
 mod cave;
 mod cave_topology;

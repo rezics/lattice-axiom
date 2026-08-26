@@ -62,8 +62,8 @@ use latticeaxiom_world_db::{
 };
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveOccupancyArbitrationV1,
-    GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, MAX_BOUNDED_REGION_CHUNKS,
-    SpawnLocationV1,
+    GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
+    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1,
 };
 
 use super::{
@@ -4918,13 +4918,14 @@ fn apply_hydrology_occupancy(
         // Initial occupancy is standing source water. Directional flow is a
         // drainage hint for the bounded runtime planner, not a D9 snapshot.
         if occupied.flow() != HydrologyFlowV1::Still
-            || hydrology_occupancy_forbidden(
-                materialization,
-                entrance.as_ref(),
-                world_x,
-                world_y,
-                world_z,
-            )
+            || (!hydrology_occupancy_is_surface(occupied.kind())
+                && hydrology_occupancy_forbidden(
+                    materialization,
+                    entrance.as_ref(),
+                    world_x,
+                    world_y,
+                    world_z,
+                ))
         {
             continue;
         }
@@ -4967,6 +4968,13 @@ fn apply_hydrology_occupancy(
         }
     }
     Ok(())
+}
+
+const fn hydrology_occupancy_is_surface(kind: HydrologyOccupancyKindV1) -> bool {
+    matches!(
+        kind,
+        HydrologyOccupancyKindV1::SurfaceChannel | HydrologyOccupancyKindV1::SurfaceWater
+    )
 }
 
 fn hydrology_occupancy_forbidden(
