@@ -1608,8 +1608,10 @@ impl ProductionSpine {
             },
         )?;
         drop(inner);
-        spawn_worldgen_jobs(self)?;
-        drain_derived(self, tick)
+        // Presentation work for a newly published chunk is latency-sensitive.
+        // Admit it first, then let worldgen consume the shared slots that remain.
+        drain_derived(self, tick)?;
+        spawn_worldgen_jobs(self)
     }
 
     fn ensure_collider_safety_inner(
@@ -3714,7 +3716,14 @@ fn compute_worldgen(input: &WorldgenInput) -> ComputedWorldgen {
 fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
     let inputs = {
         let mut inner = spine.lock_inner()?;
-        inner.pending_worldgen.drain(..).collect::<Vec<_>>()
+        let admission = inner.runtime.admission_snapshot();
+        let capacity = shared_cpu_slots_remaining(
+            admission.cpu_heavy_concurrency(),
+            admission.in_flight_jobs(),
+            inner.in_flight_worldgen_tasks.len(),
+        );
+        let count = capacity.min(inner.pending_worldgen.len());
+        inner.pending_worldgen.drain(..count).collect::<Vec<_>>()
     };
     if inputs.is_empty() {
         return Ok(());
@@ -4269,11 +4278,13 @@ fn dispatch_derived_batch(
             DerivedKind::Collider => collider = true,
         }
     }
-    let capacity = inner
-        .runtime
-        .admission_snapshot()
-        .cpu_heavy_slots_remaining()
-        .min(DERIVED_DISPATCH_JOB_CAP);
+    let admission = inner.runtime.admission_snapshot();
+    let capacity = shared_cpu_slots_remaining(
+        admission.cpu_heavy_concurrency(),
+        admission.in_flight_jobs(),
+        inner.in_flight_worldgen_tasks.len(),
+    )
+    .min(DERIVED_DISPATCH_JOB_CAP);
     let mut inputs = Vec::with_capacity(capacity);
     while inputs.len() < capacity {
         let outcome = match (mesh, collider) {
@@ -4291,6 +4302,16 @@ fn dispatch_derived_batch(
         }
     }
     Ok(inputs)
+}
+
+const fn shared_cpu_slots_remaining(
+    concurrency: usize,
+    derived_in_flight: usize,
+    worldgen_in_flight: usize,
+) -> usize {
+    concurrency
+        .saturating_sub(derived_in_flight)
+        .saturating_sub(worldgen_in_flight)
 }
 
 fn spawn_derived_jobs(
@@ -5896,7 +5917,7 @@ mod tests {
     use super::{
         CollisionSemantics, HostVoxel, InterestClass, MAIN_WORLD_APPLY_JOB_CAP, MeshPresentation,
         OccupiedBox, OccupiedCell, apply_waiting_derived, compound_collider, merge_occupied_boxes,
-        player_occupied_chunks, stream_derived_priority,
+        player_occupied_chunks, shared_cpu_slots_remaining, stream_derived_priority,
     };
     use bevy::prelude::Vec3;
     use latticeaxiom_storage::ChunkCoordinate;
@@ -5922,6 +5943,13 @@ mod tests {
             stream_derived_priority(InterestClass::Core, 3)
                 < stream_derived_priority(InterestClass::Core, 4)
         );
+    }
+
+    #[test]
+    fn worldgen_and_derived_work_share_one_cpu_slot_budget() {
+        assert_eq!(shared_cpu_slots_remaining(6, 2, 3), 1);
+        assert_eq!(shared_cpu_slots_remaining(6, 6, 3), 0);
+        assert_eq!(shared_cpu_slots_remaining(6, 2, 8), 0);
     }
 
     #[test]
