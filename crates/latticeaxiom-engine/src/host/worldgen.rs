@@ -283,16 +283,16 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
 
 const fn provider_revision(slot: ProviderSlotV1) -> u32 {
     match slot {
-        ProviderSlotV1::CaveTopology => 8,
+        ProviderSlotV1::CaveTopology
+        | ProviderSlotV1::TemperateTerrain
+        | ProviderSlotV1::AridTerrain => 8,
         ProviderSlotV1::Geology
         | ProviderSlotV1::Hydrology
         | ProviderSlotV1::Resources
-        | ProviderSlotV1::Vegetation
-        | ProviderSlotV1::BorealTerrain => 1,
+        | ProviderSlotV1::Vegetation => 1,
+        ProviderSlotV1::BorealTerrain => 2,
         ProviderSlotV1::GenerationCoordinator
         | ProviderSlotV1::StyleSelector
-        | ProviderSlotV1::TemperateTerrain
-        | ProviderSlotV1::AridTerrain
         | ProviderSlotV1::TerrainTransition
         | ProviderSlotV1::Materializer => 7,
     }

@@ -39,6 +39,7 @@ mod region;
 mod roles;
 mod seed;
 mod spawn;
+mod terrain_field;
 mod territory;
 
 pub use cave::{

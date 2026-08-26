@@ -762,16 +762,27 @@ fn style_materialization_uses_role_resolved_concrete_blocks() {
         ),
     ] {
         let coordinate = find_surface_chunk(&plan, style);
-        let outcome = plan
-            .generate(vacant_request(coordinate))
-            .expect("style surface chunk generates");
-        let candidate = prepared(&outcome);
-        let used = candidate
-            .draft()
-            .voxel_palette_indices()
-            .iter()
-            .map(|index| candidate.draft().palette()[usize::from(*index)].as_str())
-            .collect::<BTreeSet<_>>();
+        let mut used = BTreeSet::new();
+        for sample in [
+            coordinate,
+            ChunkCoordinate::new(coordinate.x, coordinate.y.saturating_sub(1), coordinate.z),
+        ] {
+            let outcome = plan
+                .generate(vacant_request(sample))
+                .expect("style surface and subsurface chunks generate");
+            let candidate = prepared(&outcome);
+            used.extend(
+                candidate
+                    .draft()
+                    .voxel_palette_indices()
+                    .iter()
+                    .map(|index| {
+                        candidate.draft().palette()[usize::from(*index)]
+                            .as_str()
+                            .to_owned()
+                    }),
+            );
+        }
         if style == TerrainStyleV1::TemperateWoodland {
             assert!(required.iter().all(|path| {
                 let id = format!("terrenia:block/{path}");
@@ -1058,7 +1069,7 @@ fn fixed_d4_snapshot_has_stable_golden_checksum() {
         .expect("golden chunk generates");
     assert_eq!(
         prepared(&outcome).checksum().to_string(),
-        "97398bec96be4535c180abb8304b0202cc0d356d96175b44f320d3fc2296bd15"
+        "d1f7d9cdb1cf6c320f03d49b65d5f372af9523d752a8baaaa5a65bf783299397"
     );
 }
 
@@ -1083,13 +1094,13 @@ fn both_style_surface_snapshots_have_independent_goldens() {
         vec![
             (
                 TerrainStyleV1::TemperateWoodland,
-                ChunkCoordinate::new(-247, 2, -252),
-                "2dabd982d58e397bfdbd2ab4a7e8ce7725762437802b119a580f40de4a89f34c".to_owned(),
+                ChunkCoordinate::new(-207, 2, -252),
+                "21c50392eb5a132047a77552950d8028a25d8e47f61dfdc430e8753e170b5c51".to_owned(),
             ),
             (
                 TerrainStyleV1::AridBadlands,
-                ChunkCoordinate::new(-255, 1, -252),
-                "147195163db0ce2ddce24996f1e8572ba5d8b8d87b7c63325304deefd8169d9c".to_owned(),
+                ChunkCoordinate::new(-223, 2, -251),
+                "6cad859055f35b3d8ed252ca8b133890dd6fe8e77344d14cf8a19975e8fc2c8c".to_owned(),
             ),
         ]
     );

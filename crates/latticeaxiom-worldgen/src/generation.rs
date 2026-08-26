@@ -652,8 +652,8 @@ impl GenerationPlanV1 {
             providers
                 .identity(ProviderSlotV1::TerrainTransition)
                 .clone(),
-            providers.identity(ProviderSlotV1::TemperateTerrain).clone(),
-            providers.identity(ProviderSlotV1::AridTerrain).clone(),
+            providers.identity(ProviderSlotV1::TemperateTerrain),
+            providers.identity(ProviderSlotV1::AridTerrain),
         );
         let mut cave = CaveSamplerV1::new(
             input.world_seed,

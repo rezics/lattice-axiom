@@ -2632,6 +2632,27 @@ fn enqueue_look_then_walk(
     forward: f32,
     walk_ticks: u64,
 ) -> u64 {
+    enqueue_look_then_walk_axes(
+        instance,
+        start_generation,
+        yaw,
+        pitch,
+        0.0,
+        forward,
+        walk_ticks,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn enqueue_look_then_walk_axes(
+    instance: &mut EngineInstance,
+    start_generation: u64,
+    yaw: f32,
+    pitch: f32,
+    strafe: f32,
+    forward: f32,
+    walk_ticks: u64,
+) -> u64 {
     let mut frames = vec![
         look_frame(start_generation, yaw, pitch),
         idle_frame(start_generation + 1),
@@ -2643,7 +2664,10 @@ fn enqueue_look_then_walk(
         }
         PlayerActionFrameV1 {
             generation: start_generation + 2 + offset,
-            movement: ActionAxis2V1 { x: 0.0, y: forward },
+            movement: ActionAxis2V1 {
+                x: strafe,
+                y: forward,
+            },
             started,
             ..PlayerActionFrameV1::default()
         }
@@ -2671,14 +2695,18 @@ fn sample_look_then_walk_until(
     const ACTION_BATCH: u32 = 32;
     let mut remaining = max_ticks;
     let mut look = Some((yaw, pitch));
+    let mut prior_position = spine.player_pose().translation;
+    let mut strafe = 0.0_f32;
+    let mut avoidance_sign = 1.0_f32;
     while remaining > 0 {
         let batch = remaining.min(ACTION_BATCH);
         let (batch_yaw, batch_pitch) = look.take().unwrap_or((0.0, 0.0));
-        generation = enqueue_look_then_walk(
+        generation = enqueue_look_then_walk_axes(
             instance,
             generation,
             batch_yaw,
             batch_pitch,
+            strafe,
             forward,
             u64::from(batch),
         );
@@ -2691,6 +2719,16 @@ fn sample_look_then_walk_until(
         if reached(player_chunk) {
             return generation;
         }
+        let position = spine.player_pose().translation;
+        let horizontal_progress =
+            (position.x - prior_position.x).hypot(position.z - prior_position.z);
+        if horizontal_progress < 0.5 {
+            strafe = avoidance_sign;
+            avoidance_sign = -avoidance_sign;
+        } else {
+            strafe = 0.0;
+        }
+        prior_position = position;
         remaining = remaining.saturating_sub(batch);
     }
     generation
@@ -4985,19 +5023,19 @@ fn idle_at_hole(
     generation: u64,
     ticks: u64,
 ) -> u64 {
-    let frames: Vec<_> = (0..ticks)
-        .map(|offset| idle_frame(generation + offset))
-        .collect();
-    instance
-        .enqueue_headless_actions(frames)
-        .expect("idle frames enqueue");
-    instance
-        .advance_fixed_ticks(u32::try_from(ticks).expect("idle ticks fit"))
-        .expect("idle ticks at the cave hole");
-    assert!(
-        !spine.occupies_unready_cave_void(),
-        "idle at the hole must not enter an unready cave void"
-    );
+    for offset in 0..ticks {
+        instance
+            .enqueue_headless_actions([idle_frame(generation + offset)])
+            .expect("idle frame enqueues");
+        instance
+            .advance_fixed_ticks(1)
+            .expect("idle tick at the cave hole advances");
+        assert!(
+            !spine.occupies_unready_cave_void(),
+            "idle at the hole must not enter an unready cave void"
+        );
+        std::thread::park_timeout(Duration::from_millis(1));
+    }
     generation + ticks
 }
 

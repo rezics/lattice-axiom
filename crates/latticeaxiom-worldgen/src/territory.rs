@@ -5,6 +5,7 @@ use crate::{
     GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, WorldSeedV1,
     WorldgenConfigV1,
     hashes::{domain_hash, hash_u64},
+    terrain_field::terrain_shape,
 };
 
 const TERRITORY_CELL_DOMAIN: &[u8] = b"latticeaxiom.territory-cell.v1\0";
@@ -172,34 +173,49 @@ pub(crate) struct TerritorySamplerV1 {
     config: WorldgenConfigV1,
     selector: ProviderGenerationIdentityV1,
     transition: ProviderGenerationIdentityV1,
-    temperate: ProviderGenerationIdentityV1,
-    arid: ProviderGenerationIdentityV1,
+    temperate_height_seed: u64,
+    arid_height_seed: u64,
+    boreal_height_seed: Option<u64>,
     boreal: Option<BorealTerrainParamsV1>,
 }
 
 impl TerritorySamplerV1 {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         seed: WorldSeedV1,
         input_hash: GenerationInputHashV1,
         config: WorldgenConfigV1,
         selector: ProviderGenerationIdentityV1,
         transition: ProviderGenerationIdentityV1,
-        temperate: ProviderGenerationIdentityV1,
-        arid: ProviderGenerationIdentityV1,
+        temperate: &ProviderGenerationIdentityV1,
+        arid: &ProviderGenerationIdentityV1,
     ) -> Self {
+        let temperate_height_seed = height_seed(
+            seed,
+            input_hash,
+            temperate,
+            TerrainStyleV1::TemperateWoodland,
+        );
+        let arid_height_seed = height_seed(seed, input_hash, arid, TerrainStyleV1::AridBadlands);
         Self {
             seed,
             input_hash,
             config,
             selector,
             transition,
-            temperate,
-            arid,
+            temperate_height_seed,
+            arid_height_seed,
+            boreal_height_seed: None,
             boreal: None,
         }
     }
 
     pub(crate) fn with_boreal(mut self, params: BorealTerrainParamsV1) -> Self {
+        self.boreal_height_seed = Some(height_seed(
+            self.seed,
+            self.input_hash,
+            &params.provider,
+            TerrainStyleV1::BorealWetland,
+        ));
         self.boreal = Some(params);
         self
     }
@@ -365,16 +381,16 @@ impl TerritorySamplerV1 {
     }
 
     fn raw_height(&self, style: TerrainStyleV1, x: i64, z: i64) -> i32 {
-        let (base, relief, provider) = match style {
+        let (base, relief, height_seed) = match style {
             TerrainStyleV1::TemperateWoodland => (
                 self.config.temperate_base_height,
                 self.config.temperate_relief,
-                &self.temperate,
+                self.temperate_height_seed,
             ),
             TerrainStyleV1::AridBadlands => (
                 self.config.arid_base_height,
                 self.config.arid_relief,
-                &self.arid,
+                self.arid_height_seed,
             ),
             TerrainStyleV1::BorealWetland => {
                 let boreal = self.boreal.as_ref();
@@ -383,53 +399,33 @@ impl TerritorySamplerV1 {
                         params.base_height
                     }),
                     boreal.map_or(self.config.temperate_relief, |params| params.relief),
-                    boreal.map_or(&self.temperate, |params| &params.provider),
+                    self.boreal_height_seed
+                        .unwrap_or(self.temperate_height_seed),
                 )
             }
         };
-        let scale = i64::from(self.config.height_noise_scale_voxels);
-        let grid_x = x.div_euclid(scale);
-        let grid_z = z.div_euclid(scale);
-        let local_x = x.rem_euclid(scale);
-        let local_z = z.rem_euclid(scale);
-        let n00 = self.height_corner(provider, style, grid_x, grid_z);
-        let n10 = self.height_corner(provider, style, grid_x.saturating_add(1), grid_z);
-        let n01 = self.height_corner(provider, style, grid_x, grid_z.saturating_add(1));
-        let n11 = self.height_corner(
-            provider,
-            style,
-            grid_x.saturating_add(1),
-            grid_z.saturating_add(1),
-        );
-        let nx0 = lerp_fixed(n00, n10, local_x, scale);
-        let nx1 = lerp_fixed(n01, n11, local_x, scale);
-        let noise = lerp_fixed(nx0, nx1, local_z, scale);
-        let displacement = noise.saturating_mul(i64::from(relief)).div_euclid(1_024);
+        let shape = terrain_shape(height_seed, x, z, self.config.height_noise_scale_voxels);
+        let displacement = shape.saturating_mul(i64::from(relief)).div_euclid(1_024);
         i32::try_from(i64::from(base).saturating_add(displacement)).unwrap_or(base)
     }
+}
 
-    fn height_corner(
-        &self,
-        provider: &ProviderGenerationIdentityV1,
-        style: TerrainStyleV1,
-        grid_x: i64,
-        grid_z: i64,
-    ) -> i64 {
-        let style_byte = [style.discriminant()];
-        let roll = hash_u64(
-            HEIGHT_DOMAIN,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                provider.provider_stable_id().as_str().as_bytes(),
-                provider.implementation_fingerprint().as_bytes(),
-                &style_byte,
-                &grid_x.to_be_bytes(),
-                &grid_z.to_be_bytes(),
-            ],
-        );
-        i64::try_from(roll % 2_049).unwrap_or_default() - 1_024
-    }
+fn height_seed(
+    seed: WorldSeedV1,
+    input_hash: GenerationInputHashV1,
+    provider: &ProviderGenerationIdentityV1,
+    style: TerrainStyleV1,
+) -> u64 {
+    hash_u64(
+        HEIGHT_DOMAIN,
+        &[
+            seed.as_bytes(),
+            input_hash.as_bytes(),
+            provider.provider_stable_id().as_str().as_bytes(),
+            provider.implementation_fingerprint().as_bytes(),
+            &[style.discriminant()],
+        ],
+    )
 }
 
 fn nearest_boundary(local_x: i64, local_z: i64, edge: i64) -> (BoundarySide, i64) {
@@ -468,10 +464,4 @@ const fn side_discriminant(side: BoundarySide) -> u8 {
         BoundarySide::North => 2,
         BoundarySide::South => 3,
     }
-}
-
-fn lerp_fixed(left: i64, right: i64, numerator: i64, denominator: i64) -> i64 {
-    left.saturating_mul(denominator.saturating_sub(numerator))
-        .saturating_add(right.saturating_mul(numerator))
-        .div_euclid(denominator.max(1))
 }
