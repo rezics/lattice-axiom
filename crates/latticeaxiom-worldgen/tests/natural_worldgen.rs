@@ -110,6 +110,30 @@ fn river_plan_is_continuous_across_style_boundaries() {
 }
 
 #[test]
+fn river_distance_is_lipschitz_across_coarse_cell_boundaries() {
+    let plan = natural_plan(42, false);
+    for z in -96..96 {
+        for x in -96..96 {
+            let here = plan.river_sample(x, z).expect("natural river sample");
+            let east = plan
+                .river_sample(x.saturating_add(1), z)
+                .expect("east river sample");
+            let south = plan
+                .river_sample(x, z.saturating_add(1))
+                .expect("south river sample");
+            assert!(
+                here.distance_voxels().abs_diff(east.distance_voxels()) <= 1,
+                "river distance must be one-voxel Lipschitz on X at ({x},{z})"
+            );
+            assert!(
+                here.distance_voxels().abs_diff(south.distance_voxels()) <= 1,
+                "river distance must be one-voxel Lipschitz on Z at ({x},{z})"
+            );
+        }
+    }
+}
+
+#[test]
 fn exclusion_radius_rejects_closer_tree_anchors() {
     let plan = natural_plan(42, false);
     let radius = 5_i64;

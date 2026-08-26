@@ -318,6 +318,7 @@ pub(crate) struct NaturalSamplerV1 {
     geology: ProviderGenerationIdentityV1,
     resources: ProviderGenerationIdentityV1,
     vegetation: ProviderGenerationIdentityV1,
+    river_warp_seeds: [u64; 2],
     boreal: BorealTerrainParamsV1,
     receipts: Vec<RoleBindingReceiptV1>,
 }
@@ -353,6 +354,26 @@ impl NaturalSamplerV1 {
         let resources = required_natural(&resolved, ProviderSlotV1::Resources)?.clone();
         let vegetation = required_natural(&resolved, ProviderSlotV1::Vegetation)?.clone();
         let boreal_provider = required_natural(&resolved, ProviderSlotV1::BorealTerrain)?.clone();
+        let river_warp_seeds = [
+            hash_u64(
+                BASIN_DOMAIN,
+                &[
+                    seed.as_bytes(),
+                    input_hash.as_bytes(),
+                    hydrology.implementation_fingerprint().as_bytes(),
+                    b"river-warp-z",
+                ],
+            ),
+            hash_u64(
+                BASIN_DOMAIN,
+                &[
+                    seed.as_bytes(),
+                    input_hash.as_bytes(),
+                    hydrology.implementation_fingerprint().as_bytes(),
+                    b"river-warp-x",
+                ],
+            ),
+        ];
         let receipts = resolve_natural_roles(&layer.vocabulary, bindings, catalog, d4_targets)?;
         let receipt_bytes =
             canonical_json_bytes(&receipts).map_err(|error| WorldgenError::CanonicalEncoding {
@@ -385,6 +406,7 @@ impl NaturalSamplerV1 {
             geology,
             resources,
             vegetation,
+            river_warp_seeds,
             boreal: BorealTerrainParamsV1 {
                 provider: boreal_provider,
                 base_height: layer.config.boreal_base_height,
@@ -428,12 +450,8 @@ impl NaturalSamplerV1 {
                 &cell.1.to_be_bytes(),
             ],
         ));
-        let warp_z = i64::try_from(self.basin_rank(0, cell.1) % u64::try_from(edge).unwrap_or(1))
-            .unwrap_or_default()
-            .saturating_sub(edge.saturating_div(2));
-        let warp_x = i64::try_from(self.basin_rank(cell.0, 0) % u64::try_from(edge).unwrap_or(1))
-            .unwrap_or_default()
-            .saturating_sub(edge.saturating_div(2));
+        let warp_z = interpolated_river_warp(self.river_warp_seeds[0], z, edge);
+        let warp_x = interpolated_river_warp(self.river_warp_seeds[1], x, edge);
         let east_west = (x.saturating_add(warp_z)).rem_euclid(edge);
         let north_south = (z.saturating_add(warp_x)).rem_euclid(edge);
         let dist_ew = east_west.min(edge.saturating_sub(east_west));
@@ -938,6 +956,34 @@ fn upper_rock_role(style: TerrainStyleV1, roll: u64) -> D4MaterialRoleV1 {
 
 fn coarse_cell(x: i64, z: i64, edge: i64) -> (i64, i64) {
     (x.div_euclid(edge), z.div_euclid(edge))
+}
+
+fn interpolated_river_warp(seed: u64, coordinate: i64, edge: i64) -> i64 {
+    let cell = coordinate.div_euclid(edge);
+    let local = coordinate.rem_euclid(edge);
+    let start = river_warp_anchor(seed, cell, edge);
+    let end = river_warp_anchor(seed, cell.saturating_add(1), edge);
+    start
+        .saturating_mul(edge.saturating_sub(local))
+        .saturating_add(end.saturating_mul(local))
+        .div_euclid(edge)
+}
+
+fn river_warp_anchor(seed: u64, cell: i64, edge: i64) -> i64 {
+    let coordinate_bits = u64::from_be_bytes(cell.to_be_bytes());
+    let rank = mix_coordinate(seed, coordinate_bits);
+    i64::try_from(rank % u64::try_from(edge).unwrap_or(1))
+        .unwrap_or_default()
+        .saturating_sub(edge.saturating_div(2))
+}
+
+fn mix_coordinate(seed: u64, coordinate: u64) -> u64 {
+    // The SplitMix64 finalizer is deterministic, allocation-free, and adequate
+    // for keyed procedural variation after the plan has derived the seed.
+    let mut mixed = seed.wrapping_add(coordinate.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^ (mixed >> 31)
 }
 
 fn bounded_u16(field: &'static str, value: u16, minimum: u16, maximum: u16) -> WorldgenResult<()> {
