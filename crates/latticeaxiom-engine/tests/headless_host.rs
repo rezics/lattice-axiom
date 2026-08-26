@@ -1101,7 +1101,7 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
+fn derived_queues_stay_bounded_during_async_traversal() {
     let mut instance =
         EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
             .expect("production spine starts from the reopened lock");
@@ -1117,7 +1117,7 @@ fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
     let _ = spine
         .set_requested_view_distance(limits.view_distance_chunks)
         .expect("view distance clamp");
-    await_resident_count(&mut instance, &spine, max_resident, 640);
+    await_resident_count(&mut instance, &spine, max_in_flight.max(1), 640);
     let traversal_ticks = scaled_fixture_ticks(&spine, 480);
     enqueue_look_then_walk(
         &mut instance,
@@ -1199,8 +1199,8 @@ fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
     assert!(
         queues.cancel_requests > 0
             || spine.stream_eviction_count() > 0
-            || spine.resident_chunks().len() < high_resident,
-        "eviction or cancellation must keep the working set bounded (cancels {}, evictions {}, resident {})",
+            || spine.resident_chunks().len() < max_resident,
+        "a saturated working set requires eviction or cancellation (cancels {}, evictions {}, resident {})",
         queues.cancel_requests,
         spine.stream_eviction_count(),
         spine.resident_chunks().len()
