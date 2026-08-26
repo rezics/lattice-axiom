@@ -1016,6 +1016,29 @@ impl GenerationPlanV1 {
         let origin = chunk_origin(coordinate, self.config.chunk_edge_voxels)?;
         let mut accounting = hydrology.start_accounting();
         let mut cells = Vec::new();
+        let mut columns = Vec::with_capacity(edge.saturating_mul(edge));
+        for local_z in 0..edge {
+            for local_x in 0..edge {
+                let world_x = origin
+                    .0
+                    .saturating_add(i64::try_from(local_x).unwrap_or_default());
+                let world_z = origin
+                    .2
+                    .saturating_add(i64::try_from(local_z).unwrap_or_default());
+                let height = self.terrain_height(world_x, world_z);
+                let territory = self.territory.sample(world_x, world_z);
+                let style = self
+                    .territory
+                    .choose_material_style(world_x, world_z, territory);
+                columns.push(hydrology.column(
+                    world_x,
+                    world_z,
+                    height,
+                    self.river_sample(world_x, world_z),
+                    style,
+                ));
+            }
+        }
         for local_y in 0..edge {
             for local_z in 0..edge {
                 for local_x in 0..edge {
@@ -1029,10 +1052,22 @@ impl GenerationPlanV1 {
                     let world_z = origin
                         .2
                         .saturating_add(i64::try_from(local_z).unwrap_or_default());
-                    let Some(sample) = self.hydrology_occupancy_sample(world_x, world_y, world_z)
-                    else {
-                        continue;
-                    };
+                    let column_index = local_z.saturating_mul(edge).saturating_add(local_x);
+                    let column = columns.get(column_index).copied().ok_or(
+                        WorldgenError::ArithmeticOverflow {
+                            operation: "hydrology occupancy column lookup",
+                        },
+                    )?;
+                    let occupancy =
+                        self.cave
+                            .occupancy(world_x, world_y, world_z, column.surface_y());
+                    let sample = hydrology.occupy_column(
+                        world_x,
+                        world_y,
+                        world_z,
+                        occupancy.allows_fluid_occupancy(),
+                        column,
+                    );
                     let Some(cell) = HydrologySamplerV1::occupancy_cell(
                         u16::try_from(local_x).unwrap_or_default(),
                         u16::try_from(local_y).unwrap_or_default(),

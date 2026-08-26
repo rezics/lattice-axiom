@@ -13,6 +13,7 @@ use latticeaxiom_worldgen::{
     AdjacentEpochSnapshotV1, AuthoredWorldgenBindingsV1, CellEpochStateV1, ChunkCoordinate,
     ChunkGenerationRequestV1, D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1,
     DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
+    HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
     NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
     ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, WorldSeedV1, WorldgenConfigV1,
     WorldgenLimitsV1,
@@ -95,6 +96,17 @@ fn generation_benchmarks(c: &mut Criterion) {
                 .expect("32-cubic natural benchmark chunk must remain valid")
         });
     });
+    let hydrology_32 = hydrology_fixture_plan_with_edge(32);
+    c.bench_function(
+        "v6_hydrology_chunk_32_cubic_occupancy_candidate",
+        |bencher| {
+            bencher.iter(|| {
+                hydrology_32
+                    .hydrology_occupancy_candidate(black_box(ChunkCoordinate::new(-3, 1, 5)))
+                    .expect("32-cubic hydrology benchmark chunk must remain valid")
+            });
+        },
+    );
     c.bench_function("d4_density_4096_samples", |bencher| {
         bencher.iter(|| {
             let mut accumulator = 0_i64;
@@ -194,6 +206,17 @@ fn natural_fixture_plan() -> GenerationPlanV1 {
 }
 
 fn natural_fixture_plan_with_edge(chunk_edge_voxels: u16) -> GenerationPlanV1 {
+    natural_fixture_plan_with_options(chunk_edge_voxels, false)
+}
+
+fn hydrology_fixture_plan_with_edge(chunk_edge_voxels: u16) -> GenerationPlanV1 {
+    natural_fixture_plan_with_options(chunk_edge_voxels, true)
+}
+
+fn natural_fixture_plan_with_options(
+    chunk_edge_voxels: u16,
+    include_hydrology_occupancy: bool,
+) -> GenerationPlanV1 {
     let bindings = AuthoredWorldgenBindingsV1::from_json(
         include_str!("../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json")
             .as_bytes(),
@@ -221,30 +244,46 @@ fn natural_fixture_plan_with_edge(chunk_edge_voxels: u16) -> GenerationPlanV1 {
         chunk_edge_voxels,
         ..WorldgenConfigV1::default()
     };
-    GenerationPlanV1::compile(
-        GenerationPlanInputV1::new(
-            "terrenia:dimension/terrenia"
-                .parse()
-                .expect("benchmark dimension is valid"),
-            WorldSeedV1::from_integer(42),
-            config,
-            7,
-            PlanActivationIdV1::from_hash(CanonicalHash::digest(b"benchmark-activation")),
-            provider_offers(),
-            bindings.d4_vocabulary().expect("D4 vocabulary"),
-            bindings.role_bindings().expect("role bindings"),
-            bindings.catalog_closure().expect("catalog"),
-            CanonicalHash::digest(b"benchmark-semantic-image"),
-            vec![CanonicalHash::digest(b"benchmark-lock")],
-            WorldgenLimitsV1::default(),
-        )
-        .with_natural_layer(NaturalLayerInputV1::new(
-            NaturalLayerConfigV1::default(),
-            bindings.natural_vocabulary().expect("natural vocabulary"),
-            natural_offers,
-        )),
+    let mut input = GenerationPlanInputV1::new(
+        "terrenia:dimension/terrenia"
+            .parse()
+            .expect("benchmark dimension is valid"),
+        WorldSeedV1::from_integer(42),
+        config,
+        7,
+        PlanActivationIdV1::from_hash(CanonicalHash::digest(b"benchmark-activation")),
+        provider_offers(),
+        bindings.d4_vocabulary().expect("D4 vocabulary"),
+        bindings.role_bindings().expect("role bindings"),
+        bindings.catalog_closure().expect("catalog"),
+        CanonicalHash::digest(b"benchmark-semantic-image"),
+        vec![CanonicalHash::digest(b"benchmark-lock")],
+        WorldgenLimitsV1::default(),
     )
-    .expect("natural benchmark plan is valid")
+    .with_natural_layer(NaturalLayerInputV1::new(
+        NaturalLayerConfigV1::default(),
+        bindings.natural_vocabulary().expect("natural vocabulary"),
+        natural_offers,
+    ));
+    if include_hydrology_occupancy {
+        input = input.with_hydrology_occupancy(HydrologyOccupancyInputV1::new(
+            HydrologyOccupancyConfigV1::default(),
+            HydrologyFluidBindingsV1::new(
+                stable_id("terrenia:fluid/water"),
+                stable_id("terrenia:fluid/lava"),
+                bindings
+                    .predicate("place-water")
+                    .expect("place-water predicate")
+                    .clone(),
+                bindings
+                    .predicate("place-lava")
+                    .expect("place-lava predicate")
+                    .clone(),
+            )
+            .expect("benchmark hydrology fluids are valid"),
+        ));
+    }
+    GenerationPlanV1::compile(input).expect("natural benchmark plan is valid")
 }
 
 fn stable_id(value: &str) -> StableId {

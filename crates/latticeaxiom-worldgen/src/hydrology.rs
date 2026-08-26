@@ -611,6 +611,21 @@ pub(crate) struct HydrologySamplerV1 {
     river_incision_voxels: u16,
 }
 
+/// Hydrology facts that are invariant along one world `(x, z)` column.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HydrologyColumnV1 {
+    surface_y: i32,
+    style: TerrainStyleV1,
+    aquifer: AquiferSampleV1,
+    drainage: DrainageSampleV1,
+}
+
+impl HydrologyColumnV1 {
+    pub(crate) const fn surface_y(self) -> i32 {
+        self.surface_y
+    }
+}
+
 impl HydrologySamplerV1 {
     pub(crate) fn compile(
         seed: WorldSeedV1,
@@ -735,19 +750,45 @@ impl HydrologySamplerV1 {
         river: Option<RiverSampleV1>,
         style: TerrainStyleV1,
     ) -> HydrologyOccupancySampleV1 {
+        let column = self.column(x, z, surface_y, river, style);
+        self.occupy_column(x, y, z, cave_allows_fluid, column)
+    }
+
+    pub(crate) fn column(
+        &self,
+        x: i64,
+        z: i64,
+        surface_y: i32,
+        river: Option<RiverSampleV1>,
+        style: TerrainStyleV1,
+    ) -> HydrologyColumnV1 {
+        HydrologyColumnV1 {
+            surface_y,
+            style,
+            aquifer: self.aquifer_sample(x, z, surface_y),
+            drainage: self.drainage_sample(x, z, river),
+        }
+    }
+
+    pub(crate) fn occupy_column(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+        cave_allows_fluid: bool,
+        column: HydrologyColumnV1,
+    ) -> HydrologyOccupancySampleV1 {
         if y < i64::from(self.world_floor_y) || y > i64::from(self.world_ceiling_y) {
             return empty_sample();
         }
-        let aquifer = self.aquifer_sample(x, z, surface_y);
-        let drainage = self.drainage_sample(x, z, river);
         let kind = occupancy_kind(
             y,
-            surface_y,
+            column.surface_y,
             self.river_incision_voxels,
             cave_allows_fluid,
-            drainage.is_connected(),
-            aquifer,
-            self.lava_occupies(x, y, z, style, aquifer.lava_table_y),
+            column.drainage.is_connected(),
+            column.aquifer,
+            self.lava_occupies(x, y, z, column.style, column.aquifer.lava_table_y),
         );
         match kind {
             HydrologyOccupancyKindV1::Empty => empty_sample(),
@@ -755,7 +796,7 @@ impl HydrologySamplerV1 {
                 kind,
                 fluid: Some(self.fluids.lava.clone()),
                 level: 0,
-                flow: self.initial_flow(x, y, z, surface_y, cave_allows_fluid, river, style, kind),
+                flow: self.initial_flow(x, y, z, cave_allows_fluid, column, kind),
             },
             HydrologyOccupancyKindV1::SurfaceChannel
             | HydrologyOccupancyKindV1::Drainage
@@ -763,40 +804,32 @@ impl HydrologySamplerV1 {
                 kind,
                 fluid: Some(self.fluids.water.clone()),
                 level: 0,
-                flow: self.initial_flow(x, y, z, surface_y, cave_allows_fluid, river, style, kind),
+                flow: self.initial_flow(x, y, z, cave_allows_fluid, column, kind),
             },
         }
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "initial flow inspects one cell below without allocating a queue"
-    )]
     fn initial_flow(
         &self,
         x: i64,
         y: i64,
         z: i64,
-        surface_y: i32,
         cave_allows_fluid: bool,
-        river: Option<RiverSampleV1>,
-        style: TerrainStyleV1,
+        column: HydrologyColumnV1,
         kind: HydrologyOccupancyKindV1,
     ) -> HydrologyFlowV1 {
         let below = y.saturating_sub(1);
         if below < i64::from(self.world_floor_y) {
             return HydrologyFlowV1::Still;
         }
-        let aquifer = self.aquifer_sample(x, z, surface_y);
-        let drainage = self.drainage_sample(x, z, river);
         let below_kind = occupancy_kind(
             below,
-            surface_y,
+            column.surface_y,
             self.river_incision_voxels,
             cave_allows_fluid,
-            drainage.is_connected(),
-            aquifer,
-            self.lava_occupies(x, below, z, style, aquifer.lava_table_y),
+            column.drainage.is_connected(),
+            column.aquifer,
+            self.lava_occupies(x, below, z, column.style, column.aquifer.lava_table_y),
         );
         if fluid_family(kind) == fluid_family(below_kind)
             && below_kind != HydrologyOccupancyKindV1::Empty

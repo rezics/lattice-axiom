@@ -96,6 +96,49 @@ fn occupancy_candidates_are_deterministic_and_do_not_change_snapshots() {
 }
 
 #[test]
+fn occupancy_candidate_matches_independent_coordinate_queries() {
+    let plan = occupancy_plan(37, false);
+    let coordinate = ChunkCoordinate::new(-1, 0, 2);
+    let edge = i64::from(WorldgenConfigV1::default().chunk_edge_voxels);
+    let origin = [
+        i64::from(coordinate.x).saturating_mul(edge),
+        i64::from(coordinate.y).saturating_mul(edge),
+        i64::from(coordinate.z).saturating_mul(edge),
+    ];
+    let mut expected = Vec::new();
+    for local_y in 0..edge {
+        for local_z in 0..edge {
+            for local_x in 0..edge {
+                let sample = plan
+                    .hydrology_occupancy_sample(
+                        origin[0].saturating_add(local_x),
+                        origin[1].saturating_add(local_y),
+                        origin[2].saturating_add(local_z),
+                    )
+                    .expect("occupancy query remains available");
+                if sample.is_occupied() {
+                    expected.push((local_x, local_y, local_z, sample));
+                }
+            }
+        }
+    }
+
+    let candidate = plan
+        .hydrology_occupancy_candidate(coordinate)
+        .expect("column-cached occupancy candidate");
+    assert_eq!(candidate.cells().len(), expected.len());
+    for (cell, (local_x, local_y, local_z, sample)) in candidate.cells().iter().zip(expected) {
+        assert_eq!(i64::from(cell.x()), local_x);
+        assert_eq!(i64::from(cell.y()), local_y);
+        assert_eq!(i64::from(cell.z()), local_z);
+        assert_eq!(cell.kind(), sample.kind());
+        assert_eq!(cell.fluid(), sample.fluid().expect("occupied sample fluid"));
+        assert_eq!(cell.level(), sample.level());
+        assert_eq!(cell.flow(), sample.flow());
+    }
+}
+
+#[test]
 fn negative_coordinates_and_shared_faces_stay_continuous() {
     let plan = occupancy_plan(42, false);
     let coordinate = ChunkCoordinate::new(-4, 0, -3);
