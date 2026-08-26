@@ -785,9 +785,6 @@ fn spawn_pause_overlay(
             spawn_pause_button(overlay, PauseMenuAction::Resume, "Resume");
             spawn_pause_button(overlay, PauseMenuAction::Settings, "Settings");
             super::settings_view::spawn_settings_page(overlay);
-            spawn_pause_button(overlay, PauseMenuAction::Apply, "Apply");
-            spawn_pause_button(overlay, PauseMenuAction::Undo, "Undo changes");
-            spawn_pause_button(overlay, PauseMenuAction::Back, "Back");
             spawn_pause_button(overlay, PauseMenuAction::Quit, "Quit Game");
             overlay.spawn((
                 PauseSettingsHint,
@@ -888,10 +885,6 @@ fn spawn_pause_button(
     action: PauseMenuAction,
     label: &'static str,
 ) {
-    let hidden = matches!(
-        action,
-        PauseMenuAction::Apply | PauseMenuAction::Undo | PauseMenuAction::Back
-    );
     parent
         .spawn((
             Button,
@@ -902,7 +895,6 @@ fn spawn_pause_button(
             Node {
                 width: Val::Px(240.0),
                 height: Val::Px(44.0),
-                display: if hidden { Display::None } else { Display::Flex },
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 ..Node::default()
@@ -1547,6 +1539,21 @@ mod tests {
         assert!(source.contains("SettingsSurfaceCommand::Apply"));
         assert!(source.contains("SettingsSurfaceCommand::Undo"));
         assert!(source.contains("SettingsSurfaceCommand::Cancel"));
+        assert!(
+            !source.contains(concat!(
+                "spawn_pause_button(overlay, PauseMenuAction::",
+                "Apply"
+            )),
+            "Apply/Undo/Back belong on the settings page, not the pause column"
+        );
+        assert!(!source.contains(concat!(
+            "spawn_pause_button(overlay, PauseMenuAction::",
+            "Undo"
+        )));
+        assert!(!source.contains(concat!(
+            "spawn_pause_button(overlay, PauseMenuAction::",
+            "Back"
+        )));
 
         let invalid_step = SettingsIntegerSliderState {
             min: 2,

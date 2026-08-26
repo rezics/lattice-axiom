@@ -4,6 +4,7 @@ use accesskit::{Node as AccessKitNode, Role as AccessKitRole};
 use bevy::{
     a11y::AccessibilityNode,
     ecs::observer::On,
+    input_focus::tab_navigation::TabIndex,
     picking::hover::Hovered,
     prelude::{
         AlignItems, BackgroundColor, BorderColor, BorderRadius, Color, Commands, Component,
@@ -12,8 +13,8 @@ use bevy::{
     },
     ui::FocusPolicy,
     ui_widgets::{
-        Activate, Button, Slider, SliderPrecision, SliderRange, SliderStep, SliderThumb,
-        SliderValue, TrackClick, ValueChange,
+        Activate, Button, ScrollArea, Slider, SliderPrecision, SliderRange, SliderStep,
+        SliderThumb, SliderValue, TrackClick, ValueChange,
     },
     window::PrimaryWindow,
 };
@@ -27,7 +28,8 @@ use latticeaxiom_settings_ui::{
 use serde_json::Value;
 
 use super::pause::{
-    PauseOverlay, ProductionSettingsState, ViewDistanceSlider, ViewDistanceSliderThumb,
+    PauseMenuAction, PauseOverlay, ProductionSettingsState, ViewDistanceSlider,
+    ViewDistanceSliderThumb,
 };
 use crate::ui_font::ui_text_font;
 
@@ -63,6 +65,7 @@ pub(super) struct SettingsIntegerRow {
 
 const PAGE_NAV_WIDTH: f32 = 168.0;
 const PAGE_DETAIL_WIDTH: f32 = 280.0;
+const TRANSACTION_BUTTON_HEIGHT: f32 = 40.0;
 
 /// Spawns the hidden settings page under the pause overlay.
 pub(super) fn spawn_settings_page(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
@@ -157,8 +160,10 @@ fn spawn_populated_page(
                     Node {
                         width: Val::Percent(100.0),
                         flex_grow: 1.0,
+                        min_height: Val::Px(0.0),
                         flex_direction: FlexDirection::Row,
                         column_gap: Val::Px(12.0),
+                        overflow: Overflow::clip(),
                         ..Node::default()
                     },
                 ))
@@ -169,6 +174,7 @@ fn spawn_populated_page(
                         spawn_detail(body, settings);
                     }
                 });
+            spawn_transaction_bar(page_root);
         });
 }
 
@@ -179,11 +185,14 @@ fn spawn_category_nav(
     parent
         .spawn((
             Name::new("Settings categories"),
+            ScrollArea,
             Node {
                 width: Val::Px(PAGE_NAV_WIDTH),
                 height: Val::Percent(100.0),
+                min_height: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
+                overflow: Overflow::scroll_y(),
                 ..Node::default()
             },
         ))
@@ -208,9 +217,12 @@ fn spawn_content(
     parent
         .spawn((
             Name::new("Settings content"),
+            ScrollArea,
             Node {
                 flex_grow: 1.0,
                 height: Val::Percent(100.0),
+                min_height: Val::Px(0.0),
+                min_width: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
                 overflow: Overflow::scroll_y(),
@@ -306,13 +318,16 @@ fn spawn_detail(
     parent
         .spawn((
             Name::new("Settings detail"),
+            ScrollArea,
             Node {
                 width: Val::Px(PAGE_DETAIL_WIDTH),
                 min_width: Val::Px(220.0),
                 height: Val::Percent(100.0),
+                min_height: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
                 padding: UiRect::all(Val::Px(10.0)),
+                overflow: Overflow::scroll_y(),
                 ..Node::default()
             },
             BackgroundColor(Color::srgb(0.06, 0.08, 0.08)),
@@ -454,7 +469,7 @@ fn spawn_integer_slider(
                 SliderRange::new(min, max),
                 SliderStep(step),
                 SliderPrecision(0),
-                bevy::input_focus::tab_navigation::TabIndex(tab + 500),
+                TabIndex(tab + 500),
                 accessibility_node(AccessKitRole::Slider, "Setting slider"),
                 BorderColor::all(Color::NONE),
             ));
@@ -504,6 +519,61 @@ fn spawn_integer_slider(
         });
 }
 
+fn spawn_transaction_bar(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
+    parent
+        .spawn((
+            Name::new("Settings transaction"),
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::FlexEnd,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                flex_shrink: 0.0,
+                ..Node::default()
+            },
+        ))
+        .with_children(|bar| {
+            spawn_transaction_button(bar, PauseMenuAction::Undo, "Undo", 1001);
+            spawn_transaction_button(bar, PauseMenuAction::Apply, "Apply", 1000);
+            spawn_transaction_button(bar, PauseMenuAction::Back, "Back", 1002);
+        });
+}
+
+fn spawn_transaction_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    action: PauseMenuAction,
+    label: &'static str,
+    tab: i32,
+) {
+    parent
+        .spawn((
+            Button,
+            action,
+            Name::new(label),
+            Hovered::default(),
+            TabIndex(tab),
+            accessibility_node(AccessKitRole::Button, label),
+            Node {
+                min_width: Val::Px(112.0),
+                height: Val::Px(TRANSACTION_BUTTON_HEIGHT),
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..Node::default()
+            },
+            BackgroundColor(Color::srgb(0.08, 0.11, 0.10)),
+        ))
+        .with_children(|button| {
+            button.spawn((
+                Text::new(label),
+                ui_text_font(16.0),
+                TextColor(Color::srgb(0.94, 0.95, 0.90)),
+            ));
+        });
+}
+
 fn spawn_text_button(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
     action: SettingsPageAction,
@@ -517,7 +587,7 @@ fn spawn_text_button(
             SettingsPageControl { action },
             Name::new(label.to_owned()),
             Hovered::default(),
-            bevy::input_focus::tab_navigation::TabIndex(tab),
+            TabIndex(tab),
             accessibility_node(AccessKitRole::Button, "Settings control"),
             Node {
                 min_height: Val::Px(36.0),
@@ -695,5 +765,27 @@ pub(super) fn sync_settings_page_visibility(
         } else {
             Display::None
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn transaction_buttons_are_a_bottom_right_row_and_content_scrolls() {
+        let source = include_str!("settings_view.rs");
+        assert!(source.contains("Name::new(\"Settings transaction\")"));
+        assert!(source.contains("JustifyContent::FlexEnd"));
+        assert!(source.contains("FlexDirection::Row"));
+        assert!(source.contains("PauseMenuAction::Apply"));
+        assert!(source.contains("PauseMenuAction::Undo"));
+        assert!(source.contains("PauseMenuAction::Back"));
+        assert!(source.contains("ScrollArea"));
+        assert!(source.contains("Overflow::scroll_y()"));
+        assert!(source.contains("min_height: Val::Px(0.0)"));
+        assert!(source.contains("spawn_transaction_button"));
+        assert!(source.contains("\"Undo\""));
+        assert!(source.contains("\"Apply\""));
+        assert!(source.contains("\"Back\""));
+        assert!(!source.contains(concat!("spawn_transaction_", "icon")));
     }
 }
