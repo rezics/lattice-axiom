@@ -39,6 +39,7 @@ const ROLE_TARGETS: [(D4MaterialRoleV1, &str); 16] = [
 
 fn generation_benchmarks(c: &mut Criterion) {
     let plan = fixture_plan();
+    let plan_32 = fixture_plan_with_edge(32);
     let adjacent = AdjacentEpochSnapshotV1::all_unassigned(PlanningCellCoordinateV1::new(-1, 0))
         .expect("benchmark adjacency is representable");
     c.bench_function("d4_chunk_16_cubic_snapshot_candidate", |bencher| {
@@ -53,7 +54,21 @@ fn generation_benchmarks(c: &mut Criterion) {
             .expect("benchmark chunk must remain valid")
         });
     });
+    c.bench_function("d4_chunk_32_cubic_snapshot_candidate", |bencher| {
+        bencher.iter(|| {
+            plan_32
+                .generate(ChunkGenerationRequestV1::new(
+                    black_box(ChunkCoordinate::new(-3, 1, 5)),
+                    None,
+                    CellEpochStateV1::Unassigned,
+                    adjacent.clone(),
+                    Vec::new(),
+                ))
+                .expect("32-cubic benchmark chunk must remain valid")
+        });
+    });
     let natural = natural_fixture_plan();
+    let natural_32 = natural_fixture_plan_with_edge(32);
     c.bench_function("v5_natural_chunk_16_cubic_snapshot_candidate", |bencher| {
         bencher.iter(|| {
             natural
@@ -65,6 +80,19 @@ fn generation_benchmarks(c: &mut Criterion) {
                     Vec::new(),
                 ))
                 .expect("natural benchmark chunk must remain valid")
+        });
+    });
+    c.bench_function("v5_natural_chunk_32_cubic_snapshot_candidate", |bencher| {
+        bencher.iter(|| {
+            natural_32
+                .generate(ChunkGenerationRequestV1::new(
+                    black_box(ChunkCoordinate::new(-3, 1, 5)),
+                    None,
+                    CellEpochStateV1::Unassigned,
+                    adjacent.clone(),
+                    Vec::new(),
+                ))
+                .expect("32-cubic natural benchmark chunk must remain valid")
         });
     });
     c.bench_function("d4_density_4096_samples", |bencher| {
@@ -83,6 +111,10 @@ fn generation_benchmarks(c: &mut Criterion) {
 }
 
 fn fixture_plan() -> GenerationPlanV1 {
+    fixture_plan_with_edge(WorldgenConfigV1::default().chunk_edge_voxels)
+}
+
+fn fixture_plan_with_edge(chunk_edge_voxels: u16) -> GenerationPlanV1 {
     let vocabulary = D4RoleVocabularyV1::new(ROLE_TARGETS.iter().map(|(purpose, _)| {
         (
             *purpose,
@@ -106,10 +138,14 @@ fn fixture_plan() -> GenerationPlanV1 {
     let dimension = "terrenia:dimension/terrenia"
         .parse::<DimensionId>()
         .expect("benchmark dimension is valid");
+    let config = WorldgenConfigV1 {
+        chunk_edge_voxels,
+        ..WorldgenConfigV1::default()
+    };
     GenerationPlanV1::compile(GenerationPlanInputV1::new(
         dimension,
         WorldSeedV1::from_integer(42),
-        WorldgenConfigV1::default(),
+        config,
         7,
         PlanActivationIdV1::from_hash(CanonicalHash::digest(b"benchmark-activation")),
         provider_offers(),
@@ -154,6 +190,10 @@ fn provider_offers() -> Vec<ProviderOfferV1> {
 }
 
 fn natural_fixture_plan() -> GenerationPlanV1 {
+    natural_fixture_plan_with_edge(WorldgenConfigV1::default().chunk_edge_voxels)
+}
+
+fn natural_fixture_plan_with_edge(chunk_edge_voxels: u16) -> GenerationPlanV1 {
     let bindings = AuthoredWorldgenBindingsV1::from_json(
         include_str!("../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json")
             .as_bytes(),
@@ -177,13 +217,17 @@ fn natural_fixture_plan() -> GenerationPlanV1 {
             ),
         ));
     }
+    let config = WorldgenConfigV1 {
+        chunk_edge_voxels,
+        ..WorldgenConfigV1::default()
+    };
     GenerationPlanV1::compile(
         GenerationPlanInputV1::new(
             "terrenia:dimension/terrenia"
                 .parse()
                 .expect("benchmark dimension is valid"),
             WorldSeedV1::from_integer(42),
-            WorldgenConfigV1::default(),
+            config,
             7,
             PlanActivationIdV1::from_hash(CanonicalHash::digest(b"benchmark-activation")),
             provider_offers(),
