@@ -24,6 +24,15 @@ pub(super) const RETAIN_GRACE_TICKS: u64 = 32;
 /// Ticks a chunk must stay resident after admission before distance eviction.
 pub(super) const MIN_RESIDENCY_TICKS: u64 = 8;
 
+/// Vertical radius retained around the player's current chunk.
+///
+/// This matches the ADR 0026 active working-set premise and prevents a taller
+/// dimension from forcing every vertical section into memory at once.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VerticalStreamRadiusChunks(u32);
+
+const VERTICAL_STREAM_RADIUS: VerticalStreamRadiusChunks = VerticalStreamRadiusChunks(2);
+
 /// Constraint that reduced a requested view distance for the active host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewDistanceClampReasonV1 {
@@ -217,7 +226,9 @@ impl StreamClamps {
             .validate()
             .map_err(|_| ProductionHostError::InvalidHostLimits)?;
         let (vertical_min_chunk, vertical_max_chunk) = vertical_chunk_bounds(config);
-        let vertical_layers = vertical_layer_count(vertical_min_chunk, vertical_max_chunk)?;
+        let world_vertical_layers = vertical_layer_count(vertical_min_chunk, vertical_max_chunk)?;
+        let streamed_vertical_layers = VERTICAL_STREAM_RADIUS.0.saturating_mul(2).saturating_add(1);
+        let vertical_layers = world_vertical_layers.min(streamed_vertical_layers);
         let distances =
             stream_distances(hard_limits, DEFAULT_VIEW_DISTANCE_CHUNKS, vertical_layers)
                 .ok_or(ProductionHostError::InvalidHostLimits)?;
@@ -310,6 +321,28 @@ impl StreamClamps {
     /// Soft high-water at which prefetch admission stops.
     pub(super) fn prefetch_high_water(self) -> usize {
         prefetch_high_water(self.max_resident())
+    }
+
+    fn streamed_vertical_bounds(self, origin_y: i32) -> (i32, i32) {
+        let world_min = i64::from(self.vertical_min_chunk);
+        let world_max = i64::from(self.vertical_max_chunk);
+        let radius = i64::from(VERTICAL_STREAM_RADIUS.0);
+        let world_span = world_max.saturating_sub(world_min);
+        let window_span = radius.saturating_mul(2).min(world_span);
+        let last_start = world_max.saturating_sub(window_span);
+        let minimum = i64::from(origin_y)
+            .saturating_sub(radius)
+            .clamp(world_min, last_start);
+        let maximum = minimum.saturating_add(window_span);
+        (
+            i32::try_from(minimum).unwrap_or(self.vertical_min_chunk),
+            i32::try_from(maximum).unwrap_or(self.vertical_max_chunk),
+        )
+    }
+
+    fn contains_streamed_y(self, chunk_y: i32, origin_y: i32) -> bool {
+        let (minimum, maximum) = self.streamed_vertical_bounds(origin_y);
+        (minimum..=maximum).contains(&chunk_y)
     }
 }
 
@@ -404,9 +437,10 @@ pub(super) fn interest_class(
 
 /// Desired working-set coordinates for one player chunk.
 ///
-/// Core is the player column plus the clamped horizontal ring. Prefetch may add
-/// one look-ahead column. Pins stay in the set even when they leave the view
-/// radius. Retain is eviction hysteresis only and is not admitted here.
+/// Core is the clamped horizontal ring within a bounded vertical window around
+/// the player. Prefetch may add one look-ahead column over the same window.
+/// Pins stay in the set even when they leave either radius. Retain is eviction
+/// hysteresis only and is not admitted here.
 #[must_use]
 pub(super) fn desired_chunks(
     origin: ChunkCoordinate,
@@ -415,13 +449,8 @@ pub(super) fn desired_chunks(
     pins: &BTreeSet<ChunkCoordinate>,
 ) -> BTreeSet<ChunkCoordinate> {
     let mut desired = BTreeSet::new();
-    insert_column(
-        &mut desired,
-        origin.x,
-        origin.z,
-        clamps.vertical_min_chunk,
-        clamps.vertical_max_chunk,
-    );
+    let (vertical_min, vertical_max) = clamps.streamed_vertical_bounds(origin.y);
+    insert_column(&mut desired, origin.x, origin.z, vertical_min, vertical_max);
     let radius = i32::try_from(clamps.resident_distance()).unwrap_or(i32::MAX);
     let min_x = origin.x.saturating_sub(radius);
     let max_x = origin.x.saturating_add(radius);
@@ -429,25 +458,13 @@ pub(super) fn desired_chunks(
     let max_z = origin.z.saturating_add(radius);
     for z in min_z..=max_z {
         for x in min_x..=max_x {
-            insert_column(
-                &mut desired,
-                x,
-                z,
-                clamps.vertical_min_chunk,
-                clamps.vertical_max_chunk,
-            );
+            insert_column(&mut desired, x, z, vertical_min, vertical_max);
         }
     }
     if let Some((ahead_x, ahead_z)) =
         look_ahead_column(origin, clamps.prefetch_distance(), look_ahead)
     {
-        insert_column(
-            &mut desired,
-            ahead_x,
-            ahead_z,
-            clamps.vertical_min_chunk,
-            clamps.vertical_max_chunk,
-        );
+        insert_column(&mut desired, ahead_x, ahead_z, vertical_min, vertical_max);
     }
     desired.extend(pins.iter().copied());
     fit_desired(desired, origin, look_ahead, pins, clamps)
@@ -517,7 +534,7 @@ fn resident_budget_radius(
 ) -> u32 {
     let mut radius = maximum_radius;
     while radius > 0 {
-        if interest_volume(radius, vertical_layers, true) <= max_resident_chunks {
+        if interest_volume(radius, vertical_layers, false) <= max_resident_chunks {
             return radius;
         }
         radius -= 1;
@@ -571,8 +588,7 @@ pub(super) fn is_render_chunk(
     origin: ChunkCoordinate,
     clamps: StreamClamps,
 ) -> bool {
-    chunk.y >= clamps.vertical_min_chunk
-        && chunk.y <= clamps.vertical_max_chunk
+    clamps.contains_streamed_y(chunk.y, origin.y)
         && chebyshev_xz(chunk, origin) <= clamps.effective_render_distance()
 }
 
@@ -583,8 +599,7 @@ fn is_prefetch_chunk(
     look_ahead: [i32; 2],
 ) -> bool {
     look_ahead_column(origin, clamps.prefetch_distance(), look_ahead) == Some((chunk.x, chunk.z))
-        && chunk.y >= clamps.vertical_min_chunk
-        && chunk.y <= clamps.vertical_max_chunk
+        && clamps.contains_streamed_y(chunk.y, origin.y)
 }
 
 fn prefetch_high_water(max_resident: usize) -> usize {
@@ -830,6 +845,34 @@ mod tests {
             assert!(desired.contains(&ChunkCoordinate::new(-2, y, 0)));
         }
         assert!(!desired.contains(&ChunkCoordinate::new(2, 0, 0)));
+    }
+
+    #[test]
+    fn tall_world_streams_a_bounded_vertical_window() {
+        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 8, 4)
+            .expect("desktop request clamps are nonzero");
+        let clamps = StreamClamps::new(
+            limits,
+            &WorldgenConfigV1 {
+                chunk_edge_voxels: 32,
+                world_floor_y: -64,
+                world_ceiling_y: 319,
+                ..WorldgenConfigV1::default()
+            },
+        )
+        .expect("tall-world clamps are valid");
+        let origin = ChunkCoordinate::new(0, 2, 0);
+        let desired = desired_chunks(origin, clamps, [0, 0], &BTreeSet::new());
+
+        assert_eq!(clamps.vertical_min_chunk, -2);
+        assert_eq!(clamps.vertical_max_chunk, 9);
+        assert_eq!(clamps.effective_render_distance(), 4);
+        assert_eq!(desired.len(), 405);
+        for y in 0..=4 {
+            assert!(desired.contains(&ChunkCoordinate::new(0, y, 0)));
+        }
+        assert!(!desired.contains(&ChunkCoordinate::new(0, -1, 0)));
+        assert!(!desired.contains(&ChunkCoordinate::new(0, 5, 0)));
     }
 
     #[test]
