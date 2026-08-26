@@ -797,7 +797,7 @@ impl ProductionSpine {
         ];
         let origin = translation_chunk(inner.player_pose.translation, inner.chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
-        fill_working_set(&mut inner, &kernel, origin, [0, 0], FixedTick::new(0))?;
+        prime_startup_working_set(&mut inner, &kernel, origin, FixedTick::new(0))?;
         inner.last_success = None;
         bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk)?;
         if let Some(session) = restored_session {
@@ -1138,6 +1138,15 @@ impl ProductionSpine {
                     .filter(|coordinate| inner.runtime.is_resident(*coordinate))
                     .collect()
             },
+        )
+    }
+
+    /// Returns the latest cached desired-interest set for diagnostics.
+    #[must_use]
+    pub fn desired_interest_chunks(&self) -> BTreeSet<ChunkCoordinate> {
+        self.lock_inner().map_or_else(
+            |_| BTreeSet::new(),
+            |inner| inner.last_desired.as_ref().clone(),
         )
     }
 
@@ -3302,50 +3311,32 @@ impl RetainedBytes for HostDerivedCollider {
     }
 }
 
-fn fill_working_set(
+/// Materializes only the chunks intersecting the initial interaction-safety cube.
+///
+/// The complete interest set is cached for the first fixed tick, but its
+/// remaining chunks enter through the bounded deferred world-generation path.
+fn prime_startup_working_set(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
     origin: ChunkCoordinate,
-    look_ahead: [i32; 2],
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
-    let limit = inner.clamps.max_resident();
-    for _ in 0..limit {
-        let (desired, _) = cached_desired_chunks(inner, origin, look_ahead);
-        if desired
-            .iter()
-            .all(|coordinate| inner.runtime.is_resident(*coordinate))
-        {
-            sync_working_set(
-                inner,
-                kernel,
-                origin,
-                look_ahead,
-                tick,
-                WorldgenAdmission {
-                    limit,
-                    execution: WorldgenExecution::Blocking,
-                },
-            )?;
-            return Ok(());
-        }
-        let before = inner.runtime.diagnostics().resident_chunks();
-        sync_working_set(
-            inner,
-            kernel,
-            origin,
-            look_ahead,
-            tick,
-            WorldgenAdmission {
-                limit,
-                execution: WorldgenExecution::Blocking,
-            },
-        )?;
-        if inner.runtime.diagnostics().resident_chunks() == before {
-            break;
-        }
-    }
-    Ok(())
+    let _ = cached_desired_chunks(inner, origin, [0, 0]);
+    let mut required = startup_safety_chunks(inner.player_pose.translation, inner.chunk_edge)?;
+    required.insert(origin);
+    let ordered = prioritize_chunks(&required, origin, [0, 0]);
+    admit_desired(
+        inner,
+        kernel,
+        origin,
+        [0, 0],
+        &ordered,
+        tick,
+        WorldgenAdmission {
+            limit: ordered.len(),
+            execution: WorldgenExecution::Blocking,
+        },
+    )
 }
 
 fn sync_working_set(
@@ -5343,6 +5334,37 @@ fn player_occupied_chunks(
         .iter()
         .map(|&[x, y, z]| world_chunk(x, y, z, edge))
         .collect())
+}
+
+fn startup_safety_chunks(
+    translation: Vec3,
+    edge: u16,
+) -> Result<BTreeSet<ChunkCoordinate>, ProductionHostError> {
+    let origin =
+        translation_chunk(translation, edge).ok_or(ProductionHostError::InvalidPlayerPose)?;
+    let radius = MAX_BLOCK_EDIT_REACH_M + 1.0;
+    let minimum = world_chunk(
+        f32_floor_i64(translation.x - radius),
+        f32_floor_i64(translation.y - radius),
+        f32_floor_i64(translation.z - radius),
+        edge,
+    );
+    let maximum = world_chunk(
+        f32_floor_i64(translation.x + radius),
+        f32_floor_i64(translation.y + radius),
+        f32_floor_i64(translation.z + radius),
+        edge,
+    );
+    let mut chunks = BTreeSet::new();
+    for y in minimum.y..=maximum.y {
+        for z in minimum.z..=maximum.z {
+            for x in minimum.x..=maximum.x {
+                chunks.insert(ChunkCoordinate::new(x, y, z));
+            }
+        }
+    }
+    chunks.insert(origin);
+    Ok(chunks)
 }
 
 fn world_chunk(x: i64, y: i64, z: i64, edge: u16) -> ChunkCoordinate {

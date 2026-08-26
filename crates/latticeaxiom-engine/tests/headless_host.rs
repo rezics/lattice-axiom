@@ -34,16 +34,16 @@ use latticeaxiom_core::{
 use latticeaxiom_engine::{
     ActionAxis2V1, AuthoredGameplayCatalogSourcesV1, AuthoritativeTransactionKernel,
     CellOccupancyV1, ChunkCoordinate, ChunkFaceV1, ChunkLifecycle, ChunkMeshCursor,
-    ChunkPresentation, ChunkRevision, CommandOutcomeV1, ContainerId, DropEntityId, EngineInstance,
+    ChunkPresentation, CommandOutcomeV1, ContainerId, DropEntityId, EngineInstance,
     EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayCatalog, GameplayReject,
     HOTBAR_SLOTS, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1,
-    LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, MeshReceipt, PlayerActionButtonsV1,
-    PlayerActionFrameV1, PlayerActionV1, PreparationError, ProductionInspectSurface,
-    ProductionMemoryStart, ProductionSessionPause, ProductionSpine, ProductionWorldList,
-    ProductionWorldStorage, RecipeId, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost,
-    SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
-    ViewDistanceClampReasonV1, WorkingSetDiagnosticsV1, WorkstationId,
-    compile_authored_gameplay_catalog, empty_gameplay_catalog,
+    LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1,
+    PlayerActionV1, PreparationError, ProductionInspectSurface, ProductionMemoryStart,
+    ProductionSessionPause, ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId,
+    STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost, SealedWriterHostError, SlotIndex,
+    StructurallyValidatedComposeImages, VerifiedProductLockHash, ViewDistanceClampReasonV1,
+    WorkingSetDiagnosticsV1, WorkstationId, compile_authored_gameplay_catalog,
+    empty_gameplay_catalog,
 };
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_launcher::{
@@ -598,9 +598,12 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
         )
     );
 
-    let hash_before_inspect = spine
-        .materialized_chunk_state_hash()
-        .expect("omitted-presentation host exposes a world hash");
+    let revision_before_inspect = spine
+        .chunk_revision(target_chunk)
+        .expect("inspected chunk has a committed revision");
+    let occupancy_before_inspect = spine
+        .inspect_occupancy(current.observation.position)
+        .expect("inspected cell has committed occupancy");
     instance
         .enqueue_headless_actions([inspect_frame(3)])
         .expect("inspect frame enqueues");
@@ -618,11 +621,16 @@ fn production_spine_headless_inspect_reports_targeted_block_id_after_dda() {
     assert_eq!(inspected.chunk, current.chunk);
     assert_inspect_dto_overlay_fields(&inspected, &spine);
     assert_eq!(
+        spine.chunk_revision(target_chunk),
+        Some(revision_before_inspect),
+        "headless inspect must not mutate its authoritative chunk"
+    );
+    assert_eq!(
         spine
-            .materialized_chunk_state_hash()
-            .expect("inspect still exposes a world hash"),
-        hash_before_inspect,
-        "headless inspect with omitted presentation must not change the world hash"
+            .inspect_occupancy(current.observation.position)
+            .expect("inspected cell remains committed"),
+        occupancy_before_inspect,
+        "headless inspect must not mutate its authoritative cell"
     );
 
     instance
@@ -809,6 +817,12 @@ fn production_host_exposes_working_set_diagnostics() {
         .expect("working-set diagnostics are installed");
     assert_eq!(snapshot, spine.working_set_diagnostics());
     assert_working_set_diagnostics(snapshot, limits);
+    // A 13 m safety cube spans at most 3³ chunks at the supported 8 m minimum edge.
+    assert!(
+        snapshot.resident() <= 27,
+        "startup must synchronously prime only the player-safety set, got {} chunks",
+        snapshot.resident()
+    );
 
     instance
         .advance_fixed_ticks(2)
@@ -881,7 +895,7 @@ fn requested_view_distance_is_clamped_by_host_limits() {
 }
 
 #[test]
-fn camera_yaw_pitch_only_does_not_change_presentation_state() {
+fn camera_yaw_pitch_only_does_not_change_spatial_interest() {
     const TICKS: u32 = 6;
     let mut idle =
         EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
@@ -901,6 +915,8 @@ fn camera_yaw_pitch_only_does_not_change_presentation_state() {
         .get_resource::<ProductionSpine>()
         .expect("look-only production spine is installed")
         .clone();
+    let idle_rebuilds = idle_spine.desired_chunk_set_rebuild_count();
+    let looking_rebuilds = looking_spine.desired_chunk_set_rebuild_count();
 
     looking
         .enqueue_headless_actions([
@@ -936,10 +952,17 @@ fn camera_yaw_pitch_only_does_not_change_presentation_state() {
         idle_pose.translation,
         looking_pose.translation
     );
+    assert_eq!(idle_spine.interest_look_ahead(), [0, 0]);
+    assert_eq!(looking_spine.interest_look_ahead(), [0, 0]);
     assert_eq!(
-        presentation_invariant_snapshot(&looking, &looking_spine),
-        presentation_invariant_snapshot(&idle, &idle_spine),
-        "yaw/pitch-only camera motion must not change resident set, lifecycle, mesh receipt, entity count, or queue counters"
+        idle_spine.desired_chunk_set_rebuild_count(),
+        idle_rebuilds,
+        "idle camera must reuse the desired-interest set"
+    );
+    assert_eq!(
+        looking_spine.desired_chunk_set_rebuild_count(),
+        looking_rebuilds,
+        "yaw/pitch-only camera motion must not rebuild spatial interest"
     );
 }
 
@@ -1190,7 +1213,7 @@ fn at_most_one_interest_reconciliation_per_fixed_tick() {
 }
 
 #[test]
-fn intra_chunk_motion_does_not_distance_evict_or_remesh() {
+fn intra_chunk_motion_reuses_interest_and_does_not_distance_evict() {
     const SETTLE: u32 = 8;
     const HOLD: u32 = 24;
     let mut instance =
@@ -1220,15 +1243,15 @@ fn intra_chunk_motion_does_not_distance_evict_or_remesh() {
         .advance_fixed_ticks(SETTLE)
         .expect("settle walk advances");
     let origin = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
-    let before = presentation_invariant_snapshot(&instance, &spine);
-    let admissions = spine.stream_admission_count();
+    let resident_before = spine.resident_chunks();
+    let rebuilds = spine.desired_chunk_set_rebuild_count();
     let evictions = spine.stream_eviction_count();
     enqueue_walk(&mut instance, generation, 1.0, u64::from(HOLD));
     instance
         .advance_fixed_ticks(HOLD)
         .expect("intra-chunk walk advances");
     let after_chunk = chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
-    let after = presentation_invariant_snapshot(&instance, &spine);
+    let resident_after = spine.resident_chunks();
     assert_eq!(
         after_chunk,
         origin,
@@ -1236,26 +1259,19 @@ fn intra_chunk_motion_does_not_distance_evict_or_remesh() {
         spine.player_pose().translation
     );
     assert_eq!(
-        spine.stream_admission_count(),
-        admissions,
-        "same-chunk motion must not admit by distance"
+        spine.desired_chunk_set_rebuild_count(),
+        rebuilds,
+        "same-chunk motion with a stable look-ahead must reuse its interest set"
     );
     assert_eq!(
         spine.stream_eviction_count(),
         evictions,
         "same-chunk motion must not evict by distance"
     );
-    assert_eq!(
-        after.resident, before.resident,
-        "same-chunk motion must not change the resident set"
+    assert!(
+        resident_before.is_subset(&resident_after),
+        "background admission must not churn already resident chunks"
     );
-    for (chunk, receipt) in &before.receipts {
-        assert_eq!(
-            after.receipts.get(chunk),
-            Some(receipt),
-            "same-chunk motion must not remesh {chunk:?}"
-        );
-    }
 }
 
 #[test]
@@ -1331,12 +1347,12 @@ fn retain_keeps_former_core_after_immediate_boundary_reversal() {
         .into_iter()
         .filter(|chunk| chunk.x.abs_diff(start.x).max(chunk.z.abs_diff(start.z)) <= 1)
         .collect::<BTreeSet<_>>();
-    let receipts = retained
+    let revisions = retained
         .iter()
         .filter_map(|chunk| {
             spine
-                .mesh_cursor(*chunk)
-                .map(|cursor| (*chunk, (cursor.receipt(), cursor.revision())))
+                .chunk_revision(*chunk)
+                .map(|revision| (*chunk, revision))
         })
         .collect::<BTreeMap<_, _>>();
     enqueue_look_then_walk(
@@ -1355,14 +1371,11 @@ fn retain_keeps_former_core_after_immediate_boundary_reversal() {
             spine.resident_chunks().contains(chunk),
             "retain must keep {chunk:?} resident after an immediate reversal"
         );
-        if let Some(before) = receipts.get(chunk) {
-            let after = spine
-                .mesh_cursor(*chunk)
-                .map(|cursor| (cursor.receipt(), cursor.revision()));
+        if let Some(before) = revisions.get(chunk) {
             assert_eq!(
-                after.as_ref(),
+                spine.chunk_revision(*chunk).as_ref(),
                 Some(before),
-                "retain must not rematerialize {chunk:?}"
+                "retain must preserve the committed revision for {chunk:?}"
             );
         }
     }
@@ -1392,10 +1405,10 @@ fn look_ahead_survives_zero_delta_idle_ticks() {
     let ahead = ChunkCoordinate::new(origin.x + 2, origin.y, origin.z);
     assert!(
         spine
-            .resident_chunks()
+            .desired_interest_chunks()
             .iter()
             .any(|chunk| chunk.x == ahead.x && chunk.z == ahead.z),
-        "look-ahead column {ahead:?} must be admitted before idle ticks"
+        "look-ahead column {ahead:?} must enter desired interest before idle ticks"
     );
     instance
         .enqueue_headless_actions([idle_frame(20), idle_frame(21), idle_frame(22)])
@@ -1408,10 +1421,10 @@ fn look_ahead_survives_zero_delta_idle_ticks() {
     );
     assert!(
         spine
-            .resident_chunks()
+            .desired_interest_chunks()
             .iter()
             .any(|chunk| chunk.x == ahead.x && chunk.z == ahead.z),
-        "look-ahead column must remain after a short idle"
+        "look-ahead interest must remain after a short idle"
     );
 }
 
@@ -2619,41 +2632,6 @@ fn presented_chunks(instance: &EngineInstance) -> BTreeSet<ChunkCoordinate> {
                 .map(|chunk| chunk.coordinate)
         })
         .collect()
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct PresentationInvariantSnapshot {
-    resident: BTreeSet<ChunkCoordinate>,
-    lifecycles: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
-    receipts: BTreeMap<ChunkCoordinate, (MeshReceipt, ChunkRevision)>,
-    entity_count: usize,
-    diagnostics: WorkingSetDiagnosticsV1,
-}
-
-fn presentation_invariant_snapshot(
-    instance: &EngineInstance,
-    spine: &ProductionSpine,
-) -> PresentationInvariantSnapshot {
-    let resident = spine.resident_chunks();
-    let lifecycles = resident
-        .iter()
-        .map(|chunk| (*chunk, spine.chunk_lifecycle(*chunk)))
-        .collect();
-    let receipts = resident
-        .iter()
-        .filter_map(|chunk| {
-            spine
-                .mesh_cursor(*chunk)
-                .map(|cursor| (*chunk, (cursor.receipt(), cursor.revision())))
-        })
-        .collect();
-    PresentationInvariantSnapshot {
-        resident,
-        lifecycles,
-        receipts,
-        entity_count: instance.production_chunk_entity_count(),
-        diagnostics: spine.working_set_diagnostics(),
-    }
 }
 
 #[allow(clippy::cast_possible_truncation)]
