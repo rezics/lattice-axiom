@@ -510,17 +510,16 @@ impl CaveSamplerV1 {
     fn occupancy_uncapped(&self, x: i64, y: i64, z: i64) -> CaveOccupancyArbitrationV1 {
         let (local_signed_distance, branch_signed_distance, portal_signed_distance) =
             if let Some(topology) = &self.topology {
-                let local_signed_distance = topology.local_signed_distance(x, y, z);
-                let branch_signed_distance = if topology.branch_contains(x, y, z) {
+                let sample = topology.occupancy_sample(x, y, z);
+                let branch_signed_distance = if sample.branch_contains() {
                     self.branch_signed_distance(x, y, z)
                 } else {
                     i32::from(self.config.cave_cell_edge_voxels).saturating_mul(2)
                 };
-                let portal_signed_distance = topology.portal_signed_distance(x, y, z);
                 (
-                    local_signed_distance,
+                    sample.local_signed_distance(),
                     branch_signed_distance,
-                    portal_signed_distance,
+                    sample.portal_signed_distance(),
                 )
             } else {
                 (

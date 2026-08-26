@@ -554,6 +554,27 @@ pub(crate) struct TopologyFieldV1 {
     branch: CaveBranchContributorV1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TopologyOccupancySampleV1 {
+    local_signed_distance: i32,
+    branch_contains: bool,
+    portal_signed_distance: i32,
+}
+
+impl TopologyOccupancySampleV1 {
+    pub(crate) const fn local_signed_distance(self) -> i32 {
+        self.local_signed_distance
+    }
+
+    pub(crate) const fn branch_contains(self) -> bool {
+        self.branch_contains
+    }
+
+    pub(crate) const fn portal_signed_distance(self) -> i32 {
+        self.portal_signed_distance
+    }
+}
+
 impl TopologyFieldV1 {
     pub(crate) fn compile(config: WorldgenConfigV1, layer: CaveTopologyLayerInputV1) -> Self {
         Self {
@@ -618,30 +639,11 @@ impl TopologyFieldV1 {
         })
     }
 
-    pub(crate) fn local_signed_distance(&self, x: i64, y: i64, z: i64) -> i32 {
-        if !self.in_declared_influence(x, y, z) {
-            return inactive_distance(&self.config);
-        }
-        let algorithm = self.algorithm_at(x, y, z);
-        let mut distance = inactive_distance(&self.config);
-        for corridor in &self.corridors {
-            distance = distance.min(algorithm_distance(
-                algorithm,
-                [x, y, z],
-                corridor.start_voxels,
-                corridor.end_voxels,
-            ));
-        }
-        distance
-    }
-
-    pub(crate) fn branch_contains(&self, x: i64, y: i64, z: i64) -> bool {
+    pub(crate) fn occupancy_sample(&self, x: i64, y: i64, z: i64) -> TopologyOccupancySampleV1 {
+        let y_i32 = clamp_i64_to_i32(y);
         let (cell_x, cell_z) = self.planning_cell(x, z);
-        self.branch.contains(cell_x, cell_z, clamp_i64_to_i32(y))
-    }
-
-    pub(crate) fn portal_signed_distance(&self, x: i64, y: i64, z: i64) -> i32 {
-        let mut distance = i32::MAX;
+        let branch_contains = self.branch.contains(cell_x, cell_z, y_i32);
+        let mut portal_signed_distance = i32::MAX;
         for portal in &self.portals {
             let radius = i64::from(
                 portal
@@ -649,9 +651,36 @@ impl TopologyFieldV1 {
                     .max(portal.clearance_height_voxels),
             );
             let sample = chebyshev(x, y, z, portal.anchor_voxels).saturating_sub(radius);
-            distance = distance.min(i32::try_from(sample).unwrap_or(i32::MAX));
+            portal_signed_distance =
+                portal_signed_distance.min(i32::try_from(sample).unwrap_or(i32::MAX));
         }
-        distance
+        let corridor_influence = self.corridors.iter().any(|corridor| {
+            linf_to_segment([x, y, z], corridor.start_voxels, corridor.end_voxels)
+                <= INFLUENCE_RADIUS_VOXELS
+        });
+        let local_signed_distance =
+            if branch_contains || portal_signed_distance <= 0 || corridor_influence {
+                let algorithm = self.domain_at(x, y, z).1;
+                self.corridors
+                    .iter()
+                    .map(|corridor| {
+                        algorithm_distance(
+                            algorithm,
+                            [x, y, z],
+                            corridor.start_voxels,
+                            corridor.end_voxels,
+                        )
+                    })
+                    .min()
+                    .unwrap_or_else(|| inactive_distance(&self.config))
+            } else {
+                inactive_distance(&self.config)
+            };
+        TopologyOccupancySampleV1 {
+            local_signed_distance,
+            branch_contains,
+            portal_signed_distance,
+        }
     }
 
     pub(crate) fn face_portal(
