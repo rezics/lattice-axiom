@@ -31,10 +31,55 @@ where
     domain_revisions_advance_selectively(&factory());
     entity_index_moves_atomically_and_rejects_collisions(&factory());
     invalid_transactions_do_not_publish(&factory());
+    bounded_reads_match_reference_snapshot(&factory());
     owned_snapshot_is_isolated(&factory());
     mutation_order_does_not_change_state(factory);
     changed_domain_mismatch_is_rejected(&factory());
     batch_count_is_bounded(&factory());
+}
+
+fn bounded_reads_match_reference_snapshot(storage: &impl AuthoritativeTransactionKernel) {
+    let transaction = sample_create_transaction(11);
+    let world = transaction.world();
+    let keys = transaction
+        .mutations()
+        .iter()
+        .map(|mutation| mutation.key().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        storage
+            .world_frontier(world)
+            .expect("an empty world frontier must be readable"),
+        WorldRevision::ZERO
+    );
+    assert!(
+        storage
+            .read_chunk(&keys[0])
+            .expect("an absent bounded chunk read must succeed")
+            .is_none()
+    );
+
+    let receipt = storage
+        .commit(transaction)
+        .expect("the bounded-read fixture transaction must commit");
+    let snapshot = storage
+        .reference_snapshot(world)
+        .expect("the committed reference snapshot must remain readable");
+    assert_eq!(
+        storage
+            .world_frontier(world)
+            .expect("the committed world frontier must be readable"),
+        receipt.world_revision()
+    );
+    for key in keys {
+        assert_eq!(
+            storage
+                .read_chunk(&key)
+                .expect("a committed bounded chunk read must succeed")
+                .as_ref(),
+            snapshot.chunk(&key)
+        );
+    }
 }
 
 /// Creates a canonical two-chunk materialization transaction for backend tests.

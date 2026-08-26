@@ -3,7 +3,8 @@
 use latticeaxiom_core::WorldId;
 
 use crate::{
-    CommitReceipt, ReferenceWorldSnapshot, StorageResult, TransactionKernelLimits, WorldTransaction,
+    ChunkKey, CommitReceipt, ReferenceWorldSnapshot, StorageResult, StoredChunk,
+    TransactionKernelLimits, WorldRevision, WorldTransaction,
 };
 
 pub(crate) mod sealed {
@@ -25,6 +26,24 @@ pub trait AuthoritativeTransactionKernel: sealed::Sealed + Send + Sync {
     /// Returns hard transaction and retained-receipt ceilings for this instance.
     #[must_use]
     fn limits(&self) -> TransactionKernelLimits;
+
+    /// Reads the current contiguous revision of one world without materializing
+    /// a full-world reference snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed kernel error if a consistent frontier cannot be read.
+    fn world_frontier(&self, world: WorldId) -> StorageResult<WorldRevision>;
+
+    /// Reads one complete chunk without materializing unrelated world chunks.
+    ///
+    /// The returned value is owned and snapshot-isolated from later commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed kernel error if a consistent bounded read cannot be
+    /// captured.
+    fn read_chunk(&self, key: &ChunkKey) -> StorageResult<Option<StoredChunk>>;
 
     /// Captures an owned, snapshot-isolated reference view of one world.
     ///

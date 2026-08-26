@@ -184,6 +184,23 @@ impl AuthoritativeTransactionKernel for MemoryTransactionKernel {
         self.limits
     }
 
+    fn world_frontier(&self, world: WorldId) -> StorageResult<WorldRevision> {
+        let state = self.read_state("read world frontier")?;
+        Ok(state
+            .worlds
+            .get(&world)
+            .map_or(WorldRevision::ZERO, |stored| stored.revision))
+    }
+
+    fn read_chunk(&self, key: &ChunkKey) -> StorageResult<Option<StoredChunk>> {
+        let state = self.read_state("read bounded chunk")?;
+        Ok(state
+            .worlds
+            .get(&key.world)
+            .and_then(|world| world.chunks.get(key))
+            .cloned())
+    }
+
     fn reference_snapshot(&self, world: WorldId) -> StorageResult<ReferenceWorldSnapshot> {
         let state = self.read_state("capture read snapshot")?;
         let (revision, chunks, entity_locations) = state.worlds.get(&world).map_or_else(

@@ -7,9 +7,10 @@
 //! world-scoped entity index, and deterministic fault injection.
 //!
 //! This is not the complete D3 `WorldStorage` boundary. The trait is sealed and
-//! intentionally omits typed world metadata and requirement closure, bounded
-//! production reads, frontiers, checkpoints, a frozen wire envelope, `RocksDB`,
-//! Bevy, and runtime facades.
+//! intentionally omits typed world metadata and requirement closure,
+//! checkpoints, a frozen wire envelope, `RocksDB`, Bevy, and runtime facades.
+//! It exposes bounded chunk and frontier reads so scale-sensitive callers do
+//! not need the full-world reference snapshot.
 mod canonical_hash;
 #[cfg(any(test, feature = "conformance"))]
 #[allow(
