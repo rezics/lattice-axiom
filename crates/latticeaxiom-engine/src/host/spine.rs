@@ -37,9 +37,10 @@ use latticeaxiom_runtime_contracts::{
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
-    ChunkMutation, ChunkRevision, ChunkRevisionExpectation, ContinuationId, DimensionId,
-    MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion, PersistentEntityId,
-    StoredChunk, TransactionId, VersionedPayload, WorldRevision, WorldTransaction,
+    ChunkMutation, ChunkRevision, ChunkRevisionExpectation, CommitReceipt, ContinuationId,
+    DimensionId, MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion,
+    PersistentEntityId, StoredChunk, TransactionId, VersionedPayload, WorldRevision,
+    WorldTransaction,
 };
 use latticeaxiom_voxel_mesh::{
     Aabb, Face, FaceDescriptor, GreedyMesher, LayerMergeKey, MeshBuffer, MeshReceipt, MeshSource,
@@ -3747,7 +3748,7 @@ fn apply_ready_worldgen(
                 inner,
                 kernel,
                 &[job.coordinate],
-                &BTreeMap::from([(job.coordinate, cells)]),
+                BTreeMap::from([(job.coordinate, cells)]),
                 tick,
                 origin,
                 look_ahead,
@@ -3881,7 +3882,7 @@ fn publish_generated_region(
         inner,
         kernel,
         coordinates,
-        &generated_cells,
+        generated_cells,
         tick,
         origin,
         look_ahead,
@@ -3892,13 +3893,14 @@ fn publish_generated_cells(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
     coordinates: &[ChunkCoordinate],
-    generated_cells: &BTreeMap<ChunkCoordinate, Vec<HostVoxel>>,
+    mut generated_cells: BTreeMap<ChunkCoordinate, Vec<HostVoxel>>,
     tick: FixedTick,
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
     let mut mutations = Vec::with_capacity(generated_cells.len());
-    for (coordinate, cells) in generated_cells {
+    let mut committed_coordinates = Vec::with_capacity(generated_cells.len());
+    for (coordinate, cells) in &generated_cells {
         if inner.lifecycle.get(coordinate) != Some(&ChunkLifecycle::Generate) {
             continue;
         }
@@ -3908,6 +3910,7 @@ fn publish_generated_cells(
             ChangedDomains::ALL,
             chunk_data(&inner.voxel_schema, inner.voxel_schema_version, cells),
         ));
+        committed_coordinates.push(*coordinate);
     }
     if mutations.is_empty() {
         for coordinate in coordinates {
@@ -3918,40 +3921,54 @@ fn publish_generated_cells(
         }
         return Ok(());
     }
-    let snapshot = kernel.reference_snapshot(inner.world)?;
-    kernel.commit(WorldTransaction::new(
+    let base_revision = kernel.world_frontier(inner.world)?;
+    let receipt = kernel.commit(WorldTransaction::new(
         TransactionId::from_u128(inner.next_transaction),
         inner.world,
-        snapshot.revision(),
+        base_revision,
         mutations,
     ))?;
     inner.next_transaction = inner.next_transaction.saturating_add(1);
-    let published = kernel.reference_snapshot(inner.world)?;
-    for coordinate in coordinates {
-        if inner.lifecycle.get(coordinate) != Some(&ChunkLifecycle::Generate) {
-            continue;
-        }
-        let key = ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate);
-        let stored = published
-            .chunk(&key)
-            .ok_or(ProductionHostError::MissingStoredChunk {
-                coordinate: *coordinate,
-            })?;
-        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
-        let requests = stream_derived_requests(class, chebyshev_xz(*coordinate, origin));
-        project_stored(
+    for coordinate in committed_coordinates {
+        let key = ChunkKey::new(inner.world, inner.dimension.clone(), coordinate);
+        let cells = generated_cells
+            .remove(&coordinate)
+            .ok_or(ProductionHostError::MissingGeneratedChunk { coordinate })?;
+        let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let requests = stream_derived_requests(class, chebyshev_xz(coordinate, origin));
+        project_commit_receipt(
             &mut inner.runtime,
-            stored,
+            &receipt,
+            key,
             inner.chunk_edge,
+            cells,
             tick,
-            &inner.presentation,
             requests,
         )?;
-        inner
-            .lifecycle
-            .insert(*coordinate, ChunkLifecycle::Resident);
-        seal_unready_cave_voids(inner, *coordinate);
+        inner.lifecycle.insert(coordinate, ChunkLifecycle::Resident);
+        seal_unready_cave_voids(inner, coordinate);
     }
+    Ok(())
+}
+
+fn project_commit_receipt(
+    runtime: &mut VoxelRuntime<HostVoxel>,
+    receipt: &CommitReceipt,
+    key: ChunkKey,
+    edge: u16,
+    cells: Vec<HostVoxel>,
+    tick: FixedTick,
+    requests: DerivedRequestSet,
+) -> Result<(), ProductionHostError> {
+    let projection = CommittedChunkProjection::from_commit_receipt(
+        receipt,
+        key,
+        edge,
+        cells,
+        MESH_SEMANTICS,
+        COLLIDER_SEMANTICS,
+    )?;
+    runtime.project_committed(projection, tick, requests)?;
     Ok(())
 }
 
