@@ -4240,6 +4240,7 @@ dependencies = [
 name = "latticeaxiom-storage"
 version = "0.1.0"
 dependencies = [
+ "criterion 0.8.2",
  "latticeaxiom-core",
  "proptest",
  "serde",

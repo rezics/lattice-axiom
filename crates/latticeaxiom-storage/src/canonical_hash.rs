@@ -63,15 +63,80 @@ pub(crate) fn hash_materialized_chunk_state(
     digest.u64(revision.get());
     digest.collection_len(chunks.len(), "world chunk count")?;
     for (key, chunk) in chunks {
-        digest.chunk_key(key)?;
-        digest.u64(chunk.captured_world_revision.get());
-        digest.u64(chunk.revision.get());
-        digest.u64(chunk.domain_revisions.voxels.get());
-        digest.u64(chunk.domain_revisions.persistent_entities.get());
-        digest.u64(chunk.domain_revisions.continuation.get());
-        digest.chunk_data(&chunk.data)?;
+        hash_chunk_entry(&mut digest, key, chunk)?;
     }
     Ok(MaterializedChunkStateHash::from_bytes(digest.finish()))
+}
+
+pub(crate) fn hash_projected_materialized_chunk_state(
+    world: WorldId,
+    revision: WorldRevision,
+    chunks: &BTreeMap<ChunkKey, StoredChunk>,
+    replacements: &BTreeMap<ChunkKey, StoredChunk>,
+) -> StorageResult<MaterializedChunkStateHash> {
+    let inserted = replacements
+        .keys()
+        .filter(|key| !chunks.contains_key(*key))
+        .count();
+    let projected_count =
+        chunks
+            .len()
+            .checked_add(inserted)
+            .ok_or(StorageError::PayloadSizeOverflow {
+                what: "projected world chunk count",
+            })?;
+    let mut digest = CanonicalDigest::new(REFERENCE_MATERIALIZED_CHUNK_STATE_DOMAIN);
+    digest.world_id(world);
+    digest.u64(revision.get());
+    digest.collection_len(projected_count, "world chunk count")?;
+
+    let mut existing = chunks.iter().peekable();
+    let mut replacement = replacements.iter().peekable();
+    loop {
+        match (existing.peek(), replacement.peek()) {
+            (Some((existing_key, existing_chunk)), Some((replacement_key, replacement_chunk))) => {
+                match existing_key.cmp(replacement_key) {
+                    std::cmp::Ordering::Less => {
+                        hash_chunk_entry(&mut digest, existing_key, existing_chunk)?;
+                        existing.next();
+                    }
+                    std::cmp::Ordering::Equal => {
+                        hash_chunk_entry(&mut digest, replacement_key, replacement_chunk)?;
+                        existing.next();
+                        replacement.next();
+                    }
+                    std::cmp::Ordering::Greater => {
+                        hash_chunk_entry(&mut digest, replacement_key, replacement_chunk)?;
+                        replacement.next();
+                    }
+                }
+            }
+            (Some((key, chunk)), None) => {
+                hash_chunk_entry(&mut digest, key, chunk)?;
+                existing.next();
+            }
+            (None, Some((key, chunk))) => {
+                hash_chunk_entry(&mut digest, key, chunk)?;
+                replacement.next();
+            }
+            (None, None) => break,
+        }
+    }
+    Ok(MaterializedChunkStateHash::from_bytes(digest.finish()))
+}
+
+fn hash_chunk_entry(
+    digest: &mut CanonicalDigest,
+    key: &ChunkKey,
+    chunk: &StoredChunk,
+) -> StorageResult<()> {
+    digest.chunk_key(key)?;
+    digest.u64(chunk.captured_world_revision.get());
+    digest.u64(chunk.revision.get());
+    digest.u64(chunk.domain_revisions.voxels.get());
+    digest.u64(chunk.domain_revisions.persistent_entities.get());
+    digest.u64(chunk.domain_revisions.continuation.get());
+    digest.chunk_data(&chunk.data)
 }
 
 pub(crate) fn hash_transaction(transaction: &WorldTransaction) -> StorageResult<CanonicalHash> {
@@ -287,6 +352,47 @@ mod tests {
                 0x1f, 0x0d, 0x77, 0xd8,
             ]
         );
+    }
+
+    #[test]
+    fn projected_chunk_hash_matches_fully_materialized_state() {
+        let state = fixed_state();
+        let template = state
+            .chunks
+            .values()
+            .next()
+            .expect("the fixed state contains exactly one chunk");
+        let mut existing = BTreeMap::new();
+        for x in [-3, 0, 3] {
+            let key = sample_key(state.world, ChunkCoordinate::new(x, -2, 3));
+            let mut chunk = template.clone();
+            chunk.key = key.clone();
+            chunk.data = sample_data(u8::try_from(x + 4).expect("fixture seed fits in u8"));
+            existing.insert(key, chunk);
+        }
+        let mut replacements = BTreeMap::new();
+        for x in [-4, 0, 4] {
+            let key = sample_key(state.world, ChunkCoordinate::new(x, -2, 3));
+            let mut chunk = template.clone();
+            chunk.key = key.clone();
+            chunk.captured_world_revision = WorldRevision::new(8);
+            chunk.data = sample_data(u8::try_from(x + 8).expect("fixture seed fits in u8"));
+            replacements.insert(key, chunk);
+        }
+        let mut materialized = existing.clone();
+        materialized.extend(replacements.clone());
+
+        let projected = hash_projected_materialized_chunk_state(
+            state.world,
+            WorldRevision::new(8),
+            &existing,
+            &replacements,
+        )
+        .expect("the bounded projected fixture has representable lengths");
+        let expected =
+            hash_materialized_chunk_state(state.world, WorldRevision::new(8), &materialized)
+                .expect("the bounded materialized fixture has representable lengths");
+        assert_eq!(projected, expected);
     }
 
     #[test]

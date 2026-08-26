@@ -14,7 +14,9 @@ use crate::{
     DomainRevisions, FaultPoint, PersistentEntityRevision, ReferenceDurability,
     ReferenceWorldSnapshot, RevisionCounter, StorageError, StorageResult, StoredChunk,
     TransactionId, TransactionKernelLimits, VoxelRevision, WorldRevision, WorldTransaction,
-    canonical_hash::{hash_materialized_chunk_state, hash_transaction},
+    canonical_hash::{
+        hash_materialized_chunk_state, hash_projected_materialized_chunk_state, hash_transaction,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -110,44 +112,43 @@ impl MemoryTransactionKernel {
 
     fn commit_prepared(&self, prepared: PreparedTransaction) -> StorageResult<CommitReceipt> {
         let mut state = self.write_state("commit authoritative transaction")?;
-        let current_world = state
-            .worlds
-            .get(&prepared.world)
-            .cloned()
-            .unwrap_or_default();
-
-        if let Some(receipt) = replay_receipt(&current_world, &prepared)? {
-            return Ok(receipt);
-        }
-        ensure_retry_not_expired(&current_world, &prepared)?;
-        ensure_world_revision(&current_world, &prepared)?;
-        let new_world_revision = next_world_revision(current_world.revision)?;
-        let plans = prepare_mutation_plans(&current_world, prepared.mutations)?;
-        let entity_locations = project_entity_locations(&current_world, &plans)?;
+        let (new_world_revision, plans, entity_locations) = {
+            let empty_world = MemoryWorld::default();
+            let current_world = state.worlds.get(&prepared.world).unwrap_or(&empty_world);
+            if let Some(receipt) = replay_receipt(current_world, &prepared)? {
+                return Ok(receipt);
+            }
+            ensure_retry_not_expired(current_world, &prepared)?;
+            ensure_world_revision(current_world, &prepared)?;
+            let new_world_revision = next_world_revision(current_world.revision)?;
+            let plans = prepare_mutation_plans(current_world, prepared.mutations)?;
+            let entity_locations = project_entity_locations(current_world, &plans)?;
+            (new_world_revision, plans, entity_locations)
+        };
         let fault = state.next_fault.take();
         fail_if(fault, FaultPoint::AfterValidation)?;
 
-        let mut staged_world = current_world;
-        staged_world.revision = new_world_revision;
-        staged_world.entity_locations = entity_locations;
+        let mut replacements = BTreeMap::new();
         let mut chunk_receipts = Vec::with_capacity(plans.len());
         for (index, plan) in plans.into_iter().enumerate() {
-            apply_plan(
-                &mut staged_world,
-                new_world_revision,
-                plan,
-                &mut chunk_receipts,
-            );
+            let (key, chunk, chunk_receipt) = stage_plan(new_world_revision, plan);
+            replacements.insert(key, chunk);
+            chunk_receipts.push(chunk_receipt);
             if index == 0 {
                 fail_if(fault, FaultPoint::AfterFirstStagedMutation)?;
             }
         }
 
-        let materialized_chunk_state_hash = hash_materialized_chunk_state(
-            prepared.world,
-            new_world_revision,
-            &staged_world.chunks,
-        )?;
+        let materialized_chunk_state_hash = {
+            let empty_world = MemoryWorld::default();
+            let current_world = state.worlds.get(&prepared.world).unwrap_or(&empty_world);
+            hash_projected_materialized_chunk_state(
+                prepared.world,
+                new_world_revision,
+                &current_world.chunks,
+                &replacements,
+            )?
+        };
         let receipt = CommitReceipt {
             transaction_id: prepared.id,
             world: prepared.world,
@@ -157,17 +158,25 @@ impl MemoryTransactionKernel {
             materialized_chunk_state_hash,
             replayed: false,
         };
+        let max_retained =
+            usize::try_from(self.limits.max_retained_receipts_per_world()).map_err(|_| {
+                StorageError::PayloadSizeOverflow {
+                    what: "retained receipt limit",
+                }
+            })?;
+        fail_if(fault, FaultPoint::AfterStagingBeforePublish)?;
+
+        let published_world = state.worlds.entry(prepared.world).or_default();
+        published_world.revision = new_world_revision;
+        published_world.entity_locations = entity_locations;
+        published_world.chunks.extend(replacements);
         retain_receipt(
-            &mut staged_world,
+            published_world,
             prepared.id,
             prepared.fingerprint,
             receipt.clone(),
-            self.limits.max_retained_receipts_per_world(),
-            prepared.world,
-        )?;
-        fail_if(fault, FaultPoint::AfterStagingBeforePublish)?;
-
-        state.worlds.insert(prepared.world, staged_world);
+            max_retained,
+        );
         fail_if(fault, FaultPoint::AfterPublishBeforeReceipt)?;
         Ok(receipt)
     }
@@ -583,29 +592,25 @@ fn next_continuation_revision(
         })
 }
 
-fn apply_plan(
-    world: &mut MemoryWorld,
+fn stage_plan(
     world_revision: WorldRevision,
     plan: MutationPlan,
-    receipts: &mut Vec<ChunkCommitReceipt>,
-) {
+) -> (ChunkKey, StoredChunk, ChunkCommitReceipt) {
     let key = plan.mutation.key;
-    world.chunks.insert(
-        key.clone(),
-        StoredChunk {
-            key: key.clone(),
-            captured_world_revision: world_revision,
-            revision: plan.chunk_revision,
-            domain_revisions: plan.domain_revisions,
-            data: plan.mutation.data,
-        },
-    );
-    receipts.push(ChunkCommitReceipt {
-        key,
+    let chunk = StoredChunk {
+        key: key.clone(),
+        captured_world_revision: world_revision,
+        revision: plan.chunk_revision,
+        domain_revisions: plan.domain_revisions,
+        data: plan.mutation.data,
+    };
+    let receipt = ChunkCommitReceipt {
+        key: key.clone(),
         chunk_revision: plan.chunk_revision,
         domain_revisions: plan.domain_revisions,
         changed_domains: plan.mutation.changed_domains,
-    });
+    };
+    (key, chunk, receipt)
 }
 
 fn retain_receipt(
@@ -613,9 +618,8 @@ fn retain_receipt(
     id: TransactionId,
     fingerprint: CanonicalHash,
     receipt: CommitReceipt,
-    max_retained: u32,
-    world_id: WorldId,
-) -> StorageResult<()> {
+    maximum: usize,
+) {
     world.committed_transactions.insert(
         id,
         CommittedTransaction {
@@ -624,16 +628,12 @@ fn retain_receipt(
         },
     );
     world.receipt_order.push_back(id);
-    let maximum = usize::try_from(max_retained).map_err(|_| StorageError::PayloadSizeOverflow {
-        what: "retained receipt limit",
-    })?;
     while world.receipt_order.len() > maximum {
         let Some(expired) = world.receipt_order.pop_front() else {
-            return Err(StorageError::ReceiptHistoryInvariant { world: world_id });
+            break;
         };
         world.committed_transactions.remove(&expired);
     }
-    Ok(())
 }
 fn fail_if(actual: Option<FaultPoint>, expected: FaultPoint) -> StorageResult<()> {
     if actual == Some(expected) {
