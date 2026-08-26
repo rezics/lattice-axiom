@@ -3693,13 +3693,12 @@ fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostErro
 }
 
 fn poll_worldgen_tasks(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
+    // These Send tasks advance on AsyncComputeTaskPool workers. The fixed path
+    // only harvests finished work; explicit readiness barriers tick local work.
     let tasks = {
         let mut inner = spine.lock_inner()?;
         mem::take(&mut inner.in_flight_worldgen_tasks)
     };
-    if tasks.iter().any(|task| !task.is_finished()) {
-        tick_compute_pool();
-    }
     let mut remaining = Vec::new();
     let mut completed = Vec::new();
     for task in tasks {
@@ -4260,13 +4259,12 @@ fn spawn_derived_jobs(
 }
 
 fn poll_derived_tasks(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
+    // These Send tasks advance on AsyncComputeTaskPool workers. The fixed path
+    // only harvests finished work; explicit readiness barriers tick local work.
     let tasks = {
         let mut inner = spine.lock_inner()?;
         mem::take(&mut inner.in_flight_tasks)
     };
-    if tasks.iter().any(|task| !task.is_finished()) {
-        tick_compute_pool();
-    }
     let mut remaining = Vec::new();
     let mut completed = Vec::new();
     for task in tasks {
