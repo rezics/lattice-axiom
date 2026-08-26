@@ -379,6 +379,10 @@ pub(super) struct ProductionSpineInner {
     look_ahead_tick: u64,
     last_reconciled_tick: Option<u64>,
     last_desired: Arc<BTreeSet<ChunkCoordinate>>,
+    last_prioritized_desired: Arc<[ChunkCoordinate]>,
+    /// First stable-priority coordinate not conclusively resident or queued.
+    /// A desired-key change or asynchronous generation failure resets it.
+    desired_admission_cursor: usize,
     last_desired_key: Option<DesiredChunkCacheKey>,
     reconciled_desired_key: Option<DesiredChunkCacheKey>,
     edited_pin_revision: EditedPinRevision,
@@ -796,6 +800,8 @@ impl ProductionSpine {
             look_ahead_tick: 0,
             last_reconciled_tick: None,
             last_desired: Arc::new(BTreeSet::new()),
+            last_prioritized_desired: Arc::from([]),
+            desired_admission_cursor: 0,
             last_desired_key: None,
             reconciled_desired_key: None,
             edited_pin_revision: EditedPinRevision::default(),
@@ -2300,13 +2306,8 @@ impl ProductionSpine {
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         let origin = translation_chunk(inner.player_pose.translation, inner.chunk_edge)
             .ok_or(BlockEditRejectV1::StorageUnavailable)?;
-        let simulation_distance = inner.clamps.simulation_distance();
-        tick_simulated_fluids(
-            &mut inner,
-            self.storage.kernel(),
-            origin,
-            simulation_distance,
-        )
+        let clamps = inner.clamps;
+        tick_simulated_fluids(&mut inner, self.storage.kernel(), origin, clamps)
     }
 
     /// Returns the captured fluid revision stamp for a resident chunk.
@@ -3390,6 +3391,7 @@ fn prime_startup_working_set(
             execution: WorldgenExecution::Blocking,
         },
     )
+    .map(|_| ())
 }
 
 fn sync_working_set(
@@ -3400,17 +3402,13 @@ fn sync_working_set(
     tick: FixedTick,
     admission: WorldgenAdmission,
 ) -> Result<(), ProductionHostError> {
-    let (desired, desired_key) = cached_desired_chunks(inner, origin, look_ahead);
+    let (desired, prioritized, desired_key) = cached_desired_chunks(inner, origin, look_ahead);
     refresh_residency(inner, origin, look_ahead, tick);
     let needs_mutate = inner.reconciled_desired_key != Some(desired_key)
-        || desired
-            .iter()
-            .any(|coordinate| !inner.runtime.is_resident(*coordinate));
+        || inner.desired_admission_cursor < prioritized.len();
     if needs_mutate {
         evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, false)?;
-        let needs_capacity = desired
-            .iter()
-            .any(|coordinate| !inner.runtime.is_resident(*coordinate))
+        let needs_capacity = inner.desired_admission_cursor < prioritized.len()
             && inner.runtime.diagnostics().resident_chunks() >= inner.clamps.max_resident();
         if needs_capacity {
             // Retain is a latency optimization, not permission to deadlock
@@ -3418,8 +3416,17 @@ fn sync_working_set(
             // protected; only clean retained chunks may be released here.
             evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, true)?;
         }
-        let ordered = prioritize_chunks(desired.as_ref(), origin, look_ahead);
-        admit_desired(inner, kernel, origin, look_ahead, &ordered, tick, admission)?;
+        let cursor = inner.desired_admission_cursor.min(prioritized.len());
+        let inspected_prefix = admit_desired(
+            inner,
+            kernel,
+            origin,
+            look_ahead,
+            &prioritized[cursor..],
+            tick,
+            admission,
+        )?;
+        inner.desired_admission_cursor = cursor.saturating_add(inspected_prefix);
         inner.reconciled_desired_key = Some(desired_key);
     }
     Ok(())
@@ -3429,7 +3436,11 @@ fn cached_desired_chunks(
     inner: &mut ProductionSpineInner,
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
-) -> (Arc<BTreeSet<ChunkCoordinate>>, DesiredChunkCacheKey) {
+) -> (
+    Arc<BTreeSet<ChunkCoordinate>>,
+    Arc<[ChunkCoordinate]>,
+    DesiredChunkCacheKey,
+) {
     let key = DesiredChunkCacheKey {
         origin,
         clamps: inner.clamps,
@@ -3437,16 +3448,18 @@ fn cached_desired_chunks(
         edited_pin_revision: inner.edited_pin_revision,
     };
     if inner.last_desired_key != Some(key) {
-        inner.last_desired = Arc::new(desired_chunks(
-            origin,
-            inner.clamps,
-            look_ahead,
-            &inner.edited,
-        ));
+        let desired = desired_chunks(origin, inner.clamps, look_ahead, &inner.edited);
+        inner.last_prioritized_desired = Arc::from(prioritize_chunks(&desired, origin, look_ahead));
+        inner.last_desired = Arc::new(desired);
+        inner.desired_admission_cursor = 0;
         inner.last_desired_key = Some(key);
         inner.desired_chunk_set_rebuilds = inner.desired_chunk_set_rebuilds.saturating_add(1);
     }
-    (Arc::clone(&inner.last_desired), key)
+    (
+        Arc::clone(&inner.last_desired),
+        Arc::clone(&inner.last_prioritized_desired),
+        key,
+    )
 }
 
 fn refresh_residency(
@@ -3582,10 +3595,12 @@ fn admit_desired(
     ordered: &[ChunkCoordinate],
     tick: FixedTick,
     admission: WorldgenAdmission,
-) -> Result<(), ProductionHostError> {
+) -> Result<usize, ProductionHostError> {
     let mut generate = Vec::new();
     let mut hydrate = Vec::new();
     let mut admitted = 0_usize;
+    let mut inspected_prefix = 0_usize;
+    let mut skipped_prefix = false;
     let world_view = inner
         .world_store
         .as_ref()
@@ -3599,6 +3614,7 @@ fn admit_desired(
     for coordinate in ordered {
         if inner.runtime.is_resident(*coordinate) || inner.worldgen_tickets.contains_key(coordinate)
         {
+            advance_inspected_prefix(&mut inspected_prefix, skipped_prefix);
             continue;
         }
         let upcoming = inner
@@ -3611,6 +3627,7 @@ fn admit_desired(
         let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
         let render_scoped = is_render_chunk(*coordinate, origin, inner.clamps);
         if class == InterestClass::Prefetch && upcoming >= high_water {
+            skipped_prefix = true;
             continue;
         }
         if upcoming >= inner.clamps.max_resident() || admitted >= admit_limit {
@@ -3632,6 +3649,7 @@ fn admit_desired(
                 .insert(*coordinate, ChunkLifecycle::Resident);
             remember_admission(inner, *coordinate, class, render_scoped, tick);
             admitted = admitted.saturating_add(1);
+            advance_inspected_prefix(&mut inspected_prefix, skipped_prefix);
             continue;
         }
         if let Some(persisted) = world_view
@@ -3644,6 +3662,7 @@ fn admit_desired(
             hydrate.push((*coordinate, persisted));
             remember_admission(inner, *coordinate, class, render_scoped, tick);
             admitted = admitted.saturating_add(1);
+            advance_inspected_prefix(&mut inspected_prefix, skipped_prefix);
             continue;
         }
         if generate.len() >= MAX_BOUNDED_REGION_CHUNKS {
@@ -3655,21 +3674,28 @@ fn admit_desired(
         generate.push(*coordinate);
         remember_admission(inner, *coordinate, class, render_scoped, tick);
         admitted = admitted.saturating_add(1);
+        advance_inspected_prefix(&mut inspected_prefix, skipped_prefix);
     }
     if !hydrate.is_empty() {
         publish_hydrated(inner, kernel, &hydrate, tick, origin, look_ahead)?;
     }
     if generate.is_empty() {
-        return Ok(());
+        return Ok(inspected_prefix);
     }
     match admission.execution {
         WorldgenExecution::Blocking => {
-            publish_generated(inner, kernel, &generate, tick, origin, look_ahead)
+            publish_generated(inner, kernel, &generate, tick, origin, look_ahead)?;
         }
         WorldgenExecution::Deferred => {
             queue_worldgen(inner, generate);
-            Ok(())
         }
+    }
+    Ok(inspected_prefix)
+}
+
+fn advance_inspected_prefix(inspected_prefix: &mut usize, skipped_prefix: bool) {
+    if !skipped_prefix {
+        *inspected_prefix = inspected_prefix.saturating_add(1);
     }
 }
 
@@ -3819,6 +3845,7 @@ fn apply_ready_worldgen(
                 inner.lifecycle.remove(&job.coordinate);
                 inner.residency.remove(&job.coordinate);
             }
+            inner.desired_admission_cursor = 0;
             return Err(error);
         }
         published = published.saturating_add(1);

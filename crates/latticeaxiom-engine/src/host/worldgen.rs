@@ -105,6 +105,8 @@ pub(super) fn spine_config() -> WorldgenConfigV1 {
 
 /// Accepted active-chunk ceiling for the desktop reference profile.
 const HOST_MAX_ACTIVE_CHUNKS: u32 = 405;
+/// Accepted resident-chunk ceiling for the desktop reference profile.
+const HOST_MAX_RESIDENT_CHUNKS: u32 = 1_183;
 /// Concurrent chunk admission stays bounded independently of requested range.
 const HOST_MAX_IN_FLIGHT_CHUNKS: u32 = 8;
 /// Durable save radius remains unused by the in-memory production host.
@@ -112,9 +114,9 @@ const HOST_DURABLE_SAVE_RADIUS_CHUNKS: u32 = 4;
 
 /// Returns host streaming clamps for the authored `2..=32` request contract.
 ///
-/// The 32³ baseline preserves the accepted 128-meter active coverage.
-/// [`super::stream::StreamClamps`] derives an effective radius of four from the
-/// accepted 405-chunk working-set ceiling and reports the binding constraint.
+/// The 32³ baseline preserves the accepted 128-meter active and 192-meter
+/// resident coverage. [`super::stream::StreamClamps`] derives simulation and
+/// render radii independently and reports any binding request constraint.
 ///
 /// # Errors
 ///
@@ -124,7 +126,7 @@ pub(super) fn host_hard_limits() -> Result<PlayableWorldHardLimitsV1, Production
         AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
         AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
         HOST_MAX_ACTIVE_CHUNKS,
-        HOST_MAX_ACTIVE_CHUNKS,
+        HOST_MAX_RESIDENT_CHUNKS,
         HOST_MAX_IN_FLIGHT_CHUNKS,
         HOST_DURABLE_SAVE_RADIUS_CHUNKS,
     )

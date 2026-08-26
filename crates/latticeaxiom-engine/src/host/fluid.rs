@@ -17,7 +17,7 @@ use latticeaxiom_voxel_runtime::{
 
 use super::{
     spine::{HostVoxel, ProductionSpineInner, canonical_index, runtime_chunk_cells},
-    stream::chebyshev_xz,
+    stream::{StreamClamps, is_simulation_chunk},
 };
 
 /// Result of one host-side bounded fluid apply.
@@ -83,12 +83,12 @@ pub(super) fn tick_simulated(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
     origin: ChunkCoordinate,
-    simulation_distance: u32,
+    clamps: StreamClamps,
 ) -> Result<Vec<HostFluidTickV1>, BlockEditRejectV1> {
     let coordinates = inner
         .runtime
         .resident_coordinates()
-        .filter(|coordinate| within_simulation_distance(*coordinate, origin, simulation_distance))
+        .filter(|coordinate| is_simulation_chunk(*coordinate, origin, clamps))
         .collect::<Vec<_>>();
     let mut applied = Vec::new();
     for coordinate in coordinates {
@@ -97,14 +97,6 @@ pub(super) fn tick_simulated(
         }
     }
     Ok(applied)
-}
-
-fn within_simulation_distance(
-    coordinate: ChunkCoordinate,
-    origin: ChunkCoordinate,
-    simulation_distance: u32,
-) -> bool {
-    chebyshev_xz(coordinate, origin) <= simulation_distance
 }
 
 fn apply_plan(
@@ -282,27 +274,5 @@ fn map_fluid_error(error: &FluidRuntimeError) -> BlockEditRejectV1 {
             actual: 0,
         },
         _ => BlockEditRejectV1::ContentUnavailable,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use latticeaxiom_storage::ChunkCoordinate;
-
-    use super::within_simulation_distance;
-
-    #[test]
-    fn simulation_distance_excludes_resident_prefetch_chunks() {
-        let origin = ChunkCoordinate::new(10, 0, -4);
-        assert!(within_simulation_distance(
-            ChunkCoordinate::new(14, 9, 0),
-            origin,
-            4
-        ));
-        assert!(!within_simulation_distance(
-            ChunkCoordinate::new(15, 0, -4),
-            origin,
-            4
-        ));
     }
 }

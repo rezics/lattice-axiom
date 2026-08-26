@@ -81,12 +81,18 @@ pub struct StreamingProfileEvidenceV1 {
     pub generation_radius_chunks: u32,
     /// Admitted Chebyshev interest radius after the resident budget clamp.
     pub interest_radius_chunks: u32,
+    /// Hard active chunk cap.
+    pub max_active_chunks: u32,
     /// Hard resident chunk cap.
     pub max_resident_chunks: u32,
     /// Hard in-flight chunk cap.
     pub max_in_flight_chunks: u32,
     /// World-space horizontal coverage of the live interest radius, in meters.
     pub world_space_interest_coverage_m: u32,
+    /// World-space horizontal coverage of authoritative simulation, in meters.
+    pub world_space_simulation_coverage_m: u32,
+    /// World-space horizontal coverage of retained full-resolution chunks, in meters.
+    pub world_space_resident_coverage_m: u32,
     /// World-space horizontal coverage of the live generation radius, in meters.
     pub world_space_generation_coverage_m: u32,
     /// ADR 0026 chunk-edge premise.
@@ -132,10 +138,13 @@ impl StreamingProfileEvidenceV1 {
         let interest_radius = status.effective_render_distance().chunks();
         let edge = config.chunk_edge_voxels;
         let interest_coverage = coverage_m(interest_radius, edge);
+        let simulation_coverage = coverage_m(status.simulation_distance().chunks(), edge);
+        let resident_coverage = coverage_m(status.resident_distance().chunks(), edge);
         let generation_coverage = coverage_m(limits.generation_radius_chunks, edge);
         let equivalent_active = radius_for_coverage(ADR_0026_ACTIVE_COVERAGE_M, edge);
         let equivalent_resident = radius_for_coverage(ADR_0026_RESIDENT_COVERAGE_M, edge);
-        let matches_coverage = interest_coverage == ADR_0026_ACTIVE_COVERAGE_M
+        let matches_coverage = simulation_coverage == ADR_0026_ACTIVE_COVERAGE_M
+            && resident_coverage == ADR_0026_RESIDENT_COVERAGE_M
             && generation_coverage >= ADR_0026_RESIDENT_COVERAGE_M;
         Self {
             schema: STREAMING_PROFILE_EVIDENCE_SCHEMA_V1.to_owned(),
@@ -152,9 +161,12 @@ impl StreamingProfileEvidenceV1 {
             prefetch_distance_chunks: status.prefetch_distance().chunks(),
             generation_radius_chunks: limits.generation_radius_chunks,
             interest_radius_chunks: interest_radius,
+            max_active_chunks: limits.max_active_chunks,
             max_resident_chunks: limits.max_resident_chunks,
             max_in_flight_chunks: limits.max_in_flight_chunks,
             world_space_interest_coverage_m: interest_coverage,
+            world_space_simulation_coverage_m: simulation_coverage,
+            world_space_resident_coverage_m: resident_coverage,
             world_space_generation_coverage_m: generation_coverage,
             adr_0026_chunk_edge_voxels: ADR_0026_CHUNK_EDGE_VOXELS,
             adr_0026_active_coverage_m: ADR_0026_ACTIVE_COVERAGE_M,
@@ -166,7 +178,9 @@ impl StreamingProfileEvidenceV1 {
             p4_choice: "adopt-32-cubed-baseline".to_owned(),
             counts,
             notes: format!(
-                "Live fixture uses {edge}³ chunks and interest radius {interest_radius} ({interest_coverage} m). ADR 0026 {ADR_0026_ACTIVE_COVERAGE_M} m / {ADR_0026_RESIDENT_COVERAGE_M} m coverage uses radii {ADR_0026_ACTIVE_RADIUS_CHUNKS} / {ADR_0026_RESIDENT_RADIUS_CHUNKS} at {ADR_0026_CHUNK_EDGE_VOXELS}³ and radii {equivalent_active} / {equivalent_resident} at this edge. Radius 1–2 is not a D2/D10 working-set pass. P7 LOD remains unauthorized."
+                "Live fixture uses {edge}³ chunks with simulation radius {} ({simulation_coverage} m), resident/render radius {} ({resident_coverage} m), and admitted interest radius {interest_radius} ({interest_coverage} m). ADR 0026 {ADR_0026_ACTIVE_COVERAGE_M} m / {ADR_0026_RESIDENT_COVERAGE_M} m coverage uses radii {ADR_0026_ACTIVE_RADIUS_CHUNKS} / {ADR_0026_RESIDENT_RADIUS_CHUNKS} at {ADR_0026_CHUNK_EDGE_VOXELS}³ and radii {equivalent_active} / {equivalent_resident} at this edge. Radius 1–2 is not a D2/D10 working-set pass. P7 LOD remains unauthorized.",
+                status.simulation_distance().chunks(),
+                status.resident_distance().chunks(),
             ),
         }
     }
@@ -237,15 +251,19 @@ mod tests {
     #[test]
     fn thirty_two_cubed_baseline_reports_matching_coverage_without_claiming_the_d2_gate() {
         let limits =
-            PlayableWorldHardLimitsV1::new(32, 32, 405, 405, 8, 4).expect("nonzero clamps");
+            PlayableWorldHardLimitsV1::new(32, 32, 405, 1_183, 8, 4).expect("nonzero clamps");
         let evidence = StreamingProfileEvidenceV1::for_spine_config(limits).expect("clamps");
         assert_eq!(evidence.chunk_edge_voxels, 32);
         assert_eq!(evidence.requested_render_distance_chunks, 8);
         assert_eq!(evidence.admitted_render_distance_chunks, 8);
-        assert_eq!(evidence.effective_render_distance_chunks, 4);
+        assert_eq!(evidence.effective_render_distance_chunks, 6);
         assert_eq!(evidence.simulation_distance_chunks, 4);
-        assert_eq!(evidence.resident_distance_chunks, 4);
-        assert_eq!(evidence.prefetch_distance_chunks, 5);
+        assert_eq!(evidence.resident_distance_chunks, 6);
+        assert_eq!(evidence.prefetch_distance_chunks, 7);
+        assert_eq!(evidence.max_active_chunks, 405);
+        assert_eq!(evidence.max_resident_chunks, 1_183);
+        assert_eq!(evidence.world_space_simulation_coverage_m, 128);
+        assert_eq!(evidence.world_space_resident_coverage_m, 192);
         assert_eq!(evidence.equivalent_active_radius_chunks, 4);
         assert_eq!(evidence.equivalent_resident_radius_chunks, 6);
         assert!(evidence.matches_adr_0026_world_space_coverage);

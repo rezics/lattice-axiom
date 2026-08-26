@@ -24,14 +24,14 @@ pub(super) const RETAIN_GRACE_TICKS: u64 = 32;
 /// Ticks a chunk must stay resident after admission before distance eviction.
 pub(super) const MIN_RESIDENCY_TICKS: u64 = 8;
 
-/// Vertical radius retained around the player's current chunk.
-///
-/// This matches the ADR 0026 active working-set premise and prevents a taller
-/// dimension from forcing every vertical section into memory at once.
+/// Typed vertical radius around the player's current chunk.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct VerticalStreamRadiusChunks(u32);
 
-const VERTICAL_STREAM_RADIUS: VerticalStreamRadiusChunks = VerticalStreamRadiusChunks(2);
+/// ADR 0026 active vertical radius for authoritative simulation.
+const ACTIVE_VERTICAL_STREAM_RADIUS: VerticalStreamRadiusChunks = VerticalStreamRadiusChunks(2);
+/// ADR 0026 resident vertical radius for full-resolution presentation data.
+const RESIDENT_VERTICAL_STREAM_RADIUS: VerticalStreamRadiusChunks = VerticalStreamRadiusChunks(3);
 
 /// Constraint that reduced a requested view distance for the active host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,6 +102,7 @@ pub struct ViewDistanceStatusV1 {
     prefetch: PrefetchDistanceChunksV1,
     requested_cap: u32,
     generation_cap: u32,
+    active_budget_cap: u32,
     resident_budget_cap: u32,
     clamp_reason: Option<ViewDistanceClampReasonV1>,
 }
@@ -153,6 +154,12 @@ impl ViewDistanceStatusV1 {
     #[must_use]
     pub const fn generation_cap(self) -> u32 {
         self.generation_cap
+    }
+
+    /// Returns the largest simulation radius that fits the active budget.
+    #[must_use]
+    pub const fn active_budget_cap(self) -> u32 {
+        self.active_budget_cap
     }
 
     /// Returns the largest radius that fits the resident budget.
@@ -208,7 +215,8 @@ pub(super) struct StreamClamps {
     distances: StreamDistances,
     pub(super) vertical_min_chunk: i32,
     pub(super) vertical_max_chunk: i32,
-    vertical_layers: u32,
+    active_vertical_layers: u32,
+    resident_vertical_layers: u32,
 }
 
 impl StreamClamps {
@@ -227,17 +235,24 @@ impl StreamClamps {
             .map_err(|_| ProductionHostError::InvalidHostLimits)?;
         let (vertical_min_chunk, vertical_max_chunk) = vertical_chunk_bounds(config);
         let world_vertical_layers = vertical_layer_count(vertical_min_chunk, vertical_max_chunk)?;
-        let streamed_vertical_layers = VERTICAL_STREAM_RADIUS.0.saturating_mul(2).saturating_add(1);
-        let vertical_layers = world_vertical_layers.min(streamed_vertical_layers);
-        let distances =
-            stream_distances(hard_limits, DEFAULT_VIEW_DISTANCE_CHUNKS, vertical_layers)
-                .ok_or(ProductionHostError::InvalidHostLimits)?;
+        let active_vertical_layers =
+            world_vertical_layers.min(vertical_layer_span(ACTIVE_VERTICAL_STREAM_RADIUS));
+        let resident_vertical_layers =
+            world_vertical_layers.min(vertical_layer_span(RESIDENT_VERTICAL_STREAM_RADIUS));
+        let distances = stream_distances(
+            hard_limits,
+            DEFAULT_VIEW_DISTANCE_CHUNKS,
+            active_vertical_layers,
+            resident_vertical_layers,
+        )
+        .ok_or(ProductionHostError::InvalidHostLimits)?;
         Ok(Self {
             hard_limits,
             distances,
             vertical_min_chunk,
             vertical_max_chunk,
-            vertical_layers,
+            active_vertical_layers,
+            resident_vertical_layers,
         })
     }
 
@@ -246,8 +261,13 @@ impl StreamClamps {
         &mut self,
         requested: u32,
     ) -> Result<(), ProductionHostError> {
-        self.distances = stream_distances(self.hard_limits, requested, self.vertical_layers)
-            .ok_or(ProductionHostError::InvalidHostLimits)?;
+        self.distances = stream_distances(
+            self.hard_limits,
+            requested,
+            self.active_vertical_layers,
+            self.resident_vertical_layers,
+        )
+        .ok_or(ProductionHostError::InvalidHostLimits)?;
         Ok(())
     }
 
@@ -259,9 +279,14 @@ impl StreamClamps {
             .generation_radius_chunks
             .max(1)
             .min(requested_cap);
+        let active_budget_cap = budget_radius(
+            requested_cap,
+            self.active_vertical_layers,
+            self.hard_limits.max_active_chunks,
+        );
         let resident_budget_cap = resident_budget_radius(
             requested_cap,
-            self.vertical_layers,
+            self.resident_vertical_layers,
             self.hard_limits.max_resident_chunks,
         );
         let generation_binds = generation_cap < self.distances.admitted_render.chunks()
@@ -283,6 +308,7 @@ impl StreamClamps {
             prefetch: self.distances.prefetch,
             requested_cap,
             generation_cap,
+            active_budget_cap,
             resident_budget_cap,
             clamp_reason,
         }
@@ -323,10 +349,10 @@ impl StreamClamps {
         prefetch_high_water(self.max_resident())
     }
 
-    fn streamed_vertical_bounds(self, origin_y: i32) -> (i32, i32) {
+    fn vertical_bounds(self, origin_y: i32, radius: VerticalStreamRadiusChunks) -> (i32, i32) {
         let world_min = i64::from(self.vertical_min_chunk);
         let world_max = i64::from(self.vertical_max_chunk);
-        let radius = i64::from(VERTICAL_STREAM_RADIUS.0);
+        let radius = i64::from(radius.0);
         let world_span = world_max.saturating_sub(world_min);
         let window_span = radius.saturating_mul(2).min(world_span);
         let last_start = world_max.saturating_sub(window_span);
@@ -340,8 +366,21 @@ impl StreamClamps {
         )
     }
 
-    fn contains_streamed_y(self, chunk_y: i32, origin_y: i32) -> bool {
-        let (minimum, maximum) = self.streamed_vertical_bounds(origin_y);
+    fn active_vertical_bounds(self, origin_y: i32) -> (i32, i32) {
+        self.vertical_bounds(origin_y, ACTIVE_VERTICAL_STREAM_RADIUS)
+    }
+
+    fn resident_vertical_bounds(self, origin_y: i32) -> (i32, i32) {
+        self.vertical_bounds(origin_y, RESIDENT_VERTICAL_STREAM_RADIUS)
+    }
+
+    fn contains_active_y(self, chunk_y: i32, origin_y: i32) -> bool {
+        let (minimum, maximum) = self.active_vertical_bounds(origin_y);
+        (minimum..=maximum).contains(&chunk_y)
+    }
+
+    fn contains_resident_y(self, chunk_y: i32, origin_y: i32) -> bool {
+        let (minimum, maximum) = self.resident_vertical_bounds(origin_y);
         (minimum..=maximum).contains(&chunk_y)
     }
 }
@@ -449,7 +488,7 @@ pub(super) fn desired_chunks(
     pins: &BTreeSet<ChunkCoordinate>,
 ) -> BTreeSet<ChunkCoordinate> {
     let mut desired = BTreeSet::new();
-    let (vertical_min, vertical_max) = clamps.streamed_vertical_bounds(origin.y);
+    let (vertical_min, vertical_max) = clamps.resident_vertical_bounds(origin.y);
     insert_column(&mut desired, origin.x, origin.z, vertical_min, vertical_max);
     let radius = i32::try_from(clamps.resident_distance()).unwrap_or(i32::MAX);
     let min_x = origin.x.saturating_sub(radius);
@@ -480,13 +519,21 @@ pub(super) fn prioritize_chunks(
     let mut ordered = desired.iter().copied().collect::<Vec<_>>();
     ordered.sort_by_key(|chunk| {
         let distance = chebyshev_xz(*chunk, origin);
+        let vertical_distance = chunk.y.abs_diff(origin.y);
         let look = i64::from(chunk.x.saturating_sub(origin.x))
             .saturating_mul(i64::from(look_ahead[0]))
             .saturating_add(
                 i64::from(chunk.z.saturating_sub(origin.z))
                     .saturating_mul(i64::from(look_ahead[1])),
             );
-        (distance, std::cmp::Reverse(look), chunk.x, chunk.y, chunk.z)
+        (
+            distance,
+            vertical_distance,
+            std::cmp::Reverse(look),
+            chunk.x,
+            chunk.y,
+            chunk.z,
+        )
     });
     ordered
 }
@@ -494,24 +541,35 @@ pub(super) fn prioritize_chunks(
 fn clamped_interest_radius_for(
     limits: PlayableWorldHardLimitsV1,
     requested_view: u32,
-    vertical_layers: u32,
+    resident_vertical_layers: u32,
 ) -> u32 {
     let requested = requested_view
         .min(limits.view_distance_chunks)
         .min(limits.generation_radius_chunks);
-    resident_budget_radius(requested, vertical_layers, limits.max_resident_chunks)
+    resident_budget_radius(
+        requested,
+        resident_vertical_layers,
+        limits.max_resident_chunks,
+    )
 }
 
 fn stream_distances(
     limits: PlayableWorldHardLimitsV1,
     requested_render: u32,
-    vertical_layers: u32,
+    active_vertical_layers: u32,
+    resident_vertical_layers: u32,
 ) -> Option<StreamDistances> {
     let requested_render =
         requested_render.clamp(MIN_VIEW_DISTANCE_CHUNKS, AUTHORED_MAX_VIEW_DISTANCE_CHUNKS);
     let requested_cap = limits.view_distance_chunks.max(1);
     let admitted_render = requested_render.min(requested_cap);
-    let effective_render = clamped_interest_radius_for(limits, admitted_render, vertical_layers);
+    let effective_render =
+        clamped_interest_radius_for(limits, admitted_render, resident_vertical_layers);
+    let simulation = budget_radius(
+        effective_render,
+        active_vertical_layers,
+        limits.max_active_chunks,
+    );
     let generation_cap = limits.generation_radius_chunks.max(1).min(requested_cap);
     let prefetch = effective_render
         .saturating_add(1)
@@ -521,7 +579,7 @@ fn stream_distances(
         requested_render: RequestedRenderDistanceChunksV1::new(requested_render)?,
         admitted_render: AdmittedRenderDistanceChunksV1::new(admitted_render)?,
         effective_render: EffectiveRenderDistanceChunksV1::new(effective_render)?,
-        simulation: SimulationDistanceChunksV1::new(effective_render)?,
+        simulation: SimulationDistanceChunksV1::new(simulation)?,
         resident: ResidentDistanceChunksV1::new(effective_render)?,
         prefetch: PrefetchDistanceChunksV1::new(prefetch)?,
     })
@@ -532,14 +590,22 @@ fn resident_budget_radius(
     vertical_layers: u32,
     max_resident_chunks: u32,
 ) -> u32 {
+    budget_radius(maximum_radius, vertical_layers, max_resident_chunks)
+}
+
+fn budget_radius(maximum_radius: u32, vertical_layers: u32, maximum_chunks: u32) -> u32 {
     let mut radius = maximum_radius;
     while radius > 0 {
-        if interest_volume(radius, vertical_layers, false) <= max_resident_chunks {
+        if interest_volume(radius, vertical_layers, false) <= maximum_chunks {
             return radius;
         }
         radius -= 1;
     }
     radius
+}
+
+const fn vertical_layer_span(radius: VerticalStreamRadiusChunks) -> u32 {
+    radius.0.saturating_mul(2).saturating_add(1)
 }
 
 fn interest_volume(radius: u32, vertical_layers: u32, include_look_ahead: bool) -> u32 {
@@ -588,8 +654,19 @@ pub(super) fn is_render_chunk(
     origin: ChunkCoordinate,
     clamps: StreamClamps,
 ) -> bool {
-    clamps.contains_streamed_y(chunk.y, origin.y)
+    clamps.contains_resident_y(chunk.y, origin.y)
         && chebyshev_xz(chunk, origin) <= clamps.effective_render_distance()
+}
+
+/// Returns whether a chunk is inside the bounded authoritative simulation set.
+#[must_use]
+pub(super) fn is_simulation_chunk(
+    chunk: ChunkCoordinate,
+    origin: ChunkCoordinate,
+    clamps: StreamClamps,
+) -> bool {
+    clamps.contains_active_y(chunk.y, origin.y)
+        && chebyshev_xz(chunk, origin) <= clamps.simulation_distance()
 }
 
 fn is_prefetch_chunk(
@@ -599,7 +676,7 @@ fn is_prefetch_chunk(
     look_ahead: [i32; 2],
 ) -> bool {
     look_ahead_column(origin, clamps.prefetch_distance(), look_ahead) == Some((chunk.x, chunk.z))
-        && clamps.contains_streamed_y(chunk.y, origin.y)
+        && clamps.contains_resident_y(chunk.y, origin.y)
 }
 
 fn prefetch_high_water(max_resident: usize) -> usize {
@@ -661,7 +738,8 @@ mod tests {
     use super::{
         ChunkLifecycle, InterestClass, LOOK_AHEAD_EXPIRY_TICKS, MIN_RESIDENCY_TICKS,
         RETAIN_GRACE_TICKS, StreamClamps, ViewDistanceClampReasonV1, chebyshev_xz, desired_chunks,
-        interest_class, look_ahead_axis, prioritize_chunks, retain_protected, sticky_look_ahead,
+        interest_class, is_simulation_chunk, look_ahead_axis, prioritize_chunks, retain_protected,
+        sticky_look_ahead,
     };
     use latticeaxiom_compose::PlayableWorldHardLimitsV1;
     use latticeaxiom_storage::ChunkCoordinate;
@@ -751,7 +829,7 @@ mod tests {
 
     #[test]
     fn desktop_request_cap_reports_resident_budget_clamp() {
-        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 405, 8, 4)
+        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 1_183, 8, 4)
             .expect("desktop request clamps are nonzero");
         let mut clamps = StreamClamps::new(
             limits,
@@ -772,11 +850,12 @@ mod tests {
         assert_eq!(status.admitted_render_distance().chunks(), 32);
         assert_eq!(status.requested_cap(), 32);
         assert_eq!(status.generation_cap(), 32);
-        assert_eq!(status.resident_budget_cap(), 4);
-        assert_eq!(status.effective_render_distance().chunks(), 4);
+        assert_eq!(status.active_budget_cap(), 4);
+        assert_eq!(status.resident_budget_cap(), 8);
+        assert_eq!(status.effective_render_distance().chunks(), 8);
         assert_eq!(status.simulation_distance().chunks(), 4);
-        assert_eq!(status.resident_distance().chunks(), 4);
-        assert_eq!(status.prefetch_distance().chunks(), 5);
+        assert_eq!(status.resident_distance().chunks(), 8);
+        assert_eq!(status.prefetch_distance().chunks(), 9);
         assert_eq!(
             status.clamp_reason(),
             Some(ViewDistanceClampReasonV1::ResidentBudget)
@@ -789,7 +868,7 @@ mod tests {
             [1, 0],
             &BTreeSet::new(),
         );
-        assert_eq!(desired.len(), 328);
+        assert_eq!(desired.len(), 1_160);
         assert!(desired.len() <= clamps.max_resident());
     }
 
@@ -849,7 +928,7 @@ mod tests {
 
     #[test]
     fn tall_world_streams_a_bounded_vertical_window() {
-        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 405, 8, 4)
+        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 1_183, 8, 4)
             .expect("desktop request clamps are nonzero");
         let clamps = StreamClamps::new(
             limits,
@@ -866,13 +945,30 @@ mod tests {
 
         assert_eq!(clamps.vertical_min_chunk, -2);
         assert_eq!(clamps.vertical_max_chunk, 9);
-        assert_eq!(clamps.effective_render_distance(), 4);
-        assert_eq!(desired.len(), 405);
-        for y in 0..=4 {
+        assert_eq!(clamps.effective_render_distance(), 6);
+        assert_eq!(clamps.simulation_distance(), 4);
+        assert_eq!(clamps.resident_distance(), 6);
+        assert_eq!(desired.len(), 1_183);
+        for y in -1..=5 {
             assert!(desired.contains(&ChunkCoordinate::new(0, y, 0)));
         }
-        assert!(!desired.contains(&ChunkCoordinate::new(0, -1, 0)));
-        assert!(!desired.contains(&ChunkCoordinate::new(0, 5, 0)));
+        assert!(!desired.contains(&ChunkCoordinate::new(0, -2, 0)));
+        assert!(!desired.contains(&ChunkCoordinate::new(0, 6, 0)));
+        assert!(is_simulation_chunk(
+            ChunkCoordinate::new(4, 4, -4),
+            origin,
+            clamps
+        ));
+        assert!(!is_simulation_chunk(
+            ChunkCoordinate::new(5, 2, 0),
+            origin,
+            clamps
+        ));
+        assert!(!is_simulation_chunk(
+            ChunkCoordinate::new(0, 5, 0),
+            origin,
+            clamps
+        ));
     }
 
     #[test]
@@ -897,6 +993,19 @@ mod tests {
         assert_eq!(ordered[0], ChunkCoordinate::new(0, 0, 0));
         assert_eq!(ordered[1], ChunkCoordinate::new(1, 0, 0));
         assert_eq!(ordered[2], ChunkCoordinate::new(-1, 0, 0));
+        let vertical = BTreeSet::from([
+            ChunkCoordinate::new(0, 0, 0),
+            ChunkCoordinate::new(0, 2, 0),
+            ChunkCoordinate::new(0, 3, 0),
+        ]);
+        assert_eq!(
+            prioritize_chunks(&vertical, ChunkCoordinate::new(0, 3, 0), [0, 0]),
+            [
+                ChunkCoordinate::new(0, 3, 0),
+                ChunkCoordinate::new(0, 2, 0),
+                ChunkCoordinate::new(0, 0, 0),
+            ]
+        );
         assert_eq!(chebyshev_xz(ChunkCoordinate::new(-3, 2, 1), origin), 3);
         assert_ne!(ChunkLifecycle::Absent, ChunkLifecycle::Active);
     }
