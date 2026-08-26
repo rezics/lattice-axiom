@@ -6,7 +6,7 @@ use std::{
     mem,
     num::NonZeroU16,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use avian3d::prelude::Collider;
@@ -62,7 +62,8 @@ use latticeaxiom_world_db::{
 };
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveOccupancyArbitrationV1,
-    GenerationPlanV1, HydrologyFlowV1, MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1,
+    GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, MAX_BOUNDED_REGION_CHUNKS,
+    SpawnLocationV1,
 };
 
 use super::{
@@ -100,8 +101,14 @@ const VOXEL_SCHEMA_VERSION: u32 = 2;
 const CELL_OCCUPANCY_BYTES: usize = 4;
 /// One generated chunk is published per fixed slice so commits and projection stay bounded.
 const WORLDGEN_APPLY_JOB_CAP: usize = 1;
+/// Large worldgen candidates are memory-bandwidth heavy; keep their worker
+/// fan-out below the host-wide CPU budget so frame and derived work stay responsive.
+const WORLDGEN_DISPATCH_JOB_CAP: usize = 1;
 /// Halo capture stays bounded even when many Bevy worker slots become free together.
-const DERIVED_DISPATCH_JOB_CAP: usize = 4;
+const DERIVED_DISPATCH_JOB_CAP: usize = 1;
+/// One 32-cubic checkerboard mesh or collider fits below 10 MiB; retain
+/// 12 MiB per stage so accounting also covers receipts and container overhead.
+const DERIVED_JOB_BYTE_BUDGET: u64 = 12 * 1024 * 1024;
 /// Physics colliders are materialized only around the player, not at render distance.
 const COLLIDER_INTEREST_RADIUS_CHUNKS: u32 = 1;
 const WORLD_ID: &str = "00000000-0000-4000-8000-0000000000b1";
@@ -830,7 +837,7 @@ impl ProductionSpine {
             FixedTick::new(0),
             DerivedReadiness::Startup,
             &[],
-            STARTUP_BARRIER_SLICES,
+            STARTUP_BARRIER_TIMEOUT,
         )?;
         Ok(spine)
     }
@@ -3698,12 +3705,16 @@ fn compute_worldgen(input: &WorldgenInput) -> ComputedWorldgen {
                     coordinate: input.coordinate,
                 },
             )?;
+            let occupancy = input
+                .materialization
+                .plan
+                .hydrology_occupancy_candidate_for_snapshot(candidate)?;
             let mut cells = draft_cells(
                 candidate.draft(),
                 &input.materialization.palette,
                 &input.materialization.presentation,
             )?;
-            apply_hydrology_occupancy(&input.materialization, input.coordinate, &mut cells)?;
+            apply_hydrology_occupancy(&input.materialization, occupancy.as_ref(), &mut cells)?;
             Ok(cells)
         });
     ComputedWorldgen {
@@ -3722,7 +3733,9 @@ fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostErro
             admission.in_flight_jobs(),
             inner.in_flight_worldgen_tasks.len(),
         );
-        let count = capacity.min(inner.pending_worldgen.len());
+        let count = capacity
+            .min(WORLDGEN_DISPATCH_JOB_CAP)
+            .min(inner.pending_worldgen.len());
         inner.pending_worldgen.drain(..count).collect::<Vec<_>>()
     };
     if inputs.is_empty() {
@@ -3918,8 +3931,15 @@ fn publish_generated_region(
         {
             continue;
         }
+        let occupancy = inner
+            .plan
+            .hydrology_occupancy_candidate_for_snapshot(candidate)?;
         let mut cells = draft_cells(candidate.draft(), &inner.palette, &inner.presentation)?;
-        apply_hydrology_occupancy(&inner.worldgen_materialization, coordinate, &mut cells)?;
+        apply_hydrology_occupancy(
+            &inner.worldgen_materialization,
+            occupancy.as_ref(),
+            &mut cells,
+        )?;
         generated_cells.insert(coordinate, cells);
     }
     publish_generated_cells(
@@ -4093,10 +4113,12 @@ fn project_stored(
 /// ADR 0026 main-world completion apply job cap per interest slice.
 #[cfg(test)]
 const MAIN_WORLD_APPLY_JOB_CAP: usize = RuntimeLimits::MAIN_WORLD_APPLY_JOB_CAP;
-/// Startup may drain the initial working set without joining a dispatched slice.
-const STARTUP_BARRIER_SLICES: usize = 8_192;
+/// Startup may drain the initial working set outside the frame-critical path.
+const STARTUP_BARRIER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Edit readiness waits only for the touched chunks' current revisions.
-const EDIT_BARRIER_SLICES: usize = 1_024;
+const EDIT_BARRIER_TIMEOUT: Duration = Duration::from_secs(5);
+/// Cooperative wait interval for Bevy's process-global compute workers.
+const DERIVED_BARRIER_POLL_INTERVAL: Duration = Duration::from_millis(1);
 /// Movement-time collider safety waits only for player-occupied chunks.
 const COLLIDER_SAFETY_BARRIER_SLICES: usize = 32;
 
@@ -4144,7 +4166,7 @@ fn await_edit_readiness(
         tick,
         DerivedReadiness::Chunks,
         &chunks,
-        EDIT_BARRIER_SLICES,
+        EDIT_BARRIER_TIMEOUT,
     )
 }
 
@@ -4181,9 +4203,10 @@ fn await_derived_ready(
     tick: FixedTick,
     readiness: DerivedReadiness,
     chunks: &[ChunkCoordinate],
-    max_slices: usize,
+    timeout: Duration,
 ) -> Result<(), ProductionHostError> {
-    for _ in 0..max_slices {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
         poll_derived_tasks(spine)?;
         let idle = {
             let mut inner = spine.lock_inner()?;
@@ -4214,20 +4237,10 @@ fn await_derived_ready(
             return Err(ProductionHostError::DerivedReadinessBarrier);
         }
         spawn_derived_jobs(spine, inputs)?;
-        for _ in 0..8 {
-            tick_compute_pool();
-            poll_derived_tasks(spine)?;
-            let mut inner = spine.lock_inner()?;
-            apply_ready_waiting(&mut inner, tick, ApplyBudgetMode::Barrier)?;
-            let ready = match readiness {
-                DerivedReadiness::Startup => derived_work_idle(&inner),
-                DerivedReadiness::Chunks => chunks_derived_ready(&inner, chunks),
-            };
-            if ready {
-                refresh_lifecycle(&mut inner);
-                return Ok(());
-            }
-        }
+        tick_compute_pool();
+        // Readiness barriers run outside the frame-critical path. Parking keeps
+        // parallel headless hosts from starving Bevy's process-global workers.
+        std::thread::park_timeout(DERIVED_BARRIER_POLL_INTERVAL);
     }
     Err(ProductionHostError::DerivedReadinessBarrier)
 }
@@ -4892,18 +4905,16 @@ fn draft_cells(
 
 fn apply_hydrology_occupancy(
     materialization: &WorldgenMaterialization,
-    coordinate: ChunkCoordinate,
+    candidate: Option<&HydrologyOccupancyCandidateV1>,
     cells: &mut [HostVoxel],
 ) -> Result<(), ProductionHostError> {
-    if !materialization.plan.has_hydrology_occupancy() {
+    let Some(candidate) = candidate else {
+        return Ok(());
+    };
+    if !occupancy_candidate_is_current(&materialization.plan, candidate) {
         return Ok(());
     }
-    let candidate = materialization
-        .plan
-        .hydrology_occupancy_candidate(coordinate)?;
-    if !occupancy_candidate_is_current(&materialization.plan, &candidate) {
-        return Ok(());
-    }
+    let coordinate = candidate.chunk();
     let empty_block = materialization
         .palette
         .get(usize::from(materialization.empty.palette_index))
@@ -5239,10 +5250,13 @@ fn runtime_limits(
     let max_resident = usize::try_from(hard_limits.max_resident_chunks).unwrap_or(64);
     let mesh = DerivedQueueLimits::mesh_desktop_reference_v1()?;
     let collider = DerivedQueueLimits::collider_desktop_reference_v1()?;
-    Ok(
-        RuntimeLimits::new(max_resident.max(1), 32 * 1024 * 1024, mesh, collider)?
-            .with_cpu_heavy_concurrency(cpu_heavy_concurrency(host_parallelism()))?,
-    )
+    Ok(RuntimeLimits::new(
+        max_resident.max(1),
+        RuntimeLimits::COMBINED_BYTE_CAP,
+        mesh,
+        collider,
+    )?
+    .with_cpu_heavy_concurrency(cpu_heavy_concurrency(host_parallelism()))?)
 }
 
 const DERIVED_PRIORITY_BUCKET_WIDTH: u16 = 8_192;
@@ -5295,7 +5309,7 @@ fn derived_request(priority: DerivedPriority) -> DerivedRequest {
     DerivedRequest::new(
         priority,
         DerivedOwner::new(1),
-        DerivedMemoryBudget::new(64 * 1024, 64 * 1024),
+        DerivedMemoryBudget::new(DERIVED_JOB_BYTE_BUDGET, DERIVED_JOB_BYTE_BUDGET),
     )
 }
 fn chunk_changed_domains(current: Option<&ChunkData>, replacement: &ChunkData) -> ChangedDomains {

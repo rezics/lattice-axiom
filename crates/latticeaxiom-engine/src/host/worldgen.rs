@@ -87,11 +87,13 @@ pub(super) fn occupancy_candidate_is_current(
 #[must_use]
 pub(super) fn spine_config() -> WorldgenConfigV1 {
     WorldgenConfigV1 {
-        chunk_edge_voxels: 8,
-        planning_cell_edge_chunks: 8,
+        chunk_edge_voxels: 32,
+        // Preserve the authored 64-meter territory and cave planning scale
+        // when moving the production chunk edge from 8 to 32 voxels.
+        planning_cell_edge_chunks: 2,
         transition_width_voxels: 8,
-        world_floor_y: 0,
-        world_ceiling_y: 31,
+        world_floor_y: -64,
+        world_ceiling_y: 319,
         temperate_base_height: 16,
         // Keep a broad, walkable plain while adding enough relief to avoid a flat test slab.
         temperate_relief: 4,
@@ -110,8 +112,8 @@ const HOST_DURABLE_SAVE_RADIUS_CHUNKS: u32 = 4;
 
 /// Returns host streaming clamps for the authored `2..=32` request contract.
 ///
-/// The current 8³ fixture does not claim 32 chunks of effective coverage.
-/// [`super::stream::StreamClamps`] derives the lower effective radius from the
+/// The 32³ baseline preserves the accepted 128-meter active coverage.
+/// [`super::stream::StreamClamps`] derives an effective radius of four from the
 /// accepted 405-chunk working-set ceiling and reports the binding constraint.
 ///
 /// # Errors
@@ -1198,6 +1200,21 @@ mod tests {
         include_str!("../../../../packages/terrenia/blocks/data/goldens/d7-block-ids.txt");
 
     #[test]
+    fn production_world_scale_matches_the_accepted_vertical_and_planning_contract() {
+        let config = spine_config();
+
+        assert_eq!(config.chunk_edge_voxels, 32);
+        assert_eq!(config.world_floor_y, -64);
+        assert_eq!(config.world_ceiling_y, 319);
+        assert_eq!(config.world_ceiling_y - config.world_floor_y + 1, 384);
+        assert_eq!(
+            i32::from(config.chunk_edge_voxels) * i32::from(config.planning_cell_edge_chunks),
+            64,
+            "planning cells preserve the authored 64-meter physical scale"
+        );
+    }
+
+    #[test]
     fn plan_chunks_are_not_limited_to_the_d4_origin_neighborhood() {
         let plan = fixture_plan(42);
         assert!(plan.has_natural_layer());
@@ -1286,11 +1303,14 @@ mod tests {
                     && here_river.in_channel()
                     && east_river.in_channel()
                 {
+                    let distance_delta = here_river
+                        .distance_voxels()
+                        .abs_diff(east_river.distance_voxels());
                     assert!(
-                        here_river
-                            .distance_voxels()
-                            .abs_diff(east_river.distance_voxels())
-                            <= 1
+                        distance_delta <= 1,
+                        "river distance seam {distance_delta} at ({x},{z}): {} -> {}",
+                        here_river.distance_voxels(),
+                        east_river.distance_voxels()
                     );
                 }
                 let height = plan.terrain_height(x, z);
@@ -1471,11 +1491,15 @@ mod tests {
             .expect("west face");
         assert_eq!(east.occupancy_hash(), west.occupancy_hash());
         let accounting = current.accounting();
-        assert!(accounting.cells_examined() > 0);
+        let chunk_edge = u64::from(first.config().chunk_edge_voxels);
+        assert_eq!(
+            accounting.cells_examined(),
+            chunk_edge.saturating_pow(3),
+            "a complete occupancy candidate examines each chunk voxel once"
+        );
         assert!(
-            accounting.cells_examined()
+            accounting.cells_occupied()
                 <= u64::from(HydrologyOccupancyConfigV1::default().max_cells_per_chunk)
-                    .saturating_mul(2)
         );
         assert!(
             accounting.queue_depth()

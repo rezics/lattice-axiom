@@ -1,7 +1,7 @@
 //! Machine-readable V4/P4 streaming profile evidence.
 //!
-//! This is a correctness and coverage receipt for the current 8³ production
-//! fixture. It does not claim the D2/D10 `desktop-reference-v1` working-set
+//! This is a correctness and coverage receipt for the current 32³ production
+//! baseline. It does not claim the D2/D10 `desktop-reference-v1` working-set
 //! gate and does not authorize P7 LOD or radius reduction.
 
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
@@ -163,7 +163,7 @@ impl StreamingProfileEvidenceV1 {
             equivalent_resident_radius_chunks: equivalent_resident,
             matches_adr_0026_world_space_coverage: matches_coverage,
             claims_d2_working_set_gate: false,
-            p4_choice: "retain-8-cubed-correctness-fixture".to_owned(),
+            p4_choice: "adopt-32-cubed-baseline".to_owned(),
             counts,
             notes: format!(
                 "Live fixture uses {edge}³ chunks and interest radius {interest_radius} ({interest_coverage} m). ADR 0026 {ADR_0026_ACTIVE_COVERAGE_M} m / {ADR_0026_RESIDENT_COVERAGE_M} m coverage uses radii {ADR_0026_ACTIVE_RADIUS_CHUNKS} / {ADR_0026_RESIDENT_RADIUS_CHUNKS} at {ADR_0026_CHUNK_EDGE_VOXELS}³ and radii {equivalent_active} / {equivalent_resident} at this edge. Radius 1–2 is not a D2/D10 working-set pass. P7 LOD remains unauthorized."
@@ -235,21 +235,21 @@ mod tests {
     }
 
     #[test]
-    fn eight_cubed_fixture_does_not_claim_the_d2_working_set_gate() {
-        let limits = PlayableWorldHardLimitsV1::new(4, 4, 128, 8, 4).expect("nonzero clamps");
+    fn thirty_two_cubed_baseline_reports_matching_coverage_without_claiming_the_d2_gate() {
+        let limits = PlayableWorldHardLimitsV1::new(32, 32, 405, 8, 4).expect("nonzero clamps");
         let evidence = StreamingProfileEvidenceV1::for_spine_config(limits).expect("clamps");
-        assert_eq!(evidence.chunk_edge_voxels, 8);
+        assert_eq!(evidence.chunk_edge_voxels, 32);
         assert_eq!(evidence.requested_render_distance_chunks, 8);
-        assert_eq!(evidence.admitted_render_distance_chunks, 4);
-        assert_eq!(evidence.effective_render_distance_chunks, 2);
-        assert_eq!(evidence.simulation_distance_chunks, 2);
-        assert_eq!(evidence.resident_distance_chunks, 2);
-        assert_eq!(evidence.prefetch_distance_chunks, 3);
-        assert_eq!(evidence.equivalent_active_radius_chunks, 16);
-        assert_eq!(evidence.equivalent_resident_radius_chunks, 24);
-        assert!(!evidence.matches_adr_0026_world_space_coverage);
+        assert_eq!(evidence.admitted_render_distance_chunks, 8);
+        assert_eq!(evidence.effective_render_distance_chunks, 4);
+        assert_eq!(evidence.simulation_distance_chunks, 4);
+        assert_eq!(evidence.resident_distance_chunks, 4);
+        assert_eq!(evidence.prefetch_distance_chunks, 5);
+        assert_eq!(evidence.equivalent_active_radius_chunks, 4);
+        assert_eq!(evidence.equivalent_resident_radius_chunks, 6);
+        assert!(evidence.matches_adr_0026_world_space_coverage);
         assert!(!evidence.claims_d2_working_set_gate);
-        assert_eq!(evidence.p4_choice, "retain-8-cubed-correctness-fixture");
+        assert_eq!(evidence.p4_choice, "adopt-32-cubed-baseline");
         assert_eq!(evidence.status, "d2-provisional");
         let encoded = serde_json::to_value(&evidence).expect("evidence is JSON");
         assert_eq!(
