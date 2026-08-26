@@ -53,7 +53,7 @@ pub use host::{
     RequiredCaveEntranceV1, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost,
     SealedWriterHostError, StreamingProfileCountsV1, StreamingProfileEvidenceV1,
     ViewDistanceClampReasonV1, ViewDistanceStatusV1, WorkingSetDiagnosticsV1,
-    WorldgenInspectReportV1, compile_authored_content_catalog,
+    WorldgenInspectReportV1, WorldgenQueueSnapshotV1, compile_authored_content_catalog,
     compile_authored_content_display_catalog, compile_authored_gameplay_catalog, coverage_m,
     empty_gameplay_catalog, lock_selected_content_catalog, lock_selected_content_display_catalog,
     lock_selected_gameplay_catalog, radius_for_coverage, sealed_activation_binding,

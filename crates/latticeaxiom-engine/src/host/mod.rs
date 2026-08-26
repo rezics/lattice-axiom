@@ -98,7 +98,7 @@ pub use profile::{
 };
 pub use spine::{
     CellOccupancyV1, DerivedQueueSnapshotV1, ProductionSpine, ProductionWorldStorage,
-    WorkingSetDiagnosticsV1,
+    WorkingSetDiagnosticsV1, WorldgenQueueSnapshotV1,
 };
 pub use start::{
     ChildResultV1, ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList,
@@ -1117,6 +1117,12 @@ pub enum ProductionHostError {
     /// Storage published no chunk for a generated coordinate.
     #[error("storage snapshot is missing generated chunk {coordinate:?}")]
     MissingStoredChunk {
+        /// Missing chunk.
+        coordinate: ChunkCoordinate,
+    },
+    /// A successful bounded generation result omitted its requested chunk.
+    #[error("generated region is missing requested chunk {coordinate:?}")]
+    MissingGeneratedChunk {
         /// Missing chunk.
         coordinate: ChunkCoordinate,
     },

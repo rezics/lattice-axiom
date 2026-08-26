@@ -1066,6 +1066,7 @@ fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
         remaining -= step;
         let diagnostics = spine.working_set_diagnostics();
         let queues = spine.derived_queue_snapshot();
+        let worldgen = spine.worldgen_queue_snapshot();
         let resident = usize::try_from(diagnostics.resident()).unwrap_or(usize::MAX);
         high_resident = high_resident.max(resident);
         assert!(
@@ -1092,6 +1093,14 @@ fn derived_queues_stay_bounded_with_cancellation_under_traversal() {
             "reserved bytes {} exceeded budget {}",
             queues.reserved_bytes,
             diagnostics.byte_budget()
+        );
+        assert!(
+            worldgen
+                .pending
+                .saturating_add(worldgen.in_flight)
+                .saturating_add(worldgen.waiting_to_apply)
+                <= max_in_flight,
+            "worldgen queue exceeded host in-flight cap: {worldgen:?}"
         );
     }
     assert!(high_resident > 0, "traversal must occupy a working set");

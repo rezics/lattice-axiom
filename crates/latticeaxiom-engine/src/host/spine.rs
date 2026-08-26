@@ -60,8 +60,8 @@ use latticeaxiom_world_db::{
     StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitRequestV1, WorldStorage,
 };
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, GenerationPlanV1, HydrologyFlowV1,
-    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1,
+    AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveOccupancyArbitrationV1,
+    GenerationPlanV1, HydrologyFlowV1, MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1,
 };
 
 use super::{
@@ -96,6 +96,8 @@ const COLLIDER_SEMANTICS: ColliderSemanticFingerprint =
 const VOXEL_SCHEMA: &str = "latticeaxiom:schema/chunk-voxels@1";
 const VOXEL_SCHEMA_VERSION: u32 = 2;
 const CELL_OCCUPANCY_BYTES: usize = 4;
+/// One generated chunk is published per fixed slice so commits and projection stay bounded.
+const WORLDGEN_APPLY_JOB_CAP: usize = 1;
 const WORLD_ID: &str = "00000000-0000-4000-8000-0000000000b1";
 const REACH_MM: u16 = 5_000;
 /// Portal SDF is doubled-voxel Chebyshev minus radius and is biased one unit
@@ -260,6 +262,17 @@ pub struct DerivedQueueSnapshotV1 {
     pub spawned_tasks: usize,
 }
 
+/// Host-owned world-generation work waiting across the Bevy task boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WorldgenQueueSnapshotV1 {
+    /// Inputs admitted but not yet spawned on the Bevy compute pool.
+    pub pending: usize,
+    /// Bevy compute tasks not yet polled to completion.
+    pub in_flight: usize,
+    /// Completed results waiting for stable sequence-order publication.
+    pub waiting_to_apply: usize,
+}
+
 /// Versioned solid and orthogonal fluid occupancy of one committed cell.
 ///
 /// Collision and selection identities are catalog-owned policy references. This
@@ -286,14 +299,15 @@ pub struct CellOccupancyV1 {
 
 pub(super) struct ProductionSpineInner {
     pub(super) runtime: VoxelRuntime<HostVoxel>,
-    plan: GenerationPlanV1,
+    plan: Arc<GenerationPlanV1>,
+    worldgen_materialization: Arc<WorldgenMaterialization>,
     worldgen_bindings: AuthoredWorldgenBindingsV1,
     spawn: SpawnLocationV1,
     clamps: StreamClamps,
-    pub(super) content: ContentCatalogV1,
-    pub(super) palette: Vec<BlockId>,
+    pub(super) content: Arc<ContentCatalogV1>,
+    pub(super) palette: Arc<[BlockId]>,
     solid_palette: CompiledSolidPaletteV1,
-    pub(super) fluid_palette: CompiledFluidPaletteV1,
+    pub(super) fluid_palette: Arc<CompiledFluidPaletteV1>,
     empty: HostVoxel,
     pub(super) chunk_edge: u16,
     world: WorldId,
@@ -307,7 +321,13 @@ pub(super) struct ProductionSpineInner {
     removed: BTreeSet<ChunkCoordinate>,
     waiting_derived: VecDeque<ComputedDerived>,
     in_flight_tasks: Vec<Task<ComputedDerived>>,
-    pub(super) presentation: HostPresentationIndex,
+    pending_worldgen: VecDeque<WorldgenInput>,
+    in_flight_worldgen_tasks: Vec<Task<ComputedWorldgen>>,
+    waiting_worldgen: BTreeMap<WorldgenTicket, ComputedWorldgen>,
+    worldgen_tickets: BTreeMap<ChunkCoordinate, WorldgenTicket>,
+    next_worldgen_sequence: u64,
+    next_worldgen_apply_sequence: u64,
+    pub(super) presentation: Arc<HostPresentationIndex>,
     edited: BTreeSet<ChunkCoordinate>,
     lifecycle: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
     eviction_lease: u64,
@@ -455,6 +475,45 @@ struct ComputedDerived {
     payload: Result<DerivedPayload, ProductionHostError>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct WorldgenTicket(u64);
+
+#[derive(Clone)]
+struct WorldgenInput {
+    ticket: WorldgenTicket,
+    coordinate: ChunkCoordinate,
+    materialization: Arc<WorldgenMaterialization>,
+}
+
+struct ComputedWorldgen {
+    ticket: WorldgenTicket,
+    coordinate: ChunkCoordinate,
+    result: Result<Vec<HostVoxel>, ProductionHostError>,
+}
+
+struct WorldgenMaterialization {
+    plan: Arc<GenerationPlanV1>,
+    content: Arc<ContentCatalogV1>,
+    palette: Arc<[BlockId]>,
+    fluid_palette: Arc<CompiledFluidPaletteV1>,
+    presentation: Arc<HostPresentationIndex>,
+    spawn: SpawnLocationV1,
+    empty: HostVoxel,
+    chunk_edge: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorldgenExecution {
+    Blocking,
+    Deferred,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorldgenAdmission {
+    limit: usize,
+    execution: WorldgenExecution,
+}
+
 thread_local! {
     static MESH_LANE: RefCell<GreedyMesher<LayerMergeKey>> =
         const { RefCell::new(GreedyMesher::new()) };
@@ -566,20 +625,24 @@ impl ProductionSpine {
         let config = spine_config();
         let chunk_edge = config.chunk_edge_voxels;
         let worldgen = host_worldgen_catalog(images)?;
-        let plan = compile_plan(
+        let plan = Arc::new(compile_plan(
             images.product_lock_hash(),
             images.images().registration().image.image_hash,
             &worldgen,
-        )?;
+        )?);
         let dimension = worldgen.dimension.clone();
         let kernel = Arc::new(MemoryTransactionKernel::new());
-        let content = lock_selected_content_catalog(images)?;
+        let content = Arc::new(lock_selected_content_catalog(images)?);
         let display = lock_selected_content_display_catalog(images)?;
-        let palette = worldgen.palette.clone();
+        let palette = Arc::<[BlockId]>::from(worldgen.palette.clone());
         let solid_palette = compile_host_solid_palette(&content, &palette)?;
-        let fluid_palette = compile_host_fluid_palette(&content)?;
-        let presentation =
-            HostPresentationIndex::compile(images, &content, &palette, &fluid_palette)?;
+        let fluid_palette = Arc::new(compile_host_fluid_palette(&content)?);
+        let presentation = Arc::new(HostPresentationIndex::compile(
+            images,
+            &content,
+            &palette,
+            &fluid_palette,
+        )?);
         let empty = HostVoxel::from_solid(
             palette_index(&palette, &worldgen.empty)
                 .ok_or(ProductionHostError::UnknownDraftBlock)?,
@@ -610,10 +673,21 @@ impl ProductionSpine {
         if let Some(session) = &restored_session {
             player_pose = session.pose();
         }
+        let worldgen_materialization = Arc::new(WorldgenMaterialization {
+            plan: Arc::clone(&plan),
+            content: Arc::clone(&content),
+            palette: Arc::clone(&palette),
+            fluid_palette: Arc::clone(&fluid_palette),
+            presentation: Arc::clone(&presentation),
+            spawn,
+            empty,
+            chunk_edge,
+        });
 
         let mut inner = ProductionSpineInner {
             runtime,
             plan,
+            worldgen_materialization,
             worldgen_bindings: worldgen.bindings,
             spawn,
             clamps,
@@ -634,6 +708,12 @@ impl ProductionSpine {
             removed: BTreeSet::new(),
             waiting_derived: VecDeque::new(),
             in_flight_tasks: Vec::new(),
+            pending_worldgen: VecDeque::new(),
+            in_flight_worldgen_tasks: Vec::new(),
+            waiting_worldgen: BTreeMap::new(),
+            worldgen_tickets: BTreeMap::new(),
+            next_worldgen_sequence: 0,
+            next_worldgen_apply_sequence: 0,
             presentation,
             edited: BTreeSet::new(),
             lifecycle: BTreeMap::new(),
@@ -904,7 +984,7 @@ impl ProductionSpine {
     #[cfg(feature = "client")]
     pub(super) fn palette_ids(&self) -> Vec<BlockId> {
         self.lock_inner()
-            .map(|inner| inner.palette.clone())
+            .map(|inner| inner.palette.to_vec())
             .unwrap_or_default()
     }
 
@@ -1295,6 +1375,19 @@ impl ProductionSpine {
         )
     }
 
+    /// Returns bounded world-generation occupancy across the Bevy task boundary.
+    #[must_use]
+    pub fn worldgen_queue_snapshot(&self) -> WorldgenQueueSnapshotV1 {
+        self.lock_inner().map_or_else(
+            |_| WorldgenQueueSnapshotV1::default(),
+            |inner| WorldgenQueueSnapshotV1 {
+                pending: inner.pending_worldgen.len(),
+                in_flight: inner.in_flight_worldgen_tasks.len(),
+                waiting_to_apply: inner.waiting_worldgen.len(),
+            },
+        )
+    }
+
     /// Streams interest, generation, and eviction from the latest player pose.
     ///
     /// # Errors
@@ -1367,6 +1460,7 @@ impl ProductionSpine {
     }
 
     fn sync_interest_inner(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
+        poll_worldgen_tasks(self)?;
         let mut inner = self.lock_inner()?;
         if inner.last_reconciled_tick == Some(fixed_tick) {
             return Ok(());
@@ -1391,15 +1485,20 @@ impl ProductionSpine {
         inner.stream_anchor_xz = [translation.x, translation.z];
         let admit_limit = inner.clamps.max_in_flight();
         let tick = FixedTick::new(fixed_tick);
+        apply_ready_worldgen(&mut inner, self.storage.kernel(), tick, chunk, look_ahead)?;
         sync_working_set(
             &mut inner,
             self.storage.kernel(),
             chunk,
             look_ahead,
             tick,
-            admit_limit,
+            WorldgenAdmission {
+                limit: admit_limit,
+                execution: WorldgenExecution::Deferred,
+            },
         )?;
         drop(inner);
+        spawn_worldgen_jobs(self)?;
         drain_derived(self, tick)
     }
 
@@ -3099,11 +3198,31 @@ fn fill_working_set(
             .iter()
             .all(|coordinate| inner.runtime.is_resident(*coordinate))
         {
-            sync_working_set(inner, kernel, origin, look_ahead, tick, limit)?;
+            sync_working_set(
+                inner,
+                kernel,
+                origin,
+                look_ahead,
+                tick,
+                WorldgenAdmission {
+                    limit,
+                    execution: WorldgenExecution::Blocking,
+                },
+            )?;
             return Ok(());
         }
         let before = inner.runtime.diagnostics().resident_chunks();
-        sync_working_set(inner, kernel, origin, look_ahead, tick, limit)?;
+        sync_working_set(
+            inner,
+            kernel,
+            origin,
+            look_ahead,
+            tick,
+            WorldgenAdmission {
+                limit,
+                execution: WorldgenExecution::Blocking,
+            },
+        )?;
         if inner.runtime.diagnostics().resident_chunks() == before {
             break;
         }
@@ -3117,7 +3236,7 @@ fn sync_working_set(
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
     tick: FixedTick,
-    admit_limit: usize,
+    admission: WorldgenAdmission,
 ) -> Result<(), ProductionHostError> {
     let desired = desired_chunks(origin, inner.clamps, look_ahead, &inner.edited);
     refresh_residency(inner, origin, look_ahead, tick);
@@ -3138,15 +3257,7 @@ fn sync_working_set(
             evict_unwanted(inner, origin, look_ahead, &desired, tick, true)?;
         }
         let ordered = prioritize_chunks(&desired, origin, look_ahead);
-        admit_desired(
-            inner,
-            kernel,
-            origin,
-            look_ahead,
-            &ordered,
-            tick,
-            admit_limit,
-        )?;
+        admit_desired(inner, kernel, origin, look_ahead, &ordered, tick, admission)?;
         inner.last_desired.clone_from(&desired);
     }
     Ok(())
@@ -3250,7 +3361,7 @@ fn admit_desired(
     look_ahead: [i32; 2],
     ordered: &[ChunkCoordinate],
     tick: FixedTick,
-    admit_limit: usize,
+    admission: WorldgenAdmission,
 ) -> Result<(), ProductionHostError> {
     let mut generate = Vec::new();
     let mut hydrate = Vec::new();
@@ -3261,16 +3372,21 @@ fn admit_desired(
         .as_ref()
         .map(|storage| storage.begin_read(inner.world))
         .transpose()?;
-    let admit_limit = admit_limit.max(1);
+    let admit_limit = admission
+        .limit
+        .max(1)
+        .saturating_sub(worldgen_work_count(inner));
     let high_water = inner.clamps.prefetch_high_water();
     for coordinate in ordered {
-        if inner.runtime.is_resident(*coordinate) {
+        if inner.runtime.is_resident(*coordinate) || inner.worldgen_tickets.contains_key(coordinate)
+        {
             continue;
         }
         let upcoming = inner
             .runtime
             .diagnostics()
             .resident_chunks()
+            .saturating_add(worldgen_work_count(inner))
             .saturating_add(generate.len())
             .saturating_add(hydrate.len());
         let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
@@ -3327,7 +3443,156 @@ fn admit_desired(
     if generate.is_empty() {
         return Ok(());
     }
-    publish_generated(inner, kernel, &generate, tick, origin, look_ahead)
+    match admission.execution {
+        WorldgenExecution::Blocking => {
+            publish_generated(inner, kernel, &generate, tick, origin, look_ahead)
+        }
+        WorldgenExecution::Deferred => {
+            queue_worldgen(inner, generate);
+            Ok(())
+        }
+    }
+}
+
+fn worldgen_work_count(inner: &ProductionSpineInner) -> usize {
+    inner
+        .pending_worldgen
+        .len()
+        .saturating_add(inner.in_flight_worldgen_tasks.len())
+        .saturating_add(inner.waiting_worldgen.len())
+}
+
+fn queue_worldgen(inner: &mut ProductionSpineInner, coordinates: Vec<ChunkCoordinate>) {
+    for coordinate in coordinates {
+        if inner.worldgen_tickets.contains_key(&coordinate) {
+            continue;
+        }
+        let ticket = WorldgenTicket(inner.next_worldgen_sequence);
+        inner.next_worldgen_sequence = inner.next_worldgen_sequence.saturating_add(1);
+        inner.worldgen_tickets.insert(coordinate, ticket);
+        inner.pending_worldgen.push_back(WorldgenInput {
+            ticket,
+            coordinate,
+            materialization: Arc::clone(&inner.worldgen_materialization),
+        });
+    }
+}
+
+fn compute_worldgen(input: &WorldgenInput) -> ComputedWorldgen {
+    let result =
+        generate_plan_chunks(&input.materialization.plan, [input.coordinate]).and_then(|region| {
+            let candidate = region.candidate(input.coordinate).ok_or(
+                ProductionHostError::MissingGeneratedChunk {
+                    coordinate: input.coordinate,
+                },
+            )?;
+            let mut cells = draft_cells(
+                candidate.draft(),
+                &input.materialization.palette,
+                &input.materialization.presentation,
+            )?;
+            apply_hydrology_occupancy(&input.materialization, input.coordinate, &mut cells)?;
+            Ok(cells)
+        });
+    ComputedWorldgen {
+        ticket: input.ticket,
+        coordinate: input.coordinate,
+        result,
+    }
+}
+
+fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
+    let inputs = {
+        let mut inner = spine.lock_inner()?;
+        inner.pending_worldgen.drain(..).collect::<Vec<_>>()
+    };
+    if inputs.is_empty() {
+        return Ok(());
+    }
+    if let Some(pool) = AsyncComputeTaskPool::try_get() {
+        let mut tasks = inputs
+            .into_iter()
+            .map(|input| pool.spawn(async move { compute_worldgen(&input) }))
+            .collect::<Vec<_>>();
+        let mut inner = spine.lock_inner()?;
+        inner.in_flight_worldgen_tasks.append(&mut tasks);
+    } else {
+        let completed = inputs.iter().map(compute_worldgen).collect::<Vec<_>>();
+        let mut inner = spine.lock_inner()?;
+        enqueue_waiting_worldgen(&mut inner, completed);
+    }
+    Ok(())
+}
+
+fn poll_worldgen_tasks(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
+    let tasks = {
+        let mut inner = spine.lock_inner()?;
+        mem::take(&mut inner.in_flight_worldgen_tasks)
+    };
+    if tasks.iter().any(|task| !task.is_finished()) {
+        tick_compute_pool();
+    }
+    let mut remaining = Vec::new();
+    let mut completed = Vec::new();
+    for task in tasks {
+        if task.is_finished() {
+            completed.push(block_on(task));
+        } else {
+            remaining.push(task);
+        }
+    }
+    let mut inner = spine.lock_inner()?;
+    inner.in_flight_worldgen_tasks = remaining;
+    enqueue_waiting_worldgen(&mut inner, completed);
+    Ok(())
+}
+
+fn enqueue_waiting_worldgen(inner: &mut ProductionSpineInner, completed: Vec<ComputedWorldgen>) {
+    for job in completed {
+        inner.waiting_worldgen.insert(job.ticket, job);
+    }
+}
+
+fn apply_ready_worldgen(
+    inner: &mut ProductionSpineInner,
+    kernel: &MemoryTransactionKernel,
+    tick: FixedTick,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
+) -> Result<(), ProductionHostError> {
+    let mut published = 0_usize;
+    while published < WORLDGEN_APPLY_JOB_CAP {
+        let ticket = WorldgenTicket(inner.next_worldgen_apply_sequence);
+        let Some(job) = inner.waiting_worldgen.remove(&ticket) else {
+            break;
+        };
+        inner.next_worldgen_apply_sequence = inner.next_worldgen_apply_sequence.saturating_add(1);
+        if inner.worldgen_tickets.get(&job.coordinate) != Some(&ticket) {
+            continue;
+        }
+        let result = match job.result {
+            Ok(cells) => publish_generated_cells(
+                inner,
+                kernel,
+                &[job.coordinate],
+                &BTreeMap::from([(job.coordinate, cells)]),
+                tick,
+                origin,
+                look_ahead,
+            ),
+            Err(error) => Err(error),
+        };
+        inner.worldgen_tickets.remove(&job.coordinate);
+        if let Err(error) = result {
+            if inner.lifecycle.get(&job.coordinate) == Some(&ChunkLifecycle::Generate) {
+                inner.lifecycle.remove(&job.coordinate);
+                inner.residency.remove(&job.coordinate);
+            }
+            return Err(error);
+        }
+        published = published.saturating_add(1);
+    }
+    Ok(())
 }
 
 fn publish_hydrated(
@@ -3407,7 +3672,27 @@ fn publish_generated(
     look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
     let region = generate_plan_chunks(&inner.plan, coordinates.iter().copied())?;
-    let mut mutations = Vec::with_capacity(region.len());
+    publish_generated_region(
+        inner,
+        kernel,
+        coordinates,
+        &region,
+        tick,
+        origin,
+        look_ahead,
+    )
+}
+
+fn publish_generated_region(
+    inner: &mut ProductionSpineInner,
+    kernel: &MemoryTransactionKernel,
+    coordinates: &[ChunkCoordinate],
+    region: &BoundedGeneratedRegionV1,
+    tick: FixedTick,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
+) -> Result<(), ProductionHostError> {
+    let mut generated_cells = BTreeMap::new();
     for (coordinate, candidate) in region.candidates() {
         if !inner
             .lifecycle
@@ -3417,12 +3702,39 @@ fn publish_generated(
             continue;
         }
         let mut cells = draft_cells(candidate.draft(), &inner.palette, &inner.presentation)?;
-        apply_hydrology_occupancy(inner, coordinate, &mut cells)?;
+        apply_hydrology_occupancy(&inner.worldgen_materialization, coordinate, &mut cells)?;
+        generated_cells.insert(coordinate, cells);
+    }
+    publish_generated_cells(
+        inner,
+        kernel,
+        coordinates,
+        &generated_cells,
+        tick,
+        origin,
+        look_ahead,
+    )
+}
+
+fn publish_generated_cells(
+    inner: &mut ProductionSpineInner,
+    kernel: &MemoryTransactionKernel,
+    coordinates: &[ChunkCoordinate],
+    generated_cells: &BTreeMap<ChunkCoordinate, Vec<HostVoxel>>,
+    tick: FixedTick,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
+) -> Result<(), ProductionHostError> {
+    let mut mutations = Vec::with_capacity(generated_cells.len());
+    for (coordinate, cells) in generated_cells {
+        if inner.lifecycle.get(coordinate) != Some(&ChunkLifecycle::Generate) {
+            continue;
+        }
         mutations.push(ChunkMutation::new(
-            ChunkKey::new(inner.world, inner.dimension.clone(), coordinate),
+            ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate),
             ChunkRevisionExpectation::Absent,
             ChangedDomains::ALL,
-            chunk_data(&inner.voxel_schema, inner.voxel_schema_version, &cells),
+            chunk_data(&inner.voxel_schema, inner.voxel_schema_version, cells),
         ));
     }
     if mutations.is_empty() {
@@ -3491,6 +3803,7 @@ fn remember_admission(
 
 fn forget_chunk(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
     inner.lifecycle.remove(&coordinate);
+    inner.worldgen_tickets.remove(&coordinate);
     inner.derived.remove(&coordinate);
     inner.mesh_dirty.remove(&coordinate);
     inner.collider_dirty.remove(&coordinate);
@@ -3619,7 +3932,7 @@ fn await_collider_safety(
             dispatch_derived_batch(&mut inner, [DerivedKind::Collider])?
         };
         spawn_derived_jobs(spine, inputs)?;
-        tick_derived_pool();
+        tick_compute_pool();
     }
     poll_derived_tasks(spine)?;
     let mut inner = spine.lock_inner()?;
@@ -3666,7 +3979,7 @@ fn await_derived_ready(
         }
         spawn_derived_jobs(spine, inputs)?;
         for _ in 0..8 {
-            tick_derived_pool();
+            tick_compute_pool();
             poll_derived_tasks(spine)?;
             let mut inner = spine.lock_inner()?;
             apply_ready_waiting(&mut inner, tick, ApplyBudgetMode::Barrier)?;
@@ -3780,7 +4093,7 @@ fn poll_derived_tasks(spine: &ProductionSpine) -> Result<(), ProductionHostError
         mem::take(&mut inner.in_flight_tasks)
     };
     if tasks.iter().any(|task| !task.is_finished()) {
-        tick_derived_pool();
+        tick_compute_pool();
     }
     let mut remaining = Vec::new();
     let mut completed = Vec::new();
@@ -3797,7 +4110,7 @@ fn poll_derived_tasks(spine: &ProductionSpine) -> Result<(), ProductionHostError
     Ok(())
 }
 
-fn tick_derived_pool() {
+fn tick_compute_pool() {
     if AsyncComputeTaskPool::try_get().is_some() {
         tick_global_task_pools_on_main_thread();
     }
@@ -4213,40 +4526,40 @@ fn draft_cells(
 }
 
 fn apply_hydrology_occupancy(
-    inner: &ProductionSpineInner,
+    materialization: &WorldgenMaterialization,
     coordinate: ChunkCoordinate,
     cells: &mut [HostVoxel],
 ) -> Result<(), ProductionHostError> {
-    if !inner.plan.has_hydrology_occupancy() {
+    if !materialization.plan.has_hydrology_occupancy() {
         return Ok(());
     }
-    let candidate = inner.plan.hydrology_occupancy_candidate(coordinate)?;
-    if !occupancy_candidate_is_current(&inner.plan, &candidate) {
+    let candidate = materialization
+        .plan
+        .hydrology_occupancy_candidate(coordinate)?;
+    if !occupancy_candidate_is_current(&materialization.plan, &candidate) {
         return Ok(());
     }
-    let empty_block = inner
+    let empty_block = materialization
         .palette
-        .get(usize::from(inner.empty.palette_index))
+        .get(usize::from(materialization.empty.palette_index))
         .ok_or(ProductionHostError::UnknownDraftBlock)?;
     let empty_id: StableId = empty_block.as_str().parse()?;
-    let empty_definition =
-        inner
-            .content
-            .block(&empty_id)
-            .ok_or(ProductionHostError::MissingCatalogDefinition {
-                kind: "block",
-                id: empty_id.to_string(),
-            })?;
+    let empty_definition = materialization.content.block(&empty_id).ok_or(
+        ProductionHostError::MissingCatalogDefinition {
+            kind: "block",
+            id: empty_id.to_string(),
+        },
+    )?;
     let context = OccupancyArbitrationContextV1::new(
         empty_id,
         empty_definition.definition().default_state.clone(),
     )?;
-    let edge = inner.chunk_edge;
+    let edge = materialization.chunk_edge;
     let stride = usize::from(edge).saturating_mul(usize::from(edge));
-    let entrance = player_spawn_center(inner.spawn)
+    let entrance = player_spawn_center(materialization.spawn)
         .ok()
-        .and_then(|center| translation_chunk(center, inner.chunk_edge))
-        .and_then(|chunk| required_cave_entrance(&inner.plan, chunk));
+        .and_then(|center| translation_chunk(center, materialization.chunk_edge))
+        .and_then(|chunk| required_cave_entrance(&materialization.plan, chunk));
     for occupied in candidate.cells() {
         let index = usize::from(occupied.y())
             .saturating_mul(stride)
@@ -4255,7 +4568,7 @@ fn apply_hydrology_occupancy(
         let Some(cell) = cells.get_mut(index) else {
             continue;
         };
-        if cell.palette_index != inner.empty.palette_index {
+        if cell.palette_index != materialization.empty.palette_index {
             continue;
         }
         let world_x = i64::from(coordinate.x)
@@ -4270,7 +4583,13 @@ fn apply_hydrology_occupancy(
         // Initial occupancy is standing source water. Directional flow is a
         // drainage hint for the bounded runtime planner, not a D9 snapshot.
         if occupied.flow() != HydrologyFlowV1::Still
-            || hydrology_occupancy_forbidden(inner, entrance.as_ref(), world_x, world_y, world_z)
+            || hydrology_occupancy_forbidden(
+                materialization,
+                entrance.as_ref(),
+                world_x,
+                world_y,
+                world_z,
+            )
         {
             continue;
         }
@@ -4287,7 +4606,7 @@ fn apply_hydrology_occupancy(
             },
         };
         match arbitrate_cell(
-            &inner.content,
+            &materialization.content,
             &context,
             &solid,
             &FluidPaletteEntryV1::Empty,
@@ -4297,11 +4616,15 @@ fn apply_hydrology_occupancy(
                 fluid, fluid_state, ..
             } => {
                 let Some(fluid_index) =
-                    fluid_palette_index(&inner.fluid_palette, &fluid, fluid_state)
+                    fluid_palette_index(&materialization.fluid_palette, &fluid, fluid_state)
                 else {
                     continue;
                 };
-                *cell = HostVoxel::occupancy(cell.palette_index, fluid_index, &inner.presentation);
+                *cell = HostVoxel::occupancy(
+                    cell.palette_index,
+                    fluid_index,
+                    &materialization.presentation,
+                );
             }
             SolidFluidArbitrationV1::ReplaceThenOccupy { .. }
             | SolidFluidArbitrationV1::Rejected { .. }
@@ -4312,13 +4635,13 @@ fn apply_hydrology_occupancy(
 }
 
 fn hydrology_occupancy_forbidden(
-    inner: &ProductionSpineInner,
+    materialization: &WorldgenMaterialization,
     entrance: Option<&RequiredCaveEntranceV1>,
     world_x: i64,
     world_y: i64,
     world_z: i64,
 ) -> bool {
-    let occupancy = inner
+    let occupancy = materialization
         .plan
         .cave_occupancy_arbitration(world_x, world_y, world_z);
     if occupancy.portal_signed_distance() <= 0 {
