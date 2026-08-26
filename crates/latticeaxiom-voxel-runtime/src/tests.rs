@@ -328,6 +328,49 @@ fn receipt_projection_is_gated_replayable_and_fault_safe() {
 }
 
 #[test]
+fn mesh_only_projection_defers_collider_until_explicitly_requested() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let coordinate = ChunkCoordinate::new(0, 0, 0);
+    let (_, stored) = commit_chunk(&storage, &runtime_scope, coordinate, vec![1; CELL_COUNT], 1);
+    let mesh = request(1, 0, 512, 256);
+    let collider = request(2, 0, 512, 256);
+    let mut runtime = runtime();
+
+    let receipt = runtime
+        .project_committed(
+            projection_from_stored(&stored, 1, 1),
+            FixedTick::new(0),
+            DerivedRequestSet::mesh_only(mesh),
+        )
+        .expect("mesh-only projection fits the runtime");
+    assert_eq!(receipt.derived().len(), 1);
+    assert_eq!(receipt.derived()[0].key().kind(), DerivedKind::Mesh);
+    assert!(matches!(
+        runtime
+            .dispatch_next(DerivedKind::Collider)
+            .expect("collider queue identity remains in range"),
+        DispatchOutcome::Empty
+    ));
+
+    let requested = runtime
+        .request_derived(
+            coordinate,
+            DerivedKind::Collider,
+            FixedTick::new(1),
+            collider,
+        )
+        .expect("resident projection accepts an on-demand collider");
+    assert_eq!(requested.key().kind(), DerivedKind::Collider);
+    assert!(matches!(
+        runtime
+            .dispatch_next(DerivedKind::Collider)
+            .expect("collider queue identity remains in range"),
+        DispatchOutcome::Started(_)
+    ));
+}
+
+#[test]
 fn projection_rejects_scope_capacity_conflict_and_regression() {
     let runtime_scope = scope();
     let storage = MemoryTransactionKernel::new();

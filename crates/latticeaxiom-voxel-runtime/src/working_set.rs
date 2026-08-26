@@ -39,19 +39,61 @@ struct RuntimeChunk<V> {
     revision: ChunkRevision,
     voxel_revision: VoxelRevision,
     cells: Vec<V>,
+    retained_bytes: u64,
+    face_retained_bytes: [u64; 6],
     mesh_semantics: MeshSemanticFingerprint,
     collider_semantics: ColliderSemanticFingerprint,
     last_applied: [Option<DerivedJobKey>; 2],
     collider_safety: ColliderSafetyState,
 }
 
-impl<V> RuntimeChunk<V> {
-    fn from_parts(parts: ProjectionParts<V>, last_applied: [Option<DerivedJobKey>; 2]) -> Self {
+impl<V: RetainedBytes> RuntimeChunk<V> {
+    fn from_parts(
+        parts: ProjectionParts<V>,
+        last_applied: [Option<DerivedJobKey>; 2],
+        edge: usize,
+    ) -> Self {
+        let mut retained_bytes = 0_u64;
+        let mut face_retained_bytes = [0_u64; 6];
+        for y in 0..edge {
+            for z in 0..edge {
+                for x in 0..edge {
+                    let bytes = parts.cells[canonical_index(edge, x, y, z)].retained_bytes();
+                    retained_bytes = retained_bytes.saturating_add(bytes);
+                    if x == 0 {
+                        face_retained_bytes[Face::NegX.index()] =
+                            face_retained_bytes[Face::NegX.index()].saturating_add(bytes);
+                    }
+                    if x + 1 == edge {
+                        face_retained_bytes[Face::PosX.index()] =
+                            face_retained_bytes[Face::PosX.index()].saturating_add(bytes);
+                    }
+                    if y == 0 {
+                        face_retained_bytes[Face::NegY.index()] =
+                            face_retained_bytes[Face::NegY.index()].saturating_add(bytes);
+                    }
+                    if y + 1 == edge {
+                        face_retained_bytes[Face::PosY.index()] =
+                            face_retained_bytes[Face::PosY.index()].saturating_add(bytes);
+                    }
+                    if z == 0 {
+                        face_retained_bytes[Face::NegZ.index()] =
+                            face_retained_bytes[Face::NegZ.index()].saturating_add(bytes);
+                    }
+                    if z + 1 == edge {
+                        face_retained_bytes[Face::PosZ.index()] =
+                            face_retained_bytes[Face::PosZ.index()].saturating_add(bytes);
+                    }
+                }
+            }
+        }
         Self {
             world_revision: parts.world_revision,
             revision: parts.revision,
             voxel_revision: parts.voxel_revision,
             cells: parts.cells,
+            retained_bytes,
+            face_retained_bytes,
             mesh_semantics: parts.mesh_semantics,
             collider_semantics: parts.collider_semantics,
             last_applied,
@@ -442,7 +484,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         let world_revision = parts.world_revision;
         let revision = parts.revision;
         let voxel_revision = parts.voxel_revision;
-        let mut replacement = RuntimeChunk::from_parts(parts, last_applied);
+        let mut replacement = RuntimeChunk::from_parts(parts, last_applied, usize::from(self.edge));
         if !collider_changed && let Some(previous) = previous_collider_safety {
             replacement.collider_safety = previous;
         }
@@ -1223,8 +1265,9 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
     ) -> Vec<DerivedEnqueueReceipt> {
         work.iter()
             .filter_map(|&(coordinate, kind)| {
+                let request = requests.get(kind)?;
                 self.current_job_key(coordinate, kind)
-                    .map(|key| self.enqueue_key(key, tick, requests.get(kind)))
+                    .map(|key| self.enqueue_key(key, tick, request))
             })
             .collect()
     }
@@ -1371,26 +1414,47 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
 
     fn halo_retained_bytes(&self, coordinate: ChunkCoordinate) -> u64 {
         let edge = usize::from(self.edge);
+        let target = self
+            .chunks
+            .get(&coordinate)
+            .expect("only resident targets may be queued");
         let mut bytes = u64::try_from(mem::size_of::<DerivedInput<V>>()).unwrap_or(u64::MAX);
-        for z in 0..edge + 2 {
-            for y in 0..edge + 2 {
-                for x in 0..edge + 2 {
-                    bytes = bytes
-                        .saturating_add(self.padded_sample(coordinate, [x, y, z]).retained_bytes());
-                }
-            }
+        bytes = bytes.saturating_add(target.retained_bytes);
+        let empty_bytes = self.empty.retained_bytes();
+        let face_cell_count = u64::try_from(edge.saturating_mul(edge)).unwrap_or(u64::MAX);
+        for face in Face::ALL {
+            let face_bytes = neighbor_coordinate(coordinate, face)
+                .and_then(|neighbor| self.chunks.get(&neighbor))
+                .map_or_else(
+                    || face_cell_count.saturating_mul(empty_bytes),
+                    |neighbor| neighbor.face_retained_bytes[face.opposite().index()],
+                );
+            bytes = bytes.saturating_add(face_bytes);
         }
-        bytes
+        let edge_and_corner_cells = u64::try_from(edge)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(12)
+            .saturating_add(8);
+        bytes.saturating_add(edge_and_corner_cells.saturating_mul(empty_bytes))
     }
 
     fn capture_halo(&self, coordinate: ChunkCoordinate) -> (Vec<V>, u64) {
         let edge = usize::from(self.edge);
+        let target = self
+            .chunks
+            .get(&coordinate)
+            .expect("only resident targets may be dispatched");
+        let neighbors = Face::ALL.map(|face| {
+            neighbor_coordinate(coordinate, face).and_then(|neighbor| self.chunks.get(&neighbor))
+        });
         let mut samples = Vec::with_capacity(self.dimensions.volume_len());
         let mut bytes = u64::try_from(mem::size_of::<DerivedInput<V>>()).unwrap_or(u64::MAX);
         for z in 0..edge + 2 {
             for y in 0..edge + 2 {
                 for x in 0..edge + 2 {
-                    let sample = self.padded_sample(coordinate, [x, y, z]).clone();
+                    let sample = self
+                        .cached_padded_sample(target, &neighbors, [x, y, z])
+                        .clone();
                     bytes = bytes.saturating_add(sample.retained_bytes());
                     samples.push(sample);
                 }
@@ -1400,18 +1464,19 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         (samples, bytes)
     }
 
-    fn padded_sample(&self, coordinate: ChunkCoordinate, [x, y, z]: [usize; 3]) -> &V {
+    fn cached_padded_sample<'a>(
+        &'a self,
+        target: &'a RuntimeChunk<V>,
+        neighbors: &[Option<&'a RuntimeChunk<V>>; 6],
+        [x, y, z]: [usize; 3],
+    ) -> &'a V {
         let edge = usize::from(self.edge);
         let outside = [x, y, z]
             .into_iter()
             .filter(|value| *value == 0 || *value == edge + 1)
             .count();
         if outside == 0 {
-            let chunk = self
-                .chunks
-                .get(&coordinate)
-                .expect("only resident targets may be queued");
-            return &chunk.cells[canonical_index(edge, x - 1, y - 1, z - 1)];
+            return &target.cells[canonical_index(edge, x - 1, y - 1, z - 1)];
         }
         if outside != 1 {
             return &self.empty;
@@ -1430,9 +1495,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         } else {
             (Face::PosZ, [x - 1, y - 1, 0])
         };
-        let Some(neighbor) =
-            neighbor_coordinate(coordinate, face).and_then(|neighbor| self.chunks.get(&neighbor))
-        else {
+        let Some(neighbor) = neighbors[face.index()] else {
             return &self.empty;
         };
         &neighbor.cells[canonical_index(edge, local[0], local[1], local[2])]

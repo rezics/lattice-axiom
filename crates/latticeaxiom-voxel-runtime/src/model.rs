@@ -566,21 +566,32 @@ impl DerivedRequest {
     }
 }
 
-/// Mesh and collider requests supplied together for projection invalidation.
+/// Selective mesh and collider requests for projection invalidation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DerivedRequestSet {
-    mesh: DerivedRequest,
-    collider: DerivedRequest,
+    mesh: Option<DerivedRequest>,
+    collider: Option<DerivedRequest>,
 }
 impl DerivedRequestSet {
     /// Creates independent request policies.
     #[must_use]
     pub const fn new(mesh: DerivedRequest, collider: DerivedRequest) -> Self {
-        Self { mesh, collider }
+        Self {
+            mesh: Some(mesh),
+            collider: Some(collider),
+        }
+    }
+    /// Requests mesh work without materializing a physics collider.
+    #[must_use]
+    pub const fn mesh_only(mesh: DerivedRequest) -> Self {
+        Self {
+            mesh: Some(mesh),
+            collider: None,
+        }
     }
     /// Request for one kind.
     #[must_use]
-    pub const fn get(self, kind: DerivedKind) -> DerivedRequest {
+    pub const fn get(self, kind: DerivedKind) -> Option<DerivedRequest> {
         match kind {
             DerivedKind::Mesh => self.mesh,
             DerivedKind::Collider => self.collider,
