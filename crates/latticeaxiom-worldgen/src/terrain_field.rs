@@ -79,6 +79,11 @@ pub(crate) fn terrain_shape(seed: u64, x: i64, z: i64, base_scale: u16) -> i64 {
         .clamp(-UNIT, UNIT)
 }
 
+/// Samples a low-frequency correlated climate field over planning-cell coordinates.
+pub(crate) fn climate_field(seed: u64, cell_x: i64, cell_z: i64, scale_cells: u16) -> i64 {
+    gradient_noise(seed, cell_x, cell_z, i64::from(scale_cells.max(1)))
+}
+
 fn fractal_noise(seed: u64, x: i64, z: i64, scale: i64, octaves: u8) -> i64 {
     let mut weighted = 0_i64;
     let mut total_weight = 0_i64;
@@ -180,7 +185,7 @@ fn lerp_fixed(left: i64, right: i64, amount: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{UNIT, gradient_noise, quintic_fade, terrain_shape};
+    use super::{UNIT, climate_field, gradient_noise, quintic_fade, terrain_shape};
 
     #[test]
     fn quintic_fade_has_exact_endpoints() {
@@ -200,6 +205,29 @@ mod tests {
             assert!((center - left).abs() <= 128, "left edge jump at {x}");
             assert!((right - center).abs() <= 128, "right edge jump at {x}");
         }
+    }
+
+    #[test]
+    fn climate_field_correlates_neighboring_planning_cells() {
+        let mut minimum = UNIT;
+        let mut maximum = -UNIT;
+        let mut maximum_step = 0_i64;
+        for z in -64_i64..=64 {
+            for x in -64_i64..=64 {
+                let sample = climate_field(0xc11a_7e42, x, z, 8);
+                minimum = minimum.min(sample);
+                maximum = maximum.max(sample);
+                maximum_step = maximum_step
+                    .max((sample - climate_field(0xc11a_7e42, x + 1, z, 8)).abs())
+                    .max((sample - climate_field(0xc11a_7e42, x, z + 1, 8)).abs());
+            }
+        }
+        assert!(minimum < -256);
+        assert!(maximum > 256);
+        assert!(
+            maximum_step <= 512,
+            "climate step is too abrupt: {maximum_step}"
+        );
     }
 
     #[test]

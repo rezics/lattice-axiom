@@ -4,14 +4,17 @@ use serde::{Deserialize, Serialize};
 use crate::{
     GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, WorldSeedV1,
     WorldgenConfigV1,
-    hashes::{domain_hash, hash_u64, sample_hash_2d},
-    terrain_field::terrain_shape,
+    hashes::{domain_hash, hash_u64},
+    terrain_field::{climate_field, terrain_shape},
 };
 
 const TERRITORY_CELL_DOMAIN: &[u8] = b"latticeaxiom.territory-cell.v1\0";
 const STYLE_DOMAIN: &[u8] = b"latticeaxiom.d4-style.v1\0";
 const HEIGHT_DOMAIN: &[u8] = b"latticeaxiom.d4-height.v1\0";
 const TRANSITION_DOMAIN: &[u8] = b"latticeaxiom.d4-transition.v1\0";
+const CLIMATE_SCALE_CELLS: u16 = 8;
+const TEMPERATURE_SALT: u64 = 0xa076_1d64_78bd_642f;
+const HUMIDITY_SALT: u64 = 0xe703_7ed1_a0b4_28db;
 
 /// Deterministic terrain-style discriminants used by the D4 and natural layers.
 ///
@@ -164,7 +167,8 @@ pub(crate) struct TerritorySamplerV1 {
     seed: WorldSeedV1,
     input_hash: GenerationInputHashV1,
     config: WorldgenConfigV1,
-    style_seed: u64,
+    temperature_seed: u64,
+    humidity_seed: u64,
     transition: ProviderGenerationIdentityV1,
     temperate_height_seed: u64,
     arid_height_seed: u64,
@@ -189,7 +193,7 @@ impl TerritorySamplerV1 {
             TerrainStyleV1::TemperateWoodland,
         );
         let arid_height_seed = height_seed(seed, input_hash, arid, TerrainStyleV1::AridBadlands);
-        let style_seed = hash_u64(
+        let climate_seed = hash_u64(
             STYLE_DOMAIN,
             &[
                 seed.as_bytes(),
@@ -202,7 +206,8 @@ impl TerritorySamplerV1 {
             seed,
             input_hash,
             config,
-            style_seed,
+            temperature_seed: climate_seed ^ TEMPERATURE_SALT,
+            humidity_seed: climate_seed ^ HUMIDITY_SALT,
             transition,
             temperate_height_seed,
             arid_height_seed,
@@ -295,19 +300,38 @@ impl TerritorySamplerV1 {
         let x_blend = axis_blend(sample.cell_x, x.rem_euclid(edge), edge, width);
         let z_blend = axis_blend(sample.cell_z, z.rem_euclid(edge), edge, width);
         let mut cached_heights = [None; 3];
-        let current = self.raw_cell_height(sample.cell_x, sample.cell_z, x, z, &mut cached_heights);
+        let current = self.raw_cell_height(
+            sample.cell_x,
+            sample.cell_z,
+            x,
+            z,
+            sample,
+            &mut cached_heights,
+        );
         let current_row = if x_blend.adjacent == sample.cell_x {
             current
         } else {
-            let adjacent_x =
-                self.raw_cell_height(x_blend.adjacent, sample.cell_z, x, z, &mut cached_heights);
+            let adjacent_x = self.raw_cell_height(
+                x_blend.adjacent,
+                sample.cell_z,
+                x,
+                z,
+                sample,
+                &mut cached_heights,
+            );
             blend_height(current, adjacent_x, x_blend.current_weight, denominator)
         };
         if z_blend.adjacent == sample.cell_z {
             return saturating_height(current_row);
         }
-        let adjacent_z =
-            self.raw_cell_height(sample.cell_x, z_blend.adjacent, x, z, &mut cached_heights);
+        let adjacent_z = self.raw_cell_height(
+            sample.cell_x,
+            z_blend.adjacent,
+            x,
+            z,
+            sample,
+            &mut cached_heights,
+        );
         let adjacent_row = if x_blend.adjacent == sample.cell_x {
             adjacent_z
         } else {
@@ -316,6 +340,7 @@ impl TerritorySamplerV1 {
                 z_blend.adjacent,
                 x,
                 z,
+                sample,
                 &mut cached_heights,
             );
             blend_height(adjacent_z, diagonal, x_blend.current_weight, denominator)
@@ -335,9 +360,16 @@ impl TerritorySamplerV1 {
         cell_z: i64,
         x: i64,
         z: i64,
+        sample: CompactTerritorySampleV1,
         cached_heights: &mut [Option<i64>; 3],
     ) -> i64 {
-        let style = self.style_for_cell(cell_x, cell_z);
+        let style = if (cell_x, cell_z) == (sample.cell_x, sample.cell_z) {
+            sample.winner
+        } else if (cell_x, cell_z) == (sample.neighbor_x, sample.neighbor_z) {
+            sample.adjacent_style
+        } else {
+            self.style_for_cell(cell_x, cell_z)
+        };
         let index = usize::from(style.discriminant());
         if let Some(height) = cached_heights[index] {
             return height;
@@ -393,17 +425,21 @@ impl TerritorySamplerV1 {
     }
 
     fn style_for_cell(&self, cell_x: i64, cell_z: i64) -> TerrainStyleV1 {
-        let roll = sample_hash_2d(self.style_seed, cell_x, cell_z);
+        let temperature = climate_field(self.temperature_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS);
+        let humidity = climate_field(self.humidity_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS);
+        let aridity = temperature.saturating_sub(humidity.div_euclid(3));
         if self.boreal.is_some() {
-            match roll % 3 {
-                0 => TerrainStyleV1::TemperateWoodland,
-                1 => TerrainStyleV1::AridBadlands,
-                _ => TerrainStyleV1::BorealWetland,
+            if temperature < -96 && humidity > -320 {
+                TerrainStyleV1::BorealWetland
+            } else if aridity > 96 || humidity < -384 {
+                TerrainStyleV1::AridBadlands
+            } else {
+                TerrainStyleV1::TemperateWoodland
             }
-        } else if roll & 1 == 0 {
-            TerrainStyleV1::TemperateWoodland
-        } else {
+        } else if aridity > 64 {
             TerrainStyleV1::AridBadlands
+        } else {
+            TerrainStyleV1::TemperateWoodland
         }
     }
 

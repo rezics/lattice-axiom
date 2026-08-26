@@ -732,6 +732,44 @@ fn both_fixture_styles_and_named_transition_are_queryable() {
 }
 
 #[test]
+fn climate_selector_clusters_neighboring_planning_cells() {
+    let plan = fixture_plan(false, &[b"lock-a"]);
+    let edge = i64::from(plan.config().chunk_edge_voxels)
+        .saturating_mul(i64::from(plan.config().planning_cell_edge_chunks));
+    let mut matching_neighbors = 0_u32;
+    let mut inspected_neighbors = 0_u32;
+    let mut styles = BTreeSet::new();
+    for cell_z in -32_i64..=32 {
+        for cell_x in -32_i64..=32 {
+            let center_x = cell_x.saturating_mul(edge).saturating_add(edge / 2);
+            let center_z = cell_z.saturating_mul(edge).saturating_add(edge / 2);
+            let style = plan.territory_query(center_x, center_z).winner();
+            styles.insert(style);
+            for (neighbor_x, neighbor_z) in [
+                (center_x.saturating_add(edge), center_z),
+                (center_x, center_z.saturating_add(edge)),
+            ] {
+                inspected_neighbors = inspected_neighbors.saturating_add(1);
+                matching_neighbors = matching_neighbors.saturating_add(u32::from(
+                    plan.territory_query(neighbor_x, neighbor_z).winner() == style,
+                ));
+            }
+        }
+    }
+    assert_eq!(
+        styles,
+        BTreeSet::from([
+            TerrainStyleV1::TemperateWoodland,
+            TerrainStyleV1::AridBadlands,
+        ])
+    );
+    assert!(
+        matching_neighbors.saturating_mul(100) >= inspected_neighbors.saturating_mul(75),
+        "climate selector did not form coherent regions: {matching_neighbors}/{inspected_neighbors} matching neighbors"
+    );
+}
+
+#[test]
 fn high_relief_height_blends_continuously_through_planning_cell_corners() {
     let mut config = default_config();
     config.transition_width_voxels = 16;
@@ -1118,7 +1156,7 @@ fn fixed_d4_snapshot_has_stable_golden_checksum() {
         .expect("golden chunk generates");
     assert_eq!(
         prepared(&outcome).checksum().to_string(),
-        "4b00586c0dcbae28e703c322ef4684a80d06a30e8dfd84c5599cae1b57dcb441"
+        "6f49fbbbf9aaaeddf2e5812ae406ae1e32eb500b1dc4f388f2be0d08cacab9bb"
     );
 }
 
@@ -1143,13 +1181,13 @@ fn both_style_surface_snapshots_have_independent_goldens() {
         vec![
             (
                 TerrainStyleV1::TemperateWoodland,
-                ChunkCoordinate::new(-198, 2, -255),
-                "1c0c6faaa6c8cf44ca3213942f11570ae049c70a337105555f04c31f6563b472".to_owned(),
+                ChunkCoordinate::new(-214, 2, -255),
+                "4152ed038eddeb819c188505aa4faf0e5258d9879ff0fa4eb3c2ba0c4a8edd2d".to_owned(),
             ),
             (
                 TerrainStyleV1::AridBadlands,
-                ChunkCoordinate::new(-254, 2, -255),
-                "b54fa884662871d5b46f2e6a9efbb5df0270b8b5945072ef82acf2d1e906ebf0".to_owned(),
+                ChunkCoordinate::new(-108, 2, -255),
+                "60b2483c0d7fbc5e74c0512ea135d631798dad79334249540bcad2499d57ca5a".to_owned(),
             ),
         ]
     );
