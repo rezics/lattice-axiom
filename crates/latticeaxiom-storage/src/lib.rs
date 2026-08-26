@@ -30,9 +30,9 @@ pub use model::{
     ChangedDomains, ChunkCommitReceipt, ChunkCoordinate, ChunkData, ChunkKey, ChunkMutation,
     ChunkRevision, ChunkRevisionExpectation, CommitReceipt, ContinuationId, ContinuationRevision,
     DimensionId, DomainRevisions, FaultPoint, PayloadSchemaVersion, PersistentEntityId,
-    PersistentEntityRevision, ReferenceDurability, ReferenceWorldSnapshot, StoredChunk,
-    TransactionId, TransactionKernelLimits, VersionedPayload, VoxelRevision, WorldRevision,
-    WorldTransaction,
+    PersistentEntityRevision, PublicationReceipt, ReferenceDurability, ReferenceWorldSnapshot,
+    StoredChunk, TransactionId, TransactionKernelLimits, VersionedPayload, VoxelRevision,
+    WorldRevision, WorldTransaction,
 };
 pub use storage::AuthoritativeTransactionKernel;
 

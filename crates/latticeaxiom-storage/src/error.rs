@@ -150,6 +150,17 @@ pub enum StorageError {
         /// Reused identifier.
         transaction_id: TransactionId,
     },
+    /// Reference evidence was requested for a transaction originally accepted
+    /// through the scale-sensitive publication path.
+    #[error(
+        "transaction {transaction_id:?} in world {world} has no retained full-world reference hash"
+    )]
+    ReferenceReceiptUnavailable {
+        /// World in which the transaction was published.
+        world: WorldId,
+        /// Transaction whose reference-only evidence was not computed.
+        transaction_id: TransactionId,
+    },
     /// An exact retry fell outside the bounded retained-receipt horizon.
     #[error(
         "transaction {transaction_id:?} in world {world} is older than replayable base revision {oldest_replayable_base:?}"

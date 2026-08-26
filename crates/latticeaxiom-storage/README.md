@@ -25,6 +25,15 @@ state.
 but explicitly excludes world metadata, requirement closure, and exact lock
 data. The snapshot exists for deterministic conformance and fault evidence,
 not production scale.
+
+Scale-sensitive in-process callers may use `MemoryTransactionKernel::publish`
+to receive a typed `PublicationReceipt` without recomputing the full-world
+reference hash on every transaction. It preserves atomic publication,
+optimistic validation, revisions, changed-domain evidence, and bounded exact
+replay. A full `CommitReceipt` cannot be reconstructed later for a transaction
+first accepted through this path; callers that need that reference-only
+evidence must use `commit` or capture an explicit `ReferenceWorldSnapshot`.
+
 The reference limits (32 chunks, 64 MiB payload, 64 receipts by default) are
 non-normative safety values and are not ADR 0027 production budgets.
 

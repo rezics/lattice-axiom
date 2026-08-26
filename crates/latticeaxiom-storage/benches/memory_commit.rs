@@ -54,6 +54,41 @@ fn memory_commit_benchmark(criterion: &mut Criterion) {
             black_box(receipt);
         });
     });
+
+    let (kernel, world, dimension, schema, mut frontier) = seeded_kernel();
+    let mut revisions = [ChunkRevision::new(1); CHUNK_COUNT];
+    let mut iteration = 0_u64;
+    criterion.bench_function("memory_publish_128_x_32_cubic_payloads", |bencher| {
+        bencher.iter(|| {
+            let index = usize::try_from(iteration % CHUNK_COUNT as u64)
+                .expect("bounded benchmark index fits usize");
+            let next_byte =
+                u8::try_from(iteration % 251 + 1).expect("bounded benchmark byte fits u8");
+            let key = ChunkKey::new(
+                world,
+                dimension.clone(),
+                ChunkCoordinate::new(i32::try_from(index).expect("chunk index fits i32"), 0, 0),
+            );
+            let mutation = ChunkMutation::new(
+                key,
+                ChunkRevisionExpectation::Exact(revisions[index]),
+                ChangedDomains::VOXELS,
+                chunk_data(&schema, next_byte),
+            );
+            let receipt = kernel
+                .publish(WorldTransaction::new(
+                    TransactionId::from_u128(u128::from(iteration) + 20_000),
+                    world,
+                    frontier,
+                    vec![mutation],
+                ))
+                .expect("benchmark publication satisfies current revisions");
+            frontier = receipt.world_revision();
+            revisions[index] = receipt.chunks()[0].chunk_revision();
+            iteration = iteration.saturating_add(1);
+            black_box(receipt);
+        });
+    });
 }
 
 fn seeded_kernel() -> (

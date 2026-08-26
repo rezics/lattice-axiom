@@ -743,6 +743,61 @@ impl ChunkCommitReceipt {
 }
 
 /// Acknowledgement returned only after a complete atomic publication.
+///
+/// This receipt deliberately omits the full-world reference hash. It is the
+/// scale-sensitive acknowledgement used when callers only need publication
+/// identity, revisions, changed domains, and the non-durable acknowledgement
+/// level. [`CommitReceipt`] remains the stronger reference-evidence form.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicationReceipt {
+    pub(crate) transaction_id: TransactionId,
+    pub(crate) world: WorldId,
+    pub(crate) world_revision: WorldRevision,
+    pub(crate) chunks: Vec<ChunkCommitReceipt>,
+    pub(crate) durability: ReferenceDurability,
+    pub(crate) replayed: bool,
+}
+
+impl PublicationReceipt {
+    /// Returns the transaction idempotency identifier.
+    #[must_use]
+    pub const fn transaction_id(&self) -> TransactionId {
+        self.transaction_id
+    }
+
+    /// Returns the authoritative world.
+    #[must_use]
+    pub const fn world(&self) -> WorldId {
+        self.world
+    }
+
+    /// Returns the world revision shared by all changed chunks.
+    #[must_use]
+    pub const fn world_revision(&self) -> WorldRevision {
+        self.world_revision
+    }
+
+    /// Returns committed chunks in canonical key order.
+    #[must_use]
+    pub fn chunks(&self) -> &[ChunkCommitReceipt] {
+        &self.chunks
+    }
+
+    /// Returns the non-durable acknowledgement state of this publication.
+    #[must_use]
+    pub const fn durability(&self) -> ReferenceDurability {
+        self.durability
+    }
+
+    /// Returns whether this receipt came from an exact idempotent replay.
+    #[must_use]
+    pub const fn replayed(&self) -> bool {
+        self.replayed
+    }
+}
+
+/// Acknowledgement returned only after a complete atomic publication and
+/// full-world reference hashing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitReceipt {
     pub(crate) transaction_id: TransactionId,
@@ -755,6 +810,20 @@ pub struct CommitReceipt {
 }
 
 impl CommitReceipt {
+    /// Projects this reference receipt into its scale-sensitive publication
+    /// evidence without recomputing or exposing the full-world state hash.
+    #[must_use]
+    pub fn publication(&self) -> PublicationReceipt {
+        PublicationReceipt {
+            transaction_id: self.transaction_id,
+            world: self.world,
+            world_revision: self.world_revision,
+            chunks: self.chunks.clone(),
+            durability: self.durability,
+            replayed: self.replayed,
+        }
+    }
+
     /// Returns the transaction idempotency identifier.
     #[must_use]
     pub const fn transaction_id(&self) -> TransactionId {

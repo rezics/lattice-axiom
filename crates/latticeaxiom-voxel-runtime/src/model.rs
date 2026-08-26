@@ -4,8 +4,8 @@ use std::mem;
 
 use latticeaxiom_core::WorldId;
 use latticeaxiom_storage::{
-    ChunkCoordinate, ChunkKey, ChunkRevision, CommitReceipt, DimensionId, ReferenceDurability,
-    StoredChunk, TransactionId, VoxelRevision, WorldRevision,
+    ChunkCoordinate, ChunkKey, ChunkRevision, CommitReceipt, DimensionId, PublicationReceipt,
+    ReferenceDurability, StoredChunk, TransactionId, VoxelRevision, WorldRevision,
 };
 use latticeaxiom_voxel_mesh::{
     Face, MeshSource, PaddedChunk, SourceEpoch, SourceFingerprint, SourceRevision,
@@ -304,6 +304,14 @@ pub enum ProjectionEvidence {
         /// Current reference acknowledgement level.
         durability: ReferenceDurability,
     },
+    /// Complete atomic publication acknowledged without a full-world
+    /// reference-state hash.
+    PublicationReceipt {
+        /// Transaction identity.
+        transaction: TransactionId,
+        /// Current non-durable acknowledgement level.
+        durability: ReferenceDurability,
+    },
     /// Reconstructed directly from a storage-owned snapshot.
     StoredSnapshot,
 }
@@ -322,6 +330,49 @@ pub struct CommittedChunkProjection<V> {
     evidence: ProjectionEvidence,
 }
 impl<V> CommittedChunkProjection<V> {
+    /// Decodes one chunk published by a scale-sensitive publication receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the key is absent or the cubic shape is invalid.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "both semantic domains and storage evidence are explicit"
+    )]
+    pub fn from_publication_receipt(
+        receipt: &PublicationReceipt,
+        key: ChunkKey,
+        edge: u16,
+        cells: Vec<V>,
+        mesh_semantics: MeshSemanticFingerprint,
+        collider_semantics: ColliderSemanticFingerprint,
+    ) -> RuntimeResult<Self> {
+        let coordinate = key.coordinate;
+        let committed = receipt
+            .chunks()
+            .iter()
+            .find(|chunk| chunk.key() == &key)
+            .ok_or_else(|| RuntimeError::ChunkMissingFromCommit {
+                coordinate,
+                world_revision: receipt.world_revision(),
+            })?;
+        validate_projection_shape(coordinate, edge, cells.len())?;
+        Ok(Self {
+            key,
+            world_revision: receipt.world_revision(),
+            revision: committed.chunk_revision(),
+            voxel_revision: committed.domain_revisions().voxels(),
+            edge,
+            cells,
+            mesh_semantics,
+            collider_semantics,
+            evidence: ProjectionEvidence::PublicationReceipt {
+                transaction: receipt.transaction_id(),
+                durability: receipt.durability(),
+            },
+        })
+    }
+
     /// Decodes one chunk published by a storage commit receipt.
     ///
     /// # Errors

@@ -328,6 +328,51 @@ fn receipt_projection_is_gated_replayable_and_fault_safe() {
 }
 
 #[test]
+fn publication_receipt_projects_without_reference_hash_evidence() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let coordinate = ChunkCoordinate::new(-2, 1, 3);
+    let cells = vec![7; CELL_COUNT];
+    let receipt = storage
+        .publish(build_transaction(
+            &storage,
+            &runtime_scope,
+            coordinate,
+            cells.clone(),
+            9,
+        ))
+        .expect("scale-sensitive publication commits atomically");
+    let key = ChunkKey::new(
+        runtime_scope.world(),
+        runtime_scope.dimension().clone(),
+        coordinate,
+    );
+    let projection = CommittedChunkProjection::from_publication_receipt(
+        &receipt,
+        key,
+        EDGE,
+        cells,
+        mesh_fingerprint(3),
+        collider_fingerprint(4),
+    )
+    .expect("publication receipt includes the committed chunk");
+    assert!(matches!(
+        projection.evidence(),
+        ProjectionEvidence::PublicationReceipt {
+            transaction,
+            durability: latticeaxiom_storage::ReferenceDurability::Queued,
+        } if transaction == receipt.transaction_id()
+    ));
+
+    let mut runtime = runtime();
+    let admitted = runtime
+        .project_committed(projection, FixedTick::new(6), requests())
+        .expect("published projection is admitted");
+    assert_eq!(admitted.decision(), ProjectionDecision::Admitted);
+    assert_eq!(admitted.world_revision(), receipt.world_revision());
+}
+
+#[test]
 fn mesh_only_projection_defers_collider_until_explicitly_requested() {
     let runtime_scope = scope();
     let storage = MemoryTransactionKernel::new();

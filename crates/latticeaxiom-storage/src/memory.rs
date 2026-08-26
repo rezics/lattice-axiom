@@ -11,7 +11,7 @@ use crate::model::PayloadByteMeter;
 use crate::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCommitReceipt, ChunkData, ChunkKey,
     ChunkMutation, ChunkRevision, ChunkRevisionExpectation, CommitReceipt, ContinuationRevision,
-    DomainRevisions, FaultPoint, PersistentEntityRevision, ReferenceDurability,
+    DomainRevisions, FaultPoint, PersistentEntityRevision, PublicationReceipt, ReferenceDurability,
     ReferenceWorldSnapshot, RevisionCounter, StorageError, StorageResult, StoredChunk,
     TransactionId, TransactionKernelLimits, VoxelRevision, WorldRevision, WorldTransaction,
     canonical_hash::{
@@ -22,7 +22,8 @@ use crate::{
 #[derive(Clone, Debug)]
 struct CommittedTransaction {
     fingerprint: CanonicalHash,
-    receipt: CommitReceipt,
+    publication: PublicationReceipt,
+    materialized_chunk_state_hash: Option<crate::MaterializedChunkStateHash>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -110,12 +111,16 @@ impl MemoryTransactionKernel {
             .map_err(|_| StorageError::LockPoisoned { operation })
     }
 
-    fn commit_prepared(&self, prepared: PreparedTransaction) -> StorageResult<CommitReceipt> {
+    fn commit_prepared(
+        &self,
+        prepared: PreparedTransaction,
+        evidence: CommitEvidence,
+    ) -> StorageResult<CommittedReceipt> {
         let mut state = self.write_state("commit authoritative transaction")?;
         let (new_world_revision, plans, entity_locations) = {
             let empty_world = MemoryWorld::default();
             let current_world = state.worlds.get(&prepared.world).unwrap_or(&empty_world);
-            if let Some(receipt) = replay_receipt(current_world, &prepared)? {
+            if let Some(receipt) = replay_receipt(current_world, &prepared, evidence)? {
                 return Ok(receipt);
             }
             ensure_retry_not_expired(current_world, &prepared)?;
@@ -139,23 +144,25 @@ impl MemoryTransactionKernel {
             }
         }
 
-        let materialized_chunk_state_hash = {
-            let empty_world = MemoryWorld::default();
-            let current_world = state.worlds.get(&prepared.world).unwrap_or(&empty_world);
-            hash_projected_materialized_chunk_state(
-                prepared.world,
-                new_world_revision,
-                &current_world.chunks,
-                &replacements,
-            )?
+        let materialized_chunk_state_hash = match evidence {
+            CommitEvidence::Reference => {
+                let empty_world = MemoryWorld::default();
+                let current_world = state.worlds.get(&prepared.world).unwrap_or(&empty_world);
+                Some(hash_projected_materialized_chunk_state(
+                    prepared.world,
+                    new_world_revision,
+                    &current_world.chunks,
+                    &replacements,
+                )?)
+            }
+            CommitEvidence::Publication => None,
         };
-        let receipt = CommitReceipt {
+        let publication = PublicationReceipt {
             transaction_id: prepared.id,
             world: prepared.world,
             world_revision: new_world_revision,
             chunks: chunk_receipts,
             durability: ReferenceDurability::Queued,
-            materialized_chunk_state_hash,
             replayed: false,
         };
         let max_retained =
@@ -174,11 +181,38 @@ impl MemoryTransactionKernel {
             published_world,
             prepared.id,
             prepared.fingerprint,
-            receipt.clone(),
+            publication.clone(),
+            materialized_chunk_state_hash,
             max_retained,
         );
         fail_if(fault, FaultPoint::AfterPublishBeforeReceipt)?;
-        Ok(receipt)
+        committed_receipt(publication, materialized_chunk_state_hash, evidence)
+    }
+
+    /// Atomically publishes a transaction without constructing the
+    /// full-world reference-state hash.
+    ///
+    /// The returned receipt still proves transaction identity, atomic world
+    /// revision, per-chunk revisions, changed domains, and acknowledgement
+    /// level. Call [`Self::reference_snapshot`] explicitly when test or
+    /// conformance evidence needs the complete materialized-state hash.
+    ///
+    /// Exact retries through this method remain idempotent. A later attempt to
+    /// obtain a [`CommitReceipt`] for a transaction first accepted here is
+    /// rejected because that historical full-world hash was deliberately not
+    /// computed or retained.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation, conflict, limit, replay, failpoint, and
+    /// publication errors as [`AuthoritativeTransactionKernel::commit`].
+    pub fn publish(&self, transaction: WorldTransaction) -> StorageResult<PublicationReceipt> {
+        let prepared = validate_transaction(transaction, self.limits)?;
+        let world = prepared.world;
+        match self.commit_prepared(prepared, CommitEvidence::Publication)? {
+            CommittedReceipt::Publication(receipt) => Ok(receipt),
+            CommittedReceipt::Reference(_) => Err(StorageError::ReceiptHistoryInvariant { world }),
+        }
     }
 }
 
@@ -234,7 +268,50 @@ impl AuthoritativeTransactionKernel for MemoryTransactionKernel {
     }
     fn commit(&self, transaction: WorldTransaction) -> StorageResult<CommitReceipt> {
         let prepared = validate_transaction(transaction, self.limits)?;
-        self.commit_prepared(prepared)
+        let world = prepared.world;
+        match self.commit_prepared(prepared, CommitEvidence::Reference)? {
+            CommittedReceipt::Reference(receipt) => Ok(receipt),
+            CommittedReceipt::Publication(_) => {
+                Err(StorageError::ReceiptHistoryInvariant { world })
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommitEvidence {
+    Publication,
+    Reference,
+}
+
+enum CommittedReceipt {
+    Publication(PublicationReceipt),
+    Reference(CommitReceipt),
+}
+
+fn committed_receipt(
+    publication: PublicationReceipt,
+    materialized_chunk_state_hash: Option<crate::MaterializedChunkStateHash>,
+    evidence: CommitEvidence,
+) -> StorageResult<CommittedReceipt> {
+    match evidence {
+        CommitEvidence::Publication => Ok(CommittedReceipt::Publication(publication)),
+        CommitEvidence::Reference => {
+            let materialized_chunk_state_hash =
+                materialized_chunk_state_hash.ok_or(StorageError::ReferenceReceiptUnavailable {
+                    world: publication.world,
+                    transaction_id: publication.transaction_id,
+                })?;
+            Ok(CommittedReceipt::Reference(CommitReceipt {
+                transaction_id: publication.transaction_id,
+                world: publication.world,
+                world_revision: publication.world_revision,
+                chunks: publication.chunks,
+                durability: publication.durability,
+                materialized_chunk_state_hash,
+                replayed: publication.replayed,
+            }))
+        }
     }
 }
 
@@ -318,7 +395,8 @@ fn validate_keys(transaction: &WorldTransaction) -> StorageResult<()> {
 fn replay_receipt(
     world: &MemoryWorld,
     prepared: &PreparedTransaction,
-) -> StorageResult<Option<CommitReceipt>> {
+    evidence: CommitEvidence,
+) -> StorageResult<Option<CommittedReceipt>> {
     let Some(committed) = world.committed_transactions.get(&prepared.id) else {
         return Ok(None);
     };
@@ -328,9 +406,14 @@ fn replay_receipt(
             transaction_id: prepared.id,
         });
     }
-    let mut receipt = committed.receipt.clone();
-    receipt.replayed = true;
-    Ok(Some(receipt))
+    let mut publication = committed.publication.clone();
+    publication.replayed = true;
+    committed_receipt(
+        publication,
+        committed.materialized_chunk_state_hash,
+        evidence,
+    )
+    .map(Some)
 }
 
 fn ensure_retry_not_expired(
@@ -349,7 +432,7 @@ fn ensure_retry_not_expired(
         },
     )?;
     let oldest_replayable_base = oldest
-        .receipt
+        .publication
         .world_revision
         .get()
         .checked_sub(1)
@@ -617,14 +700,16 @@ fn retain_receipt(
     world: &mut MemoryWorld,
     id: TransactionId,
     fingerprint: CanonicalHash,
-    receipt: CommitReceipt,
+    publication: PublicationReceipt,
+    materialized_chunk_state_hash: Option<crate::MaterializedChunkStateHash>,
     maximum: usize,
 ) {
     world.committed_transactions.insert(
         id,
         CommittedTransaction {
             fingerprint,
-            receipt,
+            publication,
+            materialized_chunk_state_hash,
         },
     );
     world.receipt_order.push_back(id);
@@ -750,6 +835,85 @@ mod tests {
             .commit(conformance::sample_create_transaction(92))
             .expect("the valid reference transaction must commit");
         assert_eq!(receipt.durability(), ReferenceDurability::Queued);
+    }
+
+    #[test]
+    fn publication_receipts_replay_without_full_world_reference_hashing() {
+        let storage = MemoryTransactionKernel::new();
+        let transaction = conformance::sample_create_transaction(921);
+        let world = transaction.world();
+        let first = storage
+            .publish(transaction.clone())
+            .expect("the bounded publication must commit");
+        assert!(!first.replayed());
+        assert_eq!(first.world(), world);
+        assert_eq!(first.world_revision(), WorldRevision::new(1));
+        assert_eq!(first.chunks().len(), 2);
+        assert_eq!(first.durability(), ReferenceDurability::Queued);
+
+        let replay = storage
+            .publish(transaction.clone())
+            .expect("the exact publication retry must be idempotent");
+        assert!(replay.replayed());
+        assert_eq!(replay.world_revision(), first.world_revision());
+        assert_eq!(replay.chunks(), first.chunks());
+        assert!(matches!(
+            storage.commit(transaction),
+            Err(StorageError::ReferenceReceiptUnavailable {
+                world: rejected_world,
+                transaction_id,
+            }) if rejected_world == world && transaction_id == first.transaction_id()
+        ));
+        assert_eq!(
+            storage
+                .reference_snapshot(world)
+                .expect("reference evidence remains available through an explicit snapshot")
+                .revision(),
+            first.world_revision()
+        );
+    }
+
+    #[test]
+    fn reference_receipts_can_replay_as_publication_evidence() {
+        let storage = MemoryTransactionKernel::new();
+        let transaction = conformance::sample_create_transaction(922);
+        let reference = storage
+            .commit(transaction.clone())
+            .expect("the reference transaction must commit");
+        let publication = storage
+            .publish(transaction)
+            .expect("reference evidence contains publication evidence");
+        assert!(publication.replayed());
+        assert_eq!(publication.world(), reference.world());
+        assert_eq!(publication.world_revision(), reference.world_revision());
+        assert_eq!(publication.chunks(), reference.chunks());
+    }
+
+    #[test]
+    fn lost_publication_receipt_retry_is_idempotent() {
+        let storage = MemoryTransactionKernel::new();
+        let transaction = conformance::sample_create_transaction(923);
+        let world = transaction.world();
+        storage
+            .inject_fault_once(FaultPoint::AfterPublishBeforeReceipt)
+            .expect("a fresh storage must accept one publication failpoint");
+        assert_eq!(
+            storage.publish(transaction.clone()),
+            Err(StorageError::InjectedFault {
+                point: FaultPoint::AfterPublishBeforeReceipt,
+            })
+        );
+        let retry = storage
+            .publish(transaction)
+            .expect("the exact publication retry must recover the lost receipt");
+        assert!(retry.replayed());
+        assert_eq!(retry.world_revision(), WorldRevision::new(1));
+        assert_eq!(
+            storage
+                .world_frontier(world)
+                .expect("publication remains visible after acknowledgement loss"),
+            WorldRevision::new(1)
+        );
     }
 
     #[test]
