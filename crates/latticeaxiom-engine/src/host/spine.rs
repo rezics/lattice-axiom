@@ -563,7 +563,12 @@ struct WorldgenInput {
 struct ComputedWorldgen {
     ticket: WorldgenTicket,
     coordinate: ChunkCoordinate,
-    result: Result<Vec<HostVoxel>, ProductionHostError>,
+    result: Result<GeneratedChunkPayload, ProductionHostError>,
+}
+
+struct GeneratedChunkPayload {
+    cells: Vec<HostVoxel>,
+    data: ChunkData,
 }
 
 struct WorldgenMaterialization {
@@ -575,6 +580,8 @@ struct WorldgenMaterialization {
     spawn: SpawnLocationV1,
     empty: HostVoxel,
     chunk_edge: u16,
+    voxel_schema: SchemaId,
+    voxel_schema_version: PayloadSchemaVersion,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -757,6 +764,8 @@ impl ProductionSpine {
             spawn,
             empty,
             chunk_edge,
+            voxel_schema: voxel_schema.clone(),
+            voxel_schema_version,
         });
 
         let mut inner = ProductionSpineInner {
@@ -3741,7 +3750,11 @@ fn compute_worldgen(input: &WorldgenInput) -> ComputedWorldgen {
                 &input.materialization.presentation,
             )?;
             apply_hydrology_occupancy(&input.materialization, occupancy.as_ref(), &mut cells)?;
-            Ok(cells)
+            Ok(generated_chunk_payload(
+                &input.materialization.voxel_schema,
+                input.materialization.voxel_schema_version,
+                cells,
+            ))
         });
     ComputedWorldgen {
         ticket: input.ticket,
@@ -3828,11 +3841,11 @@ fn apply_ready_worldgen(
             continue;
         }
         let result = match job.result {
-            Ok(cells) => publish_generated_cells(
+            Ok(payload) => publish_generated_cells(
                 inner,
                 kernel,
                 &[job.coordinate],
-                BTreeMap::from([(job.coordinate, cells)]),
+                BTreeMap::from([(job.coordinate, payload)]),
                 tick,
                 origin,
                 look_ahead,
@@ -3949,7 +3962,7 @@ fn publish_generated_region(
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
-    let mut generated_cells = BTreeMap::new();
+    let mut generated = BTreeMap::new();
     for (coordinate, candidate) in region.candidates() {
         if !inner
             .lifecycle
@@ -3967,13 +3980,16 @@ fn publish_generated_region(
             occupancy.as_ref(),
             &mut cells,
         )?;
-        generated_cells.insert(coordinate, cells);
+        generated.insert(
+            coordinate,
+            generated_chunk_payload(&inner.voxel_schema, inner.voxel_schema_version, cells),
+        );
     }
     publish_generated_cells(
         inner,
         kernel,
         coordinates,
-        generated_cells,
+        generated,
         tick,
         origin,
         look_ahead,
@@ -3984,24 +4000,24 @@ fn publish_generated_cells(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
     coordinates: &[ChunkCoordinate],
-    mut generated_cells: BTreeMap<ChunkCoordinate, Vec<HostVoxel>>,
+    generated: BTreeMap<ChunkCoordinate, GeneratedChunkPayload>,
     tick: FixedTick,
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
-    let mut mutations = Vec::with_capacity(generated_cells.len());
-    let mut committed_coordinates = Vec::with_capacity(generated_cells.len());
-    for (coordinate, cells) in &generated_cells {
-        if inner.lifecycle.get(coordinate) != Some(&ChunkLifecycle::Generate) {
+    let mut mutations = Vec::with_capacity(generated.len());
+    let mut committed_cells = BTreeMap::new();
+    for (coordinate, payload) in generated {
+        if inner.lifecycle.get(&coordinate) != Some(&ChunkLifecycle::Generate) {
             continue;
         }
         mutations.push(ChunkMutation::new(
-            ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate),
+            ChunkKey::new(inner.world, inner.dimension.clone(), coordinate),
             ChunkRevisionExpectation::Absent,
             ChangedDomains::ALL,
-            chunk_data(&inner.voxel_schema, inner.voxel_schema_version, cells),
+            payload.data,
         ));
-        committed_coordinates.push(*coordinate);
+        committed_cells.insert(coordinate, payload.cells);
     }
     if mutations.is_empty() {
         for coordinate in coordinates {
@@ -4020,11 +4036,8 @@ fn publish_generated_cells(
         mutations,
     ))?;
     inner.next_transaction = inner.next_transaction.saturating_add(1);
-    for coordinate in committed_coordinates {
+    for (coordinate, cells) in committed_cells {
         let key = ChunkKey::new(inner.world, inner.dimension.clone(), coordinate);
-        let cells = generated_cells
-            .remove(&coordinate)
-            .ok_or(ProductionHostError::MissingGeneratedChunk { coordinate })?;
         let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &inner.edited);
         let requests = stream_derived_requests(class, coordinate, origin);
         project_commit_receipt(
@@ -5115,6 +5128,15 @@ fn chunk_data(
         BTreeMap::new(),
         BTreeMap::new(),
     )
+}
+
+fn generated_chunk_payload(
+    schema: &SchemaId,
+    schema_version: PayloadSchemaVersion,
+    cells: Vec<HostVoxel>,
+) -> GeneratedChunkPayload {
+    let data = chunk_data(schema, schema_version, &cells);
+    GeneratedChunkPayload { cells, data }
 }
 
 pub(super) fn runtime_chunk_cells(
