@@ -9,7 +9,9 @@
 use std::collections::BTreeSet;
 
 use latticeaxiom_compose::PlayableWorldHardLimitsV1;
-use latticeaxiom_runtime_contracts::{DEFAULT_VIEW_DISTANCE_CHUNKS, MIN_VIEW_DISTANCE_CHUNKS};
+use latticeaxiom_runtime_contracts::{
+    AUTHORED_MAX_VIEW_DISTANCE_CHUNKS, DEFAULT_VIEW_DISTANCE_CHUNKS, MIN_VIEW_DISTANCE_CHUNKS,
+};
 use latticeaxiom_storage::ChunkCoordinate;
 use latticeaxiom_worldgen::{MAX_BOUNDED_REGION_CHUNKS, WorldgenConfigV1};
 
@@ -33,11 +35,62 @@ pub enum ViewDistanceClampReasonV1 {
     GenerationRadiusAndResidentBudget,
 }
 
-/// Typed view-distance request and the effective bounded streaming radius.
+macro_rules! chunk_distance_type {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+        pub struct $name(u32);
+
+        impl $name {
+            /// Creates a non-zero chunk distance.
+            #[must_use]
+            pub const fn new(chunks: u32) -> Option<Self> {
+                if chunks == 0 { None } else { Some(Self(chunks)) }
+            }
+
+            /// Returns the horizontal Chebyshev radius in chunks.
+            #[must_use]
+            pub const fn chunks(self) -> u32 {
+                self.0
+            }
+        }
+    };
+}
+
+chunk_distance_type!(
+    /// Authored render-distance request before host admission.
+    RequestedRenderDistanceChunksV1
+);
+chunk_distance_type!(
+    /// Render-distance request admitted by the active host capability.
+    AdmittedRenderDistanceChunksV1
+);
+chunk_distance_type!(
+    /// Render distance actually supported by generation and resident budgets.
+    EffectiveRenderDistanceChunksV1
+);
+chunk_distance_type!(
+    /// Radius in which authoritative gameplay simulation may tick.
+    SimulationDistanceChunksV1
+);
+chunk_distance_type!(
+    /// Base radius retained as committed full-resolution chunks.
+    ResidentDistanceChunksV1
+);
+chunk_distance_type!(
+    /// Furthest directional look-ahead distance admitted for prefetch.
+    PrefetchDistanceChunksV1
+);
+
+/// Typed render, simulation, residency, and prefetch distances for one host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ViewDistanceStatusV1 {
-    admitted: u32,
-    effective: u32,
+    requested_render: RequestedRenderDistanceChunksV1,
+    admitted_render: AdmittedRenderDistanceChunksV1,
+    effective_render: EffectiveRenderDistanceChunksV1,
+    simulation: SimulationDistanceChunksV1,
+    resident: ResidentDistanceChunksV1,
+    prefetch: PrefetchDistanceChunksV1,
     requested_cap: u32,
     generation_cap: u32,
     resident_budget_cap: u32,
@@ -45,16 +98,40 @@ pub struct ViewDistanceStatusV1 {
 }
 
 impl ViewDistanceStatusV1 {
-    /// Returns the player request admitted after the host request cap.
+    /// Returns the authored render-distance request before host admission.
     #[must_use]
-    pub const fn admitted(self) -> u32 {
-        self.admitted
+    pub const fn requested_render_distance(self) -> RequestedRenderDistanceChunksV1 {
+        self.requested_render
     }
 
-    /// Returns the radius actually used by bounded streaming.
+    /// Returns the render-distance request admitted after the host cap.
     #[must_use]
-    pub const fn effective(self) -> u32 {
-        self.effective
+    pub const fn admitted_render_distance(self) -> AdmittedRenderDistanceChunksV1 {
+        self.admitted_render
+    }
+
+    /// Returns the render radius actually supported by bounded streaming.
+    #[must_use]
+    pub const fn effective_render_distance(self) -> EffectiveRenderDistanceChunksV1 {
+        self.effective_render
+    }
+
+    /// Returns the configured authoritative simulation radius.
+    #[must_use]
+    pub const fn simulation_distance(self) -> SimulationDistanceChunksV1 {
+        self.simulation
+    }
+
+    /// Returns the base full-resolution resident radius.
+    #[must_use]
+    pub const fn resident_distance(self) -> ResidentDistanceChunksV1 {
+        self.resident
+    }
+
+    /// Returns the furthest directional prefetch distance.
+    #[must_use]
+    pub const fn prefetch_distance(self) -> PrefetchDistanceChunksV1 {
+        self.prefetch
     }
 
     /// Returns the inclusive host cap for player requests.
@@ -81,11 +158,21 @@ impl ViewDistanceStatusV1 {
         self.clamp_reason
     }
 
-    /// Returns whether the effective radius is lower than the admitted request.
+    /// Returns whether any host constraint lowers the authored request.
     #[must_use]
     pub const fn is_clamped(self) -> bool {
-        self.effective < self.admitted
+        self.effective_render.chunks() < self.requested_render.chunks()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamDistances {
+    requested_render: RequestedRenderDistanceChunksV1,
+    admitted_render: AdmittedRenderDistanceChunksV1,
+    effective_render: EffectiveRenderDistanceChunksV1,
+    simulation: SimulationDistanceChunksV1,
+    resident: ResidentDistanceChunksV1,
+    prefetch: PrefetchDistanceChunksV1,
 }
 
 /// Lifecycle of one streamed chunk in the production working set.
@@ -109,9 +196,7 @@ pub enum ChunkLifecycle {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct StreamClamps {
     pub(super) hard_limits: PlayableWorldHardLimitsV1,
-    /// Player request admitted after clamping to the hard cap.
-    pub(super) admitted_view_distance: u32,
-    pub(super) interest_radius: u32,
+    distances: StreamDistances,
     pub(super) vertical_min_chunk: i32,
     pub(super) vertical_max_chunk: i32,
     vertical_layers: u32,
@@ -133,16 +218,12 @@ impl StreamClamps {
             .map_err(|_| ProductionHostError::InvalidHostLimits)?;
         let (vertical_min_chunk, vertical_max_chunk) = vertical_chunk_bounds(config);
         let vertical_layers = vertical_layer_count(vertical_min_chunk, vertical_max_chunk)?;
-        let requested_cap = hard_limits.view_distance_chunks.max(1);
-        let requested_floor = MIN_VIEW_DISTANCE_CHUNKS.min(requested_cap);
-        let admitted_view_distance =
-            DEFAULT_VIEW_DISTANCE_CHUNKS.clamp(requested_floor, requested_cap);
-        let interest_radius =
-            clamped_interest_radius_for(hard_limits, admitted_view_distance, vertical_layers);
+        let distances =
+            stream_distances(hard_limits, DEFAULT_VIEW_DISTANCE_CHUNKS, vertical_layers)
+                .ok_or(ProductionHostError::InvalidHostLimits)?;
         Ok(Self {
             hard_limits,
-            admitted_view_distance,
-            interest_radius,
+            distances,
             vertical_min_chunk,
             vertical_max_chunk,
             vertical_layers,
@@ -150,15 +231,13 @@ impl StreamClamps {
     }
 
     /// Sets the player-requested view radius and recomputes interest against the resident budget.
-    pub(super) fn set_requested_view_distance(&mut self, requested: u32) {
-        let cap = self.hard_limits.view_distance_chunks.max(1);
-        let floor = MIN_VIEW_DISTANCE_CHUNKS.min(cap);
-        self.admitted_view_distance = requested.clamp(floor, cap);
-        self.interest_radius = clamped_interest_radius_for(
-            self.hard_limits,
-            self.admitted_view_distance,
-            self.vertical_layers,
-        );
+    pub(super) fn set_requested_view_distance(
+        &mut self,
+        requested: u32,
+    ) -> Result<(), ProductionHostError> {
+        self.distances = stream_distances(self.hard_limits, requested, self.vertical_layers)
+            .ok_or(ProductionHostError::InvalidHostLimits)?;
+        Ok(())
     }
 
     /// Returns the accepted request, effective radius, and binding clamp.
@@ -174,10 +253,10 @@ impl StreamClamps {
             self.vertical_layers,
             self.hard_limits.max_resident_chunks,
         );
-        let generation_binds =
-            generation_cap < self.admitted_view_distance && generation_cap == self.interest_radius;
-        let resident_binds = resident_budget_cap < self.admitted_view_distance
-            && resident_budget_cap == self.interest_radius;
+        let generation_binds = generation_cap < self.distances.admitted_render.chunks()
+            && generation_cap == self.distances.effective_render.chunks();
+        let resident_binds = resident_budget_cap < self.distances.admitted_render.chunks()
+            && resident_budget_cap == self.distances.effective_render.chunks();
         let clamp_reason = match (generation_binds, resident_binds) {
             (true, true) => Some(ViewDistanceClampReasonV1::GenerationRadiusAndResidentBudget),
             (true, false) => Some(ViewDistanceClampReasonV1::GenerationRadius),
@@ -185,13 +264,37 @@ impl StreamClamps {
             (false, false) => None,
         };
         ViewDistanceStatusV1 {
-            admitted: self.admitted_view_distance,
-            effective: self.interest_radius,
+            requested_render: self.distances.requested_render,
+            admitted_render: self.distances.admitted_render,
+            effective_render: self.distances.effective_render,
+            simulation: self.distances.simulation,
+            resident: self.distances.resident,
+            prefetch: self.distances.prefetch,
             requested_cap,
             generation_cap,
             resident_budget_cap,
             clamp_reason,
         }
+    }
+
+    pub(super) const fn admitted_render_distance(self) -> u32 {
+        self.distances.admitted_render.chunks()
+    }
+
+    pub(super) const fn effective_render_distance(self) -> u32 {
+        self.distances.effective_render.chunks()
+    }
+
+    pub(super) const fn simulation_distance(self) -> u32 {
+        self.distances.simulation.chunks()
+    }
+
+    pub(super) const fn resident_distance(self) -> u32 {
+        self.distances.resident.chunks()
+    }
+
+    pub(super) const fn prefetch_distance(self) -> u32 {
+        self.distances.prefetch.chunks()
     }
 
     pub(super) fn max_resident(self) -> usize {
@@ -319,7 +422,7 @@ pub(super) fn desired_chunks(
         clamps.vertical_min_chunk,
         clamps.vertical_max_chunk,
     );
-    let radius = i32::try_from(clamps.interest_radius).unwrap_or(i32::MAX);
+    let radius = i32::try_from(clamps.resident_distance()).unwrap_or(i32::MAX);
     let min_x = origin.x.saturating_sub(radius);
     let max_x = origin.x.saturating_add(radius);
     let min_z = origin.z.saturating_sub(radius);
@@ -335,7 +438,8 @@ pub(super) fn desired_chunks(
             );
         }
     }
-    if let Some((ahead_x, ahead_z)) = look_ahead_column(origin, clamps.interest_radius, look_ahead)
+    if let Some((ahead_x, ahead_z)) =
+        look_ahead_column(origin, clamps.prefetch_distance(), look_ahead)
     {
         insert_column(
             &mut desired,
@@ -379,6 +483,31 @@ fn clamped_interest_radius_for(
         .min(limits.view_distance_chunks)
         .min(limits.generation_radius_chunks);
     resident_budget_radius(requested, vertical_layers, limits.max_resident_chunks)
+}
+
+fn stream_distances(
+    limits: PlayableWorldHardLimitsV1,
+    requested_render: u32,
+    vertical_layers: u32,
+) -> Option<StreamDistances> {
+    let requested_render =
+        requested_render.clamp(MIN_VIEW_DISTANCE_CHUNKS, AUTHORED_MAX_VIEW_DISTANCE_CHUNKS);
+    let requested_cap = limits.view_distance_chunks.max(1);
+    let admitted_render = requested_render.min(requested_cap);
+    let effective_render = clamped_interest_radius_for(limits, admitted_render, vertical_layers);
+    let generation_cap = limits.generation_radius_chunks.max(1).min(requested_cap);
+    let prefetch = effective_render
+        .saturating_add(1)
+        .min(generation_cap)
+        .max(effective_render);
+    Some(StreamDistances {
+        requested_render: RequestedRenderDistanceChunksV1::new(requested_render)?,
+        admitted_render: AdmittedRenderDistanceChunksV1::new(admitted_render)?,
+        effective_render: EffectiveRenderDistanceChunksV1::new(effective_render)?,
+        simulation: SimulationDistanceChunksV1::new(effective_render)?,
+        resident: ResidentDistanceChunksV1::new(effective_render)?,
+        prefetch: PrefetchDistanceChunksV1::new(prefetch)?,
+    })
 }
 
 fn resident_budget_radius(
@@ -425,13 +554,13 @@ fn insert_column(desired: &mut BTreeSet<ChunkCoordinate>, x: i32, z: i32, min_y:
 
 fn look_ahead_column(
     origin: ChunkCoordinate,
-    radius: u32,
+    distance: u32,
     look_ahead: [i32; 2],
 ) -> Option<(i32, i32)> {
     if look_ahead == [0, 0] {
         return None;
     }
-    let extra = i32::try_from(radius.saturating_add(1)).ok()?;
+    let extra = i32::try_from(distance).ok()?;
     let x = origin.x.checked_add(look_ahead[0].saturating_mul(extra))?;
     let z = origin.z.checked_add(look_ahead[1].saturating_mul(extra))?;
     Some((x, z))
@@ -440,7 +569,7 @@ fn look_ahead_column(
 fn is_core_chunk(chunk: ChunkCoordinate, origin: ChunkCoordinate, clamps: StreamClamps) -> bool {
     chunk.y >= clamps.vertical_min_chunk
         && chunk.y <= clamps.vertical_max_chunk
-        && chebyshev_xz(chunk, origin) <= clamps.interest_radius
+        && chebyshev_xz(chunk, origin) <= clamps.effective_render_distance()
 }
 
 fn is_prefetch_chunk(
@@ -449,7 +578,7 @@ fn is_prefetch_chunk(
     clamps: StreamClamps,
     look_ahead: [i32; 2],
 ) -> bool {
-    look_ahead_column(origin, clamps.interest_radius, look_ahead) == Some((chunk.x, chunk.z))
+    look_ahead_column(origin, clamps.prefetch_distance(), look_ahead) == Some((chunk.x, chunk.z))
         && chunk.y >= clamps.vertical_min_chunk
         && chunk.y <= clamps.vertical_max_chunk
 }
@@ -539,8 +668,11 @@ mod tests {
     #[test]
     fn interest_radius_fits_resident_budget() {
         let clamps = clamps();
-        assert_eq!(clamps.interest_radius, 1);
-        assert_eq!(clamps.admitted_view_distance, 2);
+        assert_eq!(clamps.effective_render_distance(), 1);
+        assert_eq!(clamps.simulation_distance(), 1);
+        assert_eq!(clamps.resident_distance(), 1);
+        assert_eq!(clamps.prefetch_distance(), 2);
+        assert_eq!(clamps.admitted_render_distance(), 2);
         assert_eq!(clamps.vertical_min_chunk, 0);
         assert_eq!(clamps.vertical_max_chunk, 3);
         assert!(clamps.max_in_flight() <= 16);
@@ -548,6 +680,21 @@ mod tests {
             PlanningCellCoordinateV1::from_chunk(ChunkCoordinate::new(17, 2, -9), 8),
             PlanningCellCoordinateV1::new(2, -2)
         );
+    }
+
+    #[test]
+    fn nonzero_distance_types_reject_an_unrepresentable_resident_budget() {
+        let limits = PlayableWorldHardLimitsV1::new(2, 2, 1, 1, 1).expect("nonzero clamps");
+        let result = StreamClamps::new(
+            limits,
+            &WorldgenConfigV1 {
+                chunk_edge_voxels: 8,
+                world_floor_y: 0,
+                world_ceiling_y: 31,
+                ..WorldgenConfigV1::default()
+            },
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -563,16 +710,24 @@ mod tests {
             },
         )
         .expect("clamps are valid");
-        clamps.set_requested_view_distance(1);
-        assert_eq!(clamps.admitted_view_distance, 2);
-        assert_eq!(clamps.interest_radius, 2);
-        clamps.set_requested_view_distance(4);
-        assert_eq!(clamps.admitted_view_distance, 4);
-        assert_eq!(clamps.interest_radius, 2);
-        clamps.set_requested_view_distance(0);
-        assert_eq!(clamps.admitted_view_distance, 2);
-        clamps.set_requested_view_distance(99);
-        assert_eq!(clamps.admitted_view_distance, 4);
+        clamps
+            .set_requested_view_distance(1)
+            .expect("distance contract remains valid");
+        assert_eq!(clamps.admitted_render_distance(), 2);
+        assert_eq!(clamps.effective_render_distance(), 2);
+        clamps
+            .set_requested_view_distance(4)
+            .expect("distance contract remains valid");
+        assert_eq!(clamps.admitted_render_distance(), 4);
+        assert_eq!(clamps.effective_render_distance(), 2);
+        clamps
+            .set_requested_view_distance(0)
+            .expect("distance contract remains valid");
+        assert_eq!(clamps.admitted_render_distance(), 2);
+        clamps
+            .set_requested_view_distance(99)
+            .expect("distance contract remains valid");
+        assert_eq!(clamps.admitted_render_distance(), 4);
     }
 
     #[test]
@@ -589,14 +744,20 @@ mod tests {
             },
         )
         .expect("desktop request clamps are valid");
-        clamps.set_requested_view_distance(32);
+        clamps
+            .set_requested_view_distance(32)
+            .expect("distance contract remains valid");
 
         let status = clamps.view_distance_status();
-        assert_eq!(status.admitted(), 32);
+        assert_eq!(status.requested_render_distance().chunks(), 32);
+        assert_eq!(status.admitted_render_distance().chunks(), 32);
         assert_eq!(status.requested_cap(), 32);
         assert_eq!(status.generation_cap(), 32);
         assert_eq!(status.resident_budget_cap(), 4);
-        assert_eq!(status.effective(), 4);
+        assert_eq!(status.effective_render_distance().chunks(), 4);
+        assert_eq!(status.simulation_distance().chunks(), 4);
+        assert_eq!(status.resident_distance().chunks(), 4);
+        assert_eq!(status.prefetch_distance().chunks(), 5);
         assert_eq!(
             status.clamp_reason(),
             Some(ViewDistanceClampReasonV1::ResidentBudget)
@@ -628,12 +789,15 @@ mod tests {
         .expect("clamps are valid");
         let requested_draft = 99;
 
-        clamps.set_requested_view_distance(requested_draft);
+        clamps
+            .set_requested_view_distance(requested_draft)
+            .expect("distance contract remains valid");
         let status = clamps.view_distance_status();
 
         assert_eq!(requested_draft, 99);
-        assert_eq!(status.admitted(), 4);
-        assert_eq!(status.effective(), 2);
+        assert_eq!(status.requested_render_distance().chunks(), 32);
+        assert_eq!(status.admitted_render_distance().chunks(), 4);
+        assert_eq!(status.effective_render_distance().chunks(), 2);
         assert_eq!(status.requested_cap(), 4);
         assert!(status.is_clamped());
     }

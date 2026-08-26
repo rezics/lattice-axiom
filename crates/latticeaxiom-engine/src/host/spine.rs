@@ -73,7 +73,7 @@ use super::{
     display::{
         ContentDisplayCatalogV1, ContentDisplayLabelV1, lock_selected_content_display_catalog,
     },
-    fluid::{HostFluidTickV1, tick_resident as tick_resident_fluids},
+    fluid::{HostFluidTickV1, tick_simulated as tick_simulated_fluids},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
     layers::{HostFaceStyle, HostPresentationIndex},
     profile::StreamingProfileEvidenceV1,
@@ -1240,14 +1240,14 @@ impl ProductionSpine {
     #[must_use]
     pub fn admitted_view_distance(&self) -> u32 {
         self.lock_inner()
-            .map_or(1, |inner| inner.clamps.admitted_view_distance)
+            .map_or(1, |inner| inner.clamps.admitted_render_distance())
     }
 
     /// Returns the interest radius actually admitted after resident-budget clamping.
     #[must_use]
     pub fn effective_view_distance(&self) -> u32 {
         self.lock_inner()
-            .map_or(1, |inner| inner.clamps.interest_radius)
+            .map_or(1, |inner| inner.clamps.effective_render_distance())
     }
 
     /// Returns the accepted request and its effective host clamp.
@@ -1258,18 +1258,18 @@ impl ProductionSpine {
             .map(|inner| inner.clamps.view_distance_status())
     }
 
-    /// Requests a view radius in `2..=hard_limits.view_distance_chunks`.
+    /// Requests an authored render radius in `2..=32` chunks.
     ///
-    /// The admitted interest radius may be lower than `chunks` when the
-    /// resident budget cannot cover that Chebyshev ring.
+    /// Host admission, generation, and resident budgets may lower the effective
+    /// render radius without mutating the authored request.
     ///
     /// # Errors
     ///
     /// Returns [`ProductionHostError::Poisoned`] when the spine lock is poisoned.
     pub fn set_requested_view_distance(&self, chunks: u32) -> Result<u32, ProductionHostError> {
         let mut inner = self.lock_inner()?;
-        inner.clamps.set_requested_view_distance(chunks);
-        Ok(inner.clamps.interest_radius)
+        inner.clamps.set_requested_view_distance(chunks)?;
+        Ok(inner.clamps.effective_render_distance())
     }
 
     /// Returns occupancy copied from [`VoxelRuntime`] diagnostics.
@@ -2148,7 +2148,7 @@ impl ProductionSpine {
         inner.occupancy_at(position)
     }
 
-    /// Plans and applies one bounded water/lava tick on every resident chunk.
+    /// Plans and applies one bounded water/lava tick inside simulation distance.
     ///
     /// Completions that no longer match the captured chunk revision are
     /// rejected and never applied.
@@ -2162,7 +2162,15 @@ impl ProductionSpine {
             .inner
             .lock()
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        tick_resident_fluids(&mut inner, self.storage.kernel())
+        let origin = translation_chunk(inner.player_pose.translation, inner.chunk_edge)
+            .ok_or(BlockEditRejectV1::StorageUnavailable)?;
+        let simulation_distance = inner.clamps.simulation_distance();
+        tick_simulated_fluids(
+            &mut inner,
+            self.storage.kernel(),
+            origin,
+            simulation_distance,
+        )
     }
 
     /// Returns the captured fluid revision stamp for a resident chunk.

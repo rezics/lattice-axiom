@@ -63,8 +63,20 @@ pub struct StreamingProfileEvidenceV1 {
     pub chunk_edge_voxels: u16,
     /// Inclusive world floor and ceiling in voxels.
     pub vertical_voxels: [i32; 2],
-    /// Player-requested view radius in chunks.
+    /// Host capability cap for render-distance requests.
     pub view_distance_chunks: u32,
+    /// Authored render-distance request before host admission.
+    pub requested_render_distance_chunks: u32,
+    /// Render-distance request admitted by the active host.
+    pub admitted_render_distance_chunks: u32,
+    /// Render radius supported by generation and resident budgets.
+    pub effective_render_distance_chunks: u32,
+    /// Radius in which authoritative simulation may tick.
+    pub simulation_distance_chunks: u32,
+    /// Base full-resolution resident radius.
+    pub resident_distance_chunks: u32,
+    /// Furthest directional prefetch distance.
+    pub prefetch_distance_chunks: u32,
     /// Host generation radius in chunks.
     pub generation_radius_chunks: u32,
     /// Admitted Chebyshev interest radius after the resident budget clamp.
@@ -107,15 +119,17 @@ impl StreamingProfileEvidenceV1 {
         config: &WorldgenConfigV1,
         counts: StreamingProfileCountsV1,
     ) -> Self {
-        Self::from_parts(clamps.hard_limits, clamps.interest_radius, config, counts)
+        Self::from_parts(clamps, config, counts)
     }
 
     fn from_parts(
-        limits: PlayableWorldHardLimitsV1,
-        interest_radius: u32,
+        clamps: StreamClamps,
         config: &WorldgenConfigV1,
         counts: StreamingProfileCountsV1,
     ) -> Self {
+        let limits = clamps.hard_limits;
+        let status = clamps.view_distance_status();
+        let interest_radius = status.effective_render_distance().chunks();
         let edge = config.chunk_edge_voxels;
         let interest_coverage = coverage_m(interest_radius, edge);
         let generation_coverage = coverage_m(limits.generation_radius_chunks, edge);
@@ -130,6 +144,12 @@ impl StreamingProfileEvidenceV1 {
             chunk_edge_voxels: edge,
             vertical_voxels: [config.world_floor_y, config.world_ceiling_y],
             view_distance_chunks: limits.view_distance_chunks,
+            requested_render_distance_chunks: status.requested_render_distance().chunks(),
+            admitted_render_distance_chunks: status.admitted_render_distance().chunks(),
+            effective_render_distance_chunks: status.effective_render_distance().chunks(),
+            simulation_distance_chunks: status.simulation_distance().chunks(),
+            resident_distance_chunks: status.resident_distance().chunks(),
+            prefetch_distance_chunks: status.prefetch_distance().chunks(),
             generation_radius_chunks: limits.generation_radius_chunks,
             interest_radius_chunks: interest_radius,
             max_resident_chunks: limits.max_resident_chunks,
@@ -219,6 +239,12 @@ mod tests {
         let limits = PlayableWorldHardLimitsV1::new(4, 4, 128, 8, 4).expect("nonzero clamps");
         let evidence = StreamingProfileEvidenceV1::for_spine_config(limits).expect("clamps");
         assert_eq!(evidence.chunk_edge_voxels, 8);
+        assert_eq!(evidence.requested_render_distance_chunks, 8);
+        assert_eq!(evidence.admitted_render_distance_chunks, 4);
+        assert_eq!(evidence.effective_render_distance_chunks, 2);
+        assert_eq!(evidence.simulation_distance_chunks, 2);
+        assert_eq!(evidence.resident_distance_chunks, 2);
+        assert_eq!(evidence.prefetch_distance_chunks, 3);
         assert_eq!(evidence.equivalent_active_radius_chunks, 16);
         assert_eq!(evidence.equivalent_resident_radius_chunks, 24);
         assert!(!evidence.matches_adr_0026_world_space_coverage);

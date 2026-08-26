@@ -42,8 +42,7 @@ use latticeaxiom_settings_ui::{
 };
 
 use super::{
-    ProductionSessionPause, ProductionSpine, ViewDistanceClampReasonV1, ViewDistanceStatusV1,
-    hud::ProductionHudSurfaces,
+    ProductionSessionPause, ProductionSpine, ViewDistanceClampReasonV1, hud::ProductionHudSurfaces,
 };
 use crate::{
     EngineProfile,
@@ -54,13 +53,6 @@ use crate::{
 /// Marker on the pause hint / settings readout.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct PauseSettingsHint;
-
-/// Honest raw request plus the host's typed admitted/effective status.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ViewDistanceStatus {
-    requested: u32,
-    host: ViewDistanceStatusV1,
-}
 
 const SAFE_PROCESS_RESTART_REQUIRED: &str =
     "Settings state requires a safe process restart; editing is locked";
@@ -521,26 +513,24 @@ impl ProductionSettingsState {
         }
     }
 
-    fn status(&self, spine: &ProductionSpine) -> Option<ViewDistanceStatus> {
-        spine.view_distance_status().map(|host| ViewDistanceStatus {
-            requested: self.runtime_request,
-            host,
-        })
-    }
-
     fn status_text(&self, spine: &ProductionSpine) -> String {
-        let mut text = if let Some(status) = self.status(spine) {
+        let mut text = if let Some(status) = spine.view_distance_status() {
             let mut text = format!(
-                "Requested {} · admitted {} · effective {} chunks",
-                status.requested,
-                status.host.admitted(),
-                status.host.effective()
+                "Requested {} · admitted {} · render {} · simulation {} · resident {} · prefetch {} chunks",
+                status.requested_render_distance().chunks(),
+                status.admitted_render_distance().chunks(),
+                status.effective_render_distance().chunks(),
+                status.simulation_distance().chunks(),
+                status.resident_distance().chunks(),
+                status.prefetch_distance().chunks()
             );
-            if status.requested > status.host.admitted() {
+            if status.requested_render_distance().chunks()
+                > status.admitted_render_distance().chunks()
+            {
                 text.push_str(" · host request limit ");
-                text.push_str(&status.host.requested_cap().to_string());
+                text.push_str(&status.requested_cap().to_string());
             }
-            match status.host.clamp_reason() {
+            match status.clamp_reason() {
                 Some(ViewDistanceClampReasonV1::GenerationRadius) => {
                     text.push_str(" · generation-radius limited");
                 }

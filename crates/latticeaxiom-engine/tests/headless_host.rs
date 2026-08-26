@@ -853,6 +853,12 @@ fn requested_view_distance_is_clamped_by_host_limits() {
     let status = spine
         .view_distance_status()
         .expect("view-distance status is available");
+    assert_eq!(status.requested_render_distance().chunks(), cap);
+    assert_eq!(status.admitted_render_distance().chunks(), cap);
+    assert_eq!(status.effective_render_distance().chunks(), 4);
+    assert_eq!(status.simulation_distance().chunks(), 4);
+    assert_eq!(status.resident_distance().chunks(), 4);
+    assert_eq!(status.prefetch_distance().chunks(), 5);
     assert_eq!(status.requested_cap(), 32);
     assert_eq!(status.resident_budget_cap(), 4);
     assert_eq!(
@@ -947,6 +953,12 @@ fn streaming_profile_evidence_is_machine_readable_and_does_not_claim_d2() {
         .expect("live streaming evidence is available");
     assert_eq!(evidence.schema, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1);
     assert_eq!(evidence.chunk_edge_voxels, 8);
+    assert_eq!(evidence.requested_render_distance_chunks, 8);
+    assert_eq!(evidence.admitted_render_distance_chunks, 8);
+    assert_eq!(evidence.effective_render_distance_chunks, 4);
+    assert_eq!(evidence.simulation_distance_chunks, 4);
+    assert_eq!(evidence.resident_distance_chunks, 4);
+    assert_eq!(evidence.prefetch_distance_chunks, 5);
     assert_eq!(evidence.equivalent_active_radius_chunks, 16);
     assert_eq!(evidence.equivalent_resident_radius_chunks, 24);
     assert!(!evidence.matches_adr_0026_world_space_coverage);
@@ -955,6 +967,7 @@ fn streaming_profile_evidence_is_machine_readable_and_does_not_claim_d2() {
     assert!(evidence.counts.resident > 0);
     let encoded = serde_json::to_value(&evidence).expect("evidence serializes");
     assert_eq!(encoded["schema"], STREAMING_PROFILE_EVIDENCE_SCHEMA_V1);
+    assert_eq!(encoded["effective_render_distance_chunks"], 4);
     assert_eq!(encoded["claims_d2_working_set_gate"], false);
 }
 

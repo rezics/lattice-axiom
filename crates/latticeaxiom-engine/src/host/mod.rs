@@ -103,7 +103,11 @@ pub use spine::{
 pub use start::{
     ChildResultV1, ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList,
 };
-pub use stream::{ChunkLifecycle, ViewDistanceClampReasonV1, ViewDistanceStatusV1};
+pub use stream::{
+    AdmittedRenderDistanceChunksV1, ChunkLifecycle, EffectiveRenderDistanceChunksV1,
+    PrefetchDistanceChunksV1, RequestedRenderDistanceChunksV1, ResidentDistanceChunksV1,
+    SimulationDistanceChunksV1, ViewDistanceClampReasonV1, ViewDistanceStatusV1,
+};
 pub use surface::ProductionSurfaceRouter;
 pub use worldgen::RequiredCaveEntranceV1;
 pub use writer::{SealedWorldWriterHost, SealedWriterHostError, sealed_activation_binding};
