@@ -462,9 +462,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         }
         if neighbor_source_changed {
             for neighbor in self.resident_face_neighbors(coordinate) {
-                for kind in DerivedKind::ALL {
-                    work.insert((neighbor, kind));
-                }
+                work.insert((neighbor, DerivedKind::Mesh));
             }
         }
         let derived = self.enqueue_work(&work, tick, requests);
@@ -563,11 +561,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         }
         let work = neighbors
             .into_iter()
-            .flat_map(|neighbor| {
-                DerivedKind::ALL
-                    .into_iter()
-                    .map(move |kind| (neighbor, kind))
-            })
+            .map(|neighbor| (neighbor, DerivedKind::Mesh))
             .collect();
         let derived = self.enqueue_work(&work, tick, requests);
         Ok(EvictionReceipt {
@@ -1271,7 +1265,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         kind: DerivedKind,
     ) -> Option<DerivedJobKey> {
         let chunk = self.chunks.get(&coordinate)?;
-        let neighbors = self.neighbor_revisions(coordinate);
+        let neighbors = self.derived_neighbor_revisions(coordinate, kind);
         let semantics = match kind {
             DerivedKind::Mesh => DerivedSemanticFingerprint::Mesh(chunk.mesh_semantics),
             DerivedKind::Collider => DerivedSemanticFingerprint::Collider(chunk.collider_semantics),
@@ -1316,7 +1310,7 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
         if key.voxel_revision() != chunk.voxel_revision {
             return Some(StaleReason::VoxelRevision);
         }
-        let current_neighbors = self.neighbor_revisions(key.coordinate());
+        let current_neighbors = self.derived_neighbor_revisions(key.coordinate(), key.kind());
         for face in Face::ALL {
             if key.neighbors().get(face) != current_neighbors.get(face) {
                 return Some(StaleReason::NeighborRevision { face });
@@ -1354,6 +1348,17 @@ impl<V: Clone + Eq + RetainedBytes + CollisionSemantics> VoxelRuntime<V> {
                     }
                 })
         }))
+    }
+
+    fn derived_neighbor_revisions(
+        &self,
+        coordinate: ChunkCoordinate,
+        kind: DerivedKind,
+    ) -> NeighborRevisions {
+        match kind {
+            DerivedKind::Mesh => self.neighbor_revisions(coordinate),
+            DerivedKind::Collider => NeighborRevisions::missing(),
+        }
     }
 
     fn resident_face_neighbors(&self, coordinate: ChunkCoordinate) -> BTreeSet<ChunkCoordinate> {

@@ -604,12 +604,18 @@ pub enum NeighborRevision {
     },
 }
 
-/// Six neighbor revisions in [`Face::ALL`] order.
+/// Six mesh-neighbor revisions in [`Face::ALL`] order.
+///
+/// Collider keys use the canonical all-missing value because collider input is
+/// defined solely by the target chunk's interior occupancy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NeighborRevisions([NeighborRevision; 6]);
 impl NeighborRevisions {
     pub(crate) const fn new(values: [NeighborRevision; 6]) -> Self {
         Self(values)
+    }
+    pub(crate) const fn missing() -> Self {
+        Self([NeighborRevision::Missing; 6])
     }
     /// State for one face.
     #[must_use]
@@ -717,7 +723,7 @@ impl DerivedJobKey {
     pub const fn voxel_revision(&self) -> VoxelRevision {
         self.voxel_revision
     }
-    /// Neighbor revisions.
+    /// Mesh-neighbor revisions, or all missing for collider work.
     #[must_use]
     pub const fn neighbors(&self) -> NeighborRevisions {
         self.neighbors

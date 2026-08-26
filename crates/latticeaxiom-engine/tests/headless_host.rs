@@ -1458,10 +1458,12 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
     let edited = spine
         .chunk_of(edited_position)
         .expect("the edited fluid cell maps to a host chunk");
-    assert_eq!(
-        spine.chunk_lifecycle(edited),
-        ChunkLifecycle::Active,
-        "the edited chunk starts active"
+    assert!(
+        matches!(
+            spine.chunk_lifecycle(edited),
+            ChunkLifecycle::MeshCollider | ChunkLifecycle::Active
+        ),
+        "the edited chunk starts resident while its bounded derived rebuild is pending or ready"
     );
     assert!(
         spine.edited_chunks().contains(&edited),

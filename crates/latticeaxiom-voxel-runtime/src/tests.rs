@@ -22,9 +22,9 @@ use crate::{
     DerivedApplyBudget, DerivedApplySlice, DerivedInput, DerivedKind, DerivedMemoryBudget,
     DerivedOwner, DerivedPriority, DerivedQueueLimits, DerivedRequest, DerivedRequestSet,
     DispatchOutcome, EvictionLeaseGeneration, ExecutorFinish, ExecutorOutcome, FixedTick,
-    InterestWindow, MemoryStage, MeshSemanticFingerprint, ProjectionDecision, ProjectionEvidence,
-    RetainedBytes, RuntimeError, RuntimeGeneration, RuntimeLimits, StaleReason, VoxelCoordinate,
-    VoxelRuntime, WallClockNanos, WorkerAbortOutcome, WorkingSetScope, WorldEpoch,
+    InterestWindow, MemoryStage, MeshSemanticFingerprint, NeighborRevision, ProjectionDecision,
+    ProjectionEvidence, RetainedBytes, RuntimeError, RuntimeGeneration, RuntimeLimits, StaleReason,
+    VoxelCoordinate, VoxelRuntime, WallClockNanos, WorkerAbortOutcome, WorkingSetScope, WorldEpoch,
     cpu_heavy_concurrency, host_parallelism,
 };
 
@@ -498,6 +498,94 @@ fn semantic_fingerprints_are_separate_and_stale_work_never_applies() {
     ));
     assert!(!applied.get());
     assert_eq!(runtime.diagnostics().combined_reserved_bytes(), 0);
+}
+
+#[test]
+fn neighbor_lifecycle_invalidates_meshes_without_rebuilding_colliders() {
+    let runtime_scope = scope();
+    let storage = MemoryTransactionKernel::new();
+    let target = ChunkCoordinate::new(0, 0, 0);
+    let neighbor = ChunkCoordinate::new(1, 0, 0);
+    let (_, stored_target) = commit_chunk(&storage, &runtime_scope, target, vec![1; CELL_COUNT], 1);
+    let (_, stored_neighbor) =
+        commit_chunk(&storage, &runtime_scope, neighbor, vec![2; CELL_COUNT], 2);
+    let mut runtime = runtime();
+    project_stored(&mut runtime, &stored_target, 0, 1, 1);
+
+    let collider = dispatch_target(&mut runtime, DerivedKind::Collider, target);
+    assert!(
+        collider
+            .ticket()
+            .key()
+            .neighbors()
+            .as_array()
+            .into_iter()
+            .all(|revision| revision == NeighborRevision::Missing)
+    );
+    let mesh = dispatch_target(&mut runtime, DerivedKind::Mesh, target);
+
+    let admission = runtime
+        .project_committed(
+            projection_from_stored(&stored_neighbor, 1, 1),
+            FixedTick::new(1),
+            requests(),
+        )
+        .expect("face neighbor is admitted");
+    assert!(admission.derived().iter().any(|receipt| {
+        receipt.key().coordinate() == target && receipt.key().kind() == DerivedKind::Mesh
+    }));
+    assert!(!admission.derived().iter().any(|receipt| {
+        receipt.key().coordinate() == target && receipt.key().kind() == DerivedKind::Collider
+    }));
+
+    assert!(matches!(
+        runtime.complete_derived(
+            mesh,
+            0_u8,
+            ApplyByteDeclaration::new(0),
+            FixedTick::new(2),
+            |_| Ok::<(), ()>(()),
+        ),
+        CompletionOutcome::StaleRejected {
+            reason: StaleReason::NeighborRevision { face: Face::PosX },
+            ..
+        }
+    ));
+    assert!(matches!(
+        runtime.complete_derived(
+            collider,
+            0_u8,
+            ApplyByteDeclaration::new(0),
+            FixedTick::new(2),
+            |_| Ok::<(), ()>(()),
+        ),
+        CompletionOutcome::Applied { .. }
+    ));
+    let applied_collider = runtime
+        .last_applied_key(target, DerivedKind::Collider)
+        .expect("collider remains ready after neighbor admission")
+        .clone();
+
+    let permit = runtime
+        .prepare_eviction(neighbor, EvictionLeaseGeneration::new(1))
+        .expect("generated neighbor is clean");
+    let eviction = runtime
+        .evict_committed(permit, FixedTick::new(3), requests())
+        .expect("exact neighbor permit evicts");
+    assert!(eviction.derived().iter().any(|receipt| {
+        receipt.key().coordinate() == target && receipt.key().kind() == DerivedKind::Mesh
+    }));
+    assert!(!eviction.derived().iter().any(|receipt| {
+        receipt.key().coordinate() == target && receipt.key().kind() == DerivedKind::Collider
+    }));
+    assert_eq!(
+        runtime.last_applied_key(target, DerivedKind::Collider),
+        Some(&applied_collider)
+    );
+    assert!(matches!(
+        runtime.collider_safety(target),
+        Some(ColliderSafetyState::Ready { .. })
+    ));
 }
 #[test]
 fn eviction_permit_retains_cancelled_resources_until_executor_ack() {
