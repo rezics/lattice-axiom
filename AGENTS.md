@@ -19,6 +19,23 @@ repository. Accepted ADRs there override older implementation assumptions.
   The engine still fail-closes if lock or CAS is missing; Task does not
   replace that invariant. CI continues to invoke cargo directly.
 
+## Incremental delivery and references
+
+- Implement roadmap work as coherent, independently verifiable slices. Run the
+  checks appropriate to each slice and create a separate Conventional Commit
+  before starting the next behavior change.
+- For terrain generation, chunk streaming, view distance, and related
+  performance work, study the current Minecraft Java Edition behavior and
+  data formats before choosing project semantics. The
+  [Minecraft Wiki](https://minecraft.wiki/) is a valuable research index;
+  contract-critical or version-sensitive claims must also be checked against
+  current Mojang release notes, generated reports, or game code.
+- External reference projects may be cloned under `.temp/reference/` for local
+  study. Keep that directory untracked, record the upstream URL and revision
+  when a design decision depends on it, and do not turn a reference checkout
+  into a build dependency or copy code or assets whose license is incompatible
+  with this repository.
+
 ## Bevy boundary
 
 - Bevy is the game engine and the only App, ECS, scheduler, renderer, asset,
