@@ -451,6 +451,12 @@ pub(super) struct ColliderPresentation {
     pub(super) generation: ColliderGeneration,
 }
 
+/// Current conservative collider updates and whether player movement is safe.
+pub(super) struct PlayerColliderSafetyV1 {
+    pub(super) updates: Vec<ColliderPresentation>,
+    pub(super) ready: bool,
+}
+
 /// In-session identity for one accepted collider presentation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct ColliderGeneration(u64);
@@ -847,13 +853,7 @@ impl ProductionSpine {
             inner: Arc::new(Mutex::new(inner)),
             storage: ProductionWorldStorage { kernel },
         };
-        await_derived_ready(
-            &spine,
-            FixedTick::new(0),
-            DerivedReadiness::Startup,
-            &[],
-            STARTUP_BARRIER_TIMEOUT,
-        )?;
+        await_startup_derived_idle(&spine, FixedTick::new(0), STARTUP_BARRIER_TIMEOUT)?;
         Ok(spine)
     }
 
@@ -1526,9 +1526,10 @@ impl ProductionSpine {
 
     /// Ensures colliders for the current player capsule without reconciling interest.
     ///
-    /// This is the movement-time safety gate: it may complete pending collider
-    /// jobs and emit conservative shapes for occupied chunks, but it does not
-    /// generate, evict, or consume a presentation delta.
+    /// This is the movement-time safety gate: it polls completed collider jobs,
+    /// requests missing current-revision work, and reports whether movement can
+    /// proceed. It never waits for worker completion or applies derived payloads
+    /// on the fixed-update path.
     ///
     /// # Errors
     ///
@@ -1537,7 +1538,7 @@ impl ProductionSpine {
     pub(super) fn ensure_collider_safety(
         &self,
         fixed_tick: u64,
-    ) -> Result<Vec<ColliderPresentation>, ProductionHostError> {
+    ) -> Result<PlayerColliderSafetyV1, ProductionHostError> {
         let result = self.ensure_collider_safety_inner(fixed_tick);
         if result.is_err()
             && let Ok(mut inner) = self.lock_inner()
@@ -1639,7 +1640,7 @@ impl ProductionSpine {
     fn ensure_collider_safety_inner(
         &self,
         fixed_tick: u64,
-    ) -> Result<Vec<ColliderPresentation>, ProductionHostError> {
+    ) -> Result<PlayerColliderSafetyV1, ProductionHostError> {
         let tick = FixedTick::new(fixed_tick);
         let (occupied, edge) = {
             let mut inner = self.lock_inner()?;
@@ -1666,14 +1667,19 @@ impl ProductionSpine {
             }
             (occupied, f32::from(inner.chunk_edge))
         };
-        await_collider_safety(self, &occupied, tick)?;
+        poll_derived_tasks(self)?;
+        let inputs = {
+            let mut inner = self.lock_inner()?;
+            dispatch_derived_batch(&mut inner, [DerivedKind::Collider])?
+        };
+        spawn_derived_jobs(self, inputs)?;
         let mut inner = self.lock_inner()?;
+        let ready = collider_safety_ready(&inner, &occupied);
         let mut updates = Vec::new();
         for coordinate in occupied {
             if !inner.runtime.is_resident(coordinate) {
                 continue;
             }
-            seal_unready_cave_voids(&mut inner, coordinate);
             let Some(derived) = inner.derived.get(&coordinate) else {
                 continue;
             };
@@ -1688,7 +1694,7 @@ impl ProductionSpine {
             });
         }
         refresh_lifecycle(&mut inner);
-        Ok(updates)
+        Ok(PlayerColliderSafetyV1 { updates, ready })
     }
 
     /// Returns a cursor used to detect mesh invalidation after an edit.
@@ -1844,7 +1850,7 @@ impl ProductionSpine {
         &self,
         position: BlockPosition,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
-        let result = {
+        {
             let mut inner = self
                 .inner
                 .lock()
@@ -1852,9 +1858,7 @@ impl ProductionSpine {
             let result = inner.mine_cell(self.storage.kernel(), position, 0);
             record_edit_result(&mut inner, &result);
             result
-        };
-        finish_edit_readiness(self, FixedTick::new(0), [position])?;
-        result
+        }
     }
 
     /// Places from the selected hotbar slot beside `anchor` using `face`.
@@ -1867,7 +1871,7 @@ impl ProductionSpine {
         anchor: BlockPosition,
         face: BlockFaceV1,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
-        let result = {
+        {
             let mut inner = self
                 .inner
                 .lock()
@@ -1879,12 +1883,7 @@ impl ProductionSpine {
                 inner.place_cell(self.storage.kernel(), adjacent, None, [0.0, 0.0, 0.0], 0);
             record_edit_result(&mut inner, &result);
             result
-        };
-        let placed = face
-            .adjacent(anchor)
-            .ok_or(BlockEditRejectV1::PermissionDenied)?;
-        finish_edit_readiness(self, FixedTick::new(0), [placed])?;
-        result
+        }
     }
 
     /// Picks up one dropped stack.
@@ -2271,15 +2270,13 @@ impl ProductionSpine {
         fluid: &StableId,
         state: FluidStateV1,
     ) -> Result<CellOccupancyV1, BlockEditRejectV1> {
-        let result = {
+        {
             let mut inner = self
                 .inner
                 .lock()
                 .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
             inner.place_fluid_occupancy(self.storage.kernel(), position, fluid, state)
-        };
-        finish_edit_readiness(self, FixedTick::new(0), [position])?;
-        result
+        }
     }
 
     /// Inspects versioned solid and fluid occupancy at an exact cell.
@@ -2452,8 +2449,7 @@ impl BlockEditAuthority for ProductionSpine {
         &mut self,
         request: AuthoritativeBlockEditRequestV1,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
-        let tick = FixedTick::new(request.fixed_tick);
-        let result = {
+        {
             let mut inner = self
                 .inner
                 .lock()
@@ -2467,21 +2463,7 @@ impl BlockEditAuthority for ProductionSpine {
                 Err(reject) => inner.last_reject = Some(reject.clone()),
             }
             result
-        };
-        let target = result.as_ref().ok().map(|success| success.position);
-        finish_edit_readiness(self, tick, target)?;
-        result
-    }
-}
-
-fn finish_edit_readiness(
-    spine: &ProductionSpine,
-    tick: FixedTick,
-    positions: impl IntoIterator<Item = BlockPosition>,
-) -> Result<(), BlockEditRejectV1> {
-    match await_edit_readiness(spine, tick, positions) {
-        Ok(()) | Err(ProductionHostError::DerivedReadinessBarrier) => Ok(()),
-        Err(_) => Err(BlockEditRejectV1::StorageUnavailable),
+        }
     }
 }
 
@@ -4162,21 +4144,8 @@ fn project_stored(
 const MAIN_WORLD_APPLY_JOB_CAP: usize = RuntimeLimits::MAIN_WORLD_APPLY_JOB_CAP;
 /// Startup may drain the initial working set outside the frame-critical path.
 const STARTUP_BARRIER_TIMEOUT: Duration = Duration::from_secs(30);
-/// Edit readiness waits only for the touched chunks' current revisions.
-const EDIT_BARRIER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cooperative wait interval for Bevy's process-global compute workers.
 const DERIVED_BARRIER_POLL_INTERVAL: Duration = Duration::from_millis(1);
-/// Movement-time collider safety waits only for player-occupied chunks.
-const COLLIDER_SAFETY_BARRIER_SLICES: usize = 32;
-
-/// Why a bounded readiness barrier is pumping derived work.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DerivedReadiness {
-    /// Materialize until pending, in-flight, waiting, and spawned work is idle.
-    Startup,
-    /// Wait until these resident chunks have matching mesh and collider applies.
-    Chunks,
-}
 
 /// One per-tick derived slice: poll finished Bevy tasks, apply under the
 /// ADR 0026 16 job / 16 MiB / 2 ms budget, then dispatch without joining.
@@ -4199,57 +4168,9 @@ fn drain_derived(spine: &ProductionSpine, tick: FixedTick) -> Result<(), Product
     Ok(())
 }
 
-fn await_edit_readiness(
+fn await_startup_derived_idle(
     spine: &ProductionSpine,
     tick: FixedTick,
-    positions: impl IntoIterator<Item = BlockPosition>,
-) -> Result<(), ProductionHostError> {
-    let chunks = positions
-        .into_iter()
-        .filter_map(|position| spine.chunk_of(position))
-        .collect::<Vec<_>>();
-    await_derived_ready(
-        spine,
-        tick,
-        DerivedReadiness::Chunks,
-        &chunks,
-        EDIT_BARRIER_TIMEOUT,
-    )
-}
-
-fn await_collider_safety(
-    spine: &ProductionSpine,
-    occupied: &BTreeSet<ChunkCoordinate>,
-    tick: FixedTick,
-) -> Result<(), ProductionHostError> {
-    for _ in 0..COLLIDER_SAFETY_BARRIER_SLICES {
-        poll_derived_tasks(spine)?;
-        {
-            let mut inner = spine.lock_inner()?;
-            apply_ready_waiting(&mut inner, tick, ApplyBudgetMode::Barrier)?;
-            if collider_safety_ready(&inner, occupied) {
-                refresh_lifecycle(&mut inner);
-                return Ok(());
-            }
-        }
-        let inputs = {
-            let mut inner = spine.lock_inner()?;
-            dispatch_derived_batch(&mut inner, [DerivedKind::Collider])?
-        };
-        spawn_derived_jobs(spine, inputs)?;
-        tick_compute_pool();
-    }
-    poll_derived_tasks(spine)?;
-    let mut inner = spine.lock_inner()?;
-    apply_ready_waiting(&mut inner, tick, ApplyBudgetMode::Barrier)?;
-    Ok(())
-}
-
-fn await_derived_ready(
-    spine: &ProductionSpine,
-    tick: FixedTick,
-    readiness: DerivedReadiness,
-    chunks: &[ChunkCoordinate],
     timeout: Duration,
 ) -> Result<(), ProductionHostError> {
     let started = Instant::now();
@@ -4258,15 +4179,12 @@ fn await_derived_ready(
         let idle = {
             let mut inner = spine.lock_inner()?;
             apply_ready_waiting(&mut inner, tick, ApplyBudgetMode::Barrier)?;
-            let ready = match readiness {
-                DerivedReadiness::Startup => derived_work_idle(&inner),
-                DerivedReadiness::Chunks => chunks_derived_ready(&inner, chunks),
-            };
-            if ready {
+            let idle = derived_work_idle(&inner);
+            if idle {
                 refresh_lifecycle(&mut inner);
                 return Ok(());
             }
-            derived_work_idle(&inner)
+            idle
         };
         let inputs = {
             let mut inner = spine.lock_inner()?;
@@ -4275,13 +4193,7 @@ fn await_derived_ready(
         if inputs.is_empty() && idle {
             let mut inner = spine.lock_inner()?;
             refresh_lifecycle(&mut inner);
-            if match readiness {
-                DerivedReadiness::Startup => true,
-                DerivedReadiness::Chunks => chunks_derived_ready(&inner, chunks),
-            } {
-                return Ok(());
-            }
-            return Err(ProductionHostError::DerivedReadinessBarrier);
+            return Ok(());
         }
         spawn_derived_jobs(spine, inputs)?;
         tick_compute_pool();
@@ -4299,27 +4211,13 @@ fn derived_work_idle(inner: &ProductionSpineInner) -> bool {
         && inner.runtime.in_flight_jobs() == 0
 }
 
-fn chunks_derived_ready(inner: &ProductionSpineInner, chunks: &[ChunkCoordinate]) -> bool {
-    chunks.iter().all(|coordinate| {
-        !inner.runtime.is_resident(*coordinate)
-            || (inner
-                .runtime
-                .last_applied_key(*coordinate, DerivedKind::Mesh)
-                .is_some()
-                && matches!(
-                    inner.runtime.collider_safety(*coordinate),
-                    Some(ColliderSafetyState::Ready { .. })
-                ))
-    })
-}
-
 fn collider_safety_ready(
     inner: &ProductionSpineInner,
     occupied: &BTreeSet<ChunkCoordinate>,
 ) -> bool {
     occupied.iter().all(|coordinate| {
-        !inner.runtime.is_resident(*coordinate)
-            || matches!(
+        inner.runtime.is_resident(*coordinate)
+            && matches!(
                 inner.runtime.collider_safety(*coordinate),
                 Some(ColliderSafetyState::Ready { .. })
             )

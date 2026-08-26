@@ -40,7 +40,10 @@ use std::{
     fmt,
 };
 
-use avian3d::PhysicsPlugins;
+use avian3d::{
+    PhysicsPlugins,
+    prelude::{ColliderTreeOptimization, LinearVelocity},
+};
 use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
@@ -162,6 +165,13 @@ pub struct ChunkPresentation {
 /// Last host collider generation applied to one chunk presentation entity.
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 struct ChunkColliderGeneration(ColliderGeneration);
+
+/// Movement gate held closed while the current capsule lacks matching
+/// revision-checked chunk colliders.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
+struct PlayerColliderSafetyGate {
+    blocked: bool,
+}
 
 /// In-session pause latch for a production host.
 ///
@@ -358,6 +368,10 @@ impl Plugin for ProductionHostPlugin {
                 FixedUpdate,
                 (
                     sync_collider_safety.before(PlayerSystemSet::ProbeGround),
+                    freeze_player_while_collider_unready
+                        .after(sync_collider_safety)
+                        .after(PlayerSystemSet::PrepareMovement)
+                        .before(PlayerSystemSet::MoveCapsule),
                     evaluate_pick_block,
                 ),
             )
@@ -655,6 +669,15 @@ pub(super) fn install_production_host(
         .insert_resource(BlockEditAuthorityResource::new(spine.clone()))
         .insert_resource(working_set)
         .insert_resource(ProductionSessionPause::default())
+        .insert_resource(PlayerColliderSafetyGate::default())
+        // Player shape casts run before PhysicsSchedule. Inline optimization
+        // prevents Avian's end-of-step join from queueing behind worldgen and
+        // derived work on Bevy's shared AsyncComputeTaskPool.
+        .insert_resource(ColliderTreeOptimization {
+            optimize_in_place: true,
+            use_async_tasks: false,
+            ..Default::default()
+        })
         .insert_resource(spine)
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
@@ -739,6 +762,7 @@ fn sync_collider_safety(
     tick: Res<'_, PlayerFixedTick>,
     mut commands: Commands<'_, '_>,
     spine: Res<'_, ProductionSpine>,
+    mut gate: ResMut<'_, PlayerColliderSafetyGate>,
     pause: Option<Res<'_, ProductionSessionPause>>,
     chunks: Query<'_, '_, (Entity, &ChunkPresentation)>,
     mut transforms: Query<'_, '_, &mut Transform>,
@@ -748,14 +772,17 @@ fn sync_collider_safety(
     if pause.is_some_and(|pause| pause.is_paused()) {
         return;
     }
-    let Ok(updates) = spine.ensure_collider_safety(tick.get()) else {
+    let Ok(safety) = spine.ensure_collider_safety(tick.get()) else {
+        gate.blocked = true;
         return;
     };
+    gate.blocked = !safety.ready;
     let mut by_coordinate = chunks
         .iter()
         .map(|(entity, presentation)| (presentation.coordinate, entity))
         .collect::<BTreeMap<_, _>>();
-    let active = updates
+    let active = safety
+        .updates
         .iter()
         .map(|update| update.coordinate)
         .collect::<BTreeSet<_>>();
@@ -768,7 +795,7 @@ fn sync_collider_safety(
             )>();
         }
     }
-    for update in updates {
+    for update in safety.updates {
         apply_collider_update(
             &mut commands,
             &mut transforms,
@@ -777,6 +804,19 @@ fn sync_collider_safety(
             &mut by_coordinate,
             update,
         );
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn freeze_player_while_collider_unready(
+    gate: Res<'_, PlayerColliderSafetyGate>,
+    mut players: Query<'_, '_, &mut LinearVelocity, With<D2Player>>,
+) {
+    if !gate.blocked {
+        return;
+    }
+    for mut velocity in &mut players {
+        *velocity = LinearVelocity::ZERO;
     }
 }
 

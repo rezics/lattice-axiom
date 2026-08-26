@@ -1462,6 +1462,25 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
 
     let spawn = spine.spawn_center();
     let spawn_chunk = chunk_from_translation(spawn, spine.chunk_edge());
+    spine
+        .set_requested_view_distance(2)
+        .expect("the traversal fixture admits its compact view distance");
+    let resident_radius = i32::try_from(
+        spine
+            .view_distance_status()
+            .expect("streaming status is installed")
+            .resident_distance()
+            .chunks(),
+    )
+    .expect("resident radius fits i32");
+    let positive_eviction_target = spawn_chunk
+        .x
+        .saturating_add(resident_radius)
+        .saturating_add(1);
+    let negative_eviction_target = spawn_chunk
+        .x
+        .saturating_sub(resident_radius)
+        .saturating_sub(1);
     let (edited_position, _) = await_signed_direct_fluid_cells(&mut instance, &spine);
     spine
         .place_fluid_occupancy(
@@ -1487,20 +1506,20 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         spine.edited_chunks().contains(&edited),
         "a real edit must be pinned before the walk"
     );
+    await_chunk_active(&mut instance, &spine, edited, 640);
 
     let mut generation = 1_u64;
-    let mut seen_presentations = BTreeSet::new();
+    let mut seen_resident = BTreeSet::new();
     let mut seen_player_chunks = BTreeSet::new();
     let mut min_y = spawn.y;
     record_stream_sample(
-        &instance,
         &spine,
-        &mut seen_presentations,
+        &mut seen_resident,
         &mut seen_player_chunks,
         &mut min_y,
     );
 
-    let plus_ticks = scaled_fixture_ticks(&spine, 720);
+    let plus_ticks = scaled_fixture_ticks(&spine, 1_040);
     generation = sample_look_then_walk_until(
         &mut instance,
         &spine,
@@ -1509,8 +1528,8 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         0.0,
         1.0,
         plus_ticks,
-        |chunk| chunk.x > spawn_chunk.x,
-        &mut seen_presentations,
+        |chunk| chunk.x >= positive_eviction_target,
+        &mut seen_resident,
         &mut seen_player_chunks,
         &mut min_y,
     );
@@ -1522,10 +1541,10 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
     let pose_after_plus = spine.player_pose();
     assert!(
         plus_x > 0,
-        "walk +X must leave the V2 neighborhood (spawn {spawn_chunk:?}, max x {plus_x}, pose {:?}, yaw {}, min_y {min_y}, presented {:?}, resident {:?}, error {:?})",
+        "walk +X must leave the V2 neighborhood (spawn {spawn_chunk:?}, max x {plus_x}, pose {:?}, yaw {}, min_y {min_y}, seen resident {:?}, current resident {:?}, error {:?})",
         pose_after_plus.translation,
         pose_after_plus.yaw_radians,
-        seen_presentations
+        seen_resident
             .iter()
             .map(|chunk| chunk.x)
             .collect::<BTreeSet<_>>(),
@@ -1545,8 +1564,8 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         0.0,
         1.0,
         return_ticks,
-        |chunk| chunk.x < spawn_chunk.x,
-        &mut seen_presentations,
+        |chunk| chunk.x <= negative_eviction_target,
+        &mut seen_resident,
         &mut seen_player_chunks,
         &mut min_y,
     );
@@ -1556,9 +1575,9 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         .min()
         .expect("player visited -X chunks");
 
-    let current = presented_chunks(&instance);
+    let current = spine.resident_chunks().into_iter().collect::<BTreeSet<_>>();
     let current_xs = current.iter().map(|chunk| chunk.x).collect::<BTreeSet<_>>();
-    let seen_xs = seen_presentations
+    let seen_xs = seen_resident
         .iter()
         .map(|chunk| chunk.x)
         .collect::<BTreeSet<_>>();
@@ -1573,26 +1592,30 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         spine.player_pose().yaw_radians
     );
     assert!(
-        seen_presentations.len() > 4,
-        "streaming must activate more than the V2 four-chunk neighborhood, got {}",
-        seen_presentations.len()
+        seen_resident.len() > 4,
+        "streaming must materialize more than the V2 four-chunk neighborhood, got {}; working_set={:?}, derived={:?}, worldgen={:?}",
+        seen_resident.len(),
+        spine.working_set_diagnostics(),
+        spine.derived_queue_snapshot(),
+        spine.worldgen_queue_snapshot(),
     );
     assert!(
-        seen_xs.iter().any(|x| *x >= 2) && seen_xs.iter().any(|x| *x <= -3),
-        "presented chunks must exist beyond the authored V2 x range, got {seen_xs:?}"
+        seen_xs.iter().any(|x| *x >= positive_eviction_target)
+            && seen_xs.iter().any(|x| *x <= negative_eviction_target),
+        "resident chunks must exist beyond the authored V2 x range, got {seen_xs:?}"
     );
     assert!(
         min_y > 8.0,
         "the player must stay on generated ground without an authored world edge, min y {min_y}"
     );
     assert!(
-        current.len() < seen_presentations.len(),
+        current.len() < seen_resident.len(),
         "clean generated chunks must be evicted after the player walks away (current {}, seen {})",
         current.len(),
-        seen_presentations.len()
+        seen_resident.len()
     );
     assert!(
-        !current_xs.contains(&plus_x) || current.len() < seen_presentations.len(),
+        !current_xs.contains(&plus_x) || current.len() < seen_resident.len(),
         "the working set must not retain every visited chunk"
     );
     assert!(
@@ -1602,10 +1625,10 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         "dirty edited chunks must not be evicted"
     );
     assert!(
-        seen_presentations
+        seen_resident
             .iter()
             .any(|chunk| !current.contains(chunk) && !spine.edited_chunks().contains(chunk)),
-        "at least one clean presented chunk must leave the working set"
+        "at least one clean resident chunk must leave the working set"
     );
 }
 
@@ -2493,6 +2516,7 @@ fn await_signed_direct_fluid_cells(
         instance
             .advance_fixed_ticks(8)
             .expect("signed fluid search advances bounded streaming");
+        std::thread::park_timeout(Duration::from_millis(1));
     }
     panic!(
         "no direct fluid-occupancy air cells with both signed XZ quadrants in {:?}",
@@ -2640,7 +2664,7 @@ fn sample_look_then_walk_until(
     forward: f32,
     max_ticks: u32,
     reached: impl Fn(ChunkCoordinate) -> bool,
-    seen_presentations: &mut BTreeSet<ChunkCoordinate>,
+    seen_resident: &mut BTreeSet<ChunkCoordinate>,
     seen_player_chunks: &mut BTreeSet<ChunkCoordinate>,
     min_y: &mut f32,
 ) -> u64 {
@@ -2661,13 +2685,7 @@ fn sample_look_then_walk_until(
         instance
             .advance_fixed_ticks(batch.saturating_add(2))
             .expect("bounded state-driven walk advances");
-        record_stream_sample(
-            instance,
-            spine,
-            seen_presentations,
-            seen_player_chunks,
-            min_y,
-        );
+        record_stream_sample(spine, seen_resident, seen_player_chunks, min_y);
         let player_chunk =
             chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
         if reached(player_chunk) {
@@ -2679,29 +2697,15 @@ fn sample_look_then_walk_until(
 }
 
 fn record_stream_sample(
-    instance: &EngineInstance,
     spine: &ProductionSpine,
-    seen_presentations: &mut BTreeSet<ChunkCoordinate>,
+    seen_resident: &mut BTreeSet<ChunkCoordinate>,
     seen_player_chunks: &mut BTreeSet<ChunkCoordinate>,
     min_y: &mut f32,
 ) {
-    seen_presentations.extend(presented_chunks(instance));
+    seen_resident.extend(spine.resident_chunks());
     let pose = spine.player_pose();
     *min_y = min_y.min(pose.translation.y);
     seen_player_chunks.insert(chunk_from_translation(pose.translation, spine.chunk_edge()));
-}
-
-fn presented_chunks(instance: &EngineInstance) -> BTreeSet<ChunkCoordinate> {
-    instance
-        .app()
-        .world()
-        .iter_entities()
-        .filter_map(|entity| {
-            entity
-                .get::<ChunkPresentation>()
-                .map(|chunk| chunk.coordinate)
-        })
-        .collect()
 }
 
 fn scaled_fixture_ticks(spine: &ProductionSpine, ticks_at_eight_voxel_edge: u32) -> u32 {
@@ -2749,6 +2753,28 @@ fn await_resident_chunk(
         spine.resident_chunks().contains(&coordinate),
         "chunk {coordinate:?} did not become resident after {elapsed} ticks at pose {:?}",
         spine.player_pose().translation
+    );
+}
+
+fn await_chunk_active(
+    instance: &mut EngineInstance,
+    spine: &ProductionSpine,
+    coordinate: ChunkCoordinate,
+    max_ticks: u32,
+) {
+    let mut elapsed = 0_u32;
+    while spine.chunk_lifecycle(coordinate) != ChunkLifecycle::Active && elapsed < max_ticks {
+        instance
+            .advance_fixed_ticks(1)
+            .expect("asynchronous derived settling advances");
+        std::thread::park_timeout(Duration::from_millis(1));
+        elapsed = elapsed.saturating_add(1);
+    }
+    assert_eq!(
+        spine.chunk_lifecycle(coordinate),
+        ChunkLifecycle::Active,
+        "chunk {coordinate:?} did not complete its asynchronous derived rebuild after {elapsed} ticks; derived={:?}",
+        spine.derived_queue_snapshot(),
     );
 }
 
