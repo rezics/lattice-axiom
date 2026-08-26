@@ -592,7 +592,7 @@ struct WorldgenMaterialization {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldgenExecution {
-    Blocking,
+    StartupBarrier,
     Deferred,
 }
 
@@ -3386,7 +3386,7 @@ fn prime_startup_working_set(
         tick,
         WorldgenAdmission {
             limit: ordered.len(),
-            execution: WorldgenExecution::Blocking,
+            execution: WorldgenExecution::StartupBarrier,
         },
     )
     .map(|_| ())
@@ -3681,8 +3681,8 @@ fn admit_desired(
         return Ok(inspected_prefix);
     }
     match admission.execution {
-        WorldgenExecution::Blocking => {
-            publish_generated(inner, kernel, &generate, tick, origin, look_ahead)?;
+        WorldgenExecution::StartupBarrier => {
+            publish_startup_generated(inner, kernel, &generate, tick, origin, look_ahead)?;
         }
         WorldgenExecution::Deferred => {
             queue_worldgen(inner, generate);
@@ -3753,6 +3753,8 @@ fn compute_worldgen(input: &WorldgenInput) -> ComputedWorldgen {
 }
 
 fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
+    let pool = AsyncComputeTaskPool::try_get()
+        .ok_or(ProductionHostError::AsyncComputeTaskPoolUnavailable)?;
     let inputs = {
         let mut inner = spine.lock_inner()?;
         let admission = inner.runtime.admission_snapshot();
@@ -3769,18 +3771,12 @@ fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostErro
     if inputs.is_empty() {
         return Ok(());
     }
-    if let Some(pool) = AsyncComputeTaskPool::try_get() {
-        let mut tasks = inputs
-            .into_iter()
-            .map(|input| pool.spawn(async move { compute_worldgen(&input) }))
-            .collect::<Vec<_>>();
-        let mut inner = spine.lock_inner()?;
-        inner.in_flight_worldgen_tasks.append(&mut tasks);
-    } else {
-        let completed = inputs.iter().map(compute_worldgen).collect::<Vec<_>>();
-        let mut inner = spine.lock_inner()?;
-        enqueue_waiting_worldgen(&mut inner, completed);
-    }
+    let mut tasks = inputs
+        .into_iter()
+        .map(|input| pool.spawn(async move { compute_worldgen(&input) }))
+        .collect::<Vec<_>>();
+    let mut inner = spine.lock_inner()?;
+    inner.in_flight_worldgen_tasks.append(&mut tasks);
     Ok(())
 }
 
@@ -3922,7 +3918,11 @@ fn publish_hydrated(
     Ok(())
 }
 
-fn publish_generated(
+/// Generates the interaction-safety set before the first Bevy app update.
+///
+/// Frame-time streaming never calls this startup barrier; it queues owned
+/// inputs onto [`AsyncComputeTaskPool`] through [`spawn_worldgen_jobs`].
+fn publish_startup_generated(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
     coordinates: &[ChunkCoordinate],
@@ -4193,7 +4193,7 @@ fn await_startup_derived_idle(
             refresh_lifecycle(&mut inner);
             return Ok(());
         }
-        spawn_derived_jobs(spine, inputs)?;
+        spawn_startup_derived_jobs(spine, inputs)?;
         tick_compute_pool();
         // Readiness barriers run outside the frame-critical path. Parking keeps
         // parallel headless hosts from starving Bevy's process-global workers.
@@ -4277,18 +4277,34 @@ fn spawn_derived_jobs(
     if inputs.is_empty() {
         return Ok(());
     }
-    if let Some(pool) = AsyncComputeTaskPool::try_get() {
-        let mut tasks = inputs
-            .into_iter()
-            .map(|input| pool.spawn(async move { compute_derived(input) }))
-            .collect::<Vec<_>>();
-        let mut inner = spine.lock_inner()?;
-        inner.in_flight_tasks.append(&mut tasks);
-    } else {
-        let completed = inputs.into_iter().map(compute_derived).collect();
-        let mut inner = spine.lock_inner()?;
-        enqueue_waiting_derived(&mut inner, completed);
+    let pool = AsyncComputeTaskPool::try_get()
+        .ok_or(ProductionHostError::AsyncComputeTaskPoolUnavailable)?;
+    let mut tasks = inputs
+        .into_iter()
+        .map(|input| pool.spawn(async move { compute_derived(input) }))
+        .collect::<Vec<_>>();
+    let mut inner = spine.lock_inner()?;
+    inner.in_flight_tasks.append(&mut tasks);
+    Ok(())
+}
+
+/// Runs derived work during construction before Bevy installs its task pools.
+///
+/// This is the only synchronous derived path. It is called exclusively by the
+/// startup readiness barrier before the first [`bevy::prelude::App::update`].
+fn spawn_startup_derived_jobs(
+    spine: &ProductionSpine,
+    inputs: Vec<DerivedInput<HostVoxel>>,
+) -> Result<(), ProductionHostError> {
+    if inputs.is_empty() {
+        return Ok(());
     }
+    if AsyncComputeTaskPool::try_get().is_some() {
+        return spawn_derived_jobs(spine, inputs);
+    }
+    let completed = inputs.into_iter().map(compute_derived).collect();
+    let mut inner = spine.lock_inner()?;
+    enqueue_waiting_derived(&mut inner, completed);
     Ok(())
 }
 

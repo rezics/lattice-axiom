@@ -1225,6 +1225,9 @@ pub enum ProductionHostError {
     /// A derived job violated its retained-byte contract.
     #[error("derived mesh or collider work violated its memory contract")]
     DerivedMemory,
+    /// Bevy's worker pool was unavailable for frame-independent CPU work.
+    #[error("Bevy AsyncComputeTaskPool is unavailable")]
+    AsyncComputeTaskPoolUnavailable,
     /// A mesh job lacked a mesh source identity.
     #[error("derived mesh job for {coordinate:?} has no mesh source")]
     MissingMeshSource {
