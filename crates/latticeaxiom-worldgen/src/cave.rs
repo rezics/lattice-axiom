@@ -9,7 +9,7 @@ use crate::{
     ProviderGenerationIdentityV1, SharedFaceHashV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
     WorldgenResult,
     cave_topology::{CaveTopologyLayerInputV1, TopologyFieldV1},
-    hashes::{domain_hash, hash_u64},
+    hashes::{domain_hash, hash_u64, sample_hash_3d},
 };
 
 const SHARED_FACE_DOMAIN: &[u8] = b"latticeaxiom.cave-shared-face.v1\0";
@@ -410,21 +410,38 @@ pub(crate) struct CaveSamplerV1 {
     input_hash: GenerationInputHashV1,
     config: WorldgenConfigV1,
     provider: ProviderGenerationIdentityV1,
+    void_seed: u64,
+    branch_seed: u64,
     topology: Option<TopologyFieldV1>,
 }
 
 impl CaveSamplerV1 {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         seed: WorldSeedV1,
         input_hash: GenerationInputHashV1,
         config: WorldgenConfigV1,
         provider: ProviderGenerationIdentityV1,
     ) -> Self {
+        let sample_seed = |domain| {
+            hash_u64(
+                domain,
+                &[
+                    seed.as_bytes(),
+                    input_hash.as_bytes(),
+                    provider.provider_stable_id().as_str().as_bytes(),
+                    provider.implementation_fingerprint().as_bytes(),
+                ],
+            )
+        };
+        let void_seed = sample_seed(CAVE_VOID_DOMAIN);
+        let branch_seed = sample_seed(CAVE_BRANCH_DOMAIN);
         Self {
             seed,
             input_hash,
             config,
             provider,
+            void_seed,
+            branch_seed,
             topology: None,
         }
     }
@@ -641,18 +658,7 @@ impl CaveSamplerV1 {
         {
             return inactive;
         }
-        let branch_bits = hash_u64(
-            CAVE_BRANCH_DOMAIN,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.provider.provider_stable_id().as_str().as_bytes(),
-                self.provider.implementation_fingerprint().as_bytes(),
-                &cell_x.to_be_bytes(),
-                &cell_y.to_be_bytes(),
-                &cell_z.to_be_bytes(),
-            ],
-        );
+        let branch_bits = sample_hash_3d(self.branch_seed, cell_x, cell_y, cell_z);
         if self.config.cave_threshold_per_1024 != 1_024
             && branch_bits % 1_024 >= u64::from(self.config.cave_threshold_per_1024)
         {
@@ -699,18 +705,7 @@ impl CaveSamplerV1 {
         if self.config.cave_threshold_per_1024 == 0 {
             return false;
         }
-        let roll = hash_u64(
-            CAVE_VOID_DOMAIN,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.provider.provider_stable_id().as_str().as_bytes(),
-                self.provider.implementation_fingerprint().as_bytes(),
-                &cell_x.to_be_bytes(),
-                &cell_y.to_be_bytes(),
-                &cell_z.to_be_bytes(),
-            ],
-        ) % 1_024;
+        let roll = sample_hash_3d(self.void_seed, cell_x, cell_y, cell_z) % 1_024;
         roll < u64::from(self.config.cave_threshold_per_1024)
     }
 

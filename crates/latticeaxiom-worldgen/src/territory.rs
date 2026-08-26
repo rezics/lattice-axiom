@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, WorldSeedV1,
     WorldgenConfigV1,
-    hashes::{domain_hash, hash_u64},
+    hashes::{domain_hash, hash_u64, sample_hash_2d},
     terrain_field::terrain_shape,
 };
 
@@ -13,7 +13,7 @@ const STYLE_DOMAIN: &[u8] = b"latticeaxiom.d4-style.v1\0";
 const HEIGHT_DOMAIN: &[u8] = b"latticeaxiom.d4-height.v1\0";
 const TRANSITION_DOMAIN: &[u8] = b"latticeaxiom.d4-transition.v1\0";
 
-/// Two deterministic fixture-algorithm discriminants used by the D4 scaffold.
+/// Deterministic terrain-style discriminants used by the D4 and natural layers.
 ///
 /// Package-owned style identities and their registration schema remain external.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -33,13 +33,6 @@ impl TerrainStyleV1 {
             Self::TemperateWoodland => 0,
             Self::AridBadlands => 1,
             Self::BorealWetland => 2,
-        }
-    }
-
-    pub(crate) const fn other(self) -> Self {
-        match self {
-            Self::TemperateWoodland => Self::AridBadlands,
-            Self::AridBadlands | Self::BorealWetland => Self::TemperateWoodland,
         }
     }
 }
@@ -118,7 +111,7 @@ impl TerritoryQueryV1 {
         self.winner
     }
 
-    /// Returns the other ranked D4 candidate.
+    /// Returns the terrain style in the nearest adjacent planning cell.
     #[must_use]
     pub const fn runner_up(&self) -> TerrainStyleV1 {
         self.runner_up
@@ -171,7 +164,7 @@ pub(crate) struct TerritorySamplerV1 {
     seed: WorldSeedV1,
     input_hash: GenerationInputHashV1,
     config: WorldgenConfigV1,
-    selector: ProviderGenerationIdentityV1,
+    style_seed: u64,
     transition: ProviderGenerationIdentityV1,
     temperate_height_seed: u64,
     arid_height_seed: u64,
@@ -184,7 +177,7 @@ impl TerritorySamplerV1 {
         seed: WorldSeedV1,
         input_hash: GenerationInputHashV1,
         config: WorldgenConfigV1,
-        selector: ProviderGenerationIdentityV1,
+        selector: &ProviderGenerationIdentityV1,
         transition: ProviderGenerationIdentityV1,
         temperate: &ProviderGenerationIdentityV1,
         arid: &ProviderGenerationIdentityV1,
@@ -196,11 +189,20 @@ impl TerritorySamplerV1 {
             TerrainStyleV1::TemperateWoodland,
         );
         let arid_height_seed = height_seed(seed, input_hash, arid, TerrainStyleV1::AridBadlands);
+        let style_seed = hash_u64(
+            STYLE_DOMAIN,
+            &[
+                seed.as_bytes(),
+                input_hash.as_bytes(),
+                selector.provider_stable_id().as_str().as_bytes(),
+                selector.implementation_fingerprint().as_bytes(),
+            ],
+        );
         Self {
             seed,
             input_hash,
             config,
-            selector,
+            style_seed,
             transition,
             temperate_height_seed,
             arid_height_seed,
@@ -239,7 +241,7 @@ impl TerritorySamplerV1 {
         TerritoryQueryV1 {
             domain_id: self.cell_id(sample.cell_x, sample.cell_z),
             winner: sample.winner,
-            runner_up: sample.winner.other(),
+            runner_up: sample.adjacent_style,
             boundary_distance_voxels: sample.boundary_distance_voxels,
             transition: TransitionMetadataV1 {
                 provider_id: self.transition.provider_stable_id().clone(),
@@ -287,27 +289,62 @@ impl TerritorySamplerV1 {
         reason = "winner/adjacent height and weight pairs mirror the blend equation"
     )]
     pub(crate) fn height(&self, x: i64, z: i64, sample: CompactTerritorySampleV1) -> i32 {
-        let winner_height = self.raw_height(sample.winner, x, z);
-        if !sample.transition_active {
-            return winner_height;
-        }
-        let adjacent_height = self.raw_height(sample.adjacent_style, x, z);
+        let edge = self.planning_edge_voxels();
         let width = i64::from(self.config.transition_width_voxels);
-        let distance = i64::from(sample.boundary_distance_voxels.min(u32::from(u16::MAX)));
-        let winner_weight = width.saturating_add(distance);
-        let adjacent_weight = width.saturating_sub(distance);
         let denominator = width.saturating_mul(2).max(1);
-        let blended = i64::from(winner_height)
-            .saturating_mul(winner_weight)
-            .saturating_add(i64::from(adjacent_height).saturating_mul(adjacent_weight))
-            .div_euclid(denominator);
-        i32::try_from(blended).unwrap_or_else(|_| {
-            if blended.is_negative() {
-                i32::MIN
-            } else {
-                i32::MAX
-            }
-        })
+        let x_blend = axis_blend(sample.cell_x, x.rem_euclid(edge), edge, width);
+        let z_blend = axis_blend(sample.cell_z, z.rem_euclid(edge), edge, width);
+        let mut cached_heights = [None; 3];
+        let current = self.raw_cell_height(sample.cell_x, sample.cell_z, x, z, &mut cached_heights);
+        let current_row = if x_blend.adjacent == sample.cell_x {
+            current
+        } else {
+            let adjacent_x =
+                self.raw_cell_height(x_blend.adjacent, sample.cell_z, x, z, &mut cached_heights);
+            blend_height(current, adjacent_x, x_blend.current_weight, denominator)
+        };
+        if z_blend.adjacent == sample.cell_z {
+            return saturating_height(current_row);
+        }
+        let adjacent_z =
+            self.raw_cell_height(sample.cell_x, z_blend.adjacent, x, z, &mut cached_heights);
+        let adjacent_row = if x_blend.adjacent == sample.cell_x {
+            adjacent_z
+        } else {
+            let diagonal = self.raw_cell_height(
+                x_blend.adjacent,
+                z_blend.adjacent,
+                x,
+                z,
+                &mut cached_heights,
+            );
+            blend_height(adjacent_z, diagonal, x_blend.current_weight, denominator)
+        };
+        let blended = blend_height(
+            current_row,
+            adjacent_row,
+            z_blend.current_weight,
+            denominator,
+        );
+        saturating_height(blended)
+    }
+
+    fn raw_cell_height(
+        &self,
+        cell_x: i64,
+        cell_z: i64,
+        x: i64,
+        z: i64,
+        cached_heights: &mut [Option<i64>; 3],
+    ) -> i64 {
+        let style = self.style_for_cell(cell_x, cell_z);
+        let index = usize::from(style.discriminant());
+        if let Some(height) = cached_heights[index] {
+            return height;
+        }
+        let height = i64::from(self.raw_height(style, x, z));
+        cached_heights[index] = Some(height);
+        height
     }
 
     pub(crate) fn choose_material_style(
@@ -356,17 +393,7 @@ impl TerritorySamplerV1 {
     }
 
     fn style_for_cell(&self, cell_x: i64, cell_z: i64) -> TerrainStyleV1 {
-        let roll = hash_u64(
-            STYLE_DOMAIN,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.selector.provider_stable_id().as_str().as_bytes(),
-                self.selector.implementation_fingerprint().as_bytes(),
-                &cell_x.to_be_bytes(),
-                &cell_z.to_be_bytes(),
-            ],
-        );
+        let roll = sample_hash_2d(self.style_seed, cell_x, cell_z);
         if self.boreal.is_some() {
             match roll % 3 {
                 0 => TerrainStyleV1::TemperateWoodland,
@@ -408,6 +435,51 @@ impl TerritorySamplerV1 {
         let displacement = shape.saturating_mul(i64::from(relief)).div_euclid(1_024);
         i32::try_from(i64::from(base).saturating_add(displacement)).unwrap_or(base)
     }
+}
+
+#[derive(Clone, Copy)]
+struct AxisBlend {
+    adjacent: i64,
+    current_weight: i64,
+}
+
+fn axis_blend(cell: i64, local: i64, edge: i64, width: i64) -> AxisBlend {
+    if local <= width {
+        AxisBlend {
+            adjacent: cell.saturating_sub(1),
+            current_weight: width.saturating_add(local),
+        }
+    } else {
+        let far_distance = edge.saturating_sub(1).saturating_sub(local);
+        if far_distance <= width {
+            AxisBlend {
+                adjacent: cell.saturating_add(1),
+                current_weight: width.saturating_add(far_distance),
+            }
+        } else {
+            AxisBlend {
+                adjacent: cell,
+                current_weight: width.saturating_mul(2),
+            }
+        }
+    }
+}
+
+fn blend_height(current: i64, adjacent: i64, current_weight: i64, denominator: i64) -> i64 {
+    current
+        .saturating_mul(current_weight)
+        .saturating_add(adjacent.saturating_mul(denominator.saturating_sub(current_weight)))
+        .div_euclid(denominator.max(1))
+}
+
+fn saturating_height(height: i64) -> i32 {
+    i32::try_from(height).unwrap_or_else(|_| {
+        if height.is_negative() {
+            i32::MIN
+        } else {
+            i32::MAX
+        }
+    })
 }
 
 fn height_seed(

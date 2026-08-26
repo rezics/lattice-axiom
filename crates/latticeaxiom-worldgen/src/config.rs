@@ -7,6 +7,7 @@ use crate::{WorldgenConfigHashV1, WorldgenError, WorldgenResult};
 
 const MIN_CHUNK_EDGE: u16 = 8;
 const MAX_CHUNK_EDGE: u16 = 64;
+pub(crate) const MAX_TERRAIN_RELIEF: u16 = 128;
 const MAX_THRESHOLD: u16 = 1_024;
 
 /// Closed, integer-only configuration for the version-one D4 generator.
@@ -124,8 +125,13 @@ impl WorldgenConfigV1 {
             4_096,
         )?;
         bounded_u16("cave_cell_edge_voxels", self.cave_cell_edge_voxels, 2, 128)?;
-        bounded_u16("temperate_relief", self.temperate_relief, 1, 64)?;
-        bounded_u16("arid_relief", self.arid_relief, 1, 64)?;
+        bounded_u16(
+            "temperate_relief",
+            self.temperate_relief,
+            1,
+            MAX_TERRAIN_RELIEF,
+        )?;
+        bounded_u16("arid_relief", self.arid_relief, 1, MAX_TERRAIN_RELIEF)?;
         bounded_u16("cave_minimum_cover", self.cave_minimum_cover, 1, 64)?;
         threshold("cave_threshold_per_1024", self.cave_threshold_per_1024)?;
         threshold("copper_threshold_per_1024", self.copper_threshold_per_1024)?;
@@ -325,6 +331,31 @@ mod tests {
             config.validate(),
             Err(WorldgenError::InvalidConfig {
                 field: "transition_width_voxels",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn relief_accepts_full_scale_boundary_and_rejects_boundary_plus_one() {
+        let accepted = WorldgenConfigV1 {
+            world_ceiling_y: 319,
+            temperate_base_height: 80,
+            temperate_relief: MAX_TERRAIN_RELIEF,
+            arid_base_height: 80,
+            arid_relief: MAX_TERRAIN_RELIEF,
+            ..WorldgenConfigV1::default()
+        };
+        assert!(accepted.validate().is_ok());
+
+        let rejected = WorldgenConfigV1 {
+            temperate_relief: MAX_TERRAIN_RELIEF.saturating_add(1),
+            ..accepted
+        };
+        assert!(matches!(
+            rejected.validate(),
+            Err(WorldgenError::InvalidConfig {
+                field: "temperate_relief",
                 ..
             })
         ));

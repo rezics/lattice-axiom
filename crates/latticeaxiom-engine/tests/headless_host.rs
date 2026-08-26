@@ -3597,8 +3597,8 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
             .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
     );
 
-    seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
-    seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
+    seed_tool(&spine, 0, "terrenia:item/stone-pickaxe", 131);
+    seed_tool(&spine, 1, "terrenia:item/stone-shovel", 131);
 
     let mut generation = 1_u64;
     generation = walk_toward_column(
@@ -3696,7 +3696,7 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
         .expect("natural copper resource exists in the streamed underground set");
     spine
         .select_hotbar_slot(0)
-        .expect("wooden pickaxe is selected for ore");
+        .expect("stone pickaxe is selected for ore");
     gather_until_inventory_has(&spine, ore, &copper_item, 1);
     assert!(
         spine
@@ -4954,21 +4954,34 @@ fn walk_toward_column(
     ticks: u64,
 ) -> u64 {
     let mut remaining = ticks;
+    let mut strafe = 0.0_f32;
+    let mut avoidance_sign = 1.0_f32;
     while remaining > 0 {
         let pose = spine.player_pose();
         let dx = (target_x as f32 + 0.5) - pose.translation.x;
         let dz = (target_z as f32 + 0.5) - pose.translation.z;
-        if dx.hypot(dz) < 0.35 {
+        let distance = dx.hypot(dz);
+        if distance < 0.35 {
             break;
         }
         let look = wrap_pi(pose.yaw_radians - f32::atan2(-dx, -dz));
         let step = remaining.min(24);
         let before = generation;
-        generation = enqueue_look_then_walk(instance, generation, look, 0.0, 1.0, step);
+        generation =
+            enqueue_look_then_walk_axes(instance, generation, look, 0.0, strafe, 1.0, step);
         let consumed = generation.saturating_sub(before);
         instance
             .advance_fixed_ticks(u32::try_from(consumed).expect("step fits u32"))
             .expect("walk ticks toward the required entrance");
+        let position = spine.player_pose().translation;
+        let next_distance =
+            ((target_x as f32 + 0.5) - position.x).hypot((target_z as f32 + 0.5) - position.z);
+        if next_distance + 0.1 >= distance {
+            strafe = avoidance_sign;
+            avoidance_sign = -avoidance_sign;
+        } else {
+            strafe = 0.0;
+        }
         remaining = remaining.saturating_sub(step);
         assert!(
             !spine.occupies_unready_cave_void(),

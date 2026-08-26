@@ -20,7 +20,7 @@ use crate::{
     WorldgenConfigHashV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult,
     cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
-    hashes::{concatenated_hash, domain_hash, hash_u64},
+    hashes::{concatenated_hash, domain_hash, hash_u64, sample_hash_3d},
     hydrology::{
         HydrologySamplerV1, hydrology_adjacent_chunk, hydrology_face_axis, hydrology_face_hash,
     },
@@ -567,6 +567,9 @@ pub struct GenerationPlanV1 {
     generation_input_hash: GenerationInputHashV1,
     generation_provenance_hash: GenerationProvenanceHashV1,
     generation_epoch: GenerationEpochIdV1,
+    material_seed: u64,
+    tree_seed: u64,
+    ground_cover_seed: u64,
     limits: WorldgenLimitsV1,
     territory: TerritorySamplerV1,
     cave: CaveSamplerV1,
@@ -648,7 +651,7 @@ impl GenerationPlanV1 {
             input.world_seed,
             d4_input_hash,
             input.config.clone(),
-            providers.identity(ProviderSlotV1::StyleSelector).clone(),
+            providers.identity(ProviderSlotV1::StyleSelector),
             providers
                 .identity(ProviderSlotV1::TerrainTransition)
                 .clone(),
@@ -724,6 +727,27 @@ impl GenerationPlanV1 {
             }
             (None, _) => None,
         };
+        let material_seed = hash_u64(
+            MATERIAL_DOMAIN,
+            &[
+                input.world_seed.as_bytes(),
+                generation_input_hash.as_bytes(),
+            ],
+        );
+        let tree_seed = hash_u64(
+            TREE_DOMAIN,
+            &[
+                input.world_seed.as_bytes(),
+                generation_input_hash.as_bytes(),
+            ],
+        );
+        let ground_cover_seed = hash_u64(
+            GROUND_COVER_DOMAIN,
+            &[
+                input.world_seed.as_bytes(),
+                generation_input_hash.as_bytes(),
+            ],
+        );
 
         Ok(Self {
             dimension: input.dimension,
@@ -740,6 +764,9 @@ impl GenerationPlanV1 {
             generation_input_hash,
             generation_provenance_hash,
             generation_epoch,
+            material_seed,
+            tree_seed,
+            ground_cover_seed,
             limits: input.limits,
             territory,
             cave,
@@ -1503,7 +1530,14 @@ impl GenerationPlanV1 {
                     .2
                     .saturating_add(i64::try_from(local_z).unwrap_or_default());
                 let sample = self.territory.sample(world_x, world_z);
-                let height = self.terrain_height(world_x, world_z);
+                let base_height = self.territory.height(world_x, world_z, sample);
+                let in_river_channel = self
+                    .natural
+                    .as_ref()
+                    .is_some_and(|natural| natural.in_river_channel(world_x, world_z));
+                let height = self.natural.as_ref().map_or(base_height, |natural| {
+                    natural.adjust_height_for_channel(base_height, in_river_channel)
+                });
                 let material_style = self
                     .territory
                     .choose_material_style(world_x, world_z, sample);
@@ -1511,6 +1545,7 @@ impl GenerationPlanV1 {
                 columns.push(ColumnSampleV1 {
                     height,
                     material_style,
+                    in_river_channel,
                 });
             }
         }
@@ -1752,9 +1787,8 @@ impl GenerationPlanV1 {
         let depth = i64::from(column.height).saturating_sub(y);
         if let Some(natural) = &self.natural {
             natural_counters.river_samples = natural_counters.river_samples.saturating_add(1);
-            let river = natural.river_sample(x, z);
-            if river.in_channel() && y == i64::from(column.height) {
-                return natural.river_bed_role(x, z, column.material_style);
+            if column.in_river_channel && y == i64::from(column.height) {
+                return natural.channel_bed_role(x, z, column.material_style);
             }
             natural_counters.geology_samples = natural_counters.geology_samples.saturating_add(1);
             natural_counters.resource_samples = natural_counters.resource_samples.saturating_add(1);
@@ -1809,8 +1843,8 @@ impl GenerationPlanV1 {
                     .saturating_add(i64::try_from(local_z).unwrap_or_default());
                 let cover_y = i64::from(column.height).saturating_add(1);
                 counters.ground_cover_samples = counters.ground_cover_samples.saturating_add(1);
-                if self.hash_threshold(
-                    GROUND_COVER_DOMAIN,
+                if Self::sample_threshold(
+                    self.ground_cover_seed,
                     world_x,
                     cover_y,
                     world_z,
@@ -1927,10 +1961,12 @@ impl GenerationPlanV1 {
                     .saturating_add(i64::try_from(local_z).unwrap_or_default());
                 counters.ground_cover_samples = counters.ground_cover_samples.saturating_add(1);
                 counters.river_samples = counters.river_samples.saturating_add(1);
-                let in_channel = natural.river_sample(world_x, world_z).in_channel();
-                if let Some(role) =
-                    natural.ground_cover_role(world_x, world_z, column.material_style, in_channel)
-                {
+                if let Some(role) = natural.ground_cover_role(
+                    world_x,
+                    world_z,
+                    column.material_style,
+                    column.in_river_channel,
+                ) {
                     counters.ground_cover_accepts = counters.ground_cover_accepts.saturating_add(1);
                     set_vegetation_role(
                         &mut overlay,
@@ -2032,8 +2068,8 @@ impl GenerationPlanV1 {
             };
         }
         counters.resource_samples = counters.resource_samples.saturating_add(1);
-        if self.hash_threshold(
-            MATERIAL_DOMAIN,
+        if Self::sample_threshold(
+            self.material_seed,
             x,
             y,
             z,
@@ -2072,8 +2108,8 @@ impl GenerationPlanV1 {
             };
         }
         counters.resource_samples = counters.resource_samples.saturating_add(1);
-        if self.hash_threshold(
-            MATERIAL_DOMAIN,
+        if Self::sample_threshold(
+            self.material_seed,
             x,
             y,
             z,
@@ -2086,34 +2122,15 @@ impl GenerationPlanV1 {
         }
     }
     fn is_tree_anchor(&self, x: i64, z: i64) -> bool {
-        self.hash_threshold(TREE_DOMAIN, x, 0, z, self.config.tree_threshold_per_1024)
+        Self::sample_threshold(self.tree_seed, x, 0, z, self.config.tree_threshold_per_1024)
     }
 
     fn material_roll(&self, x: i64, y: i64, z: i64) -> u64 {
-        hash_u64(
-            MATERIAL_DOMAIN,
-            &[
-                self.world_seed.as_bytes(),
-                self.generation_input_hash.as_bytes(),
-                &x.to_be_bytes(),
-                &y.to_be_bytes(),
-                &z.to_be_bytes(),
-            ],
-        )
+        sample_hash_3d(self.material_seed, x, y, z)
     }
 
-    fn hash_threshold(&self, domain: &[u8], x: i64, y: i64, z: i64, threshold: u16) -> bool {
-        hash_u64(
-            domain,
-            &[
-                self.world_seed.as_bytes(),
-                self.generation_input_hash.as_bytes(),
-                &x.to_be_bytes(),
-                &y.to_be_bytes(),
-                &z.to_be_bytes(),
-            ],
-        ) % 1_024
-            < u64::from(threshold)
+    fn sample_threshold(seed: u64, x: i64, y: i64, z: i64, threshold: u16) -> bool {
+        sample_hash_3d(seed, x, y, z) % 1_024 < u64::from(threshold)
     }
 }
 
@@ -2121,6 +2138,7 @@ impl GenerationPlanV1 {
 struct ColumnSampleV1 {
     height: i32,
     material_style: TerrainStyleV1,
+    in_river_channel: bool,
 }
 
 fn local_world_axis(origin: i64, local: usize) -> i64 {

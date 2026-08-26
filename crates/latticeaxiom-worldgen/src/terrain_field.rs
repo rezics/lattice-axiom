@@ -8,6 +8,8 @@
 //! project-owned fixed-point implementation so authoritative output does not
 //! depend on platform floating-point behavior.
 
+use crate::hashes::sample_hash_2d;
+
 const UNIT: i64 = 1_024;
 const DIAGONAL: i64 = 724;
 
@@ -72,7 +74,7 @@ pub(crate) fn terrain_shape(seed: u64, x: i64, z: i64, base_scale: u16) -> i64 {
     continental
         .saturating_mul(4)
         .saturating_add(detail.saturating_mul(2))
-        .saturating_add(peaks.saturating_mul(3))
+        .saturating_add(peaks.saturating_mul(16))
         .div_euclid(8)
         .clamp(-UNIT, UNIT)
 }
@@ -136,7 +138,7 @@ fn gradient_noise(seed: u64, x: i64, z: i64, scale: i64) -> i64 {
 }
 
 fn gradient_dot(seed: u64, cell_x: i64, cell_z: i64, dx: i64, dz: i64) -> i64 {
-    let (gradient_x, gradient_z) = match lattice_hash(seed, cell_x, cell_z) & 7 {
+    let (gradient_x, gradient_z) = match sample_hash_2d(seed, cell_x, cell_z) & 7 {
         0 => (UNIT, 0),
         1 => (-UNIT, 0),
         2 => (0, UNIT),
@@ -150,21 +152,6 @@ fn gradient_dot(seed: u64, cell_x: i64, cell_z: i64, dx: i64, dz: i64) -> i64 {
         .saturating_mul(dx)
         .saturating_add(gradient_z.saturating_mul(dz))
         .div_euclid(UNIT)
-}
-
-fn lattice_hash(seed: u64, cell_x: i64, cell_z: i64) -> u64 {
-    let x = u64::from_be_bytes(cell_x.to_be_bytes());
-    let z = u64::from_be_bytes(cell_z.to_be_bytes());
-    avalanche(
-        seed ^ x.wrapping_mul(0x9e37_79b9_7f4a_7c15)
-            ^ z.wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(32),
-    )
-}
-
-fn avalanche(mut value: u64) -> u64 {
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }
 
 fn quintic_fade(value: i64) -> i64 {
@@ -218,17 +205,46 @@ mod tests {
     #[test]
     fn terrain_shape_is_bounded_and_varies_on_both_signed_axes() {
         let mut samples = std::collections::BTreeSet::new();
+        let mut minimum = UNIT;
+        let mut maximum = -UNIT;
         for z in -96_i64..=96 {
             for x in -96_i64..=96 {
                 let sample = terrain_shape(42, x, z, 16);
                 assert!((-UNIT..=UNIT).contains(&sample));
+                minimum = minimum.min(sample);
+                maximum = maximum.max(sample);
                 samples.insert(sample);
             }
         }
+        assert!(minimum <= -128, "terrain field lacks lowlands: {minimum}");
+        assert!(maximum >= 512, "terrain field lacks highlands: {maximum}");
         assert!(
             samples.len() > 256,
             "multi-scale terrain must not quantize into a small set, got {} values",
             samples.len()
+        );
+    }
+
+    #[test]
+    fn highland_extremes_are_reachable_but_rare() {
+        let mut broad_minimum = UNIT;
+        let mut broad_maximum = -UNIT;
+        let mut saturated = 0_u64;
+        let mut broad_samples = 0_u64;
+        for z in (-4_096_i64..=4_096).step_by(8) {
+            for x in (-4_096_i64..=4_096).step_by(8) {
+                let sample = terrain_shape(42, x, z, 32);
+                broad_minimum = broad_minimum.min(sample);
+                broad_maximum = broad_maximum.max(sample);
+                saturated = saturated.saturating_add(u64::from(sample == UNIT));
+                broad_samples = broad_samples.saturating_add(1);
+            }
+        }
+        assert!(broad_minimum <= -320, "lowlands regressed: {broad_minimum}");
+        assert_eq!(broad_maximum, UNIT, "the corpus must contain high peaks");
+        assert!(
+            saturated.saturating_mul(10_000) < broad_samples,
+            "clamped peaks must stay below 0.01% of the sampled field"
         );
     }
 }

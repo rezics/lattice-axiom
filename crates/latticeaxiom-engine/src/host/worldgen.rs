@@ -91,14 +91,17 @@ pub(super) fn spine_config() -> WorldgenConfigV1 {
         // Preserve the authored 64-meter territory and cave planning scale
         // when moving the production chunk edge from 8 to 32 voxels.
         planning_cell_edge_chunks: 2,
-        transition_width_voxels: 8,
+        transition_width_voxels: 16,
+        height_noise_scale_voxels: 32,
         world_floor_y: -64,
         world_ceiling_y: 319,
-        temperate_base_height: 16,
-        // Keep a broad, walkable plain while adding enough relief to avoid a flat test slab.
-        temperate_relief: 4,
-        arid_base_height: 16,
-        arid_relief: 6,
+        // The official 26.2 Overworld uses sea level 63 inside a -64..=319
+        // column. This waterless reference profile keeps its nominal land
+        // above that datum while reserving the upper column for rare peaks.
+        temperate_base_height: 80,
+        temperate_relief: 112,
+        arid_base_height: 88,
+        arid_relief: 128,
         ..WorldgenConfigV1::default()
     }
 }
@@ -283,18 +286,18 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
 
 const fn provider_revision(slot: ProviderSlotV1) -> u32 {
     match slot {
+        ProviderSlotV1::StyleSelector
+        | ProviderSlotV1::TerrainTransition
+        | ProviderSlotV1::Materializer => 8,
         ProviderSlotV1::CaveTopology
         | ProviderSlotV1::TemperateTerrain
-        | ProviderSlotV1::AridTerrain => 8,
+        | ProviderSlotV1::AridTerrain => 9,
         ProviderSlotV1::Geology
         | ProviderSlotV1::Hydrology
         | ProviderSlotV1::Resources
-        | ProviderSlotV1::Vegetation => 1,
-        ProviderSlotV1::BorealTerrain => 2,
-        ProviderSlotV1::GenerationCoordinator
-        | ProviderSlotV1::StyleSelector
-        | ProviderSlotV1::TerrainTransition
-        | ProviderSlotV1::Materializer => 7,
+        | ProviderSlotV1::Vegetation => 2,
+        ProviderSlotV1::BorealTerrain => 3,
+        ProviderSlotV1::GenerationCoordinator => 7,
     }
 }
 
@@ -1210,10 +1213,49 @@ mod tests {
         assert_eq!(config.world_floor_y, -64);
         assert_eq!(config.world_ceiling_y, 319);
         assert_eq!(config.world_ceiling_y - config.world_floor_y + 1, 384);
+        assert_eq!(config.height_noise_scale_voxels, 32);
+        assert_eq!(config.transition_width_voxels, 16);
+        assert_eq!(config.temperate_base_height, 80);
+        assert_eq!(config.temperate_relief, 112);
+        assert_eq!(config.arid_base_height, 88);
+        assert_eq!(config.arid_relief, 128);
         assert_eq!(
             i32::from(config.chunk_edge_voxels) * i32::from(config.planning_cell_edge_chunks),
             64,
             "planning cells preserve the authored 64-meter physical scale"
+        );
+    }
+
+    #[test]
+    fn production_terrain_uses_broad_vertical_relief_without_adjacent_spikes() {
+        let plan = occupancy_plan(0, false);
+        let mut minimum = i32::MAX;
+        let mut maximum = i32::MIN;
+        for z in (-2_048_i64..=2_048).step_by(8) {
+            for x in (-2_048_i64..=2_048).step_by(8) {
+                let height = plan.terrain_height(x, z);
+                minimum = minimum.min(height);
+                maximum = maximum.max(height);
+            }
+        }
+
+        let mut maximum_step = 0_u32;
+        for z in -256_i64..=256 {
+            for x in -256_i64..=256 {
+                let height = plan.terrain_height(x, z);
+                maximum_step = maximum_step
+                    .max(height.abs_diff(plan.terrain_height(x.saturating_add(1), z)))
+                    .max(height.abs_diff(plan.terrain_height(x, z.saturating_add(1))));
+            }
+        }
+        assert!(minimum >= plan.config().world_floor_y);
+        assert!(maximum <= plan.config().world_ceiling_y);
+        assert!(minimum <= 63, "production corpus lacks lowlands: {minimum}");
+        assert!(maximum >= 160, "production corpus lacks peaks: {maximum}");
+        assert!(maximum.saturating_sub(minimum) >= 80);
+        assert!(
+            maximum_step <= 12,
+            "production corpus contains a {maximum_step}-voxel adjacent spike"
         );
     }
 

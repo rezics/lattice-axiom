@@ -141,3 +141,31 @@ pub(crate) fn hash_u64(domain: &[u8], parts: &[&[u8]]) -> u64 {
     bytes.copy_from_slice(&digest.as_bytes()[..size_of::<u64>()]);
     u64::from_be_bytes(bytes)
 }
+
+/// Samples a fast deterministic two-dimensional field from a pre-derived seed.
+pub(crate) fn sample_hash_2d(seed: u64, x: i64, z: i64) -> u64 {
+    let x = u64::from_be_bytes(x.to_be_bytes());
+    let z = u64::from_be_bytes(z.to_be_bytes());
+    avalanche(
+        seed ^ x.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ z.wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(32),
+    )
+}
+
+/// Samples a fast deterministic three-dimensional field from a pre-derived seed.
+pub(crate) fn sample_hash_3d(seed: u64, x: i64, y: i64, z: i64) -> u64 {
+    let x = u64::from_be_bytes(x.to_be_bytes());
+    let y = u64::from_be_bytes(y.to_be_bytes());
+    let z = u64::from_be_bytes(z.to_be_bytes());
+    avalanche(
+        seed ^ x.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ y.wrapping_mul(0xbf58_476d_1ce4_e5b9).rotate_left(21)
+            ^ z.wrapping_mul(0x94d0_49bb_1331_11eb).rotate_left(42),
+    )
+}
+
+fn avalanche(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}

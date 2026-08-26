@@ -732,6 +732,55 @@ fn both_fixture_styles_and_named_transition_are_queryable() {
 }
 
 #[test]
+fn high_relief_height_blends_continuously_through_planning_cell_corners() {
+    let mut config = default_config();
+    config.transition_width_voxels = 16;
+    config.height_noise_scale_voxels = 32;
+    config.world_ceiling_y = 319;
+    config.temperate_base_height = 80;
+    config.temperate_relief = 112;
+    config.arid_base_height = 88;
+    config.arid_relief = 128;
+    let transition_width = i64::from(config.transition_width_voxels);
+    let cell_edge = i64::from(config.chunk_edge_voxels)
+        .saturating_mul(i64::from(config.planning_cell_edge_chunks));
+    let plan = GenerationPlanV1::compile(fixture_input(
+        config,
+        provider_offers(false),
+        role_vocabulary(),
+        role_bindings(),
+        block_catalog(),
+        vec![CanonicalHash::digest(b"lock-a")],
+        WorldgenLimitsV1::default(),
+    ))
+    .expect("high-relief transition plan compiles");
+
+    let mut maximum_step = 0_u32;
+    for cell_z in -4_i64..=4 {
+        for cell_x in -4_i64..=4 {
+            let corner_x = cell_x.saturating_mul(cell_edge);
+            let corner_z = cell_z.saturating_mul(cell_edge);
+            for z in corner_z.saturating_sub(transition_width)
+                ..=corner_z.saturating_add(transition_width)
+            {
+                for x in corner_x.saturating_sub(transition_width)
+                    ..=corner_x.saturating_add(transition_width)
+                {
+                    let height = plan.terrain_height(x, z);
+                    maximum_step = maximum_step
+                        .max(height.abs_diff(plan.terrain_height(x.saturating_add(1), z)))
+                        .max(height.abs_diff(plan.terrain_height(x, z.saturating_add(1))));
+                }
+            }
+        }
+    }
+    assert!(
+        maximum_step <= 12,
+        "high-relief transition introduced a {maximum_step}-voxel adjacent cliff"
+    );
+}
+
+#[test]
 fn deterministic_height_density_and_coarse_void_use_y_as_height() {
     let mut config = default_config();
     config.cave_threshold_per_1024 = 1_024;
@@ -1069,7 +1118,7 @@ fn fixed_d4_snapshot_has_stable_golden_checksum() {
         .expect("golden chunk generates");
     assert_eq!(
         prepared(&outcome).checksum().to_string(),
-        "d1f7d9cdb1cf6c320f03d49b65d5f372af9523d752a8baaaa5a65bf783299397"
+        "4b00586c0dcbae28e703c322ef4684a80d06a30e8dfd84c5599cae1b57dcb441"
     );
 }
 
@@ -1094,13 +1143,13 @@ fn both_style_surface_snapshots_have_independent_goldens() {
         vec![
             (
                 TerrainStyleV1::TemperateWoodland,
-                ChunkCoordinate::new(-207, 2, -252),
-                "21c50392eb5a132047a77552950d8028a25d8e47f61dfdc430e8753e170b5c51".to_owned(),
+                ChunkCoordinate::new(-198, 2, -255),
+                "1c0c6faaa6c8cf44ca3213942f11570ae049c70a337105555f04c31f6563b472".to_owned(),
             ),
             (
                 TerrainStyleV1::AridBadlands,
-                ChunkCoordinate::new(-223, 2, -251),
-                "6cad859055f35b3d8ed252ca8b133890dd6fe8e77344d14cf8a19975e8fc2c8c".to_owned(),
+                ChunkCoordinate::new(-254, 2, -255),
+                "b54fa884662871d5b46f2e6a9efbb5df0270b8b5945072ef82acf2d1e906ebf0".to_owned(),
             ),
         ]
     );

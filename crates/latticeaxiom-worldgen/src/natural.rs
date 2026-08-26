@@ -13,7 +13,8 @@ use crate::{
     PlacementPredicateReceiptV1, ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1,
     RiverBasinIdV1, RoleBindingReceiptV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1,
     WorldgenError, WorldgenLimitsV1, WorldgenResult,
-    hashes::{domain_hash, hash_u64},
+    config::MAX_TERRAIN_RELIEF,
+    hashes::{domain_hash, hash_u64, sample_hash_2d, sample_hash_3d},
     provider::ResolvedProvidersV1,
     territory::BorealTerrainParamsV1,
 };
@@ -116,7 +117,7 @@ impl NaturalLayerConfigV1 {
     /// Returns [`WorldgenError::InvalidConfig`] when a field is outside the
     /// closed domain or the derived surface would not fit the world column.
     pub fn validate(&self, spine: &WorldgenConfigV1) -> WorldgenResult<()> {
-        bounded_u16("boreal_relief", self.boreal_relief, 1, 64)?;
+        bounded_u16("boreal_relief", self.boreal_relief, 1, MAX_TERRAIN_RELIEF)?;
         bounded_u16(
             "river_cell_edge_voxels",
             self.river_cell_edge_voxels,
@@ -315,9 +316,11 @@ pub(crate) struct NaturalSamplerV1 {
     config: NaturalLayerConfigV1,
     layer_hash: NaturalLayerHashV1,
     hydrology: ProviderGenerationIdentityV1,
-    geology: ProviderGenerationIdentityV1,
-    resources: ProviderGenerationIdentityV1,
-    vegetation: ProviderGenerationIdentityV1,
+    basin_seed: u64,
+    geology_seed: u64,
+    resource_seed: u64,
+    tree_seed: u64,
+    cover_seed: u64,
     river_warp_seeds: [u64; 2],
     boreal: BorealTerrainParamsV1,
     receipts: Vec<RoleBindingReceiptV1>,
@@ -354,6 +357,11 @@ impl NaturalSamplerV1 {
         let resources = required_natural(&resolved, ProviderSlotV1::Resources)?.clone();
         let vegetation = required_natural(&resolved, ProviderSlotV1::Vegetation)?.clone();
         let boreal_provider = required_natural(&resolved, ProviderSlotV1::BorealTerrain)?.clone();
+        let basin_seed = natural_sample_seed(BASIN_DOMAIN, seed, input_hash, &hydrology);
+        let geology_seed = natural_sample_seed(GEOLOGY_DOMAIN, seed, input_hash, &geology);
+        let resource_seed = natural_sample_seed(RESOURCE_DOMAIN, seed, input_hash, &resources);
+        let tree_seed = natural_sample_seed(TREE_DOMAIN, seed, input_hash, &vegetation);
+        let cover_seed = natural_sample_seed(COVER_DOMAIN, seed, input_hash, &vegetation);
         let river_warp_seeds = [
             hash_u64(
                 BASIN_DOMAIN,
@@ -403,9 +411,11 @@ impl NaturalSamplerV1 {
             config: layer.config,
             layer_hash,
             hydrology,
-            geology,
-            resources,
-            vegetation,
+            basin_seed,
+            geology_seed,
+            resource_seed,
+            tree_seed,
+            cover_seed,
             river_warp_seeds,
             boreal: BorealTerrainParamsV1 {
                 provider: boreal_provider,
@@ -437,19 +447,32 @@ impl NaturalSamplerV1 {
     }
 
     pub(crate) fn river_sample(&self, x: i64, z: i64) -> RiverSampleV1 {
-        let edge = i64::from(self.config.river_cell_edge_voxels.max(1));
-        let width = i64::from(self.config.river_width_voxels);
-        let cell = coarse_cell(x, z, edge);
+        let local = self.local_river_sample(x, z);
         let basin = RiverBasinIdV1::from_hash(domain_hash(
             BASIN_DOMAIN,
             &[
                 self.seed.as_bytes(),
                 self.input_hash.as_bytes(),
                 self.hydrology.implementation_fingerprint().as_bytes(),
-                &cell.0.to_be_bytes(),
-                &cell.1.to_be_bytes(),
+                &local.cell_x.to_be_bytes(),
+                &local.cell_z.to_be_bytes(),
             ],
         ));
+        RiverSampleV1 {
+            basin,
+            in_channel: local.in_channel,
+            distance_voxels: local.distance_voxels,
+        }
+    }
+
+    pub(crate) fn in_river_channel(&self, x: i64, z: i64) -> bool {
+        self.local_river_sample(x, z).in_channel
+    }
+
+    fn local_river_sample(&self, x: i64, z: i64) -> LocalRiverSampleV1 {
+        let edge = i64::from(self.config.river_cell_edge_voxels.max(1));
+        let width = i64::from(self.config.river_width_voxels);
+        let cell = coarse_cell(x, z, edge);
         let warp_z = interpolated_river_warp(self.river_warp_seeds[0], z, edge);
         let warp_x = interpolated_river_warp(self.river_warp_seeds[1], x, edge);
         let east_west = (x.saturating_add(warp_z)).rem_euclid(edge);
@@ -460,15 +483,20 @@ impl NaturalSamplerV1 {
         let distance = u32::try_from(nearest.max(0)).unwrap_or(u32::MAX);
         let sparse = self.basin_rank(cell.0, cell.1)
             % u64::from(self.config.river_accumulation).saturating_add(2);
-        RiverSampleV1 {
-            basin,
+        LocalRiverSampleV1 {
+            cell_x: cell.0,
+            cell_z: cell.1,
             in_channel: nearest <= width && sparse != 0,
             distance_voxels: distance,
         }
     }
 
     pub(crate) fn adjust_height(&self, x: i64, z: i64, height: i32) -> i32 {
-        if self.river_sample(x, z).in_channel {
+        self.adjust_height_for_channel(height, self.in_river_channel(x, z))
+    }
+
+    pub(crate) fn adjust_height_for_channel(&self, height: i32, in_channel: bool) -> i32 {
+        if in_channel {
             height.saturating_sub(i32::from(self.config.river_incision_voxels))
         } else {
             height
@@ -484,7 +512,7 @@ impl NaturalSamplerV1 {
         style: TerrainStyleV1,
     ) -> GeologicSampleV1 {
         let depth = i64::from(height).saturating_sub(y);
-        let roll = self.named_roll(GEOLOGY_DOMAIN, &self.geology, x, y, z);
+        let roll = sample_hash_3d(self.geology_seed, x, y, z);
         let intrusion =
             depth >= 4 && roll % 1_024 < u64::from(self.config.intrusion_threshold_per_1024);
         let stratum = if intrusion {
@@ -576,18 +604,12 @@ impl NaturalSamplerV1 {
             if style == TerrainStyleV1::BorealWetland && role == D4MaterialRoleV1::SulfurResource {
                 continue;
             }
-            let kind = [role.resource_discriminant()];
-            let salted = hash_u64(
-                RESOURCE_DOMAIN,
-                &[
-                    self.seed.as_bytes(),
-                    self.input_hash.as_bytes(),
-                    self.resources.implementation_fingerprint().as_bytes(),
-                    &kind,
-                    &x.to_be_bytes(),
-                    &y.to_be_bytes(),
-                    &z.to_be_bytes(),
-                ],
+            let kind = u64::from(role.resource_discriminant());
+            let salted = sample_hash_3d(
+                self.resource_seed ^ kind.wrapping_mul(0x9e37_79b9_7f4a_7c15),
+                x,
+                y,
+                z,
             );
             if salted % 1_024 < u64::from(threshold) {
                 return ResourceFieldSampleV1 { role: Some(role) };
@@ -596,16 +618,17 @@ impl NaturalSamplerV1 {
         ResourceFieldSampleV1 { role: None }
     }
 
-    pub(crate) fn river_bed_role(&self, x: i64, z: i64, style: TerrainStyleV1) -> D4MaterialRoleV1 {
-        let sample = self.river_sample(x, z);
-        if !sample.in_channel {
-            return surface_role(style);
-        }
+    pub(crate) fn channel_bed_role(
+        &self,
+        x: i64,
+        z: i64,
+        style: TerrainStyleV1,
+    ) -> D4MaterialRoleV1 {
         match style {
             TerrainStyleV1::TemperateWoodland => D4MaterialRoleV1::Silt,
             TerrainStyleV1::AridBadlands => D4MaterialRoleV1::TemperateGravel,
             TerrainStyleV1::BorealWetland => {
-                if self.named_roll(BASIN_DOMAIN, &self.hydrology, x, 0, z) & 1 == 0 {
+                if sample_hash_3d(self.basin_seed, x, 0, z) & 1 == 0 {
                     D4MaterialRoleV1::Ice
                 } else {
                     D4MaterialRoleV1::Mud
@@ -661,16 +684,15 @@ impl NaturalSamplerV1 {
         }
         match style {
             TerrainStyleV1::TemperateWoodland => {
-                if self.threshold(COVER_DOMAIN, &self.vegetation, x, 0, z, 96) {
+                if Self::sample_threshold(self.cover_seed, x, 0, z, 96) {
                     Some(D4MaterialRoleV1::WoodlandGroundCover)
                 } else {
                     None
                 }
             }
             TerrainStyleV1::BorealWetland => {
-                if self.threshold(
-                    COVER_DOMAIN,
-                    &self.vegetation,
+                if Self::sample_threshold(
+                    self.cover_seed,
                     x,
                     0,
                     z,
@@ -765,7 +787,7 @@ impl NaturalSamplerV1 {
     }
 
     fn is_tree_candidate(&self, x: i64, z: i64, style: TerrainStyleV1) -> bool {
-        if self.river_sample(x, z).in_channel {
+        if self.in_river_channel(x, z) {
             return false;
         }
         let threshold = match style {
@@ -773,67 +795,28 @@ impl NaturalSamplerV1 {
             TerrainStyleV1::BorealWetland => self.config.pine_threshold_per_1024,
             TerrainStyleV1::AridBadlands => return false,
         };
-        self.threshold(TREE_DOMAIN, &self.vegetation, x, 0, z, threshold)
+        Self::sample_threshold(self.tree_seed, x, 0, z, threshold)
     }
 
     fn tree_rank(&self, x: i64, z: i64) -> u64 {
-        hash_u64(
-            TREE_DOMAIN,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.vegetation.implementation_fingerprint().as_bytes(),
-                &x.to_be_bytes(),
-                &z.to_be_bytes(),
-            ],
-        )
+        sample_hash_2d(self.tree_seed, x, z)
     }
 
     fn basin_rank(&self, cell_x: i64, cell_z: i64) -> u64 {
-        hash_u64(
-            BASIN_DOMAIN,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.hydrology.implementation_fingerprint().as_bytes(),
-                &cell_x.to_be_bytes(),
-                &cell_z.to_be_bytes(),
-            ],
-        )
+        sample_hash_2d(self.basin_seed, cell_x, cell_z)
     }
 
-    fn named_roll(
-        &self,
-        domain: &[u8],
-        provider: &ProviderGenerationIdentityV1,
-        x: i64,
-        y: i64,
-        z: i64,
-    ) -> u64 {
-        hash_u64(
-            domain,
-            &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                provider.implementation_fingerprint().as_bytes(),
-                &x.to_be_bytes(),
-                &y.to_be_bytes(),
-                &z.to_be_bytes(),
-            ],
-        )
+    fn sample_threshold(seed: u64, x: i64, y: i64, z: i64, threshold: u16) -> bool {
+        sample_hash_3d(seed, x, y, z) % 1_024 < u64::from(threshold)
     }
+}
 
-    fn threshold(
-        &self,
-        domain: &[u8],
-        provider: &ProviderGenerationIdentityV1,
-        x: i64,
-        y: i64,
-        z: i64,
-        threshold: u16,
-    ) -> bool {
-        self.named_roll(domain, provider, x, y, z) % 1_024 < u64::from(threshold)
-    }
+#[derive(Clone, Copy)]
+struct LocalRiverSampleV1 {
+    cell_x: i64,
+    cell_z: i64,
+    in_channel: bool,
+    distance_voxels: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -848,6 +831,22 @@ pub(crate) struct NaturalWorkCountersV1 {
     pub(crate) exclusion_rejects: u64,
     pub(crate) ground_cover_samples: u64,
     pub(crate) ground_cover_accepts: u64,
+}
+
+fn natural_sample_seed(
+    domain: &[u8],
+    seed: WorldSeedV1,
+    input_hash: GenerationInputHashV1,
+    provider: &ProviderGenerationIdentityV1,
+) -> u64 {
+    hash_u64(
+        domain,
+        &[
+            seed.as_bytes(),
+            input_hash.as_bytes(),
+            provider.implementation_fingerprint().as_bytes(),
+        ],
+    )
 }
 
 fn required_natural(
