@@ -4149,6 +4149,8 @@ const DERIVED_BARRIER_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 /// One per-tick derived slice: poll finished Bevy tasks, apply under the
 /// ADR 0026 16 job / 16 MiB / 2 ms budget, then dispatch without joining.
+/// Jobs completed after dispatch remain queued for the next fixed tick so a
+/// second independent apply slice cannot silently double the frame budget.
 fn drain_derived(spine: &ProductionSpine, tick: FixedTick) -> Result<(), ProductionHostError> {
     poll_derived_tasks(spine)?;
     {
@@ -4161,10 +4163,6 @@ fn drain_derived(spine: &ProductionSpine, tick: FixedTick) -> Result<(), Product
         dispatch_derived_batch(&mut inner, DerivedKind::ALL)?
     };
     spawn_derived_jobs(spine, inputs)?;
-    poll_derived_tasks(spine)?;
-    let mut inner = spine.lock_inner()?;
-    apply_ready_waiting(&mut inner, tick, ApplyBudgetMode::Frame)?;
-    refresh_lifecycle(&mut inner);
     Ok(())
 }
 
