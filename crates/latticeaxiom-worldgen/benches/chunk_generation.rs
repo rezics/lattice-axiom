@@ -11,8 +11,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_worldgen::{
     AdjacentEpochSnapshotV1, AuthoredWorldgenBindingsV1, CellEpochStateV1, ChunkCoordinate,
-    ChunkGenerationRequestV1, D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1,
-    DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
+    ChunkGenerationOutcomeV1, ChunkGenerationRequestV1, D4BlockCatalogClosureV1, D4MaterialRoleV1,
+    D4RoleVocabularyV1, DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
     HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
     NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
     ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, WorldSeedV1, WorldgenConfigV1,
@@ -107,6 +107,24 @@ fn generation_benchmarks(c: &mut Criterion) {
             });
         },
     );
+    let hydrology_coordinate = ChunkCoordinate::new(-3, 1, 5);
+    let hydrology_snapshot = hydrology_32
+        .generate(
+            hydrology_32
+                .vacant_generation_request(hydrology_coordinate)
+                .expect("32-cubic hydrology benchmark request must remain valid"),
+        )
+        .expect("32-cubic hydrology benchmark snapshot must remain valid");
+    let ChunkGenerationOutcomeV1::Prepared(hydrology_snapshot) = hydrology_snapshot else {
+        panic!("benchmark request must prepare a snapshot candidate");
+    };
+    c.bench_function("v6_hydrology_chunk_32_cubic_snapshot_reuse", |bencher| {
+        bencher.iter(|| {
+            hydrology_32
+                .hydrology_occupancy_candidate_for_snapshot(black_box(&hydrology_snapshot))
+                .expect("32-cubic snapshot reuse must remain valid")
+        });
+    });
     c.bench_function("d4_density_4096_samples", |bencher| {
         bencher.iter(|| {
             let mut accumulator = 0_i64;

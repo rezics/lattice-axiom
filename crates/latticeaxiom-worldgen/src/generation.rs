@@ -375,6 +375,12 @@ impl GenerationReceiptV1 {
         self.generation_epoch
     }
 
+    /// Returns the output-affecting generation input hash.
+    #[must_use]
+    pub const fn generation_input_hash(&self) -> GenerationInputHashV1 {
+        self.generation_input_hash
+    }
+
     /// Returns deterministic Predicate evaluation and placement Role receipts.
     #[must_use]
     pub fn placement_predicates(&self) -> &[PlacementPredicateReceiptV1] {
@@ -1006,6 +1012,45 @@ impl GenerationPlanV1 {
         &self,
         coordinate: ChunkCoordinate,
     ) -> WorldgenResult<HydrologyOccupancyCandidateV1> {
+        self.hydrology_occupancy_candidate_with_draft(coordinate, None)
+    }
+
+    /// Builds hydrology occupancy by reusing cave decisions already frozen in
+    /// a snapshot candidate from this plan.
+    ///
+    /// Omitted hydrology is represented by `None`. A candidate from another
+    /// activation, dimension, epoch, or generation input fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identity, draft-shape, arithmetic, or accounting-budget error.
+    pub fn hydrology_occupancy_candidate_for_snapshot(
+        &self,
+        snapshot: &D4SnapshotCandidateV1,
+    ) -> WorldgenResult<Option<HydrologyOccupancyCandidateV1>> {
+        if self.hydrology.is_none() {
+            return Ok(None);
+        }
+        let receipt = snapshot.receipt();
+        if snapshot.plan_activation_id() != self.plan_activation_id
+            || receipt.dimension() != &self.dimension
+            || receipt.generation_epoch() != self.generation_epoch
+            || receipt.generation_input_hash() != self.generation_input_hash
+        {
+            return Err(WorldgenError::InvalidHydrologyOccupancy {
+                field: "snapshot",
+                reason: "snapshot candidate does not belong to this generation plan".to_owned(),
+            });
+        }
+        self.hydrology_occupancy_candidate_with_draft(receipt.chunk(), Some(snapshot.draft()))
+            .map(Some)
+    }
+
+    fn hydrology_occupancy_candidate_with_draft(
+        &self,
+        coordinate: ChunkCoordinate,
+        draft: Option<&ChunkDraftV1>,
+    ) -> WorldgenResult<HydrologyOccupancyCandidateV1> {
         let Some(hydrology) = self.hydrology.as_ref() else {
             return Err(WorldgenError::InvalidHydrologyOccupancy {
                 field: "layer",
@@ -1014,17 +1059,16 @@ impl GenerationPlanV1 {
         };
         let edge = usize::from(self.config.chunk_edge_voxels);
         let origin = chunk_origin(coordinate, self.config.chunk_edge_voxels)?;
+        let draft_cave = draft
+            .map(|draft| DraftCaveOccupancyV1::new(self, draft, edge))
+            .transpose()?;
         let mut accounting = hydrology.start_accounting();
         let mut cells = Vec::new();
         let mut columns = Vec::with_capacity(edge.saturating_mul(edge));
         for local_z in 0..edge {
             for local_x in 0..edge {
-                let world_x = origin
-                    .0
-                    .saturating_add(i64::try_from(local_x).unwrap_or_default());
-                let world_z = origin
-                    .2
-                    .saturating_add(i64::try_from(local_z).unwrap_or_default());
+                let world_x = local_world_axis(origin.0, local_x);
+                let world_z = local_world_axis(origin.2, local_z);
                 let height = self.terrain_height(world_x, world_z);
                 let territory = self.territory.sample(world_x, world_z);
                 let style = self
@@ -1043,29 +1087,36 @@ impl GenerationPlanV1 {
             for local_z in 0..edge {
                 for local_x in 0..edge {
                     HydrologySamplerV1::examine(&mut accounting, 1);
-                    let world_x = origin
-                        .0
-                        .saturating_add(i64::try_from(local_x).unwrap_or_default());
-                    let world_y = origin
-                        .1
-                        .saturating_add(i64::try_from(local_y).unwrap_or_default());
-                    let world_z = origin
-                        .2
-                        .saturating_add(i64::try_from(local_z).unwrap_or_default());
+                    let world_x = local_world_axis(origin.0, local_x);
+                    let world_y = local_world_axis(origin.1, local_y);
+                    let world_z = local_world_axis(origin.2, local_z);
                     let column_index = local_z.saturating_mul(edge).saturating_add(local_x);
                     let column = columns.get(column_index).copied().ok_or(
                         WorldgenError::ArithmeticOverflow {
                             operation: "hydrology occupancy column lookup",
                         },
                     )?;
-                    let occupancy =
-                        self.cave
-                            .occupancy(world_x, world_y, world_z, column.surface_y());
+                    let voxel_index = local_y
+                        .saturating_mul(edge)
+                        .saturating_add(local_z)
+                        .saturating_mul(edge)
+                        .saturating_add(local_x);
+                    let cave_allows_fluid = draft_cave.map_or_else(
+                        || {
+                            self.cave
+                                .occupancy(world_x, world_y, world_z, column.surface_y())
+                                .allows_fluid_occupancy()
+                        },
+                        |mask| {
+                            world_y <= i64::from(column.surface_y())
+                                && mask.allows_fluid_occupancy(voxel_index)
+                        },
+                    );
                     let sample = hydrology.occupy_column(
                         world_x,
                         world_y,
                         world_z,
-                        occupancy.allows_fluid_occupancy(),
+                        cave_allows_fluid,
                         column,
                     );
                     let Some(cell) = HydrologySamplerV1::occupancy_cell(
@@ -2070,6 +2121,57 @@ impl GenerationPlanV1 {
 struct ColumnSampleV1 {
     height: i32,
     material_style: TerrainStyleV1,
+}
+
+fn local_world_axis(origin: i64, local: usize) -> i64 {
+    origin.saturating_add(i64::try_from(local).unwrap_or_default())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DraftCaveOccupancyV1<'a> {
+    voxel_palette_indices: &'a [u16],
+    empty_palette_index: u16,
+}
+
+impl<'a> DraftCaveOccupancyV1<'a> {
+    fn new(plan: &GenerationPlanV1, draft: &'a ChunkDraftV1, edge: usize) -> WorldgenResult<Self> {
+        if draft.edge_voxels() != plan.config.chunk_edge_voxels {
+            return Err(WorldgenError::InvalidHydrologyOccupancy {
+                field: "snapshot",
+                reason: "snapshot draft edge does not match the generation plan".to_owned(),
+            });
+        }
+        let expected_voxels = edge
+            .checked_mul(edge)
+            .and_then(|area| area.checked_mul(edge))
+            .ok_or(WorldgenError::ArithmeticOverflow {
+                operation: "snapshot draft voxel count",
+            })?;
+        if draft.voxel_palette_indices().len() != expected_voxels {
+            return Err(WorldgenError::InvalidHydrologyOccupancy {
+                field: "snapshot",
+                reason: "snapshot draft voxel count does not match its edge".to_owned(),
+            });
+        }
+        let empty = plan.role_target(D4MaterialRoleV1::Empty);
+        let empty_palette_index = draft
+            .palette()
+            .iter()
+            .position(|block| block == empty)
+            .and_then(|index| u16::try_from(index).ok())
+            .ok_or_else(|| WorldgenError::InvalidHydrologyOccupancy {
+                field: "snapshot",
+                reason: "snapshot draft does not contain the plan's empty material".to_owned(),
+            })?;
+        Ok(Self {
+            voxel_palette_indices: draft.voxel_palette_indices(),
+            empty_palette_index,
+        })
+    }
+
+    fn allows_fluid_occupancy(self, voxel_index: usize) -> bool {
+        self.voxel_palette_indices.get(voxel_index).copied() == Some(self.empty_palette_index)
+    }
 }
 
 fn set_vegetation_role(

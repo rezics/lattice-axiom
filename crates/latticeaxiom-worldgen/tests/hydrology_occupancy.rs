@@ -139,6 +139,57 @@ fn occupancy_candidate_matches_independent_coordinate_queries() {
 }
 
 #[test]
+fn snapshot_cave_reuse_matches_independent_occupancy_generation() {
+    let plan = occupancy_plan(37, false);
+    for coordinate in [
+        ChunkCoordinate::new(-1, -1, 2),
+        ChunkCoordinate::new(0, 0, 0),
+        ChunkCoordinate::new(2, 1, -3),
+    ] {
+        let outcome = plan
+            .generate(plan.vacant_generation_request(coordinate).unwrap())
+            .expect("snapshot candidate generates");
+        let ChunkGenerationOutcomeV1::Prepared(snapshot) = outcome else {
+            panic!("expected a prepared snapshot candidate");
+        };
+        let reused = plan
+            .hydrology_occupancy_candidate_for_snapshot(&snapshot)
+            .expect("snapshot cave decisions are reusable")
+            .expect("the plan includes hydrology occupancy");
+        let independent = plan
+            .hydrology_occupancy_candidate(coordinate)
+            .expect("independent occupancy candidate");
+        assert_eq!(
+            reused.canonical_bytes().unwrap(),
+            independent.canonical_bytes().unwrap(),
+            "snapshot reuse must preserve exact occupancy bytes for {coordinate:?}"
+        );
+    }
+}
+
+#[test]
+fn snapshot_cave_reuse_rejects_a_foreign_generation_plan() {
+    let producer = occupancy_plan(37, false);
+    let coordinate = ChunkCoordinate::new(-1, 0, 2);
+    let outcome = producer
+        .generate(producer.vacant_generation_request(coordinate).unwrap())
+        .expect("snapshot candidate generates");
+    let ChunkGenerationOutcomeV1::Prepared(snapshot) = outcome else {
+        panic!("expected a prepared snapshot candidate");
+    };
+    let error = occupancy_plan(38, false)
+        .hydrology_occupancy_candidate_for_snapshot(&snapshot)
+        .expect_err("generation identity mismatch must fail closed");
+    assert!(matches!(
+        error,
+        WorldgenError::InvalidHydrologyOccupancy {
+            field: "snapshot",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn negative_coordinates_and_shared_faces_stay_continuous() {
     let plan = occupancy_plan(42, false);
     let coordinate = ChunkCoordinate::new(-4, 0, -3);
