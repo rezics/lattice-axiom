@@ -448,7 +448,6 @@ struct ChunkDerived {
     geometry: Option<Arc<MeshBuffer<LayerMergeKey>>>,
     bounds: Option<Aabb>,
     collider: Option<Collider>,
-    occupied: Vec<OccupiedCell>,
     revision: ChunkRevision,
 }
 
@@ -494,7 +493,8 @@ struct HostDerivedMesh {
 
 #[derive(Clone, Debug)]
 struct HostDerivedCollider {
-    occupied: Vec<OccupiedCell>,
+    collider: Option<Collider>,
+    compound_parts: usize,
 }
 
 #[derive(Debug)]
@@ -3305,8 +3305,14 @@ impl RetainedBytes for HostDerivedMesh {
 
 impl RetainedBytes for HostDerivedCollider {
     fn retained_bytes(&self) -> u64 {
+        const RETAINED_BYTES_PER_COMPOUND_PART: usize = 512;
+
         4_096_u64.saturating_add(
-            u64::try_from(self.occupied.len().saturating_mul(16)).unwrap_or(u64::MAX),
+            u64::try_from(
+                self.compound_parts
+                    .saturating_mul(RETAINED_BYTES_PER_COMPOUND_PART),
+            )
+            .unwrap_or(u64::MAX),
         )
     }
 }
@@ -4419,8 +4425,11 @@ fn compute_mesh_payload(
 fn compute_collider_payload(
     input: &DerivedInput<HostVoxel>,
 ) -> Result<DerivedPayload, ProductionHostError> {
+    let occupied = occupied_voxels(input.samples(), input.dimensions())?;
+    let boxes = merge_occupied_boxes(&occupied);
     Ok(DerivedPayload::Collider(HostDerivedCollider {
-        occupied: occupied_voxels(input.samples(), input.dimensions())?,
+        collider: collider_from_boxes(&boxes),
+        compound_parts: boxes.len(),
     }))
 }
 
@@ -4518,8 +4527,7 @@ fn apply_collider_derived(
         .entry(coordinate)
         .or_insert_with(|| empty_derived(revision));
     entry.revision = revision;
-    entry.occupied = value.occupied;
-    entry.collider = compound_collider(&entry.occupied);
+    entry.collider = value.collider;
     inner.collider_dirty.insert(coordinate);
 }
 
@@ -4530,7 +4538,6 @@ fn empty_derived(revision: ChunkRevision) -> ChunkDerived {
         geometry: None,
         bounds: None,
         collider: None,
-        occupied: Vec::new(),
         revision,
     }
 }
@@ -4650,6 +4657,10 @@ fn remove_occupied_box(remaining: &mut BTreeSet<[u16; 3]>, merged: OccupiedBox) 
 /// Builds a finite Avian compound from greedily merged occupancy cuboids.
 fn compound_collider(occupied: &[OccupiedCell]) -> Option<Collider> {
     let boxes = merge_occupied_boxes(occupied);
+    collider_from_boxes(&boxes)
+}
+
+fn collider_from_boxes(boxes: &[OccupiedBox]) -> Option<Collider> {
     if boxes.is_empty() {
         return None;
     }
@@ -5249,8 +5260,7 @@ fn seal_unready_cave_voids(inner: &mut ProductionSpineInner, coordinate: ChunkCo
         .or_insert_with(|| empty_derived(revision));
     entry.revision = revision;
     if entry.mesh_receipt.is_none() {
-        entry.occupied = occupied;
-        entry.collider = compound_collider(&entry.occupied);
+        entry.collider = compound_collider(&occupied);
         inner.collider_dirty.insert(coordinate);
     }
 }
