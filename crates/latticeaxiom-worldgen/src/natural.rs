@@ -8,11 +8,11 @@ use latticeaxiom_core::canonical_json_bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    D4BlockCatalogClosureV1, D4MaterialRoleV1, FrozenRoleBindingsV1, NaturalLayerHashV1,
-    NaturalRoleVocabularyV1, PlacementPredicateKindV1, PlacementPredicateReceiptV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, RiverBasinIdV1,
-    RoleBindingReceiptV1, TerrainStyleV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
-    WorldgenResult, WorldgenSeedRootV2,
+    D4BlockCatalogClosureV1, D4MaterialRoleV1, FrozenRoleBindingsV1, GenerationDiagnosticsV1,
+    NaturalLayerHashV1, NaturalRoleVocabularyV1, PlacementPredicateKindV1,
+    PlacementPredicateReceiptV1, ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1,
+    RiverBasinIdV1, RoleBindingReceiptV1, TerrainStyleV1, WorldgenConfigV1, WorldgenError,
+    WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
     config::MAX_TERRAIN_RELIEF,
     hashes::{domain_hash, hash_u64, sample_hash_2d, sample_hash_3d},
     provider::ResolvedProvidersV1,
@@ -633,7 +633,6 @@ impl NaturalSamplerV1 {
                 }
             }
         }
-        counters.tree_anchor_accepts = counters.tree_anchor_accepts.saturating_add(1);
         true
     }
 
@@ -701,12 +700,7 @@ impl NaturalSamplerV1 {
     }
 
     pub(crate) fn placement_predicates(
-        geology_samples: u64,
-        river_samples: u64,
-        resource_samples: u64,
-        resource_accepts: u64,
-        exclusion_samples: u64,
-        exclusion_rejects: u64,
+        diagnostics: GenerationDiagnosticsV1,
     ) -> Vec<PlacementPredicateReceiptV1> {
         vec![
             PlacementPredicateReceiptV1::new(
@@ -719,8 +713,8 @@ impl NaturalSamplerV1 {
                     D4MaterialRoleV1::Calcite,
                     D4MaterialRoleV1::Dripstone,
                 ],
-                geology_samples,
-                geology_samples,
+                diagnostics.geology_samples,
+                diagnostics.geology_samples,
             ),
             PlacementPredicateReceiptV1::new(
                 PlacementPredicateKindV1::RiverChannel,
@@ -730,8 +724,8 @@ impl NaturalSamplerV1 {
                     D4MaterialRoleV1::Ice,
                     D4MaterialRoleV1::TemperateGravel,
                 ],
-                river_samples,
-                river_samples,
+                diagnostics.river_samples,
+                diagnostics.river_samples,
             ),
             PlacementPredicateReceiptV1::new(
                 PlacementPredicateKindV1::StableResource,
@@ -744,14 +738,30 @@ impl NaturalSamplerV1 {
                     D4MaterialRoleV1::SulfurResource,
                     D4MaterialRoleV1::CrystalResource,
                 ],
-                resource_samples,
-                resource_accepts,
+                diagnostics.resource_samples,
+                diagnostics.resource_accepts,
             ),
             PlacementPredicateReceiptV1::new(
                 PlacementPredicateKindV1::VegetationExclusion,
                 vec![D4MaterialRoleV1::WoodlandLog, D4MaterialRoleV1::BorealLog],
-                exclusion_samples,
-                exclusion_rejects,
+                diagnostics.vegetation_exclusion_samples,
+                diagnostics.vegetation_exclusion_rejects,
+            ),
+            PlacementPredicateReceiptV1::new(
+                PlacementPredicateKindV1::VegetationHabitat,
+                vec![
+                    D4MaterialRoleV1::WoodlandLog,
+                    D4MaterialRoleV1::WoodlandLeaves,
+                    D4MaterialRoleV1::WoodlandGroundCover,
+                    D4MaterialRoleV1::BorealLog,
+                    D4MaterialRoleV1::BorealLeaves,
+                    D4MaterialRoleV1::Moss,
+                    D4MaterialRoleV1::Peat,
+                ],
+                diagnostics.vegetation_habitat_samples,
+                diagnostics
+                    .vegetation_habitat_samples
+                    .saturating_sub(diagnostics.vegetation_habitat_rejects),
             ),
         ]
     }
@@ -796,6 +806,8 @@ pub(crate) struct NaturalWorkCountersV1 {
     pub(crate) tree_anchor_accepts: u64,
     pub(crate) exclusion_samples: u64,
     pub(crate) exclusion_rejects: u64,
+    pub(crate) habitat_samples: u64,
+    pub(crate) habitat_rejects: u64,
     pub(crate) ground_cover_samples: u64,
     pub(crate) ground_cover_accepts: u64,
 }

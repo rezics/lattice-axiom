@@ -205,6 +205,84 @@ fn exclusion_radius_rejects_closer_tree_anchors() {
 }
 
 #[test]
+fn marine_columns_never_receive_terrestrial_vegetation() {
+    let plan = natural_plan(42, false);
+    let (boundary_x, boundary_z) = marine_land_boundary(&plan);
+    let edge = i64::from(plan.config().chunk_edge_voxels);
+    let center_chunk_x = boundary_x.div_euclid(edge);
+    let center_chunk_z = boundary_z.div_euclid(edge);
+    let vegetation = [
+        D4MaterialRoleV1::WoodlandLog,
+        D4MaterialRoleV1::WoodlandLeaves,
+        D4MaterialRoleV1::WoodlandGroundCover,
+        D4MaterialRoleV1::BorealLog,
+        D4MaterialRoleV1::BorealLeaves,
+        D4MaterialRoleV1::Moss,
+        D4MaterialRoleV1::Peat,
+    ]
+    .into_iter()
+    .map(|role| plan.role_target(role).clone())
+    .collect::<std::collections::BTreeSet<_>>();
+    let mut marine_columns = 0_u64;
+
+    for chunk_z in center_chunk_z.saturating_sub(1)..=center_chunk_z.saturating_add(1) {
+        for chunk_x in center_chunk_x.saturating_sub(1)..=center_chunk_x.saturating_add(1) {
+            let origin_x = chunk_x.saturating_mul(edge);
+            let origin_z = chunk_z.saturating_mul(edge);
+            let mut minimum_y = i64::MAX;
+            let mut maximum_y = i64::MIN;
+            for local_z in 0..edge {
+                for local_x in 0..edge {
+                    let x = origin_x.saturating_add(local_x);
+                    let z = origin_z.saturating_add(local_z);
+                    let height = i64::from(plan.terrain_height(x, z));
+                    minimum_y = minimum_y.min(height.saturating_add(1));
+                    maximum_y = maximum_y.max(height.saturating_add(6));
+                }
+            }
+            for chunk_y in minimum_y.div_euclid(edge)..=maximum_y.div_euclid(edge) {
+                let coordinate = ChunkCoordinate::new(
+                    i32::try_from(chunk_x).expect("test chunk X fits i32"),
+                    i32::try_from(chunk_y).expect("test chunk Y fits i32"),
+                    i32::try_from(chunk_z).expect("test chunk Z fits i32"),
+                );
+                let outcome = plan
+                    .generate(plan.vacant_generation_request(coordinate).unwrap())
+                    .expect("shore chunk generates");
+                let ChunkGenerationOutcomeV1::Prepared(candidate) = outcome else {
+                    panic!("shore scan requires a new candidate");
+                };
+                for local_z in 0..edge {
+                    for local_x in 0..edge {
+                        let x = origin_x.saturating_add(local_x);
+                        let z = origin_z.saturating_add(local_z);
+                        if plan.material_style(x, z) != TerrainStyleV1::Marine {
+                            continue;
+                        }
+                        marine_columns = marine_columns.saturating_add(1);
+                        for local_y in 0..edge {
+                            let block = candidate
+                                .draft()
+                                .block_at(
+                                    u16::try_from(local_x).expect("local X fits u16"),
+                                    u16::try_from(local_y).expect("local Y fits u16"),
+                                    u16::try_from(local_z).expect("local Z fits u16"),
+                                )
+                                .expect("local voxel is inside the draft");
+                            assert!(
+                                !vegetation.contains(block),
+                                "terrestrial vegetation leaked into marine column ({x},{z})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(marine_columns > 0, "shore scan must cover marine columns");
+}
+
+#[test]
 fn materialized_snapshot_is_reused_after_compatible_natural_provider_update() {
     let old_plan = natural_plan(42, false);
     let coordinate = ChunkCoordinate::new(-2, 0, 3);
@@ -497,6 +575,26 @@ fn natural_plan(seed: i64, reverse: bool) -> GenerationPlanV1 {
         d4_provider_offers(reverse),
         natural_provider_offers(reverse),
     )
+}
+
+fn marine_land_boundary(plan: &GenerationPlanV1) -> (i64, i64) {
+    let planning_edge = i64::from(plan.config().chunk_edge_voxels)
+        .saturating_mul(i64::from(plan.config().planning_cell_edge_chunks));
+    for cell_z in -32_i64..=32 {
+        for cell_x in -32_i64..=32 {
+            let start_x = cell_x.saturating_mul(planning_edge);
+            let z = cell_z.saturating_mul(planning_edge);
+            let start_marine = plan.material_style(start_x, z) == TerrainStyleV1::Marine;
+            for offset in 1..=planning_edge {
+                let x = start_x.saturating_add(offset);
+                let marine = plan.material_style(x, z) == TerrainStyleV1::Marine;
+                if marine != start_marine {
+                    return (x, z);
+                }
+            }
+        }
+    }
+    panic!("fixture seed must contain a marine/land boundary");
 }
 
 fn compile_natural(

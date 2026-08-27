@@ -217,6 +217,8 @@ pub enum PlacementPredicateKindV1 {
     StableResource,
     /// Exclusion-radius vegetation anchor decision.
     VegetationExclusion,
+    /// Biome, standing-water, and footprint suitability for vegetation.
+    VegetationHabitat,
 }
 
 /// Deterministic Predicate evaluation counts and the Roles they may place.
@@ -304,6 +306,10 @@ pub struct GenerationDiagnosticsV1 {
     pub vegetation_exclusion_samples: u64,
     /// Tree anchors rejected by a nearer exclusive neighbor.
     pub vegetation_exclusion_rejects: u64,
+    /// Candidate vegetation placements checked against their complete habitat footprint.
+    pub vegetation_habitat_samples: u64,
+    /// Candidate vegetation placements rejected by biome or standing-water constraints.
+    pub vegetation_habitat_rejects: u64,
     /// Exact palette UTF-8 bytes plus the allocated `u16` voxel-index buffer.
     pub palette_and_index_bytes: u64,
 }
@@ -1533,14 +1539,7 @@ impl GenerationPlanV1 {
             self.validate_cave_face_occupancy(request.coordinate, &draft, &cave_field_requests)?;
         let mut placement_predicates = placement_predicate_receipts(diagnostics);
         if self.natural.is_some() {
-            placement_predicates.extend(NaturalSamplerV1::placement_predicates(
-                diagnostics.geology_samples,
-                diagnostics.river_samples,
-                diagnostics.resource_samples,
-                diagnostics.resource_accepts,
-                diagnostics.vegetation_exclusion_samples,
-                diagnostics.vegetation_exclusion_rejects,
-            ));
+            placement_predicates.extend(NaturalSamplerV1::placement_predicates(diagnostics));
         }
         let draft_bytes = draft.canonical_bytes()?;
         let draft_hash = CanonicalHash::digest(&draft_bytes);
@@ -1735,6 +1734,7 @@ impl GenerationPlanV1 {
             .saturating_add(natural_counters.resource_samples)
             .saturating_add(natural_counters.tree_anchor_samples)
             .saturating_add(natural_counters.exclusion_samples)
+            .saturating_add(natural_counters.habitat_samples)
             .saturating_add(natural_counters.ground_cover_samples);
         if work_units > self.limits.max_work_units.get() {
             return Err(WorldgenError::BudgetExceeded {
@@ -1778,6 +1778,8 @@ impl GenerationPlanV1 {
             river_samples: natural_counters.river_samples,
             vegetation_exclusion_samples: natural_counters.exclusion_samples,
             vegetation_exclusion_rejects: natural_counters.exclusion_rejects,
+            vegetation_habitat_samples: natural_counters.habitat_samples,
+            vegetation_habitat_rejects: natural_counters.habitat_rejects,
             palette_and_index_bytes,
         };
         Ok((
@@ -1947,13 +1949,15 @@ impl GenerationPlanV1 {
                     .saturating_add(i64::try_from(local_z).unwrap_or_default());
                 let cover_y = i64::from(column.height).saturating_add(1);
                 counters.ground_cover_samples = counters.ground_cover_samples.saturating_add(1);
-                if Self::sample_threshold(
-                    self.ground_cover_seed,
-                    world_x,
-                    cover_y,
-                    world_z,
-                    self.config.ground_cover_threshold_per_1024,
-                ) {
+                if column.supports_terrestrial_vegetation(TerrainStyleV1::TemperateWoodland)
+                    && Self::sample_threshold(
+                        self.ground_cover_seed,
+                        world_x,
+                        cover_y,
+                        world_z,
+                        self.config.ground_cover_threshold_per_1024,
+                    )
+                {
                     counters.ground_cover_accepts = counters.ground_cover_accepts.saturating_add(1);
                     set_vegetation_role(
                         &mut overlay,
@@ -1992,6 +1996,9 @@ impl GenerationPlanV1 {
                 if style != TerrainStyleV1::TemperateWoodland
                     || !self.is_tree_anchor(anchor_x, anchor_z)
                 {
+                    continue;
+                }
+                if !self.vegetation_footprint_allows(anchor_x, anchor_z, style, MAX_TREE_RADIUS) {
                     continue;
                 }
                 counters.tree_anchor_accepts = counters.tree_anchor_accepts.saturating_add(1);
@@ -2071,6 +2078,11 @@ impl GenerationPlanV1 {
                     column.material_style,
                     column.in_river_channel(),
                 ) {
+                    counters.habitat_samples = counters.habitat_samples.saturating_add(1);
+                    if !column.supports_terrestrial_vegetation(column.material_style) {
+                        counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
+                        continue;
+                    }
                     counters.ground_cover_accepts = counters.ground_cover_accepts.saturating_add(1);
                     set_vegetation_role(
                         &mut overlay,
@@ -2115,6 +2127,17 @@ impl GenerationPlanV1 {
                 if !natural.is_exclusive_tree_anchor(anchor_x, anchor_z, style, counters) {
                     continue;
                 }
+                counters.habitat_samples = counters.habitat_samples.saturating_add(1);
+                if !self.vegetation_footprint_allows(
+                    anchor_x,
+                    anchor_z,
+                    style,
+                    NaturalSamplerV1::tree_radius(),
+                ) {
+                    counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
+                    continue;
+                }
+                counters.tree_anchor_accepts = counters.tree_anchor_accepts.saturating_add(1);
                 let anchor_height = i64::from(self.terrain_height(anchor_x, anchor_z));
                 for relative_y in 4..=NaturalSamplerV1::tree_height() {
                     for offset_z in
@@ -2154,6 +2177,27 @@ impl GenerationPlanV1 {
             }
         }
         Ok(overlay)
+    }
+
+    fn vegetation_footprint_allows(
+        &self,
+        anchor_x: i64,
+        anchor_z: i64,
+        style: TerrainStyleV1,
+        radius: i64,
+    ) -> bool {
+        for offset_z in -radius..=radius {
+            for offset_x in -radius..=radius {
+                let column = self.generation_column(
+                    anchor_x.saturating_add(offset_x),
+                    anchor_z.saturating_add(offset_z),
+                );
+                if !column.supports_terrestrial_vegetation(style) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn temperate_material(
@@ -2252,6 +2296,10 @@ struct ColumnSampleV1 {
 impl ColumnSampleV1 {
     fn in_river_channel(self) -> bool {
         self.river.is_some_and(RiverSampleV1::in_channel)
+    }
+
+    fn supports_terrestrial_vegetation(self, style: TerrainStyleV1) -> bool {
+        self.material_style == style && self.surface_water_y.is_none() && !self.in_river_channel()
     }
 }
 
