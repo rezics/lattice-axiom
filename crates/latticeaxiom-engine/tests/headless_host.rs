@@ -5253,58 +5253,72 @@ fn idle_at_hole(
     generation + ticks
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn open_required_entrance_shaft(
     spine: &ProductionSpine,
     surface: latticeaxiom_gameplay::BlockPosition,
     aperture: latticeaxiom_gameplay::BlockPosition,
 ) -> BTreeSet<ChunkCoordinate> {
+    let approach = spine.player_pose().translation;
+    let offset_x = if approach.x >= surface.x as f32 + 0.5 {
+        1
+    } else {
+        -1
+    };
+    let offset_z = if approach.z >= surface.z as f32 + 0.5 {
+        1
+    } else {
+        -1
+    };
     let mut opened = 0_u32;
     let mut rebuilt_chunks = BTreeSet::new();
     let mut y = surface.y.saturating_add(8);
     while y >= aperture.y {
-        let position = latticeaxiom_gameplay::BlockPosition {
-            x: surface.x,
-            y,
-            z: surface.z,
-        };
-        if let Some(chunk) = spine.chunk_of(position) {
-            rebuilt_chunks.insert(chunk);
+        for offset_x in [0, offset_x] {
+            for offset_z in [0, offset_z] {
+                let position = latticeaxiom_gameplay::BlockPosition {
+                    x: surface.x.saturating_add(offset_x),
+                    y,
+                    z: surface.z.saturating_add(offset_z),
+                };
+                if let Some(chunk) = spine.chunk_of(position) {
+                    rebuilt_chunks.insert(chunk);
+                }
+                if spine
+                    .cave_occupancy_arbitration(
+                        i64::from(position.x),
+                        i64::from(position.y),
+                        i64::from(position.z),
+                    )
+                    .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
+                {
+                    continue;
+                }
+                if mine_cover_cell(spine, position) {
+                    opened = opened.saturating_add(1);
+                    continue;
+                }
+                if spine
+                    .inspect_occupancy(position)
+                    .ok()
+                    .is_some_and(|occupancy| {
+                        occupancy.solid.is_none()
+                            || occupancy
+                                .solid
+                                .as_ref()
+                                .is_some_and(|block| block.as_str().ends_with("/air"))
+                    })
+                {
+                    continue;
+                }
+                panic!(
+                    "required entrance cover {position:?} did not break, reject={:?}, gameplay={:?}",
+                    spine.last_reject(),
+                    spine.last_gameplay_reject()
+                );
+            }
         }
-        if spine
-            .cave_occupancy_arbitration(
-                i64::from(position.x),
-                i64::from(position.y),
-                i64::from(position.z),
-            )
-            .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
-        {
-            y -= 1;
-            continue;
-        }
-        if mine_cover_cell(spine, position) {
-            opened = opened.saturating_add(1);
-            y -= 1;
-            continue;
-        }
-        if spine
-            .inspect_occupancy(position)
-            .ok()
-            .is_some_and(|occupancy| {
-                occupancy.solid.is_none()
-                    || occupancy
-                        .solid
-                        .as_ref()
-                        .is_some_and(|block| block.as_str().ends_with("/air"))
-            })
-        {
-            y -= 1;
-            continue;
-        }
-        panic!(
-            "required entrance cover {position:?} did not break, reject={:?}, gameplay={:?}",
-            spine.last_reject(),
-            spine.last_gameplay_reject()
-        );
+        y -= 1;
     }
     assert!(
         opened > 0,
