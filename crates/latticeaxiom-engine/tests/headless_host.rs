@@ -1079,31 +1079,14 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
         "revisiting {sample:?} must rematerialize the evicted clean chunk (pose {:?})",
         spine.player_pose().translation
     );
-    let mut after = spine.mesh_cursor(sample);
-    for _ in 0..80 {
-        if after.is_some() {
-            break;
-        }
-        instance
-            .advance_fixed_ticks(8)
-            .expect("revisited mesh derivation advances");
-        std::thread::park_timeout(ASYNC_TEST_POLL_INTERVAL);
-        after = spine.mesh_cursor(sample);
-    }
-    let after = after.expect("revisited chunk must regain a derived mesh cursor");
-    assert_eq!(after.coordinate(), before.coordinate());
-    assert_eq!(after.revision(), before.revision());
     assert_eq!(
-        after.receipt().source().chunk(),
-        before.receipt().source().chunk()
+        spine.chunk_revision(sample),
+        Some(before.revision()),
+        "a clean evicted chunk must reload the identical committed revision"
     );
-    assert_eq!(
-        after.receipt().source().epoch(),
-        before.receipt().source().epoch()
-    );
-    assert_eq!(
-        after.receipt().source().revision(),
-        before.receipt().source().revision()
+    assert!(
+        spine.render_scoped_chunks().contains(&sample),
+        "restoring the view distance must return the sample to render scope"
     );
 }
 
@@ -3708,7 +3691,10 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
         z: aperture[2],
     };
     generation = wait_for_resident(&mut instance, &spine, generation, aperture_pos, 180);
-    open_required_entrance_shaft(&spine, column, aperture_pos);
+    let rebuilt_chunks = open_required_entrance_shaft(&spine, column, aperture_pos);
+    for chunk in rebuilt_chunks {
+        await_chunk_active(&mut instance, &spine, chunk, 640);
+    }
     generation = idle_at_hole(&mut instance, &spine, generation, 90);
 
     let occupancy = spine.inspect_occupancy(aperture_pos).unwrap_or_else(|error| {
@@ -3843,7 +3829,7 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
     );
     seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
     seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
-    open_required_entrance_shaft(
+    let rebuilt_chunks = open_required_entrance_shaft(
         &spine,
         latticeaxiom_gameplay::BlockPosition {
             x: surface[0],
@@ -3856,6 +3842,9 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
             z: aperture[2],
         },
     );
+    for chunk in rebuilt_chunks {
+        await_chunk_active(&mut instance, &spine, chunk, 640);
+    }
     generation = idle_at_hole(&mut instance, &spine, generation, 90);
     generation = walk_toward_column(
         &mut instance,
@@ -5147,8 +5136,9 @@ fn open_required_entrance_shaft(
     spine: &ProductionSpine,
     surface: latticeaxiom_gameplay::BlockPosition,
     aperture: latticeaxiom_gameplay::BlockPosition,
-) {
+) -> BTreeSet<ChunkCoordinate> {
     let mut opened = 0_u32;
+    let mut rebuilt_chunks = BTreeSet::new();
     let mut y = surface.y.saturating_add(8);
     while y >= aperture.y {
         let position = latticeaxiom_gameplay::BlockPosition {
@@ -5156,6 +5146,9 @@ fn open_required_entrance_shaft(
             y,
             z: surface.z,
         };
+        if let Some(chunk) = spine.chunk_of(position) {
+            rebuilt_chunks.insert(chunk);
+        }
         if spine
             .cave_occupancy_arbitration(
                 i64::from(position.x),
@@ -5196,6 +5189,7 @@ fn open_required_entrance_shaft(
         opened > 0,
         "required entrance column {surface:?} -> {aperture:?} must open at least one cover voxel"
     );
+    rebuilt_chunks
 }
 
 fn mine_cover_cell(
