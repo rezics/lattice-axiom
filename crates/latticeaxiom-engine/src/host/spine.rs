@@ -63,7 +63,7 @@ use latticeaxiom_world_db::{
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveOccupancyArbitrationV1,
     GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
-    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1,
+    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1, TerrainConfigV2, TerrainPresetV2, WorldSeedV1,
 };
 
 use super::{
@@ -88,7 +88,7 @@ use super::{
     worldgen::{
         RequiredCaveEntranceV1, compile_host_worldgen_inspect, compile_plan, generate_plan_chunks,
         host_hard_limits, occupancy_candidate_is_current, required_cave_entrance,
-        spawn_center as player_spawn_center, spine_config, validated_spawn,
+        spawn_center as player_spawn_center, validated_spawn,
     },
 };
 use crate::LockVerifiedComposeImages;
@@ -342,6 +342,7 @@ pub(super) struct ProductionSpineInner {
     pub(super) runtime: VoxelRuntime<HostVoxel>,
     plan: Arc<GenerationPlanV1>,
     worldgen_materialization: Arc<WorldgenMaterialization>,
+    required_cave_entrance: Option<RequiredCaveEntranceV1>,
     worldgen_bindings: AuthoredWorldgenBindingsV1,
     spawn: SpawnLocationV1,
     clamps: StreamClamps,
@@ -402,6 +403,20 @@ pub(super) struct ProductionSpineInner {
     display: ContentDisplayCatalogV1,
     /// Full `sync_interest` calls; schedule tests lock one per fixed tick.
     interest_reconciliations: u64,
+}
+
+impl Drop for ProductionSpineInner {
+    fn drop(&mut self) {
+        // Shutdown is outside the fixed-update path. Explicitly wait for Bevy
+        // task cancellation so CPU-heavy synchronous task bodies cannot keep
+        // using the process-global pool after their world has been released.
+        for task in mem::take(&mut self.in_flight_worldgen_tasks) {
+            let _ = block_on(task.cancel());
+        }
+        for task in mem::take(&mut self.in_flight_tasks) {
+            let _ = block_on(task.cancel());
+        }
+    }
 }
 
 /// Inputs that uniquely determine the desired resident chunk set.
@@ -583,7 +598,7 @@ struct WorldgenMaterialization {
     palette: Arc<[BlockId]>,
     fluid_palette: Arc<CompiledFluidPaletteV1>,
     presentation: Arc<HostPresentationIndex>,
-    spawn: SpawnLocationV1,
+    required_cave_entrance: Option<RequiredCaveEntranceV1>,
     empty: HostVoxel,
     chunk_edge: u16,
     voxel_schema: SchemaId,
@@ -651,6 +666,26 @@ impl ProductionSpine {
         Self::materialize_world_with_catalog(images, world, lock_selected_gameplay_catalog(images)?)
     }
 
+    /// Materializes one process-local world with an explicitly resolved V2 terrain profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when profile validation, materialization,
+    /// or catalog binding fails.
+    pub fn materialize_world_with_terrain(
+        images: &LockVerifiedComposeImages,
+        world: WorldId,
+        terrain: TerrainConfigV2,
+    ) -> Result<Self, ProductionHostError> {
+        Self::materialize_world_with_catalog_and_store(
+            images,
+            world,
+            lock_selected_gameplay_catalog(images)?,
+            terrain,
+            None,
+        )
+    }
+
     /// Materializes one process-local world with a caller-supplied catalog.
     ///
     /// # Errors
@@ -663,7 +698,13 @@ impl ProductionSpine {
         world: WorldId,
         catalog: GameplayCatalog,
     ) -> Result<Self, ProductionHostError> {
-        Self::materialize_world_with_catalog_and_store(images, world, catalog, None)
+        Self::materialize_world_with_catalog_and_store(
+            images,
+            world,
+            catalog,
+            TerrainPresetV2::Balanced.resolve(),
+            None,
+        )
     }
 
     /// Materializes one world, hydrating the memory kernel from world-db first.
@@ -700,7 +741,14 @@ impl ProductionSpine {
         catalog: GameplayCatalog,
         storage: DeterministicWorldStorage,
     ) -> Result<Self, ProductionHostError> {
-        Self::materialize_world_with_catalog_and_store(images, world, catalog, Some(storage))
+        let terrain = terrain_config_from_storage(&storage, world)?;
+        Self::materialize_world_with_catalog_and_store(
+            images,
+            world,
+            catalog,
+            terrain,
+            Some(storage),
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -708,15 +756,18 @@ impl ProductionSpine {
         images: &LockVerifiedComposeImages,
         world: WorldId,
         catalog: GameplayCatalog,
+        terrain_config: TerrainConfigV2,
         world_store: Option<DeterministicWorldStorage>,
     ) -> Result<Self, ProductionHostError> {
-        let config = spine_config();
+        let config = super::worldgen::spine_config_for(&terrain_config);
         let chunk_edge = config.chunk_edge_voxels;
         let worldgen = host_worldgen_catalog(images)?;
         let plan = Arc::new(compile_plan(
             images.product_lock_hash(),
             images.images().registration().image.image_hash,
             &worldgen,
+            WorldSeedV1::from_text(&world.to_string()),
+            terrain_config,
         )?);
         let dimension = worldgen.dimension.clone();
         let kernel = Arc::new(MemoryTransactionKernel::new());
@@ -749,6 +800,7 @@ impl ProductionSpine {
         let spawn_center = player_spawn_center(spawn)?;
         let spawn_chunk = translation_chunk(spawn_center, chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
+        let required_cave_entrance = required_cave_entrance(&plan, spawn_chunk);
         let restored_session = match &world_store {
             Some(store) => peek_player_session(store, world, &dimension, spawn_chunk)?,
             None => None,
@@ -767,7 +819,7 @@ impl ProductionSpine {
             palette: Arc::clone(&palette),
             fluid_palette: Arc::clone(&fluid_palette),
             presentation: Arc::clone(&presentation),
-            spawn,
+            required_cave_entrance,
             empty,
             chunk_edge,
             voxel_schema: voxel_schema.clone(),
@@ -778,6 +830,7 @@ impl ProductionSpine {
             runtime,
             plan,
             worldgen_materialization,
+            required_cave_entrance,
             worldgen_bindings: worldgen.bindings,
             spawn,
             clamps,
@@ -871,6 +924,24 @@ impl ProductionSpine {
     #[must_use]
     pub fn world_id(&self) -> Option<WorldId> {
         self.lock_inner().ok().map(|inner| inner.world)
+    }
+
+    /// Returns the resolved terrain configuration compiled for this world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError::Poisoned`] when shared spine state is unavailable.
+    pub fn terrain_config(&self) -> Result<TerrainConfigV2, ProductionHostError> {
+        Ok(*self.lock_inner()?.plan.terrain_config())
+    }
+
+    /// Returns the persisted-identity-derived seed compiled for this world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError::Poisoned`] when shared spine state is unavailable.
+    pub fn world_seed(&self) -> Result<WorldSeedV1, ProductionHostError> {
+        Ok(self.lock_inner()?.plan.world_seed())
     }
 
     /// Returns the non-durable production kernel.
@@ -1270,14 +1341,17 @@ impl ProductionSpine {
                 let Some(entrances) = inner.plan.cave_topology_entrances() else {
                     return Vec::new();
                 };
+                let Some(topology_edge) = inner.plan.cave_topology_cell_edge_voxels() else {
+                    return Vec::new();
+                };
                 let mut destinations = Vec::new();
                 for entrance in entrances {
                     let cell = entrance.destination_cell();
-                    let voxel = latticeaxiom_worldgen::cell_center_voxels(
+                    let voxel = latticeaxiom_worldgen::cell_center_voxels_at_edge(
                         cell[0],
                         cell[1],
                         entrance.y_voxel().saturating_mul(1_000),
-                        inner.plan.config(),
+                        topology_edge,
                     );
                     let Some(domain) = inner
                         .plan
@@ -1318,8 +1392,7 @@ impl ProductionSpine {
     #[must_use]
     pub fn required_cave_entrance(&self) -> Option<RequiredCaveEntranceV1> {
         let inner = self.lock_inner().ok()?;
-        let origin = translation_chunk(inner.spawn_center, inner.chunk_edge)?;
-        required_cave_entrance(&inner.plan, origin)
+        inner.required_cave_entrance
     }
 
     /// Returns local/branch/portal occupancy from the compiled `CaveTopology` owner.
@@ -2444,6 +2517,34 @@ impl ProductionSpine {
     }
 }
 
+fn terrain_config_from_storage(
+    storage: &DeterministicWorldStorage,
+    world: WorldId,
+) -> Result<TerrainConfigV2, ProductionHostError> {
+    let preflight = storage.preflight(world)?;
+    let provenance = preflight
+        .metadata()
+        .requirement_closure()
+        .generator_provenance();
+    let mut selected = None;
+    for preset in TerrainPresetV2::ALL {
+        let profile = preset.profile_id_str().parse::<StableId>()?;
+        let Some(persisted) = provenance.get(&profile) else {
+            continue;
+        };
+        if selected.is_some() {
+            return Err(ProductionHostError::AmbiguousTerrainProfile);
+        }
+        let terrain = preset.resolve();
+        if persisted.as_bytes() != terrain.canonical_hash()?.as_bytes() {
+            return Err(ProductionHostError::TerrainProfileDigestMismatch { profile });
+        }
+        selected = Some(terrain);
+    }
+    // Worlds provisioned before Worldgen V2 did not persist a terrain profile.
+    Ok(selected.unwrap_or_else(|| TerrainPresetV2::Balanced.resolve()))
+}
+
 impl BlockEditAuthority for ProductionSpine {
     fn apply(
         &mut self,
@@ -3402,10 +3503,13 @@ fn sync_working_set(
 ) -> Result<(), ProductionHostError> {
     let (desired, prioritized, desired_key) = cached_desired_chunks(inner, origin, look_ahead);
     refresh_residency(inner, origin, look_ahead, tick);
+    // Retain protection expires with time, even when the desired-set key does
+    // not change again. Revisit the bounded resident set every fixed tick so a
+    // view-distance shrink actually releases former core chunks after grace.
+    evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, false)?;
     let needs_mutate = inner.reconciled_desired_key != Some(desired_key)
         || inner.desired_admission_cursor < prioritized.len();
     if needs_mutate {
-        evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, false)?;
         let needs_capacity = inner.desired_admission_cursor < prioritized.len()
             && inner.runtime.diagnostics().resident_chunks() >= inner.clamps.max_resident();
         if needs_capacity {
@@ -4213,13 +4317,9 @@ fn collider_safety_ready(
     inner: &ProductionSpineInner,
     occupied: &BTreeSet<ChunkCoordinate>,
 ) -> bool {
-    occupied.iter().all(|coordinate| {
-        inner.runtime.is_resident(*coordinate)
-            && matches!(
-                inner.runtime.collider_safety(*coordinate),
-                Some(ColliderSafetyState::Ready { .. })
-            )
-    })
+    occupied
+        .iter()
+        .all(|coordinate| cave_entry_ready_inner(inner, *coordinate))
 }
 
 fn dispatch_derived_batch(
@@ -4891,10 +4991,7 @@ fn apply_hydrology_occupancy(
     )?;
     let edge = materialization.chunk_edge;
     let stride = usize::from(edge).saturating_mul(usize::from(edge));
-    let entrance = player_spawn_center(materialization.spawn)
-        .ok()
-        .and_then(|center| translation_chunk(center, materialization.chunk_edge))
-        .and_then(|chunk| required_cave_entrance(&materialization.plan, chunk));
+    let entrance = materialization.required_cave_entrance.as_ref();
     for occupied in candidate.cells() {
         let index = usize::from(occupied.y())
             .saturating_mul(stride)
@@ -4921,7 +5018,7 @@ fn apply_hydrology_occupancy(
             || (!hydrology_occupancy_is_surface(occupied.kind())
                 && hydrology_occupancy_forbidden(
                     materialization,
-                    entrance.as_ref(),
+                    entrance,
                     world_x,
                     world_y,
                     world_z,

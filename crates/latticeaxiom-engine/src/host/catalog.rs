@@ -571,8 +571,10 @@ fn compile_host_cave_topology(
 ) -> Result<latticeaxiom_worldgen::CaveTopologyLayerInputV1, ProductionHostError> {
     use latticeaxiom_worldgen::{
         CaveBranchContributorV1, CaveLayerCorridorV1, CaveLayerEntranceV1, CaveLayerPortalV1,
-        CaveOwnedDomainV1, CaveTopologyLayerInputV1, cell_center_voxels,
+        CaveOwnedDomainV1, CaveTopologyLayerInputV1, cell_center_voxels_at_edge,
     };
+
+    const TOPOLOGY_CELL_EDGE_VOXELS: u32 = 64;
 
     if cave.domains.len() < 2 {
         return Err(ProductionHostError::MissingCatalogDefinition {
@@ -607,16 +609,16 @@ fn compile_host_cave_topology(
         )?,
     ];
     let first_path = [
-        cell_center_voxels(-2, 0, y_mm, config),
-        cell_center_voxels(-1, 0, y_mm, config),
-        cell_center_voxels(0, 0, y_mm, config),
-        cell_center_voxels(1, 0, y_mm, config),
+        cell_center_voxels_at_edge(-2, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
+        cell_center_voxels_at_edge(-1, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
+        cell_center_voxels_at_edge(0, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
+        cell_center_voxels_at_edge(1, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
     ];
     let second_path = [
-        cell_center_voxels(2, 0, y_mm, config),
-        cell_center_voxels(1, 0, y_mm, config),
-        cell_center_voxels(0, 0, y_mm, config),
-        cell_center_voxels(-1, 0, y_mm, config),
+        cell_center_voxels_at_edge(2, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
+        cell_center_voxels_at_edge(1, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
+        cell_center_voxels_at_edge(0, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
+        cell_center_voxels_at_edge(-1, 0, y_mm, TOPOLOGY_CELL_EDGE_VOXELS),
     ];
     let corridors = vec![
         CaveLayerCorridorV1::new(first_path[0], first_path[1]),
@@ -643,7 +645,8 @@ fn compile_host_cave_topology(
         portals,
         entrances,
         branch,
-    )?)
+    )?
+    .with_cell_edge_voxels(TOPOLOGY_CELL_EDGE_VOXELS)?)
 }
 
 fn topology_algorithm_from_id(

@@ -60,7 +60,7 @@ use bevy::{
     prelude::{ClearColor, Color, Mesh},
 };
 use latticeaxiom_compose::LockedGameGraph;
-use latticeaxiom_core::{CapabilityId, IdentifierError, PackageName};
+use latticeaxiom_core::{CapabilityId, IdentifierError, PackageName, StableId};
 use latticeaxiom_gameplay::{GameplayIdError, GameplayReject};
 use latticeaxiom_player::{
     ActionFrameInbox, ActionFrameInboxError, AuthoritativeTargetInspectRequestV1,
@@ -490,7 +490,7 @@ impl EngineInstance {
 
     /// Builds a GPU-free production spine from a reopened final product lock.
     ///
-    /// The host inserts [`MemoryTransactionKernel`] as the production storage
+    /// The host inserts [`latticeaxiom_storage::MemoryTransactionKernel`] as the production storage
     /// implementation, streams a bounded working set around the player, and
     /// installs [`PlayerPlugin`]. It does not open a world writer.
     ///
@@ -1323,6 +1323,15 @@ pub enum ProductionHostError {
     /// mesh or collider jobs were applied.
     #[error("bounded derived readiness barrier was exhausted")]
     DerivedReadinessBarrier,
+    /// More than one built-in terrain profile was persisted for one world.
+    #[error("world metadata selects more than one terrain profile")]
+    AmbiguousTerrainProfile,
+    /// Persisted terrain profile digest disagrees with its resolved V2 config.
+    #[error("terrain profile `{profile}` has a mismatched resolved-config digest")]
+    TerrainProfileDigestMismatch {
+        /// Profile whose resolved configuration no longer matches metadata.
+        profile: StableId,
+    },
 }
 
 impl From<latticeaxiom_content::ContentError> for ProductionHostError {

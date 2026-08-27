@@ -29,8 +29,9 @@ use latticeaxiom_worldgen::{
     D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyOccupancyCandidateV1,
     HydrologyOccupancyConfigV1, MAX_BOUNDED_REGION_CHUNKS, NaturalLayerConfigV1,
     NaturalLayerInputV1, PlanActivationIdV1, ProviderGenerationIdentityV1, ProviderOfferV1,
-    ProviderSlotV1, SpawnLocationV1, SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainStyleV1,
-    WorldSeedV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, required_spawn_chunks,
+    ProviderSlotV1, SpawnLocationV1, SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainConfigV2,
+    TerrainFamilyV2, TerrainPresetV2, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
+    WorldgenLimitsV1, cell_center_voxels_at_edge, required_spawn_chunks,
     select_safe_spawn_prefer_style,
 };
 
@@ -39,22 +40,27 @@ use super::{
     catalog::{HostWorldgenCatalog, package_registration_namespace},
 };
 
+/// Worldgen V2 deliberately invalidates V1 generation provenance.
+const WORLDGEN_PLAN_REVISION: u64 = 2;
+
 /// Compiles the V5 plan bound to a reopened product lock and package catalog.
 pub(super) fn compile_plan(
     locked_receipt: CanonicalHash,
     semantic_receipt: CanonicalHash,
     catalog: &HostWorldgenCatalog,
+    world_seed: WorldSeedV1,
+    terrain_config: TerrainConfigV2,
 ) -> Result<GenerationPlanV1, ProductionHostError> {
-    let config = spine_config();
+    let config = spine_config_for(&terrain_config);
     let natural_offers =
         provider_offers(catalog.worldgen_package.as_ref(), ProviderSlotV1::NATURAL)?;
     let mut offers = provider_offers(catalog.worldgen_package.as_ref(), ProviderSlotV1::ALL)?;
     offers.extend(natural_offers.iter().cloned());
     let input = GenerationPlanInputV1::new(
         catalog.dimension.clone(),
-        WorldSeedV1::from_integer(0),
+        world_seed,
         config.clone(),
-        1,
+        WORLDGEN_PLAN_REVISION,
         PlanActivationIdV1::from_hash(locked_receipt),
         offers,
         catalog.role_vocabulary.clone(),
@@ -64,13 +70,16 @@ pub(super) fn compile_plan(
         vec![locked_receipt],
         WorldgenLimitsV1::default(),
     )
+    .with_terrain_config(terrain_config)
     .with_natural_layer(NaturalLayerInputV1::new(
-        natural_layer_config(&config)?,
+        natural_layer_config(&config, &terrain_config)?,
         catalog.natural_vocabulary.clone(),
         natural_offers,
     ))
     .with_cave_topology_layer(catalog.cave_topology_layer(&config)?)
-    .with_hydrology_occupancy(catalog.hydrology_occupancy(hydrology_occupancy_config())?);
+    .with_hydrology_occupancy(
+        catalog.hydrology_occupancy(hydrology_occupancy_config_for(&terrain_config))?,
+    );
     Ok(GenerationPlanV1::compile(input)?)
 }
 
@@ -87,21 +96,30 @@ pub(super) fn occupancy_candidate_is_current(
 /// Returns the closed D4 spine configuration.
 #[must_use]
 pub(super) fn spine_config() -> WorldgenConfigV1 {
+    spine_config_for(&production_terrain_config())
+}
+
+pub(super) fn spine_config_for(terrain: &TerrainConfigV2) -> WorldgenConfigV1 {
     WorldgenConfigV1 {
         chunk_edge_voxels: 32,
-        // Preserve the authored 64-meter territory and cave planning scale
-        // when moving the production chunk edge from 8 to 32 voxels.
-        planning_cell_edge_chunks: 2,
-        transition_width_voxels: 16,
+        // Climate ownership is coarse and correlated; terrain shape itself is
+        // sampled continuously and does not inherit these cell boundaries.
+        planning_cell_edge_chunks: 8,
+        transition_width_voxels: terrain.climate.transition_width_voxels,
         height_noise_scale_voxels: 32,
-        world_floor_y: -64,
-        world_ceiling_y: 319,
-        // The official 26.2 Overworld uses sea level 63 inside a -64..=319
-        // column. Nominal land stays above that datum while low terrain is
-        // filled independently by the hydrology occupancy layer.
-        temperate_base_height: 80,
-        temperate_relief: 112,
-        arid_base_height: 88,
+        cave_cell_edge_voxels: terrain.underground.cave_scale_voxels,
+        cave_threshold_per_1024: terrain.underground.cave_amount_per_1024,
+        world_floor_y: terrain.world.floor_y,
+        world_ceiling_y: terrain.world.ceiling_y,
+        // V1 style heights remain a conservative validation envelope. V2
+        // macro terrain is climate-independent and consumes `terrain`.
+        // The V1 base height is also the conservative surface used to place
+        // authored cave-topology corridors. Anchor that safety envelope at
+        // sea level: V2 macro relief owns the actual surface and dry spawn
+        // selection guarantees usable cover above this datum.
+        temperate_base_height: terrain.world.sea_level_y,
+        temperate_relief: 128,
+        arid_base_height: terrain.world.sea_level_y,
         arid_relief: 128,
         ..WorldgenConfigV1::default()
     }
@@ -109,9 +127,17 @@ pub(super) fn spine_config() -> WorldgenConfigV1 {
 
 /// Returns the bounded production hydrology profile.
 #[must_use]
+#[cfg(test)]
 pub(super) fn hydrology_occupancy_config() -> HydrologyOccupancyConfigV1 {
+    hydrology_occupancy_config_for(&production_terrain_config())
+}
+
+fn hydrology_occupancy_config_for(terrain: &TerrainConfigV2) -> HydrologyOccupancyConfigV1 {
     HydrologyOccupancyConfigV1 {
-        sea_level_y: Some(63),
+        sea_level_y: Some(terrain.world.sea_level_y),
+        aquifer_depth_voxels: terrain.underground.aquifer_depth_voxels,
+        aquifer_threshold_per_1024: terrain.underground.aquifer_amount_per_1024,
+        lava_column_height_voxels: terrain.underground.lava_depth_voxels,
         // A 32-cubic chunk can be entirely below sea level. The candidate is
         // still generated and consumed on a background worker, and concurrent
         // worldgen admission independently bounds aggregate memory.
@@ -184,28 +210,176 @@ pub(super) fn validated_spawn(
     plan: &GenerationPlanV1,
     bindings: &AuthoredWorldgenBindingsV1,
 ) -> Result<SpawnLocationV1, ProductionHostError> {
-    let bounds = host_spawn_bounds(plan);
-    let occupancy = ready_spawn_occupancy(plan, bounds)?;
-    select_safe_spawn_prefer_style(
-        plan,
-        bindings,
-        &occupancy,
-        bounds,
-        TerrainStyleV1::TemperateWoodland,
-    )
-    .map_err(|error| match error {
-        WorldgenError::NoSafeSpawn => ProductionHostError::NoSafeSpawn,
-        other => ProductionHostError::from(other),
-    })
+    for bounds in host_spawn_bounds(plan)? {
+        let occupancy = ready_spawn_occupancy(plan, bounds)?;
+        match select_safe_spawn_prefer_style(
+            plan,
+            bindings,
+            &occupancy,
+            bounds,
+            TerrainStyleV1::TemperateWoodland,
+        ) {
+            Ok(spawn) => return Ok(spawn),
+            Err(WorldgenError::NoSafeSpawn) => {}
+            Err(other) => return Err(ProductionHostError::from(other)),
+        }
+    }
+    Err(ProductionHostError::NoSafeSpawn)
 }
 
-/// Returns the stable origin-neighborhood spawn window.
-///
-/// Keeping the initial search around the origin makes the first frame
-/// predictable and keeps the player's first working set local. The selected
-/// style is still decided by the compiled plan and authored bindings.
-fn host_spawn_bounds(_plan: &GenerationPlanV1) -> SpawnSearchBoundsV1 {
-    SpawnSearchBoundsV1::origin_neighborhood()
+/// Returns bounded dry-land windows in deterministic expanding-ring order.
+fn host_spawn_bounds(
+    plan: &GenerationPlanV1,
+) -> Result<Vec<SpawnSearchBoundsV1>, ProductionHostError> {
+    const COARSE_STEP: i64 = 128;
+    const MAX_RING: i64 = 256;
+    const MAX_CANDIDATES: usize = 32;
+    const HALF_EXTENT: i64 = 8;
+    let mut candidates = Vec::with_capacity(MAX_CANDIDATES);
+    let mut centers = BTreeSet::new();
+    if let Some(portals) = plan.cave_topology_portals() {
+        for portal in portals {
+            let [center_x, _, center_z] = portal.anchor_voxels();
+            push_topology_spawn_bounds(
+                center_x,
+                center_z,
+                HALF_EXTENT,
+                &mut centers,
+                &mut candidates,
+            )?;
+        }
+    }
+    if let Some(entrances) = plan.cave_topology_entrances() {
+        let topology_edge = plan.cave_topology_cell_edge_voxels().ok_or(
+            ProductionHostError::MissingNaturalSample {
+                kind: "cave-topology-cell-edge",
+            },
+        )?;
+        for cell in entrances
+            .iter()
+            .flat_map(latticeaxiom_worldgen::CaveLayerEntranceV1::cells)
+        {
+            let [center_x, _, center_z] = cell_center_voxels_at_edge(
+                cell[0],
+                cell[1],
+                i64::from(plan.terrain_config().world.sea_level_y).saturating_mul(1_000),
+                topology_edge,
+            );
+            push_topology_spawn_bounds(
+                center_x,
+                center_z,
+                HALF_EXTENT,
+                &mut centers,
+                &mut candidates,
+            )?;
+            if candidates.len() == MAX_CANDIDATES {
+                return Ok(candidates);
+            }
+        }
+    }
+    for ring in 0_i64..=MAX_RING {
+        if ring == 0 {
+            push_spawn_bounds(plan, 0, 0, HALF_EXTENT, &mut centers, &mut candidates)?;
+            continue;
+        }
+        for cell_x in ring.saturating_neg()..=ring {
+            for cell_z in [ring.saturating_neg(), ring] {
+                push_spawn_bounds(
+                    plan,
+                    cell_x.saturating_mul(COARSE_STEP),
+                    cell_z.saturating_mul(COARSE_STEP),
+                    HALF_EXTENT,
+                    &mut centers,
+                    &mut candidates,
+                )?;
+                if candidates.len() == MAX_CANDIDATES {
+                    return Ok(candidates);
+                }
+            }
+        }
+        for cell_z in ring.saturating_neg().saturating_add(1)..ring {
+            for cell_x in [ring.saturating_neg(), ring] {
+                push_spawn_bounds(
+                    plan,
+                    cell_x.saturating_mul(COARSE_STEP),
+                    cell_z.saturating_mul(COARSE_STEP),
+                    HALF_EXTENT,
+                    &mut centers,
+                    &mut candidates,
+                )?;
+                if candidates.len() == MAX_CANDIDATES {
+                    return Ok(candidates);
+                }
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+fn push_topology_spawn_bounds(
+    center_x: i64,
+    center_z: i64,
+    half_extent: i64,
+    centers: &mut BTreeSet<[i64; 2]>,
+    candidates: &mut Vec<SpawnSearchBoundsV1>,
+) -> Result<(), ProductionHostError> {
+    if centers.insert([center_x, center_z]) {
+        candidates.push(SpawnSearchBoundsV1::new(
+            center_x.saturating_sub(half_extent),
+            center_x.saturating_add(half_extent),
+            center_z.saturating_sub(half_extent),
+            center_z.saturating_add(half_extent),
+            2,
+        )?);
+    }
+    Ok(())
+}
+
+fn push_spawn_bounds(
+    plan: &GenerationPlanV1,
+    center_x: i64,
+    center_z: i64,
+    half_extent: i64,
+    centers: &mut BTreeSet<[i64; 2]>,
+    candidates: &mut Vec<SpawnSearchBoundsV1>,
+) -> Result<(), ProductionHostError> {
+    if centers.insert([center_x, center_z])
+        && let Some(bounds) = spawn_bounds_at(plan, center_x, center_z, half_extent)?
+    {
+        candidates.push(bounds);
+    }
+    Ok(())
+}
+
+fn spawn_bounds_at(
+    plan: &GenerationPlanV1,
+    center_x: i64,
+    center_z: i64,
+    half_extent: i64,
+) -> Result<Option<SpawnSearchBoundsV1>, ProductionHostError> {
+    let sea = plan.terrain_config().world.sea_level_y;
+    let height = plan.terrain_height(center_x, center_z);
+    let family = plan.terrain_family(center_x, center_z);
+    if height <= sea.saturating_add(2)
+        || plan.surface_water_level(center_x, center_z).is_some()
+        || matches!(
+            family,
+            TerrainFamilyV2::DeepOcean
+                | TerrainFamilyV2::ShallowOcean
+                | TerrainFamilyV2::Coast
+                | TerrainFamilyV2::LakeBasin
+                | TerrainFamilyV2::Volcanic
+        )
+    {
+        return Ok(None);
+    }
+    Ok(Some(SpawnSearchBoundsV1::new(
+        center_x.saturating_sub(half_extent),
+        center_x.saturating_add(half_extent),
+        center_z.saturating_sub(half_extent),
+        center_z.saturating_add(half_extent),
+        2,
+    )?))
 }
 /// Returns the player capsule center standing on `location` footing.
 ///
@@ -213,7 +387,7 @@ fn host_spawn_bounds(_plan: &GenerationPlanV1) -> SpawnSearchBoundsV1 {
 ///
 /// Returns [`ProductionHostError::InvalidPlayerPose`] when a spawn voxel is
 /// outside the `i32` world-cell domain.
-#[allow(clippy::cast_precision_loss)] // Bounded origin-neighborhood voxels stay in f32.
+#[allow(clippy::cast_precision_loss)] // Bounded spawn-search voxels remain exactly representable in f32.
 pub(super) fn spawn_center(location: SpawnLocationV1) -> Result<Vec3, ProductionHostError> {
     let [x, footing_y, z] = location.footing();
     let x = i32::try_from(x).map_err(|_| ProductionHostError::InvalidPlayerPose)?;
@@ -249,12 +423,20 @@ fn ready_spawn_occupancy(
 #[allow(clippy::field_reassign_with_default)]
 fn natural_layer_config(
     spine: &WorldgenConfigV1,
+    terrain: &TerrainConfigV2,
 ) -> Result<NaturalLayerConfigV1, ProductionHostError> {
     let mut config = NaturalLayerConfigV1::default();
     config.boreal_base_height = spine.temperate_base_height;
     config.boreal_relief = spine.temperate_relief.max(1);
+    config.river_cell_edge_voxels = terrain.water.river_spacing_voxels;
+    config.river_width_voxels = terrain.water.river_width_voxels;
+    config.river_incision_voxels = terrain.water.river_depth_voxels;
     config.validate(spine)?;
     Ok(config)
+}
+
+const fn production_terrain_config() -> TerrainConfigV2 {
+    TerrainPresetV2::Balanced.resolve()
 }
 
 fn provider_offers<const N: usize>(
@@ -298,14 +480,15 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
 
 const fn provider_revision(slot: ProviderSlotV1) -> u32 {
     match slot {
-        ProviderSlotV1::TerrainTransition | ProviderSlotV1::Materializer => 8,
+        ProviderSlotV1::TerrainTransition
+        | ProviderSlotV1::Materializer
+        | ProviderSlotV1::GenerationCoordinator => 8,
         ProviderSlotV1::CaveTopology
         | ProviderSlotV1::StyleSelector
         | ProviderSlotV1::TemperateTerrain
         | ProviderSlotV1::AridTerrain => 9,
         ProviderSlotV1::Geology | ProviderSlotV1::Resources | ProviderSlotV1::Vegetation => 2,
         ProviderSlotV1::Hydrology | ProviderSlotV1::BorealTerrain => 3,
-        ProviderSlotV1::GenerationCoordinator => 7,
     }
 }
 
@@ -553,7 +736,8 @@ fn vegetation_inspect_record(
             predicate,
             candidate,
             exclusion_radius_voxels: u32::from(
-                natural_layer_config(plan.config())?.tree_exclusion_radius_voxels,
+                natural_layer_config(plan.config(), plan.terrain_config())?
+                    .tree_exclusion_radius_voxels,
             ),
             bounds,
             dependency_receipt: *required_provider(plan, ProviderSlotV1::Vegetation)?
@@ -592,12 +776,17 @@ fn cave_hydrology_inspect_records(
         .ok_or(ProductionHostError::MissingNaturalSample {
             kind: "cave-branch",
         })?;
+    let topology_edge =
+        plan.cave_topology_cell_edge_voxels()
+            .ok_or(ProductionHostError::MissingNaturalSample {
+                kind: "cave-topology-cell-edge",
+            })?;
     let dest_cell = entrance.destination_cell();
-    let dest = latticeaxiom_worldgen::cell_center_voxels(
+    let dest = cell_center_voxels_at_edge(
         dest_cell[0],
         dest_cell[1],
         entrance.y_voxel().saturating_mul(1_000),
-        plan.config(),
+        topology_edge,
     );
     let dest_domain = plan
         .cave_topology_domain(dest[0], dest[1], dest[2])
@@ -660,11 +849,11 @@ fn cave_hydrology_inspect_records(
     };
     let mut domains = Vec::new();
     for path_cell in entrance.cells() {
-        let sample = latticeaxiom_worldgen::cell_center_voxels(
+        let sample = cell_center_voxels_at_edge(
             path_cell[0],
             path_cell[1],
             entrance.y_voxel().saturating_mul(1_000),
-            plan.config(),
+            topology_edge,
         );
         if let Some(domain) = plan.cave_topology_domain(sample[0], sample[1], sample[2])
             && !domains.iter().any(|seen| seen == domain)
@@ -1000,14 +1189,19 @@ pub(super) fn required_cave_entrance(
     plan: &GenerationPlanV1,
     origin: ChunkCoordinate,
 ) -> Option<RequiredCaveEntranceV1> {
+    const SEARCH_RADIUS_CHUNKS: i32 = 12;
     let edge = i64::from(plan.config().chunk_edge_voxels);
     let chunk_edge = i32::from(plan.config().chunk_edge_voxels);
     let min_chunk_y = plan.config().world_floor_y.div_euclid(chunk_edge);
     let max_chunk_y = plan.config().world_ceiling_y.div_euclid(chunk_edge);
     let mut best: Option<RequiredCaveEntranceV1> = None;
-    for chunk_z in origin.z.saturating_sub(6)..=origin.z.saturating_add(6) {
+    for chunk_z in origin.z.saturating_sub(SEARCH_RADIUS_CHUNKS)
+        ..=origin.z.saturating_add(SEARCH_RADIUS_CHUNKS)
+    {
         for chunk_y in min_chunk_y..=max_chunk_y {
-            for chunk_x in origin.x.saturating_sub(6)..=origin.x.saturating_add(6) {
+            for chunk_x in origin.x.saturating_sub(SEARCH_RADIUS_CHUNKS)
+                ..=origin.x.saturating_add(SEARCH_RADIUS_CHUNKS)
+            {
                 let chunk = ChunkCoordinate::new(chunk_x, chunk_y, chunk_z);
                 let Ok(requests) = plan.cave_face_field_requests(chunk) else {
                     continue;
@@ -1190,8 +1384,9 @@ mod tests {
 
     use super::{
         compile_host_worldgen_inspect, generate_plan_chunks, hydrology_occupancy_config,
-        natural_layer_config, occupancy_candidate_is_current, provider_offers,
-        required_cave_entrance, spawn_center, spine_config, validated_spawn,
+        hydrology_occupancy_config_for, natural_layer_config, occupancy_candidate_is_current,
+        production_terrain_config, provider_offers, required_cave_entrance, spawn_center,
+        spine_config, spine_config_for, validated_spawn,
     };
     use latticeaxiom_core::CanonicalHash;
     use latticeaxiom_runtime_contracts::{
@@ -1204,8 +1399,8 @@ mod tests {
         ExistingSnapshotEvidenceV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyFlowV1,
         HydrologyFluidBindingsV1, HydrologyOccupancyInputV1, HydrologyOccupancyKindV1,
         NaturalLayerConfigV1, NaturalLayerInputV1, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1,
-        PlanActivationIdV1, PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
-        WorldgenConfigV1, WorldgenLimitsV1,
+        PlanActivationIdV1, PlanningCellCoordinateV1, ProviderSlotV1, TerrainConfigV2,
+        TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenLimitsV1,
     };
 
     const AUTHORED_BINDINGS_JSON: &str =
@@ -1218,29 +1413,35 @@ mod tests {
         let config = spine_config();
 
         assert_eq!(config.chunk_edge_voxels, 32);
-        assert_eq!(config.world_floor_y, -64);
-        assert_eq!(config.world_ceiling_y, 319);
-        assert_eq!(config.world_ceiling_y - config.world_floor_y + 1, 384);
+        assert_eq!(config.world_floor_y, -128);
+        assert_eq!(config.world_ceiling_y, 383);
+        assert_eq!(config.world_ceiling_y - config.world_floor_y + 1, 512);
         assert_eq!(config.height_noise_scale_voxels, 32);
-        assert_eq!(config.transition_width_voxels, 16);
-        assert_eq!(config.temperate_base_height, 80);
-        assert_eq!(config.temperate_relief, 112);
-        assert_eq!(config.arid_base_height, 88);
+        assert_eq!(config.transition_width_voxels, 48);
+        assert_eq!(config.temperate_base_height, 86);
+        assert_eq!(config.temperate_relief, 128);
+        assert_eq!(config.arid_base_height, 86);
         assert_eq!(config.arid_relief, 128);
         assert_eq!(
             i32::from(config.chunk_edge_voxels) * i32::from(config.planning_cell_edge_chunks),
-            64,
-            "planning cells preserve the authored 64-meter physical scale"
+            256,
+            "climate planning cells use a broad 256-meter physical scale"
         );
     }
 
     #[test]
     fn production_natural_layer_keeps_rivers_and_boreal_vegetation_enabled() {
         let spine = spine_config();
-        let config = natural_layer_config(&spine).expect("production natural config fits spine");
+        let terrain = production_terrain_config();
+        let config =
+            natural_layer_config(&spine, &terrain).expect("production natural config fits spine");
         let defaults = NaturalLayerConfigV1::default();
 
-        assert_eq!(config.river_incision_voxels, defaults.river_incision_voxels);
+        assert_eq!(
+            config.river_incision_voxels,
+            terrain.water.river_depth_voxels
+        );
+        assert_ne!(config.river_incision_voxels, defaults.river_incision_voxels);
         assert_eq!(
             config.pine_threshold_per_1024,
             defaults.pine_threshold_per_1024
@@ -1262,7 +1463,7 @@ mod tests {
         config
             .validate_for_world(&spine)
             .expect("production sea level fits the world column");
-        assert_eq!(config.sea_level_y, Some(63));
+        assert_eq!(config.sea_level_y, Some(64));
         assert_eq!(
             config.max_cells_per_chunk,
             u32::from(spine.chunk_edge_voxels).pow(3)
@@ -1281,7 +1482,7 @@ mod tests {
                     let in_channel = plan
                         .river_sample(x, z)
                         .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel);
-                    (surface_y < 63 && !in_channel).then_some((x, z, surface_y))
+                    (surface_y < 64 && !in_channel).then_some((x, z, surface_y))
                 })
             })
             .expect("production terrain contains non-river lowlands below sea level");
@@ -1292,7 +1493,7 @@ mod tests {
             HydrologyOccupancyKindV1::SurfaceWater
         );
         let sample = plan
-            .hydrology_occupancy_sample(x, 63, z)
+            .hydrology_occupancy_sample(x, 64, z)
             .expect("production hydrology sample");
         assert_eq!(sample.kind(), HydrologyOccupancyKindV1::SurfaceWater);
         assert_eq!(sample.flow(), HydrologyFlowV1::Still);
@@ -1300,7 +1501,7 @@ mod tests {
         let edge = i64::from(plan.config().chunk_edge_voxels);
         let coordinate = ChunkCoordinate::new(
             i32::try_from(x.div_euclid(edge)).expect("sample chunk X fits"),
-            63_i32.div_euclid(i32::from(plan.config().chunk_edge_voxels)),
+            64_i32.div_euclid(i32::from(plan.config().chunk_edge_voxels)),
             i32::try_from(z.div_euclid(edge)).expect("sample chunk Z fits"),
         );
         let candidate = plan
@@ -1308,7 +1509,7 @@ mod tests {
             .expect("lowland occupancy candidate stays within production budgets");
         let local = [
             u16::try_from(x.rem_euclid(edge)).expect("local X fits"),
-            u16::try_from(63_i64.rem_euclid(edge)).expect("local Y fits"),
+            u16::try_from(64_i64.rem_euclid(edge)).expect("local Y fits"),
             u16::try_from(z.rem_euclid(edge)).expect("local Z fits"),
         ];
         assert!(candidate.cells().iter().any(|cell| {
@@ -1319,12 +1520,70 @@ mod tests {
     }
 
     #[test]
+    fn production_lake_basins_materialize_still_water_above_their_bed() {
+        let plan = occupancy_plan(0, false);
+        let (x, z, bed_y, water_y) = (-2_048_i64..=2_048)
+            .step_by(8)
+            .find_map(|z| {
+                (-2_048_i64..=2_048).step_by(8).find_map(|x| {
+                    let bed_y = plan.terrain_height(x, z);
+                    if plan
+                        .river_sample(x, z)
+                        .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel)
+                    {
+                        return None;
+                    }
+                    plan.surface_water_level(x, z)
+                        .filter(|water_y| *water_y > bed_y)
+                        .map(|water_y| (x, z, bed_y, water_y))
+                })
+            })
+            .expect("balanced terrain contains a deterministic inland lake");
+        for y in i64::from(bed_y).saturating_add(1)..=i64::from(water_y) {
+            let sample = plan
+                .hydrology_occupancy_sample(x, y, z)
+                .expect("lake occupancy sample");
+            assert_eq!(sample.kind(), HydrologyOccupancyKindV1::SurfaceWater);
+            assert_eq!(sample.flow(), HydrologyFlowV1::Still);
+        }
+    }
+
+    #[test]
+    fn underground_river_option_does_not_disable_surface_channels() {
+        let mut terrain = production_terrain_config();
+        terrain.water.underground_rivers = false;
+        let plan = occupancy_plan_with_terrain(0, false, terrain);
+        let (x, z) = (-1_024_i64..=1_024)
+            .find_map(|z| {
+                (-1_024_i64..=1_024).find_map(|x| {
+                    plan.river_sample(x, z)
+                        .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel)
+                        .then_some((x, z))
+                })
+            })
+            .expect("balanced terrain contains a river channel");
+        assert!(
+            !plan
+                .drainage_sample(x, z)
+                .expect("drainage sample")
+                .is_connected()
+        );
+        let surface_y = plan.terrain_height(x, z);
+        assert_eq!(
+            plan.hydrology_occupancy_sample(x, i64::from(surface_y) + 1, z)
+                .expect("surface channel sample")
+                .kind(),
+            HydrologyOccupancyKindV1::SurfaceChannel
+        );
+    }
+
+    #[test]
     fn production_terrain_uses_broad_vertical_relief_without_adjacent_spikes() {
         let plan = occupancy_plan(0, false);
         let mut minimum = i32::MAX;
         let mut maximum = i32::MIN;
-        for z in (-2_048_i64..=2_048).step_by(8) {
-            for x in (-2_048_i64..=2_048).step_by(8) {
+        for z in (-16_384_i64..=16_384).step_by(64) {
+            for x in (-16_384_i64..=16_384).step_by(64) {
                 let height = plan.terrain_height(x, z);
                 minimum = minimum.min(height);
                 maximum = maximum.max(height);
@@ -1723,8 +1982,16 @@ mod tests {
     }
 
     fn occupancy_plan(seed: i64, reverse: bool) -> GenerationPlanV1 {
+        occupancy_plan_with_terrain(seed, reverse, production_terrain_config())
+    }
+
+    fn occupancy_plan_with_terrain(
+        seed: i64,
+        reverse: bool,
+        terrain: TerrainConfigV2,
+    ) -> GenerationPlanV1 {
         let bindings = authored_bindings();
-        let config = spine_config();
+        let config = spine_config_for(&terrain);
         let mut d4 = provider_offers(None, ProviderSlotV1::ALL).expect("D4 offers");
         let mut natural = provider_offers(None, ProviderSlotV1::NATURAL).expect("natural offers");
         d4.extend(natural.iter().cloned());
@@ -1749,15 +2016,16 @@ mod tests {
                 vec![CanonicalHash::digest(b"lock-a")],
                 WorldgenLimitsV1::default(),
             )
+            .with_terrain_config(terrain)
             .with_natural_layer(NaturalLayerInputV1::new(
-                natural_layer_config(&config).expect("natural config fits spine"),
+                natural_layer_config(&config, &terrain).expect("natural config fits spine"),
                 bindings
                     .natural_vocabulary()
                     .expect("authored natural vocabulary"),
                 natural,
             ))
             .with_hydrology_occupancy(HydrologyOccupancyInputV1::new(
-                hydrology_occupancy_config(),
+                hydrology_occupancy_config_for(&terrain),
                 HydrologyFluidBindingsV1::new(
                     "fixture:fluid/water".parse().expect("fixture water"),
                     "fixture:fluid/lava".parse().expect("fixture lava"),
@@ -1810,7 +2078,8 @@ mod tests {
                 WorldgenLimitsV1::default(),
             )
             .with_natural_layer(NaturalLayerInputV1::new(
-                natural_layer_config(&config).expect("natural config fits spine"),
+                natural_layer_config(&config, &TerrainConfigV2::for_legacy_spine(&config))
+                    .expect("natural config fits spine"),
                 bindings
                     .natural_vocabulary()
                     .expect("authored natural vocabulary"),

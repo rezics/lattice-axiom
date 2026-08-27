@@ -18,7 +18,8 @@ use bevy::prelude::Resource;
 use latticeaxiom_client_ui::{GameModalV1, SurfaceCommandV1};
 use latticeaxiom_compose::LockedGameGraph;
 use latticeaxiom_core::{
-    CanonicalHash, CapabilityId, IdentifierError, PackageName, WorldId, canonical_json_hash,
+    CanonicalHash, CapabilityId, IdentifierError, PackageName, StableId, WorldId,
+    canonical_json_hash,
 };
 use latticeaxiom_launcher::{
     ChildExitKindV1, ChildExitReportDraftV1, ChildExitReportV1, ChildRoleV1,
@@ -31,7 +32,7 @@ use latticeaxiom_start_ui::{
     LaunchHandoff, LaunchHandoffContext, LaunchHandoffError, MemoryStartEffect, MemoryStartError,
     MemoryStartFlow, QuickCreateIntent, SemanticActionId, SemanticCommand, SemanticNodeId,
     ShellCapability, ShellEffect, ShellPackageProvider, WorldShellError, WorldShellRecord,
-    WorldSort, memory_session_store_id, memory_session_template,
+    WorldSort, WorldgenProfileOption, memory_session_store_id, memory_session_template,
 };
 use latticeaxiom_world_catalog::{
     ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
@@ -42,6 +43,7 @@ use latticeaxiom_world_db::{
     FrozenLockReceiptV1, StorageDurabilityCapabilityV1, StoragePreflightStatusV1,
     WorldCreateRequestV1, WorldDbError, WorldRequirementClosureV1, WorldStorage,
 };
+use latticeaxiom_worldgen::{TerrainConfigV2, TerrainPresetV2};
 use thiserror::Error;
 
 use super::{
@@ -121,6 +123,7 @@ pub struct ProductionMemoryStart {
     images: LockVerifiedComposeImages,
     flow: MemoryStartFlow,
     spines: BTreeMap<WorldId, ProductionSpine>,
+    terrain_configs: BTreeMap<WorldId, TerrainConfigV2>,
     storage: Option<DeterministicWorldStorage>,
 }
 
@@ -132,6 +135,7 @@ impl ProductionMemoryStart {
             images,
             flow: MemoryStartFlow::new(graph),
             spines: BTreeMap::new(),
+            terrain_configs: BTreeMap::new(),
             storage: None,
         }
     }
@@ -168,7 +172,9 @@ impl ProductionMemoryStart {
         images: LockVerifiedComposeImages,
     ) -> Result<Self, ProductionMemoryStartError> {
         let graph = shell_graph_from_lock(images.images().graph())?;
-        Ok(Self::new(images, graph))
+        let mut start = Self::new(images, graph);
+        start.install_worldgen_profiles()?;
+        Ok(start)
     }
 
     /// Selects the client process role from reopened lock capability evidence.
@@ -270,13 +276,33 @@ impl ProductionMemoryStart {
             .next()
             .cloned()
             .ok_or(ProductionMemoryStartError::NoGraphRoot)?;
-        Ok(QuickCreateIntent::new(
+        let mut intent = QuickCreateIntent::new(
             display_name,
             memory_session_template(),
             root,
             self.images.product_lock_hash(),
         )
-        .map_err(MemoryStartError::from)?)
+        .map_err(MemoryStartError::from)?;
+        if let Some(profile) = self.flow.shell().selected_worldgen_profile() {
+            intent.set_generation_profile(profile.clone());
+        }
+        Ok(intent)
+    }
+
+    /// Builds a quick-create intent with one explicit built-in terrain preset.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::quick_create_intent`] or an identity
+    /// error if a built-in profile literal violates the stable-ID grammar.
+    pub fn quick_create_intent_with_terrain(
+        &self,
+        display_name: &str,
+        preset: TerrainPresetV2,
+    ) -> Result<QuickCreateIntent, ProductionMemoryStartError> {
+        Ok(self
+            .quick_create_intent(display_name)?
+            .with_generation_profile(preset.profile_id_str().parse::<StableId>()?))
     }
 
     /// Publishes an in-memory world without opening a catalog writer.
@@ -296,9 +322,13 @@ impl ProductionMemoryStart {
         intent: &QuickCreateIntent,
         now_ms: u64,
     ) -> Result<WorldId, ProductionMemoryStartError> {
+        let preset = terrain_preset_for_intent(intent)?;
+        let terrain = preset.resolve();
         let world_id = WorldId::new_v4();
-        self.provision_created_world(world_id, intent)?;
-        Ok(self.flow.create(intent, world_id, now_ms)?)
+        self.provision_created_world(world_id, intent, preset, &terrain)?;
+        let world_id = self.flow.create(intent, world_id, now_ms)?;
+        self.terrain_configs.insert(world_id, terrain);
+        Ok(world_id)
     }
 
     /// Returns the exact-ready Continue target, when one exists.
@@ -469,7 +499,7 @@ impl ProductionMemoryStart {
     /// Exact lock/catalog/world-header/lease receipts are revalidated before
     /// the writer opens. Player pose, inventory, selected slot, tool
     /// durability, containers, scheduled work, and edited chunks are
-    /// published at [`CommitDurabilityV1::Durable`]. A protected checkpoint
+    /// published at [`latticeaxiom_world_db::CommitDurabilityV1::Durable`]. A protected checkpoint
     /// is created at that frontier. The writer is closed before the child
     /// result is sealed with the caller's confirmed durable settings revision.
     ///
@@ -809,7 +839,14 @@ impl ProductionMemoryStart {
                 world_id,
                 storage.clone(),
             )?,
-            None => ProductionSpine::materialize_world(&self.images, world_id)?,
+            None => ProductionSpine::materialize_world_with_terrain(
+                &self.images,
+                world_id,
+                self.terrain_configs
+                    .get(&world_id)
+                    .copied()
+                    .unwrap_or_else(|| TerrainPresetV2::Balanced.resolve()),
+            )?,
         };
         self.spines.insert(world_id, spine.clone());
         Ok(spine)
@@ -819,17 +856,29 @@ impl ProductionMemoryStart {
         &self,
         world_id: WorldId,
         intent: &QuickCreateIntent,
+        preset: TerrainPresetV2,
+        terrain: &TerrainConfigV2,
     ) -> Result<(), ProductionMemoryStartError> {
         let Some(storage) = &self.storage else {
             return Ok(());
         };
-        let metadata = memory_session_authoritative_metadata(&self.images)?;
+        let metadata = memory_session_authoritative_metadata(&self.images, preset, terrain)?;
         storage.provision_world(WorldCreateRequestV1::new(
             world_id,
             intent.display_name.clone(),
             memory_session_store_id(),
             metadata,
         ))?;
+        Ok(())
+    }
+
+    fn install_worldgen_profiles(&mut self) -> Result<(), ProductionMemoryStartError> {
+        let selected = TerrainPresetV2::Balanced
+            .profile_id_str()
+            .parse::<StableId>()?;
+        self.flow
+            .set_worldgen_profiles(worldgen_profile_options()?, &selected)
+            .map_err(MemoryStartError::from)?;
         Ok(())
     }
 }
@@ -898,6 +947,12 @@ pub enum ProductionMemoryStartError {
     /// The lock graph has no root package to bind to a create intent.
     #[error("lock graph has no root package")]
     NoGraphRoot,
+    /// Create intent named a generation profile not offered by this host.
+    #[error("world-generation profile `{profile}` is not available")]
+    UnknownWorldgenProfile {
+        /// Unrecognized profile identity.
+        profile: StableId,
+    },
     /// Continue was requested without an exact-ready in-memory world.
     #[error("no exact-ready in-memory world is available for Continue")]
     NoContinueWorld,
@@ -1086,6 +1141,8 @@ fn writable_open_plan(world_id: WorldId, permit: &ActivationPermitV1) -> WorldOp
 
 fn memory_session_authoritative_metadata(
     images: &LockVerifiedComposeImages,
+    preset: TerrainPresetV2,
+    terrain: &TerrainConfigV2,
 ) -> Result<AuthoritativeMetadataInputV1, ProductionMemoryStartError> {
     let lock_hash = DigestV1::from_bytes(*images.product_lock_hash().as_bytes());
     let lock = FrozenLockReceiptV1::new(
@@ -1097,6 +1154,10 @@ fn memory_session_authoritative_metadata(
         lock_hash,
         lock_hash,
     )?;
+    let profile = preset.profile_id_str().parse::<StableId>()?;
+    let terrain_hash = terrain
+        .canonical_hash()
+        .map_err(ProductionHostError::from)?;
     let closure = WorldRequirementClosureV1::new(
         BTreeMap::new(),
         BTreeMap::new(),
@@ -1104,9 +1165,61 @@ fn memory_session_authoritative_metadata(
         BTreeMap::new(),
         lock_hash,
         lock_hash,
-        BTreeMap::new(),
+        BTreeMap::from([(profile, DigestV1::from_bytes(*terrain_hash.as_bytes()))]),
     )?;
     Ok(AuthoritativeMetadataInputV1::new(lock, closure))
+}
+
+fn terrain_preset_for_intent(
+    intent: &QuickCreateIntent,
+) -> Result<TerrainPresetV2, ProductionMemoryStartError> {
+    let Some(profile) = intent.generation_profile.as_ref() else {
+        return Ok(TerrainPresetV2::Balanced);
+    };
+    TerrainPresetV2::from_profile_id(profile).ok_or_else(|| {
+        ProductionMemoryStartError::UnknownWorldgenProfile {
+            profile: profile.clone(),
+        }
+    })
+}
+
+fn worldgen_profile_options() -> Result<Vec<WorldgenProfileOption>, IdentifierError> {
+    TerrainPresetV2::ALL
+        .into_iter()
+        .map(|preset| {
+            let (label, description) = match preset {
+                TerrainPresetV2::Balanced => (
+                    "Balanced",
+                    "Continents, island chains, rivers, lakes, wetlands, plateaus, and mountain ranges.",
+                ),
+                TerrainPresetV2::Continental => (
+                    "Continental",
+                    "Large landmasses, long river systems, broad interiors, and inland ranges.",
+                ),
+                TerrainPresetV2::Archipelago => (
+                    "Archipelago",
+                    "Deep oceans, dense island chains, rugged coasts, and compact watersheds.",
+                ),
+                TerrainPresetV2::Alpine => (
+                    "Alpine",
+                    "Continuous high mountain systems, deep valleys, and strong altitude climate.",
+                ),
+                TerrainPresetV2::Eroded => (
+                    "Eroded",
+                    "Old low-relief terrain with broad valleys, lakes, and extensive wetlands.",
+                ),
+                TerrainPresetV2::Wild => (
+                    "Wild",
+                    "A 1024-voxel world with extreme relief and uncommon volcanic landforms.",
+                ),
+            };
+            Ok(WorldgenProfileOption::new(
+                preset.profile_id_str().parse::<StableId>()?,
+                label,
+                description,
+            ))
+        })
+        .collect()
 }
 
 /// Resolves the exactly-one start-ui capability providers from a locked graph.

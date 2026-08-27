@@ -10,7 +10,7 @@
 //! adapter installation remains a later fail-closed boundary. Each instance
 //! owns one Bevy [`bevy::app::App`].
 //!
-//! The production playable spine lives in [`host`]. It starts from
+//! The production playable [`ProductionSpine`] starts from
 //! [`LockVerifiedComposeImages`], stores voxels through
 //! [`latticeaxiom_storage::MemoryTransactionKernel`] as the session cache,
 //! streams a bounded chunk working set around the local player, and presents
