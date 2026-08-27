@@ -1959,6 +1959,14 @@ pub enum GameplayReject {
         /// Stable, non-localized reason.
         reason: &'static str,
     },
+    /// A package-authored primary item-browser category is malformed.
+    #[error("invalid item category `{category}`: {reason}")]
+    InvalidItemCategory {
+        /// Versioned category identity.
+        category: String,
+        /// Stable, non-localized reason.
+        reason: &'static str,
+    },
     /// A block-to-schema binding is malformed or incomplete.
     #[error("invalid block schema binding `{block}`: {reason}")]
     InvalidSchemaBinding {
@@ -2239,6 +2247,7 @@ impl GameplayReject {
             Self::UnknownReference { .. } => "gameplay.unknown_reference",
             Self::InvalidPredicate { .. } => "gameplay.invalid_predicate",
             Self::InvalidRecipe { .. } => "gameplay.invalid_recipe",
+            Self::InvalidItemCategory { .. } => "gameplay.invalid_item_category",
             Self::InvalidSchemaBinding { .. } => "gameplay.invalid_schema_binding",
             Self::FrozenRoleRejected { .. } => "gameplay.frozen_role_rejected",
             Self::RevisionOverflow { .. } => "gameplay.revision_overflow",

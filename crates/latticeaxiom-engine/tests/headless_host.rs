@@ -2969,6 +2969,9 @@ fn authored_gameplay_catalog() -> Result<GameplayCatalog, latticeaxiom_engine::P
     compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
         blocks: include_str!("../../../packages/terrenia/blocks/data/authored-catalog-v1.json"),
         rules: include_str!("../../../packages/terrenia/gameplay/data/authored-rules-v1.json"),
+        browser: include_str!(
+            "../../../packages/terrenia/gameplay/data/authored-item-browser-v1.json"
+        ),
         tools: include_str!("../../../packages/terrenia/tools/data/authored-tools-v1.json"),
         d9_block_ids: include_str!(
             "../../../packages/terrenia/blocks/data/goldens/d9-block-ids.txt"
@@ -3001,6 +3004,10 @@ fn fixture_data_artifact(package: &PackageName) -> Vec<u8> {
         (
             "data/authored-rules-v1.json",
             "packages/terrenia/gameplay/data/authored-rules-v1.json",
+        ),
+        (
+            "data/authored-item-browser-v1.json",
+            "packages/terrenia/gameplay/data/authored-item-browser-v1.json",
         ),
         (
             "data/authored-tools-v1.json",

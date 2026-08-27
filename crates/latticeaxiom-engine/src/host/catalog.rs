@@ -18,11 +18,11 @@ use latticeaxiom_content::{
 use latticeaxiom_core::{CanonicalLogicalPath, CapabilityId, PackageName, SchemaId, StableId};
 use latticeaxiom_gameplay::{
     BlockDefinitionV1, BlockId, BlockSchemaBindingV1, CatalogLimits, FrozenItemRoleBindingV1,
-    FuelRuleV1, GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemId,
-    ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, ItemTagDefinitionV1, ItemTagId,
-    MiningRuleV1, ProcessDefinitionV1, ProcessId, RecipeDefinitionV1, RecipeId, RecipePatternV1,
-    RoleOutputV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1, WorkstationDefinitionV1,
-    WorkstationId,
+    FuelRuleV1, GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemCategoryDefinitionV1,
+    ItemCategoryId, ItemDefinitionV1, ItemId, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId,
+    ItemTagDefinitionV1, ItemTagId, MiningRuleV1, ProcessDefinitionV1, ProcessId,
+    RecipeDefinitionV1, RecipeId, RecipePatternV1, RoleOutputV1, ToolClassId, ToolDefinitionV1,
+    ToolRequirementV1, WorkstationDefinitionV1, WorkstationId,
 };
 use latticeaxiom_registration::CompiledRegistration;
 use latticeaxiom_storage::DimensionId;
@@ -50,6 +50,7 @@ pub(super) const SANDBOX_TOOLS_CAPABILITY: &str = "latticeaxiom:capability/sandb
 
 const BLOCKS_CATALOG_PATH: &str = "data/authored-catalog-v1.json";
 const GAMEPLAY_RULES_PATH: &str = "data/authored-rules-v1.json";
+const ITEM_BROWSER_PATH: &str = "data/authored-item-browser-v1.json";
 const TOOLS_CATALOG_PATH: &str = "data/authored-tools-v1.json";
 const WORLDGEN_BINDINGS_PATH: &str = "data/authored-block-bindings-v1.json";
 const WORLDGEN_BIOMES_PATH: &str = "data/authored-biomes-v1.json";
@@ -107,6 +108,8 @@ pub struct AuthoredGameplayCatalogSourcesV1<'a> {
     pub blocks: &'a str,
     /// Sandbox rules supplied by the sandbox-gameplay provider.
     pub rules: &'a str,
+    /// Primary item-browser categories supplied by the sandbox-gameplay provider.
+    pub browser: &'a str,
     /// Tool definitions supplied by the sandbox-tools provider.
     pub tools: &'a str,
     /// Required D9 block identities supplied by the blocks provider.
@@ -1078,6 +1081,7 @@ fn authored_gameplay_source(
     let blocks = parse_json_object(sources.blocks, "blocks-catalog")?;
     require_d9_golden_block_ids(&authored_catalog_block_ids(&blocks)?, sources.d9_block_ids)?;
     let rules = parse_json_object(sources.rules, "gameplay-rules")?;
+    let browser = parse_json_object(sources.browser, "item-browser")?;
     let tools = parse_json_object(sources.tools, "tools")?;
     let mut items = BTreeMap::new();
     let mut item_roles = Vec::new();
@@ -1126,6 +1130,7 @@ fn authored_gameplay_source(
         )?,
         tools: compile_tools(json_array(&tools, "tools")?)?,
         tags,
+        categories: ingest_item_categories(json_array(&browser, "categories")?)?,
         roles: item_roles,
         bindings,
         recipes,
@@ -1184,6 +1189,36 @@ fn ingest_items(
         );
     }
     Ok(())
+}
+
+fn ingest_item_categories(
+    rows: &[Value],
+) -> Result<Vec<ItemCategoryDefinitionV1>, ProductionHostError> {
+    rows.iter()
+        .map(|row| {
+            let sort_order = u16::try_from(json_u64(row, "sort_order")?).map_err(|_| {
+                ProductionHostError::InvalidCatalogField {
+                    field: "sort_order",
+                }
+            })?;
+            let members = json_array(row, "members")?
+                .iter()
+                .map(|member| {
+                    member
+                        .as_str()
+                        .ok_or(ProductionHostError::InvalidCatalogField { field: "members" })
+                        .and_then(|item| ItemId::parse(item).map_err(ProductionHostError::from))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ItemCategoryDefinitionV1 {
+                id: ItemCategoryId::parse(json_text(row, "id")?)?,
+                display_name: json_text(row, "display_name")?.to_owned(),
+                icon: ItemId::parse(json_text(row, "icon")?)?,
+                sort_order,
+                members: members.into_boxed_slice(),
+            })
+        })
+        .collect()
 }
 
 fn ingest_roles(
@@ -1644,6 +1679,7 @@ fn compile_lock_selected_gameplay_catalog(
     compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
         blocks: required_data_text(&blocks, BLOCKS_CATALOG_PATH)?,
         rules: required_data_text(&gameplay, GAMEPLAY_RULES_PATH)?,
+        browser: required_data_text(&gameplay, ITEM_BROWSER_PATH)?,
         tools: required_data_text(&tools, TOOLS_CATALOG_PATH)?,
         d9_block_ids: required_data_text(&blocks, D9_BLOCK_IDS_PATH)?,
     })
@@ -1672,6 +1708,8 @@ mod tests {
         include_str!("../../../../packages/terrenia/blocks/data/authored-catalog-v1.json");
     const AUTHORED_RULES_JSON: &str =
         include_str!("../../../../packages/terrenia/gameplay/data/authored-rules-v1.json");
+    const AUTHORED_ITEM_BROWSER_JSON: &str =
+        include_str!("../../../../packages/terrenia/gameplay/data/authored-item-browser-v1.json");
     const AUTHORED_TOOLS_JSON: &str =
         include_str!("../../../../packages/terrenia/tools/data/authored-tools-v1.json");
     const AUTHORED_BIOMES_JSON: &str =
@@ -1696,6 +1734,7 @@ mod tests {
         compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
             blocks: AUTHORED_BLOCKS_JSON,
             rules: AUTHORED_RULES_JSON,
+            browser: AUTHORED_ITEM_BROWSER_JSON,
             tools: AUTHORED_TOOLS_JSON,
             d9_block_ids: D9_BLOCK_IDS,
         })
@@ -1897,6 +1936,22 @@ mod tests {
             "compiled GameplayCatalog is missing golden IDs: {missing:?}"
         );
         assert_eq!(catalog.blocks().len(), golden.len() - missing.len());
+    }
+
+    #[test]
+    fn package_item_browser_assigns_one_primary_category_to_every_item() {
+        let catalog = test_gameplay_catalog().expect("package gameplay catalog must compile");
+        assert_eq!(catalog.categories().len(), 6);
+        let uncategorized = catalog
+            .items()
+            .keys()
+            .filter(|item| catalog.category_for_item(item).is_none())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(
+            uncategorized.is_empty(),
+            "every shipped item needs one primary browser category: {uncategorized:?}"
+        );
     }
 
     #[test]

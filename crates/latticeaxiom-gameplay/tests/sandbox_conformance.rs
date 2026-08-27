@@ -230,6 +230,7 @@ fn catalog_source() -> GameplayCatalogSourceV1 {
                 members: vec![charcoal.clone(), broad_rock].into_boxed_slice(),
             },
         ],
+        categories: Vec::new(),
         roles: vec![
             ItemRoleDefinitionV1 {
                 id: plank_role.clone(),

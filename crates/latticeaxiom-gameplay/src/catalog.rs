@@ -7,8 +7,8 @@ use latticeaxiom_core::SchemaId;
 
 use crate::{
     BlockId, ContainerOwnerComponentV1, ContainerStateV1, FurnaceContinuationV1,
-    GameplayMutationIntentV1, GameplayReject, InventoryStateV1, ItemId, ItemRoleId, ItemStackV1,
-    ItemTagId, ProcessId, RecipeId, ToolClassId, WorkstationId,
+    GameplayMutationIntentV1, GameplayReject, InventoryStateV1, ItemCategoryId, ItemId, ItemRoleId,
+    ItemStackV1, ItemTagId, ProcessId, RecipeId, ToolClassId, WorkstationId,
     model::ABSOLUTE_MAX_CONTAINER_SLOTS,
 };
 
@@ -25,6 +25,10 @@ pub struct CatalogLimits {
     pub tags: usize,
     /// Total exact members across all tags.
     pub tag_members: usize,
+    /// Primary item-browser category definitions.
+    pub categories: usize,
+    /// Total exact members across all primary categories.
+    pub category_members: usize,
     /// Frozen item roles.
     pub roles: usize,
     /// Recipes.
@@ -55,6 +59,8 @@ impl Default for CatalogLimits {
             tools: 512,
             tags: 1_024,
             tag_members: 65_536,
+            categories: 256,
+            category_members: 8_192,
             roles: 1_024,
             recipes: 2_048,
             workstations: 128,
@@ -77,6 +83,8 @@ impl CatalogLimits {
             ("catalog_tools", self.tools),
             ("catalog_tags", self.tags),
             ("catalog_tag_members", self.tag_members),
+            ("catalog_categories", self.categories),
+            ("catalog_category_members", self.category_members),
             ("catalog_roles", self.roles),
             ("catalog_recipes", self.recipes),
             ("catalog_workstations", self.workstations),
@@ -164,6 +172,24 @@ pub struct ItemTagDefinitionV1 {
     /// Versioned tag contract.
     pub id: ItemTagId,
     /// Exact concrete members; compile order is irrelevant.
+    pub members: Box<[ItemId]>,
+}
+
+/// Package-authored primary grouping for item-browser navigation.
+///
+/// An item may occur in at most one category, while semantic tags remain
+/// many-to-many and are available to search and secondary filters.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ItemCategoryDefinitionV1 {
+    /// Versioned category identity.
+    pub id: ItemCategoryId,
+    /// Locale-independent fallback label.
+    pub display_name: String,
+    /// Catalog item used as the tab icon.
+    pub icon: ItemId,
+    /// Stable package-authored tab order.
+    pub sort_order: u16,
+    /// Exact primary members.
     pub members: Box<[ItemId]>,
 }
 
@@ -342,6 +368,8 @@ pub struct GameplayCatalogSourceV1 {
     pub tools: Vec<ToolDefinitionV1>,
     /// Compiled semantic tags.
     pub tags: Vec<ItemTagDefinitionV1>,
+    /// Primary item-browser categories.
+    pub categories: Vec<ItemCategoryDefinitionV1>,
     /// Item role contracts.
     pub roles: Vec<ItemRoleDefinitionV1>,
     /// Frozen concrete bindings.
@@ -369,6 +397,8 @@ pub struct GameplayCatalog {
     pub(crate) blocks: BTreeMap<BlockId, BlockDefinitionV1>,
     pub(crate) tools: BTreeMap<ItemId, ToolDefinitionV1>,
     pub(crate) tags: BTreeMap<ItemTagId, BTreeSet<ItemId>>,
+    pub(crate) categories: BTreeMap<ItemCategoryId, ItemCategoryDefinitionV1>,
+    pub(crate) category_by_item: BTreeMap<ItemId, ItemCategoryId>,
     pub(crate) roles: BTreeMap<ItemRoleId, ItemRoleDefinitionV1>,
     pub(crate) bindings: BTreeMap<ItemRoleId, ItemId>,
     pub(crate) recipes: BTreeMap<RecipeId, RecipeDefinitionV1>,
@@ -407,12 +437,15 @@ impl GameplayCatalog {
         let block_schema_bindings =
             collect_block_schema_bindings(source.block_schema_bindings, &mut workstations)?;
         let tags = collect_tags(source.tags)?;
+        let (categories, category_by_item) = collect_categories(source.categories)?;
 
         let catalog = Self {
             items,
             blocks,
             tools,
             tags,
+            categories,
+            category_by_item,
             roles,
             bindings,
             recipes,
@@ -496,6 +529,27 @@ impl GameplayCatalog {
     #[must_use]
     pub fn tags(&self) -> &BTreeMap<ItemTagId, BTreeSet<ItemId>> {
         &self.tags
+    }
+
+    /// Returns primary item-browser categories in identity order.
+    #[must_use]
+    pub fn categories(&self) -> &BTreeMap<ItemCategoryId, ItemCategoryDefinitionV1> {
+        &self.categories
+    }
+
+    /// Returns the optional primary browser category for one item.
+    #[must_use]
+    pub fn category_for_item(&self, item: &ItemId) -> Option<&ItemCategoryId> {
+        self.category_by_item.get(item)
+    }
+
+    /// Returns semantic tags containing one item in tag identity order.
+    #[must_use]
+    pub fn tags_for_item(&self, item: &ItemId) -> Vec<&ItemTagId> {
+        self.tags
+            .iter()
+            .filter_map(|(tag, members)| members.contains(item).then_some(tag))
+            .collect()
     }
 
     /// Returns compiled item roles in identity order.
@@ -686,6 +740,18 @@ impl GameplayCatalog {
                 }
             }
         }
+        for category in self.categories.values() {
+            if category.display_name.trim().is_empty() {
+                return Err(GameplayReject::InvalidItemCategory {
+                    category: category.id.as_str().to_owned(),
+                    reason: "display name cannot be empty",
+                });
+            }
+            require_key(&self.items, &category.icon, "item_category_icon")?;
+            for member in &category.members {
+                require_key(&self.items, member, "item_category_member")?;
+            }
+        }
         for role in self.roles.values() {
             validate_predicate(&role.accepts, self, self.limits)?;
             let binding =
@@ -744,6 +810,11 @@ fn preflight_source(
         ("catalog_blocks", source.blocks.len(), limits.blocks),
         ("catalog_tools", source.tools.len(), limits.tools),
         ("catalog_tags", source.tags.len(), limits.tags),
+        (
+            "catalog_categories",
+            source.categories.len(),
+            limits.categories,
+        ),
         ("catalog_roles", source.roles.len(), limits.roles),
         ("catalog_bindings", source.bindings.len(), limits.roles),
         ("catalog_recipes", source.recipes.len(), limits.recipes),
@@ -781,6 +852,23 @@ fn preflight_source(
             })
     })?;
     ensure_limit("catalog_tag_members", tag_members, limits.tag_members)?;
+    let category_members = source
+        .categories
+        .iter()
+        .try_fold(0_usize, |total, category| {
+            total
+                .checked_add(category.members.len())
+                .ok_or(GameplayReject::LimitExceeded {
+                    resource: "catalog_category_members",
+                    limit: limits.category_members,
+                    actual: usize::MAX,
+                })
+        })?;
+    ensure_limit(
+        "catalog_category_members",
+        category_members,
+        limits.category_members,
+    )?;
 
     for recipe in &source.recipes {
         match &recipe.pattern {
@@ -1020,6 +1108,49 @@ fn collect_tags(
     Ok(result)
 }
 
+type CompiledItemCategories = (
+    BTreeMap<ItemCategoryId, ItemCategoryDefinitionV1>,
+    BTreeMap<ItemId, ItemCategoryId>,
+);
+
+fn collect_categories(
+    values: Vec<ItemCategoryDefinitionV1>,
+) -> Result<CompiledItemCategories, GameplayReject> {
+    let mut categories = BTreeMap::new();
+    let mut category_by_item = BTreeMap::new();
+    for mut value in values {
+        let mut members = BTreeSet::new();
+        for member in value.members.into_vec() {
+            if !members.insert(member.clone()) {
+                return Err(GameplayReject::DuplicateRegistration {
+                    kind: "item_category_member",
+                    id: format!("{} -> {}", value.id.as_str(), member.as_str()),
+                });
+            }
+            if let Some(previous) = category_by_item.insert(member.clone(), value.id.clone()) {
+                return Err(GameplayReject::DuplicateRegistration {
+                    kind: "item_primary_category",
+                    id: format!(
+                        "{} -> {} and {}",
+                        member.as_str(),
+                        previous.as_str(),
+                        value.id.as_str()
+                    ),
+                });
+            }
+        }
+        value.members = members.into_iter().collect();
+        let category_id = value.id.clone();
+        if categories.insert(category_id.clone(), value).is_some() {
+            return Err(GameplayReject::DuplicateRegistration {
+                kind: "item_category",
+                id: category_id.as_str().to_owned(),
+            });
+        }
+    }
+    Ok((categories, category_by_item))
+}
+
 fn require_key<'a, K, V>(
     map: &'a BTreeMap<K, V>,
     key: &K,
@@ -1146,7 +1277,8 @@ mod tests {
     use crate::{
         BlockDefinitionV1, BlockId, BlockSchemaBindingV1, ContainerOwnerComponentV1,
         ContainerStateV1, GameplayCatalog, GameplayCatalogSourceV1, GameplayReject,
-        ItemDefinitionV1, ItemId, ItemStackV1, MiningRuleV1, SchemaId, WorkstationDefinitionV1,
+        ItemCategoryDefinitionV1, ItemCategoryId, ItemDefinitionV1, ItemId, ItemStackV1,
+        ItemTagDefinitionV1, ItemTagId, MiningRuleV1, SchemaId, WorkstationDefinitionV1,
         WorkstationId,
     };
 
@@ -1254,6 +1386,62 @@ mod tests {
             Err(GameplayReject::LimitExceeded {
                 resource: "catalog_items",
                 actual: 2,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn one_primary_category_coexists_with_many_semantic_tags() {
+        let item = ItemId::parse("example:item/stone").expect("fixture item is canonical");
+        let category = ItemCategoryId::parse("example:item-category/terrain@1")
+            .expect("fixture category is canonical");
+        let source = GameplayCatalogSourceV1 {
+            items: vec![ItemDefinitionV1 {
+                id: item.clone(),
+                stack_limit: NonZeroU32::new(64).expect("fixture limit is non-zero"),
+                placement_block: None,
+                durability: None,
+            }],
+            tags: vec![
+                ItemTagDefinitionV1 {
+                    id: ItemTagId::parse("example:item-tag/stones@1")
+                        .expect("fixture tag is canonical"),
+                    members: vec![item.clone()].into_boxed_slice(),
+                },
+                ItemTagDefinitionV1 {
+                    id: ItemTagId::parse("example:item-tag/building-materials@1")
+                        .expect("fixture tag is canonical"),
+                    members: vec![item.clone()].into_boxed_slice(),
+                },
+            ],
+            categories: vec![ItemCategoryDefinitionV1 {
+                id: category.clone(),
+                display_name: "Terrain".to_owned(),
+                icon: item.clone(),
+                sort_order: 10,
+                members: vec![item.clone()].into_boxed_slice(),
+            }],
+            ..GameplayCatalogSourceV1::default()
+        };
+        let catalog = GameplayCatalog::compile(source.clone(), super::CatalogLimits::default())
+            .expect("one category and many tags compile");
+        assert_eq!(catalog.category_for_item(&item), Some(&category));
+        assert_eq!(catalog.tags_for_item(&item).len(), 2);
+
+        let mut duplicate = source;
+        duplicate.categories.push(ItemCategoryDefinitionV1 {
+            id: ItemCategoryId::parse("example:item-category/resources@1")
+                .expect("fixture category is canonical"),
+            display_name: "Resources".to_owned(),
+            icon: item.clone(),
+            sort_order: 20,
+            members: vec![item].into_boxed_slice(),
+        });
+        assert!(matches!(
+            GameplayCatalog::compile(duplicate, super::CatalogLimits::default()),
+            Err(GameplayReject::DuplicateRegistration {
+                kind: "item_primary_category",
                 ..
             })
         ));

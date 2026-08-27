@@ -30,6 +30,8 @@ const AUTHORED_BLOCK_DISPLAY_JSON: &str =
     include_str!("../../../packages/terrenia/blocks/data/authored-display-v1.json");
 const AUTHORED_RULES_JSON: &str =
     include_str!("../../../packages/terrenia/gameplay/data/authored-rules-v1.json");
+const AUTHORED_ITEM_BROWSER_JSON: &str =
+    include_str!("../../../packages/terrenia/gameplay/data/authored-item-browser-v1.json");
 const AUTHORED_TOOLS_JSON: &str =
     include_str!("../../../packages/terrenia/tools/data/authored-tools-v1.json");
 const AUTHORED_TOOL_DISPLAY_JSON: &str =
@@ -78,6 +80,7 @@ fn locked_catalog_is_exactly_72_blocks_and_water_lava() {
     let gameplay = compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
         blocks: AUTHORED_BLOCKS_JSON,
         rules: AUTHORED_RULES_JSON,
+        browser: AUTHORED_ITEM_BROWSER_JSON,
         tools: AUTHORED_TOOLS_JSON,
         d9_block_ids: D9_BLOCK_IDS,
     })

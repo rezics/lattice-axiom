@@ -105,6 +105,12 @@ typed_id!(
     true
 );
 typed_id!(
+    /// Versioned primary item-browser category identity.
+    ItemCategoryId,
+    "item-category",
+    true
+);
+typed_id!(
     /// Versioned item-role contract identity.
     ItemRoleId,
     "item-role",
@@ -137,12 +143,13 @@ typed_id!(
 
 #[cfg(test)]
 mod tests {
-    use super::{GameplayIdError, ItemId, ItemTagId};
+    use super::{GameplayIdError, ItemCategoryId, ItemId, ItemTagId};
 
     #[test]
     fn exact_and_contract_ids_keep_distinct_version_rules() {
         assert!(ItemId::parse("example:item/stone").is_ok());
         assert!(ItemTagId::parse("latticeaxiom:item-tag/stones@1").is_ok());
+        assert!(ItemCategoryId::parse("example:item-category/building@1").is_ok());
         assert!(matches!(
             ItemTagId::parse("latticeaxiom:item-tag/stones"),
             Err(GameplayIdError::MissingMajor { .. })

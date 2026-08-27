@@ -33,15 +33,15 @@ mod storage_scope;
 
 pub use catalog::{
     BlockDefinitionV1, BlockSchemaBindingV1, CatalogLimits, FrozenItemRoleBindingV1, FuelRuleV1,
-    GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemDefinitionV1, ItemPredicateV1,
-    ItemRoleDefinitionV1, ItemTagDefinitionV1, MiningRuleV1, ProcessDefinitionV1,
-    RecipeDefinitionV1, RecipePatternV1, RoleOutputV1, ToolDefinitionV1, ToolRequirementV1,
-    WorkstationDefinitionV1, is_reserved_gameplay_schema,
+    GameplayCatalog, GameplayCatalogSourceV1, IngredientV1, ItemCategoryDefinitionV1,
+    ItemDefinitionV1, ItemPredicateV1, ItemRoleDefinitionV1, ItemTagDefinitionV1, MiningRuleV1,
+    ProcessDefinitionV1, RecipeDefinitionV1, RecipePatternV1, RoleOutputV1, ToolDefinitionV1,
+    ToolRequirementV1, WorkstationDefinitionV1, is_reserved_gameplay_schema,
 };
 pub use hash::{CommandFingerprintV1, GameplayPlanHashV1, ReferenceGameplayStateHashV1};
 pub use id::{
-    BlockId, GameplayIdError, ItemId, ItemRoleId, ItemTagId, ProcessId, RecipeId, ToolClassId,
-    WorkstationId,
+    BlockId, GameplayIdError, ItemCategoryId, ItemId, ItemRoleId, ItemTagId, ProcessId, RecipeId,
+    ToolClassId, WorkstationId,
 };
 pub use inspect::{
     ContainerInspectV1, FurnaceInspectV1, InventoryInspectV1, MiningInspectV1, RecipeInspectV1,
