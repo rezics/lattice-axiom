@@ -1,8 +1,8 @@
-//! Deterministic, bounded world-generation contracts for the D4 vertical slice.
+//! Deterministic, bounded world-generation contracts.
 //!
 //! The crate is an engine-independent algorithm scaffold. It resolves one
-//! coordinator/provider identity for every fixed D4 reference slot into an
-//! immutable [`GenerationPlanV1`], then produces provisional snapshot
+//! coordinator/provider identities and package-owned surface-biome terrain
+//! programs into an immutable [`GenerationPlanV1`], then produces provisional snapshot
 //! candidates without opening a writer. Bevy owns task execution, while the
 //! storage layer owns atomic durable publication. Package/RegistrationImage
 //! graph compilation and a verified cross-epoch adapter remain external gates.
@@ -12,10 +12,10 @@
 //! coordinates are ordered `(x, y, z)`. Generation never reads a materialized
 //! neighbor chunk, so chunk and task completion order cannot affect output.
 //!
-//! The two D4 styles are deterministic fixture algorithms (temperate woodland
-//! and arid badlands); package-owned style identities and Predicate-receipt
-//! registration schemas are not frozen here. The coarse selector implements
-//! only the D7 [`TerritoryQueryV1`] result shape, not the full Territory Atlas.
+//! Surface ecology is selected before terrain dispatch. Each enabled ecology
+//! must supply exactly one [`SurfaceBiomeTerrainProgramV1`]; the platform does
+//! not contain product-specific terrain provider slots. The coarse selector
+//! implements the D7 [`TerritoryQueryV1`] result shape, not a full Territory Atlas.
 //!
 //! The optional V5 natural layer adds a third surface style, queryable strata,
 //! stable resource fields, exclusion-radius vegetation, and surface river/basin
@@ -42,6 +42,7 @@ mod seed;
 mod spawn;
 mod terrain_config;
 mod terrain_field;
+mod terrain_program;
 mod territory;
 
 pub use cave::{
@@ -104,6 +105,7 @@ pub use terrain_config::{
     UndergroundConfigV2, WorldBoundsV2,
 };
 pub use terrain_field::{TerrainColumnSampleV2, TerrainFamilyV2};
+pub use terrain_program::{SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1, TerrainBaseAlgorithmV1};
 pub use territory::{TerrainStyleV1, TerritoryQueryV1, TransitionMetadataV1};
 
 pub use latticeaxiom_storage::{

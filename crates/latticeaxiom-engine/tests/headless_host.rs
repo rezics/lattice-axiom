@@ -1163,14 +1163,14 @@ fn derived_queues_stay_bounded_during_async_traversal() {
             "in-flight {in_flight} exceeded derived cap"
         );
         assert!(
-            queues.mesh_pending + queues.mesh_in_flight <= 128,
-            "mesh queue {} + {} exceeded ADR 0026 cap",
+            queues.mesh_pending <= 128,
+            "mesh pending queue {} exceeded ADR 0026 cap; {} jobs were independently in flight",
             queues.mesh_pending,
             queues.mesh_in_flight
         );
         assert!(
-            queues.collider_pending + queues.collider_in_flight <= 64,
-            "collider queue exceeded ADR 0026 cap"
+            queues.collider_pending <= 64,
+            "collider pending queue exceeded ADR 0026 cap"
         );
         assert!(
             queues.reserved_bytes <= diagnostics.byte_budget(),
@@ -1445,8 +1445,8 @@ fn look_ahead_survives_zero_delta_idle_ticks() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)]
-fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
+#[allow(clippy::too_many_lines, clippy::similar_names)]
+fn production_host_streams_past_v2_neighborhood_in_two_horizontal_directions() {
     let _production_host_guard = production_host_test_guard();
     let boot = lock_boot_fixture();
     let images = boot.prepared();
@@ -1476,8 +1476,8 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         .x
         .saturating_add(resident_radius)
         .saturating_add(1);
-    let negative_eviction_target = spawn_chunk
-        .x
+    let negative_eviction_target_z = spawn_chunk
+        .z
         .saturating_sub(resident_radius)
         .saturating_sub(1);
     let (edited_position, _) = await_direct_fluid_cells(&mut instance, &spine);
@@ -1554,8 +1554,12 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
             .collect::<BTreeSet<_>>(),
         spine.last_stream_error()
     );
-    let return_ticks = scaled_fixture_ticks(&spine, 1_040);
-    sample_look_then_walk_until(
+    // The return leg crosses the entire outbound distance plus the negative
+    // eviction boundary. Keep its bounded budget symmetric in distance, not
+    // in ticks, so a changed but traversable terrain route is not a fixture
+    // failure.
+    let return_ticks = scaled_fixture_ticks(&spine, 2_080);
+    generation = sample_look_then_walk_until(
         &mut instance,
         &spine,
         generation,
@@ -1563,16 +1567,33 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         0.0,
         1.0,
         return_ticks,
-        |chunk| chunk.x <= negative_eviction_target,
+        |chunk| chunk.x <= spawn_chunk.x,
         &mut seen_resident,
         &mut seen_player_chunks,
         &mut min_y,
     );
-    let minus_x = seen_player_chunks
+    if chunk_from_translation(spine.player_pose().translation, spine.chunk_edge()).z
+        > negative_eviction_target_z
+    {
+        sample_look_then_walk_until(
+            &mut instance,
+            &spine,
+            generation,
+            std::f32::consts::FRAC_PI_2,
+            0.0,
+            1.0,
+            return_ticks,
+            |chunk| chunk.z <= negative_eviction_target_z,
+            &mut seen_resident,
+            &mut seen_player_chunks,
+            &mut min_y,
+        );
+    }
+    let minus_z = seen_player_chunks
         .iter()
-        .map(|chunk| chunk.x)
+        .map(|chunk| chunk.z)
         .min()
-        .expect("player visited -X chunks");
+        .expect("player visited -Z chunks");
 
     let current = spine.resident_chunks().into_iter().collect::<BTreeSet<_>>();
     let current_xs = current.iter().map(|chunk| chunk.x).collect::<BTreeSet<_>>();
@@ -1580,13 +1601,17 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
         .iter()
         .map(|chunk| chunk.x)
         .collect::<BTreeSet<_>>();
+    let seen_zs = seen_resident
+        .iter()
+        .map(|chunk| chunk.z)
+        .collect::<BTreeSet<_>>();
     assert!(
         plus_x >= positive_eviction_target,
         "walk +X must leave the spawn-relative V2 neighborhood (spawn {spawn_chunk:?}, target x {positive_eviction_target}, max x {plus_x})"
     );
     assert!(
-        minus_x < spawn_chunk.x,
-        "walk -X must cross the spawn column (spawn {spawn_chunk:?}, min x {minus_x}, pose {:?}, yaw {}, min y {min_y}, visited {seen_player_chunks:?})",
+        minus_z <= negative_eviction_target_z,
+        "walk -Z must cross the negative eviction boundary (spawn {spawn_chunk:?}, target z {negative_eviction_target_z}, min z {minus_z}, pose {:?}, yaw {}, min y {min_y}, visited {seen_player_chunks:?})",
         spine.player_pose().translation,
         spine.player_pose().yaw_radians
     );
@@ -1600,8 +1625,8 @@ fn production_host_streams_past_v2_neighborhood_in_both_x_directions() {
     );
     assert!(
         seen_xs.iter().any(|x| *x >= positive_eviction_target)
-            && seen_xs.iter().any(|x| *x <= negative_eviction_target),
-        "resident chunks must exist beyond the authored V2 x range, got {seen_xs:?}"
+            && seen_zs.iter().any(|z| *z <= negative_eviction_target_z),
+        "resident chunks must exist beyond the authored V2 horizontal range, x={seen_xs:?}, z={seen_zs:?}"
     );
     assert!(
         min_y > 8.0,

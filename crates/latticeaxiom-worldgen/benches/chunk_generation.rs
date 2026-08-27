@@ -18,7 +18,8 @@ use latticeaxiom_worldgen::{
     D4RoleVocabularyV1, DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
     HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
     NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainConfigV2, TerrainStyleV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, SurfaceBiomeIdV1,
+    SurfaceBiomeTerrainProgramV1, TerrainBaseAlgorithmV1, TerrainConfigV2, TerrainStyleV1,
     WorldSeedV1, WorldgenConfigV1, WorldgenLimitsV1,
 };
 
@@ -292,20 +293,23 @@ fn fixture_plan_with_edge(chunk_edge_voxels: u16) -> GenerationPlanV1 {
         chunk_edge_voxels,
         ..WorldgenConfigV1::default()
     };
-    GenerationPlanV1::compile(GenerationPlanInputV1::new(
-        dimension,
-        WorldSeedV1::from_integer(42),
-        config,
-        7,
-        PlanActivationIdV1::from_hash(CanonicalHash::digest(b"benchmark-activation")),
-        provider_offers(),
-        vocabulary,
-        bindings,
-        catalog,
-        CanonicalHash::digest(b"benchmark-semantic-image"),
-        vec![CanonicalHash::digest(b"benchmark-lock")],
-        WorldgenLimitsV1::default(),
-    ))
+    GenerationPlanV1::compile(
+        GenerationPlanInputV1::new(
+            dimension,
+            WorldSeedV1::from_integer(42),
+            config,
+            7,
+            PlanActivationIdV1::from_hash(CanonicalHash::digest(b"benchmark-activation")),
+            provider_offers(),
+            vocabulary,
+            bindings,
+            catalog,
+            CanonicalHash::digest(b"benchmark-semantic-image"),
+            vec![CanonicalHash::digest(b"benchmark-lock")],
+            WorldgenLimitsV1::default(),
+        )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(false)),
+    )
     .expect("benchmark plan is valid")
 }
 
@@ -313,8 +317,6 @@ fn provider_offers() -> Vec<ProviderOfferV1> {
     [
         (ProviderSlotV1::GenerationCoordinator, "coordinator"),
         (ProviderSlotV1::StyleSelector, "selector"),
-        (ProviderSlotV1::TemperateTerrain, "temperate"),
-        (ProviderSlotV1::AridTerrain, "arid"),
         (ProviderSlotV1::TerrainTransition, "transition"),
         (ProviderSlotV1::CaveTopology, "cave"),
         (ProviderSlotV1::Materializer, "materializer"),
@@ -419,7 +421,6 @@ fn natural_fixture_plan_with_config_and_terrain(
         (ProviderSlotV1::Hydrology, "hydrology"),
         (ProviderSlotV1::Resources, "resources"),
         (ProviderSlotV1::Vegetation, "vegetation"),
-        (ProviderSlotV1::BorealTerrain, "boreal"),
     ] {
         natural_offers.push(ProviderOfferV1::new(
             slot,
@@ -447,6 +448,7 @@ fn natural_fixture_plan_with_config_and_terrain(
         vec![CanonicalHash::digest(b"benchmark-lock")],
         WorldgenLimitsV1::default(),
     )
+    .with_surface_biome_terrain_programs(surface_terrain_programs(true))
     .with_natural_layer(NaturalLayerInputV1::new(
         natural_config,
         bindings.natural_vocabulary().expect("natural vocabulary"),
@@ -474,6 +476,32 @@ fn natural_fixture_plan_with_config_and_terrain(
         ));
     }
     GenerationPlanV1::compile(input).expect("natural benchmark plan is valid")
+}
+
+fn surface_terrain_programs(include_boreal: bool) -> Vec<SurfaceBiomeTerrainProgramV1> {
+    let mut rows = vec![
+        ("temperate-woodland", TerrainStyleV1::TemperateWoodland),
+        ("arid-badlands", TerrainStyleV1::AridBadlands),
+    ];
+    if include_boreal {
+        rows.push(("boreal-wetland", TerrainStyleV1::BorealWetland));
+    }
+    rows.into_iter()
+        .map(|(path, style)| {
+            SurfaceBiomeTerrainProgramV1::new(
+                SurfaceBiomeIdV1::new(stable_id(&format!("fixture:biome/{path}")))
+                    .expect("benchmark biome kind"),
+                style,
+                TerrainBaseAlgorithmV1::ContinentalComposite,
+                ProviderGenerationIdentityV1::new(
+                    stable_id(&format!("fixture:worldgen-provider/terrain-base/{path}@1")),
+                    NonZeroU32::MIN,
+                    10,
+                    CanonicalHash::digest(format!("{path}-terrain-benchmark-v10")),
+                ),
+            )
+        })
+        .collect()
 }
 
 fn v2_fixture_plan(terrain: TerrainConfigV2) -> GenerationPlanV1 {

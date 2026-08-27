@@ -24,7 +24,7 @@ use latticeaxiom_runtime_contracts::{
     WorldgenInspectReportV1, WorldgenInspectSamplesV1, compile_worldgen_inspect_report,
 };
 use latticeaxiom_storage::ChunkCoordinate;
-use latticeaxiom_terrenia_worldgen::TerrainPresetV2;
+use latticeaxiom_terrenia_worldgen::{TerrainPresetV2, surface_biome_terrain_programs};
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkFaceV1,
     D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyOccupancyCandidateV1,
@@ -72,6 +72,12 @@ pub(super) fn compile_plan(
         WorldgenLimitsV1::default(),
     )
     .with_terrain_config(terrain_config)
+    .with_surface_biome_terrain_programs(surface_biome_terrain_programs(
+        catalog.worldgen_package.as_ref().map_or_else(
+            || CanonicalHash::digest("terrenia-worldgen-builtin-v1"),
+            |package| package.artifact_hash,
+        ),
+    )?)
     .with_natural_layer(NaturalLayerInputV1::new(
         natural_layer_config(&config, &terrain_config)?,
         catalog.natural_vocabulary.clone(),
@@ -465,8 +471,6 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
     match slot {
         ProviderSlotV1::GenerationCoordinator => "coordinator",
         ProviderSlotV1::StyleSelector => "selector",
-        ProviderSlotV1::TemperateTerrain => "temperate",
-        ProviderSlotV1::AridTerrain => "arid",
         ProviderSlotV1::TerrainTransition => "transition",
         ProviderSlotV1::CaveTopology => "cave",
         ProviderSlotV1::Materializer => "materializer",
@@ -474,7 +478,6 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
         ProviderSlotV1::Hydrology => "hydrology",
         ProviderSlotV1::Resources => "resources",
         ProviderSlotV1::Vegetation => "vegetation",
-        ProviderSlotV1::BorealTerrain => "boreal",
     }
 }
 
@@ -483,12 +486,9 @@ const fn provider_revision(slot: ProviderSlotV1) -> u32 {
         ProviderSlotV1::TerrainTransition
         | ProviderSlotV1::Materializer
         | ProviderSlotV1::GenerationCoordinator => 8,
-        ProviderSlotV1::CaveTopology
-        | ProviderSlotV1::StyleSelector
-        | ProviderSlotV1::TemperateTerrain
-        | ProviderSlotV1::AridTerrain => 9,
+        ProviderSlotV1::CaveTopology | ProviderSlotV1::StyleSelector => 9,
         ProviderSlotV1::Geology | ProviderSlotV1::Resources | ProviderSlotV1::Vegetation => 2,
-        ProviderSlotV1::Hydrology | ProviderSlotV1::BorealTerrain => 3,
+        ProviderSlotV1::Hydrology => 3,
     }
 }
 
@@ -1075,12 +1075,11 @@ fn style_owner(
     plan: &GenerationPlanV1,
     style: TerrainStyleV1,
 ) -> Result<StableId, ProductionHostError> {
-    let slot = match style {
-        TerrainStyleV1::TemperateWoodland => ProviderSlotV1::TemperateTerrain,
-        TerrainStyleV1::AridBadlands => ProviderSlotV1::AridTerrain,
-        TerrainStyleV1::BorealWetland => ProviderSlotV1::BorealTerrain,
-    };
-    Ok(required_provider(plan, slot)?.provider_stable_id().clone())
+    plan.surface_biome_terrain_program(style)
+        .map(|program| program.provider().provider_stable_id().clone())
+        .ok_or(ProductionHostError::MissingNaturalSample {
+            kind: "surface biome terrain program",
+        })
 }
 
 fn required_provider(
@@ -2018,6 +2017,10 @@ mod tests {
                 WorldgenLimitsV1::default(),
             )
             .with_terrain_config(terrain)
+            .with_surface_biome_terrain_programs(
+                super::surface_biome_terrain_programs(CanonicalHash::digest("host-test-package"))
+                    .expect("Terrenia terrain programs"),
+            )
             .with_natural_layer(NaturalLayerInputV1::new(
                 natural_layer_config(&config, &terrain).expect("natural config fits spine"),
                 bindings
@@ -2077,6 +2080,10 @@ mod tests {
                 CanonicalHash::digest(b"authoritative-semantic-image"),
                 vec![CanonicalHash::digest(b"lock-a")],
                 WorldgenLimitsV1::default(),
+            )
+            .with_surface_biome_terrain_programs(
+                super::surface_biome_terrain_programs(CanonicalHash::digest("host-test-package"))
+                    .expect("Terrenia terrain programs"),
             )
             .with_natural_layer(NaturalLayerInputV1::new(
                 natural_layer_config(&config, &TerrainConfigV2::for_legacy_spine(&config))

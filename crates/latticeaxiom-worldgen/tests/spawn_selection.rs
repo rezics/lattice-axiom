@@ -6,6 +6,8 @@
     reason = "test fixtures fail immediately when authored IDs or invariants are invalid"
 )]
 
+mod support;
+
 use std::num::NonZeroU32;
 
 use latticeaxiom_core::{CanonicalHash, StableId};
@@ -16,6 +18,7 @@ use latticeaxiom_worldgen::{
     SpawnSearchBoundsV1, WorldSeedV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
     evaluate_spawn_column, inspect_spawn_cell, required_spawn_chunks, select_safe_spawn,
 };
+use support::surface_terrain_programs;
 
 const AUTHORED_BINDINGS_JSON: &str =
     include_str!("../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json");
@@ -139,22 +142,25 @@ fn authored_bindings() -> AuthoredWorldgenBindingsV1 {
 
 fn fixture_plan(seed: i64) -> GenerationPlanV1 {
     let bindings = authored_bindings();
-    GenerationPlanV1::compile(GenerationPlanInputV1::new(
-        dimension_id(),
-        WorldSeedV1::from_integer(seed),
-        WorldgenConfigV1::default(),
-        7,
-        PlanActivationIdV1::from_hash(CanonicalHash::digest(b"spawn-fixture-activation")),
-        provider_offers(),
-        bindings.d4_vocabulary().expect("authored D4 vocabulary"),
-        bindings.role_bindings().expect("authored role bindings"),
-        bindings
-            .catalog_closure()
-            .expect("authored catalog closure"),
-        CanonicalHash::digest(b"authoritative-semantic-image"),
-        vec![CanonicalHash::digest(b"lock-a")],
-        WorldgenLimitsV1::default(),
-    ))
+    GenerationPlanV1::compile(
+        GenerationPlanInputV1::new(
+            dimension_id(),
+            WorldSeedV1::from_integer(seed),
+            WorldgenConfigV1::default(),
+            7,
+            PlanActivationIdV1::from_hash(CanonicalHash::digest(b"spawn-fixture-activation")),
+            provider_offers(),
+            bindings.d4_vocabulary().expect("authored D4 vocabulary"),
+            bindings.role_bindings().expect("authored role bindings"),
+            bindings
+                .catalog_closure()
+                .expect("authored catalog closure"),
+            CanonicalHash::digest(b"authoritative-semantic-image"),
+            vec![CanonicalHash::digest(b"lock-a")],
+            WorldgenLimitsV1::default(),
+        )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(false, false)),
+    )
     .expect("authored spawn fixture plan compiles")
 }
 
@@ -179,8 +185,6 @@ fn provider_offers() -> Vec<ProviderOfferV1> {
     [
         (ProviderSlotV1::GenerationCoordinator, "coordinator"),
         (ProviderSlotV1::StyleSelector, "selector"),
-        (ProviderSlotV1::TemperateTerrain, "temperate"),
-        (ProviderSlotV1::AridTerrain, "arid"),
         (ProviderSlotV1::TerrainTransition, "transition"),
         (ProviderSlotV1::CaveTopology, "cave"),
         (ProviderSlotV1::Materializer, "materializer"),

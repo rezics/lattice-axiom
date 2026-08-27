@@ -4,10 +4,14 @@
 //! This package owns Terrenia profile identities, defaults, and the concrete
 //! parameter rows selected by its New World surface.
 
-use latticeaxiom_core::StableId;
+use std::num::NonZeroU32;
+
+use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_worldgen::{
-    ClimateConfigV2, LandmassConfigV2, ReliefConfigV2, SurfaceWaterConfigV2, TerrainConfigV2,
-    UndergroundConfigV2, WorldBoundsV2,
+    ClimateConfigV2, LandmassConfigV2, ProviderGenerationIdentityV1, ReliefConfigV2,
+    SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1, SurfaceWaterConfigV2, TerrainBaseAlgorithmV1,
+    TerrainConfigV2, TerrainStyleV1, UndergroundConfigV2, WorldBoundsV2, WorldgenError,
+    WorldgenResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -92,6 +96,58 @@ impl TerrainPresetV2 {
             Self::Wild => wild(),
         }
     }
+}
+
+/// Resolves Terrenia's surface biomes to their owned terrain providers.
+///
+/// `implementation_fingerprint` is the verified hash of the selected package
+/// realization. It becomes part of generation identity and receipts.
+///
+/// # Errors
+///
+/// Returns an invalid-program error if a package constant violates the stable
+/// identifier grammar or expected biome kind.
+pub fn surface_biome_terrain_programs(
+    implementation_fingerprint: CanonicalHash,
+) -> WorldgenResult<Vec<SurfaceBiomeTerrainProgramV1>> {
+    [
+        ("temperate-woodland", TerrainStyleV1::TemperateWoodland),
+        ("arid-badlands", TerrainStyleV1::AridBadlands),
+        ("boreal-wetland", TerrainStyleV1::BorealWetland),
+    ]
+    .into_iter()
+    .map(|(path, style)| terrain_program(path, style, implementation_fingerprint))
+    .collect()
+}
+
+fn terrain_program(
+    path: &str,
+    style: TerrainStyleV1,
+    implementation_fingerprint: CanonicalHash,
+) -> WorldgenResult<SurfaceBiomeTerrainProgramV1> {
+    let biome = parse_program_identity(&format!("terrenia:biome/{path}"))?;
+    let provider =
+        parse_program_identity(&format!("terrenia:worldgen-provider/terrain-base/{path}@1"))?;
+    Ok(SurfaceBiomeTerrainProgramV1::new(
+        SurfaceBiomeIdV1::new(biome)?,
+        style,
+        TerrainBaseAlgorithmV1::ContinentalComposite,
+        ProviderGenerationIdentityV1::new(
+            provider,
+            NonZeroU32::MIN,
+            10,
+            implementation_fingerprint,
+        ),
+    ))
+}
+
+fn parse_program_identity(value: &str) -> WorldgenResult<StableId> {
+    value
+        .parse::<StableId>()
+        .map_err(|error| WorldgenError::InvalidTerrainProgram {
+            field: "package_identity",
+            reason: error.to_string(),
+        })
 }
 
 const fn balanced() -> TerrainConfigV2 {
@@ -300,5 +356,19 @@ mod tests {
             object.insert("mystery".to_owned(), serde_json::Value::Bool(true));
         }
         assert!(serde_json::from_value::<TerrainConfigV2>(value).is_err());
+    }
+
+    #[test]
+    fn every_surface_biome_owns_one_terrain_provider() {
+        let programs = surface_biome_terrain_programs(CanonicalHash::digest("package"))
+            .expect("package terrain programs are valid");
+        assert_eq!(programs.len(), 3);
+        assert_eq!(
+            programs
+                .iter()
+                .map(SurfaceBiomeTerrainProgramV1::material_style)
+                .collect::<BTreeSet<_>>(),
+            TerrainStyleV1::ALL.into_iter().collect()
+        );
     }
 }

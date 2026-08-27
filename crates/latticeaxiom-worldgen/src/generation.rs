@@ -16,9 +16,10 @@ use crate::{
     HydrologyOccupancyHashV1, HydrologyOccupancyInputV1, HydrologyOccupancySampleV1,
     LockedClosureFingerprintV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
     ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, ResourceFieldSampleV1,
-    RiverSampleV1, SnapshotChecksumV1, TerrainColumnSampleV2, TerrainConfigHashV2, TerrainConfigV2,
-    TerrainFamilyV2, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1,
-    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
+    RiverSampleV1, SnapshotChecksumV1, SurfaceBiomeTerrainProgramV1, TerrainColumnSampleV2,
+    TerrainConfigHashV2, TerrainConfigV2, TerrainFamilyV2, TerrainStyleV1, TerritoryQueryV1,
+    WorldSeedV1, WorldgenConfigHashV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
+    WorldgenResult, WorldgenSeedRootV2,
     cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
     hashes::{concatenated_hash, domain_hash, hash_u64, sample_hash_3d},
@@ -27,6 +28,7 @@ use crate::{
     },
     natural::{NaturalSamplerV1, NaturalWorkCountersV1},
     provider::ResolvedProvidersV1,
+    terrain_program::ResolvedTerrainProgramsV1,
     territory::TerritorySamplerV1,
 };
 
@@ -34,6 +36,7 @@ const LOCK_FINGERPRINT_DOMAIN: &[u8] = b"latticeaxiom.locked-closure.v1\0";
 const GENERATION_INPUT_DOMAIN: &[u8] = b"latticeaxiom.generation-input.v1\0";
 const GENERATION_PROVENANCE_DOMAIN: &[u8] = b"latticeaxiom.generation-provenance.v1\0";
 const GENERATION_EPOCH_DOMAIN: &[u8] = b"latticeaxiom.generation-epoch.v1\0";
+const GENERATOR_FINGERPRINT_V2_DOMAIN: &[u8] = b"latticeaxiom.generator-fingerprint.v2\0";
 const MATERIAL_DOMAIN: &[u8] = b"latticeaxiom.d4-material.v1\0";
 const TREE_DOMAIN: &[u8] = b"latticeaxiom.d4-tree.v1\0";
 const GROUND_COVER_DOMAIN: &[u8] = b"latticeaxiom.d4-ground-cover.v1\0";
@@ -52,6 +55,7 @@ pub struct GenerationPlanInputV1 {
     generation_plan_revision: u64,
     plan_activation_id: PlanActivationIdV1,
     provider_offers: Vec<ProviderOfferV1>,
+    terrain_programs: Vec<SurfaceBiomeTerrainProgramV1>,
     role_vocabulary: D4RoleVocabularyV1,
     role_bindings: FrozenRoleBindingsV1,
     block_catalog: D4BlockCatalogClosureV1,
@@ -94,6 +98,7 @@ impl GenerationPlanInputV1 {
             generation_plan_revision,
             plan_activation_id,
             provider_offers,
+            terrain_programs: Vec::new(),
             role_vocabulary,
             role_bindings,
             block_catalog,
@@ -111,6 +116,16 @@ impl GenerationPlanInputV1 {
     pub const fn with_terrain_config(mut self, terrain_config: TerrainConfigV2) -> Self {
         self.terrain_config = terrain_config;
         self.terrain_config_explicit = true;
+        self
+    }
+
+    /// Attaches package-owned terrain-provider selections for surface biomes.
+    #[must_use]
+    pub fn with_surface_biome_terrain_programs(
+        mut self,
+        terrain_programs: Vec<SurfaceBiomeTerrainProgramV1>,
+    ) -> Self {
+        self.terrain_programs = terrain_programs;
         self
     }
 
@@ -362,6 +377,7 @@ pub struct GenerationReceiptV1 {
     generation_input_hash: GenerationInputHashV1,
     generation_provenance_hash: GenerationProvenanceHashV1,
     providers: Vec<(ProviderSlotV1, ProviderGenerationIdentityV1)>,
+    surface_biome_terrain_programs: Vec<SurfaceBiomeTerrainProgramV1>,
     role_bindings: Vec<RoleBindingReceiptV1>,
     placement_predicates: Vec<PlacementPredicateReceiptV1>,
     cave_field_requests: Vec<CaveFaceFieldRequestV1>,
@@ -418,6 +434,12 @@ impl GenerationReceiptV1 {
     #[must_use]
     pub fn role_bindings(&self) -> &[RoleBindingReceiptV1] {
         &self.role_bindings
+    }
+
+    /// Returns the biome-owned terrain programs frozen into this generation.
+    #[must_use]
+    pub fn surface_biome_terrain_programs(&self) -> &[SurfaceBiomeTerrainProgramV1] {
+        &self.surface_biome_terrain_programs
     }
 
     /// Returns the styles that actually materialized in the draft.
@@ -576,6 +598,7 @@ pub struct GenerationPlanV1 {
     generation_plan_revision: u64,
     plan_activation_id: PlanActivationIdV1,
     providers: ResolvedProvidersV1,
+    surface_biome_terrain_programs: Vec<SurfaceBiomeTerrainProgramV1>,
     roles: Vec<RoleBindingReceiptV1>,
     role_targets: BTreeMap<D4MaterialRoleV1, StableId>,
     material_palette: Vec<StableId>,
@@ -628,6 +651,14 @@ impl GenerationPlanV1 {
         let snapshot_bound = preflight_snapshot_bound(&input, &roles)?;
         preflight_live_generation_bound(&input, &roles, snapshot_bound)?;
         let providers = ResolvedProvidersV1::resolve(input.provider_offers, input.limits)?;
+        let seed_root = WorldgenSeedRootV2::from_world_seed(input.world_seed);
+        let terrain_programs = ResolvedTerrainProgramsV1::resolve(
+            input.terrain_programs,
+            input.natural_layer.is_some(),
+            input.limits,
+            seed_root,
+            input.terrain_config,
+        )?;
         let mut role_targets = roles
             .iter()
             .map(|receipt| (receipt.purpose, receipt.block_id.clone()))
@@ -636,9 +667,20 @@ impl GenerationPlanV1 {
         let config_hash = input.config.canonical_hash()?;
         let terrain_config_bytes = input.terrain_config.canonical_bytes()?;
         let terrain_config_hash = input.terrain_config.canonical_hash()?;
-        let provider_bytes = encode_canonical("resolved providers", &providers.ordered())?;
+        let fixed_provider_bytes = encode_canonical("resolved providers", &providers.ordered())?;
+        let terrain_program_bytes = terrain_programs.canonical_bytes()?;
+        let provider_bytes = encode_canonical(
+            "resolved generation providers",
+            &(
+                fixed_provider_bytes.as_slice(),
+                terrain_program_bytes.as_slice(),
+            ),
+        )?;
         let role_bytes = encode_canonical("frozen D4 role receipts", &roles)?;
-        let generator_fingerprint = providers.fingerprint();
+        let generator_fingerprint = GeneratorFingerprintV1::from_hash(domain_hash(
+            GENERATOR_FINGERPRINT_V2_DOMAIN,
+            &[provider_bytes.as_slice()],
+        ));
 
         let mut locked_receipts = input.locked_receipts;
         locked_receipts.sort();
@@ -649,7 +691,6 @@ impl GenerationPlanV1 {
             &[locked_bytes.as_slice()],
         ));
         let revision_bytes = input.generation_plan_revision.to_be_bytes();
-        let seed_root = WorldgenSeedRootV2::from_world_seed(input.world_seed);
         let d4_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
             GENERATION_INPUT_DOMAIN,
             &[
@@ -679,11 +720,13 @@ impl GenerationPlanV1 {
             ],
         ));
 
-        let mut territory = TerritorySamplerV1::new(
+        let surface_biome_terrain_programs = terrain_programs.ordered().to_vec();
+        let territory = TerritorySamplerV1::new(
             seed_root,
             d4_input_hash,
             input.config.clone(),
             input.terrain_config,
+            terrain_programs,
             providers
                 .identity(ProviderSlotV1::TerrainTransition)
                 .clone(),
@@ -701,7 +744,6 @@ impl GenerationPlanV1 {
                 &input.block_catalog,
                 &roles,
             )?;
-            territory = territory.with_boreal(sampler.boreal_params());
             for receipt in sampler.receipts() {
                 role_targets.insert(receipt.purpose(), receipt.block_id().clone());
                 roles.push(receipt.clone());
@@ -765,6 +807,7 @@ impl GenerationPlanV1 {
             generation_plan_revision: input.generation_plan_revision,
             plan_activation_id: input.plan_activation_id,
             providers,
+            surface_biome_terrain_programs,
             roles,
             role_targets,
             material_palette,
@@ -982,6 +1025,17 @@ impl GenerationPlanV1 {
     #[must_use]
     pub fn provider_identity(&self, slot: ProviderSlotV1) -> Option<&ProviderGenerationIdentityV1> {
         self.providers.try_identity(slot)
+    }
+
+    /// Returns the package-owned terrain program for one material style.
+    #[must_use]
+    pub fn surface_biome_terrain_program(
+        &self,
+        style: TerrainStyleV1,
+    ) -> Option<&SurfaceBiomeTerrainProgramV1> {
+        self.surface_biome_terrain_programs
+            .iter()
+            .find(|program| program.material_style() == style)
     }
 
     /// Returns deterministic terrain height intent at world `(x, z)`.
@@ -1503,6 +1557,7 @@ impl GenerationPlanV1 {
             generation_input_hash: self.generation_input_hash,
             generation_provenance_hash: self.generation_provenance_hash,
             providers: self.providers.ordered(),
+            surface_biome_terrain_programs: self.surface_biome_terrain_programs.clone(),
             role_bindings: self.roles.clone(),
             placement_predicates,
             cave_field_requests,
@@ -2394,6 +2449,14 @@ fn preflight_plan_input_bytes(input: &GenerationPlanInputV1) -> WorldgenResult<(
             input.limits,
         )?;
     }
+    for program in &input.terrain_programs {
+        add_identity_bytes(&mut total, program.biome_id().as_stable_id(), input.limits)?;
+        add_identity_bytes(
+            &mut total,
+            program.provider().provider_stable_id(),
+            input.limits,
+        )?;
+    }
     if let Some(layer) = &input.natural_layer {
         for offer in layer.provider_offers() {
             add_identity_bytes(
@@ -2485,6 +2548,13 @@ fn preflight_plan_limits(input: &GenerationPlanInputV1) -> WorldgenResult<()> {
         return Err(WorldgenError::CollectionLimitExceeded {
             kind: "provider offers",
             actual: input.provider_offers.len(),
+            limit: usize::from(input.limits.max_provider_offers.get()),
+        });
+    }
+    if input.terrain_programs.len() > usize::from(input.limits.max_provider_offers.get()) {
+        return Err(WorldgenError::CollectionLimitExceeded {
+            kind: "surface biome terrain programs",
+            actual: input.terrain_programs.len(),
             limit: usize::from(input.limits.max_provider_offers.get()),
         });
     }

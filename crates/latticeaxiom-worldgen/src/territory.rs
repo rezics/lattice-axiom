@@ -5,7 +5,8 @@ use crate::{
     GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, TerrainConfigV2,
     TerrainFamilyV2, WorldgenConfigV1, WorldgenSeedRootV2,
     hashes::{domain_hash, hash_u64},
-    terrain_field::{TerrainColumnSampleV2, TerrainFieldV2, climate_field},
+    terrain_field::{TerrainColumnSampleV2, climate_field},
+    terrain_program::ResolvedTerrainProgramsV1,
 };
 
 const TERRITORY_CELL_DOMAIN: &[u8] = b"latticeaxiom.territory-cell.v1\0";
@@ -26,6 +27,15 @@ pub enum TerrainStyleV1 {
     AridBadlands,
     /// Snow/peat/moss surfaces, slate, and bounded pine vegetation.
     BorealWetland,
+}
+
+impl TerrainStyleV1 {
+    /// Compatibility material styles in stable order.
+    pub const ALL: [Self; 3] = [
+        Self::TemperateWoodland,
+        Self::AridBadlands,
+        Self::BorealWetland,
+    ];
 }
 
 /// Metadata for the named deterministic transition at a territory boundary.
@@ -144,19 +154,15 @@ pub(crate) struct CompactTerritorySampleV1 {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct BorealTerrainParamsV1;
-
-#[derive(Clone, Debug)]
 pub(crate) struct TerritorySamplerV1 {
     seed_root: WorldgenSeedRootV2,
     input_hash: GenerationInputHashV1,
     config: WorldgenConfigV1,
     terrain_config: TerrainConfigV2,
-    terrain: TerrainFieldV2,
+    terrain_programs: ResolvedTerrainProgramsV1,
     temperature_seed: u64,
     humidity_seed: u64,
     transition: ProviderGenerationIdentityV1,
-    boreal: Option<BorealTerrainParamsV1>,
 }
 
 impl TerritorySamplerV1 {
@@ -165,6 +171,7 @@ impl TerritorySamplerV1 {
         input_hash: GenerationInputHashV1,
         config: WorldgenConfigV1,
         terrain_config: TerrainConfigV2,
+        terrain_programs: ResolvedTerrainProgramsV1,
         transition: ProviderGenerationIdentityV1,
     ) -> Self {
         let climate_seed = hash_u64(STYLE_DOMAIN, &[seed_root.as_bytes()]);
@@ -173,17 +180,11 @@ impl TerritorySamplerV1 {
             input_hash,
             config,
             terrain_config,
-            terrain: TerrainFieldV2::new(seed_root, terrain_config),
+            terrain_programs,
             temperature_seed: climate_seed ^ TEMPERATURE_SALT,
             humidity_seed: climate_seed ^ HUMIDITY_SALT,
             transition,
-            boreal: None,
         }
-    }
-
-    pub(crate) fn with_boreal(mut self, params: BorealTerrainParamsV1) -> Self {
-        self.boreal = Some(params);
-        self
     }
 
     pub(crate) fn query(&self, x: i64, z: i64) -> TerritoryQueryV1 {
@@ -254,7 +255,9 @@ impl TerritorySamplerV1 {
     }
 
     pub(crate) fn terrain_column(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
-        self.terrain.sample(x, z)
+        let territory = self.sample(x, z);
+        let biome_style = self.choose_material_style(x, z, territory);
+        self.terrain_programs.sample(biome_style, x, z)
     }
 
     pub(crate) fn height(&self, x: i64, z: i64) -> i32 {
@@ -262,11 +265,11 @@ impl TerritorySamplerV1 {
     }
 
     pub(crate) fn family(&self, x: i64, z: i64) -> TerrainFamilyV2 {
-        self.terrain.sample(x, z).family
+        self.terrain_column(x, z).family
     }
 
     pub(crate) fn surface_water_y(&self, x: i64, z: i64) -> Option<i32> {
-        self.terrain.sample(x, z).surface_water_y
+        self.terrain_column(x, z).surface_water_y
     }
 
     pub(crate) fn choose_material_style(
@@ -316,7 +319,10 @@ impl TerritorySamplerV1 {
     fn style_for_cell(&self, cell_x: i64, cell_z: i64) -> TerrainStyleV1 {
         let (temperature, humidity) = self.climate_for_cell(cell_x, cell_z);
         let aridity = temperature.saturating_sub(humidity.div_euclid(3));
-        if self.boreal.is_some() {
+        if self
+            .terrain_programs
+            .contains(TerrainStyleV1::BorealWetland)
+        {
             if temperature < -96 && humidity > -320 {
                 TerrainStyleV1::BorealWetland
             } else if aridity > 96 || humidity < -384 {
@@ -332,7 +338,10 @@ impl TerritorySamplerV1 {
     }
 
     fn runner_up_style(&self, cell_x: i64, cell_z: i64, winner: TerrainStyleV1) -> TerrainStyleV1 {
-        if self.boreal.is_none() {
+        if !self
+            .terrain_programs
+            .contains(TerrainStyleV1::BorealWetland)
+        {
             return match winner {
                 TerrainStyleV1::TemperateWoodland => TerrainStyleV1::AridBadlands,
                 TerrainStyleV1::AridBadlands | TerrainStyleV1::BorealWetland => {
@@ -380,26 +389,11 @@ impl TerritorySamplerV1 {
             .div_euclid(edge)
             .clamp(1, i64::from(u16::MAX));
         let scale_cells = u16::try_from(scale_cells).unwrap_or(u16::MAX);
-        let center_x = cell_x
-            .saturating_mul(edge)
-            .saturating_add(edge.div_euclid(2));
-        let center_z = cell_z
-            .saturating_mul(edge)
-            .saturating_add(edge.div_euclid(2));
-        let altitude = i64::from(self.terrain.sample(center_x, center_z).height)
-            .saturating_sub(i64::from(self.terrain_config.world.sea_level_y))
-            .max(0);
-        let cooling = altitude
-            .saturating_mul(i64::from(
-                self.terrain_config.climate.altitude_cooling_per_1024,
-            ))
-            .div_euclid(128);
         let temperature = climate_field(self.temperature_seed, cell_x, cell_z, scale_cells)
             .saturating_mul(i64::from(
                 self.terrain_config.climate.temperature_variance_per_1024,
             ))
-            .div_euclid(1_024)
-            .saturating_sub(cooling);
+            .div_euclid(1_024);
         let humidity = climate_field(self.humidity_seed, cell_x, cell_z, scale_cells)
             .saturating_mul(i64::from(
                 self.terrain_config.climate.humidity_variance_per_1024,

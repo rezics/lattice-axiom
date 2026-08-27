@@ -3,13 +3,13 @@ use std::{collections::BTreeMap, num::NonZeroU32};
 use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_bytes};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    GeneratorFingerprintV1, WorldgenError, WorldgenLimitsV1, WorldgenResult, hashes::domain_hash,
-};
+use crate::{WorldgenError, WorldgenLimitsV1, WorldgenResult};
 
-const GENERATOR_FINGERPRINT_DOMAIN: &[u8] = b"latticeaxiom.generator-fingerprint.v1\0";
-
-/// Exclusive provider slots required by the minimal D4 generation DAG.
+/// Exclusive dimension-wide provider slots required by the generation DAG.
+///
+/// Surface-biome terrain providers are deliberately not slots: packages bind
+/// them through `SurfaceBiomeTerrainProgramV1` after ecological ownership is
+/// resolved.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderSlotV1 {
@@ -17,10 +17,6 @@ pub enum ProviderSlotV1 {
     GenerationCoordinator,
     /// Coarse deterministic two-style selector with the D7 query shape.
     StyleSelector,
-    /// Primary terrain owner for temperate woodland domains.
-    TemperateTerrain,
-    /// Primary terrain owner for arid badlands domains.
-    AridTerrain,
     /// Named deterministic transition between the two terrain styles.
     TerrainTransition,
     /// Primary minimal cave topology/void owner.
@@ -35,29 +31,24 @@ pub enum ProviderSlotV1 {
     Resources,
     /// Exclusion-radius vegetation owner used by the V5 natural layer.
     Vegetation,
-    /// Primary terrain owner for boreal wetland domains.
-    BorealTerrain,
 }
 
 impl ProviderSlotV1 {
     /// Canonical order of required D4 exclusive slots.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 5] = [
         Self::GenerationCoordinator,
         Self::StyleSelector,
-        Self::TemperateTerrain,
-        Self::AridTerrain,
         Self::TerrainTransition,
         Self::CaveTopology,
         Self::Materializer,
     ];
 
     /// Exclusive V5 natural-layer slots. Absent from D4 plans.
-    pub const NATURAL: [Self; 5] = [
+    pub const NATURAL: [Self; 4] = [
         Self::Geology,
         Self::Hydrology,
         Self::Resources,
         Self::Vegetation,
-        Self::BorealTerrain,
     ];
 
     /// Returns the stable channel/domain label.
@@ -66,8 +57,6 @@ impl ProviderSlotV1 {
         match self {
             Self::GenerationCoordinator => "generation.coordinator/dimension",
             Self::StyleSelector => "territory.selector/dimension",
-            Self::TemperateTerrain => "terrain.base/temperate-woodland",
-            Self::AridTerrain => "terrain.base/arid-badlands",
             Self::TerrainTransition => "terrain.boundary/woodland-badlands",
             Self::CaveTopology => "cave.topology/dimension-default",
             Self::Materializer => "terrain.materializer/dimension",
@@ -75,7 +64,6 @@ impl ProviderSlotV1 {
             Self::Hydrology => "hydrology.basin/dimension",
             Self::Resources => "terrain.resource/dimension",
             Self::Vegetation => "terrain.vegetation/dimension",
-            Self::BorealTerrain => "terrain.base/boreal-wetland",
         }
     }
 }
@@ -169,7 +157,6 @@ impl ProviderOfferV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedProvidersV1 {
     identities: BTreeMap<ProviderSlotV1, ProviderGenerationIdentityV1>,
-    fingerprint: GeneratorFingerprintV1,
 }
 
 impl ResolvedProvidersV1 {
@@ -199,20 +186,11 @@ impl ResolvedProvidersV1 {
             insert_exclusive_slot(&mut identities, slot, grouped.remove(&slot), false)?;
         }
 
-        let canonical = canonical_json_bytes(&identities).map_err(|error| {
-            WorldgenError::CanonicalEncoding {
-                kind: "resolved provider identities",
-                reason: error.to_string(),
-            }
+        canonical_json_bytes(&identities).map_err(|error| WorldgenError::CanonicalEncoding {
+            kind: "resolved provider identities",
+            reason: error.to_string(),
         })?;
-        let fingerprint = GeneratorFingerprintV1::from_hash(domain_hash(
-            GENERATOR_FINGERPRINT_DOMAIN,
-            &[canonical.as_slice()],
-        ));
-        Ok(Self {
-            identities,
-            fingerprint,
-        })
+        Ok(Self { identities })
     }
 
     pub(crate) fn identity(&self, slot: ProviderSlotV1) -> &ProviderGenerationIdentityV1 {
@@ -239,10 +217,6 @@ impl ResolvedProvidersV1 {
                     .map(|identity| (slot, identity))
             })
             .collect()
-    }
-
-    pub(crate) const fn fingerprint(&self) -> GeneratorFingerprintV1 {
-        self.fingerprint
     }
 }
 

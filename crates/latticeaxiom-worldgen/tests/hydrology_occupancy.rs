@@ -6,6 +6,8 @@
     reason = "test fixtures fail immediately when authored IDs or invariants are invalid"
 )]
 
+mod support;
+
 use std::num::NonZeroU32;
 
 use latticeaxiom_core::{CanonicalHash, StableId};
@@ -17,6 +19,7 @@ use latticeaxiom_worldgen::{
     ProviderOfferV1, ProviderSlotV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
     WorldgenLimitsV1,
 };
+use support::surface_terrain_programs;
 
 const AUTHORED_BINDINGS_JSON: &str =
     include_str!("../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json");
@@ -39,6 +42,7 @@ fn hydrology_occupancy_requires_the_natural_layer() {
             vec![CanonicalHash::digest(b"lock-a")],
             WorldgenLimitsV1::default(),
         )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(false, false))
         .with_hydrology_occupancy(occupancy_input(HydrologyOccupancyConfigV1::default())),
     )
     .expect_err("occupancy without rivers must fail closed");
@@ -399,6 +403,7 @@ fn occupancy_plan_with_config(
             vec![CanonicalHash::digest(b"lock-a")],
             WorldgenLimitsV1::default(),
         )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(true, reverse))
         .with_natural_layer(NaturalLayerInputV1::new(
             NaturalLayerConfigV1::default(),
             bindings.natural_vocabulary().expect("natural vocabulary"),
@@ -426,6 +431,7 @@ fn natural_plan(seed: i64, reverse: bool) -> GenerationPlanV1 {
             vec![CanonicalHash::digest(b"lock-a")],
             WorldgenLimitsV1::default(),
         )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(true, reverse))
         .with_natural_layer(NaturalLayerInputV1::new(
             NaturalLayerConfigV1::default(),
             bindings.natural_vocabulary().expect("natural vocabulary"),
@@ -474,8 +480,6 @@ fn d4_provider_offers(reverse: bool) -> Vec<ProviderOfferV1> {
     let mut offers = slot_offers([
         (ProviderSlotV1::GenerationCoordinator, "coordinator", 7),
         (ProviderSlotV1::StyleSelector, "selector", 7),
-        (ProviderSlotV1::TemperateTerrain, "temperate", 7),
-        (ProviderSlotV1::AridTerrain, "arid", 7),
         (ProviderSlotV1::TerrainTransition, "transition", 7),
         (ProviderSlotV1::CaveTopology, "cave", 8),
         (ProviderSlotV1::Materializer, "materializer", 7),
@@ -492,7 +496,6 @@ fn natural_provider_offers(reverse: bool) -> Vec<ProviderOfferV1> {
         (ProviderSlotV1::Hydrology, "hydrology", 1),
         (ProviderSlotV1::Resources, "resources", 1),
         (ProviderSlotV1::Vegetation, "vegetation", 1),
-        (ProviderSlotV1::BorealTerrain, "boreal", 1),
     ]);
     if reverse {
         offers.reverse();

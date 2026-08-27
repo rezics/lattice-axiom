@@ -2,7 +2,9 @@ use latticeaxiom_core::StableId;
 use latticeaxiom_storage::ChunkCoordinate;
 use thiserror::Error;
 
-use crate::{CellEpochStateV1, GenerationEpochIdV1, PlanningCellCoordinateV1, ProviderSlotV1};
+use crate::{
+    CellEpochStateV1, GenerationEpochIdV1, PlanningCellCoordinateV1, ProviderSlotV1, TerrainStyleV1,
+};
 
 /// Result returned by world-generation contract operations.
 pub type WorldgenResult<T> = Result<T, WorldgenError>;
@@ -67,6 +69,34 @@ pub enum WorldgenError {
         contract_major: u32,
         /// Owner-controlled algorithm revision.
         algorithm_revision: u32,
+    },
+    /// A package-owned surface-biome terrain program was malformed.
+    #[error("invalid surface biome terrain program field `{field}`: {reason}")]
+    InvalidTerrainProgram {
+        /// Stable field name.
+        field: &'static str,
+        /// Actionable validation reason.
+        reason: String,
+    },
+    /// One enabled surface material style had no biome-owned terrain program.
+    #[error("surface material style `{style:?}` has no biome-owned terrain program")]
+    MissingTerrainProgram {
+        /// Missing compatibility material style.
+        style: TerrainStyleV1,
+    },
+    /// Multiple biome-owned terrain programs targeted one exclusive material style.
+    #[error("surface material style `{style:?}` has conflicting biome programs: {biomes:?}")]
+    ConflictingTerrainPrograms {
+        /// Conflicting compatibility material style.
+        style: TerrainStyleV1,
+        /// Canonically ordered biome identities.
+        biomes: Vec<StableId>,
+    },
+    /// One biome identity appeared in more than one terrain program.
+    #[error("surface biome `{biome}` has more than one terrain program")]
+    DuplicateTerrainBiome {
+        /// Duplicated package-owned biome identity.
+        biome: StableId,
     },
     /// Role vocabulary did not define one required material purpose.
     #[error("D4 role vocabulary is missing `{purpose}`")]

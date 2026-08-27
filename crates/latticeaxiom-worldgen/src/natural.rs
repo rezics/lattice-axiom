@@ -16,7 +16,6 @@ use crate::{
     config::MAX_TERRAIN_RELIEF,
     hashes::{domain_hash, hash_u64, sample_hash_2d, sample_hash_3d},
     provider::ResolvedProvidersV1,
-    territory::BorealTerrainParamsV1,
 };
 
 const NATURAL_LAYER_DOMAIN: &[u8] = b"latticeaxiom.natural-layer.v1\0";
@@ -321,7 +320,6 @@ pub(crate) struct NaturalSamplerV1 {
     tree_seed: u64,
     cover_seed: u64,
     river_warp_seeds: [u64; 2],
-    boreal: BorealTerrainParamsV1,
     receipts: Vec<RoleBindingReceiptV1>,
 }
 
@@ -354,7 +352,6 @@ impl NaturalSamplerV1 {
         let geology = required_natural(&resolved, ProviderSlotV1::Geology)?.clone();
         let resources = required_natural(&resolved, ProviderSlotV1::Resources)?.clone();
         let vegetation = required_natural(&resolved, ProviderSlotV1::Vegetation)?.clone();
-        let boreal_provider = required_natural(&resolved, ProviderSlotV1::BorealTerrain)?.clone();
         let basin_seed = natural_sample_seed(BASIN_DOMAIN, seed_root);
         let geology_seed = natural_sample_seed(GEOLOGY_DOMAIN, seed_root);
         let resource_seed = natural_sample_seed(RESOURCE_DOMAIN, seed_root);
@@ -383,8 +380,6 @@ impl NaturalSamplerV1 {
                 resources.implementation_fingerprint().as_bytes(),
                 vegetation.provider_stable_id().as_str().as_bytes(),
                 vegetation.implementation_fingerprint().as_bytes(),
-                boreal_provider.provider_stable_id().as_str().as_bytes(),
-                boreal_provider.implementation_fingerprint().as_bytes(),
             ],
         ));
         Ok(Self {
@@ -398,7 +393,6 @@ impl NaturalSamplerV1 {
             tree_seed,
             cover_seed,
             river_warp_seeds,
-            boreal: BorealTerrainParamsV1,
             receipts,
         })
     }
@@ -409,10 +403,6 @@ impl NaturalSamplerV1 {
 
     pub(crate) const fn config(&self) -> &NaturalLayerConfigV1 {
         &self.config
-    }
-
-    pub(crate) fn boreal_params(&self) -> BorealTerrainParamsV1 {
-        self.boreal.clone()
     }
 
     pub(crate) fn receipts(&self) -> &[RoleBindingReceiptV1] {

@@ -6,6 +6,8 @@
     reason = "test fixtures fail immediately when authored IDs or invariants are invalid"
 )]
 
+mod support;
+
 use std::num::NonZeroU32;
 
 use latticeaxiom_core::{CanonicalHash, StableId};
@@ -18,6 +20,7 @@ use latticeaxiom_worldgen::{
     WorldgenLimitsV1, cell_center_voxels,
 };
 use proptest::prelude::*;
+use support::surface_terrain_programs;
 
 const CATALOG_PATHS: [&str; 18] = [
     "air",
@@ -75,6 +78,7 @@ fn topology_plan(reverse: bool) -> GenerationPlanV1 {
             vec![CanonicalHash::digest(b"lock-a")],
             WorldgenLimitsV1::default(),
         )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(false, reverse))
         .with_cave_topology_layer(topology_layer()),
     )
     .expect("topology plan compiles")
@@ -149,20 +153,23 @@ fn topology_layer() -> CaveTopologyLayerInputV1 {
 
 #[test]
 fn topology_layer_keeps_d4_output_unchanged_when_omitted() {
-    let d4 = GenerationPlanV1::compile(GenerationPlanInputV1::new(
-        dimension_id(),
-        WorldSeedV1::from_integer(42),
-        config(),
-        7,
-        PlanActivationIdV1::from_hash(CanonicalHash::digest(b"cave-topology-activation")),
-        provider_offers(false),
-        role_vocabulary(),
-        role_bindings(),
-        block_catalog(),
-        CanonicalHash::digest(b"authoritative-semantic-image"),
-        vec![CanonicalHash::digest(b"lock-a")],
-        WorldgenLimitsV1::default(),
-    ))
+    let d4 = GenerationPlanV1::compile(
+        GenerationPlanInputV1::new(
+            dimension_id(),
+            WorldSeedV1::from_integer(42),
+            config(),
+            7,
+            PlanActivationIdV1::from_hash(CanonicalHash::digest(b"cave-topology-activation")),
+            provider_offers(false),
+            role_vocabulary(),
+            role_bindings(),
+            block_catalog(),
+            CanonicalHash::digest(b"authoritative-semantic-image"),
+            vec![CanonicalHash::digest(b"lock-a")],
+            WorldgenLimitsV1::default(),
+        )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(false, false)),
+    )
     .expect("d4 plan");
     assert!(!d4.has_cave_topology_layer());
     let topology = topology_plan(false);
@@ -302,8 +309,6 @@ fn provider_offers(reverse: bool) -> Vec<ProviderOfferV1> {
     let paths = [
         (ProviderSlotV1::GenerationCoordinator, "coordinator"),
         (ProviderSlotV1::StyleSelector, "selector"),
-        (ProviderSlotV1::TemperateTerrain, "temperate"),
-        (ProviderSlotV1::AridTerrain, "arid"),
         (ProviderSlotV1::TerrainTransition, "transition"),
         (ProviderSlotV1::CaveTopology, "cave"),
         (ProviderSlotV1::Materializer, "materializer"),

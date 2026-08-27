@@ -6,6 +6,8 @@
     reason = "test fixtures fail immediately when authored IDs or invariants are invalid"
 )]
 
+mod support;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
@@ -28,6 +30,7 @@ use latticeaxiom_worldgen::{
     WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
 };
 use proptest::prelude::*;
+use support::surface_terrain_programs;
 
 type GeneratedEvidence = (Vec<u8>, Vec<u8>, Vec<u8>);
 const CATALOG_PATHS: [&str; 18] = [
@@ -173,16 +176,27 @@ fn exclusive_provider_missing_and_conflict_fail_before_generation() {
     let mut conflict = provider_offers(false);
     let duplicate = conflict
         .iter()
-        .find(|offer| offer.slot() == ProviderSlotV1::TemperateTerrain)
-        .expect("fixture contains temperate provider")
+        .find(|offer| offer.slot() == ProviderSlotV1::StyleSelector)
+        .expect("fixture contains biome selector")
         .clone();
     conflict.push(duplicate);
     assert!(matches!(
         GenerationPlanV1::compile(fixture_input_with_defaults(conflict)),
         Err(WorldgenError::ConflictingProviders {
-            slot: ProviderSlotV1::TemperateTerrain,
+            slot: ProviderSlotV1::StyleSelector,
             ..
         })
+    ));
+
+    let mut terrain_programs = surface_terrain_programs(false, false);
+    terrain_programs.push(terrain_programs[0].clone());
+    assert!(matches!(
+        GenerationPlanV1::compile(
+            fixture_input_with_defaults(provider_offers(false))
+                .with_surface_biome_terrain_programs(terrain_programs)
+        ),
+        Err(WorldgenError::DuplicateTerrainBiome { .. }
+            | WorldgenError::ConflictingTerrainPrograms { .. })
     ));
 }
 
@@ -320,20 +334,25 @@ fn old_materialized_epoch_is_returned_without_recomputation() {
     )
     .expect("candidate bytes match checksum");
 
-    let mut offers = provider_offers(false);
+    let offers = provider_offers(false);
+    let mut terrain_programs = surface_terrain_programs(false, false);
+    let existing_program = terrain_programs[0].clone();
     let changed = ProviderGenerationIdentityV1::new(
-        stable_id("fixture:worldgen-provider/temperate@1"),
+        existing_program.provider().provider_stable_id().clone(),
         NonZeroU32::MIN,
-        8,
-        CanonicalHash::digest(b"temperate-implementation-v8"),
+        11,
+        CanonicalHash::digest(b"temperate-terrain-implementation-v11"),
     );
-    let position = offers
-        .iter()
-        .position(|offer| offer.slot() == ProviderSlotV1::TemperateTerrain)
-        .expect("fixture contains temperate provider");
-    offers[position] = ProviderOfferV1::new(ProviderSlotV1::TemperateTerrain, changed);
-    let new_plan = GenerationPlanV1::compile(fixture_input_with_defaults(offers))
-        .expect("updated provider plan compiles");
+    terrain_programs[0] = latticeaxiom_worldgen::SurfaceBiomeTerrainProgramV1::new(
+        existing_program.biome_id().clone(),
+        existing_program.material_style(),
+        existing_program.algorithm(),
+        changed,
+    );
+    let new_plan = GenerationPlanV1::compile(
+        fixture_input_with_defaults(offers).with_surface_biome_terrain_programs(terrain_programs),
+    )
+    .expect("updated provider plan compiles");
     assert_ne!(old_plan.generation_epoch(), new_plan.generation_epoch());
 
     assert!(matches!(
@@ -1000,7 +1019,7 @@ fn deterministic_two_style_corpus_materializes_every_required_role() {
 )]
 fn every_hard_limit_rejects_boundary_plus_one_before_unbounded_work() {
     let provider_limits = WorldgenLimitsV1 {
-        max_provider_offers: NonZeroU16::new(6).unwrap_or(NonZeroU16::MIN),
+        max_provider_offers: NonZeroU16::new(4).unwrap_or(NonZeroU16::MIN),
         max_plan_input_bytes: NonZeroU64::MIN,
         ..WorldgenLimitsV1::default()
     };
@@ -1016,8 +1035,8 @@ fn every_hard_limit_rejects_boundary_plus_one_before_unbounded_work() {
         )),
         Err(WorldgenError::CollectionLimitExceeded {
             kind: "provider offers",
-            actual: 7,
-            limit: 6
+            actual: 5,
+            limit: 4
         })
     ));
 
@@ -1207,11 +1226,11 @@ fn fixed_algorithm_hashes_match_known_answer_vectors() {
         ],
         [
             "d50126fa9254fe1f5426e2f31d93ec43340d81506f6444e59662ce55198a9c9d".to_owned(),
-            "27cc4f80bd6fe8f530ed76d60cd9e4cda9dbe1b062787bfa122085ae83fb57c4".to_owned(),
+            "5450f019a0bd84c3bfa0dc19345c3c8e3237c153f6ba34cabfe0b647b3bbec2f".to_owned(),
             "52898402e6d702372b222dba71d84b0b1bc4111800d40c74ad3ef3808401112c".to_owned(),
-            "81e0f2c8ca3d68c14a7aae3d12b2638f0716db94d8fc1411932d1ccaedc0a896".to_owned(),
-            "adfe9dab6e17a3c55c290b32be645a016ab785386e57aeb0c570be3bb60cd8f3".to_owned(),
-            "84bea3380630d2c9f9b6d94187a8c35d9d83ab880e674339773ff428597734fc".to_owned(),
+            "c4d93c164d123a2c6c095f31513e2497c43a9e233c89efd544ad58bdec1d6793".to_owned(),
+            "b2b6ab4c5799b2a6e9f2034f89a8a03fbb1829af8920220d92089c0c7610041c".to_owned(),
+            "c77ac0f94216973ae96c6146093803d1d86c2ecd59cec26004251e34bb3eeb20".to_owned(),
         ]
     );
 }
@@ -1224,7 +1243,7 @@ fn fixed_d4_snapshot_has_stable_golden_checksum() {
         .expect("golden chunk generates");
     assert_eq!(
         prepared(&outcome).checksum().to_string(),
-        "f835d1e4b05d34697670e2a119b8db0045e209b5bb5a3df18c76e3127117f028"
+        "9c8fdf084840080d4cf3714d282857ee080fe5b4696740e19e2e97369ee4916d"
     );
 }
 
@@ -1250,12 +1269,12 @@ fn both_style_surface_snapshots_have_independent_goldens() {
             (
                 TerrainStyleV1::TemperateWoodland,
                 ChunkCoordinate::new(-191, -3, -252),
-                "1476df8cb78759e6d27bf64eae322c5d4f0d421a8e7b30dc20fcf3f4eb30bd43".to_owned(),
+                "2dd6e87b9aadf5d27568def0e11d1c1990b6c1abc0f65c63e71a2cb4be826ab2".to_owned(),
             ),
             (
                 TerrainStyleV1::AridBadlands,
                 ChunkCoordinate::new(-255, -2, -252),
-                "77427b7592cd4e2efae5077b51a69b7645a50f4fa2eb3a34e387f8a5564a2da5".to_owned(),
+                "d8d2596231b2df5934a9885d3f4c1fbe5ad3ebd6df9f0810dc8636c2af90b461".to_owned(),
             ),
         ]
     );
@@ -1449,20 +1468,23 @@ fn all_cave_plan() -> GenerationPlanV1 {
 }
 
 fn fixture_plan_with_seed(seed: i64) -> GenerationPlanV1 {
-    GenerationPlanV1::compile(GenerationPlanInputV1::new(
-        dimension_id(),
-        WorldSeedV1::from_integer(seed),
-        default_config(),
-        7,
-        PlanActivationIdV1::from_hash(CanonicalHash::digest(b"fixture-activation")),
-        provider_offers(false),
-        role_vocabulary(),
-        role_bindings(),
-        block_catalog(),
-        CanonicalHash::digest(b"authoritative-semantic-image"),
-        vec![CanonicalHash::digest(b"lock-a")],
-        WorldgenLimitsV1::default(),
-    ))
+    GenerationPlanV1::compile(
+        GenerationPlanInputV1::new(
+            dimension_id(),
+            WorldSeedV1::from_integer(seed),
+            default_config(),
+            7,
+            PlanActivationIdV1::from_hash(CanonicalHash::digest(b"fixture-activation")),
+            provider_offers(false),
+            role_vocabulary(),
+            role_bindings(),
+            block_catalog(),
+            CanonicalHash::digest(b"authoritative-semantic-image"),
+            vec![CanonicalHash::digest(b"lock-a")],
+            WorldgenLimitsV1::default(),
+        )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(false, false)),
+    )
     .expect("seeded fixture plan compiles")
 }
 
@@ -1492,20 +1514,23 @@ fn commit_region(
 }
 
 fn fixture_plan_with_activation(activation: &[u8]) -> GenerationPlanV1 {
-    GenerationPlanV1::compile(GenerationPlanInputV1::new(
-        dimension_id(),
-        WorldSeedV1::from_integer(42),
-        default_config(),
-        7,
-        PlanActivationIdV1::from_hash(CanonicalHash::digest(activation)),
-        provider_offers(false),
-        role_vocabulary(),
-        role_bindings(),
-        block_catalog(),
-        CanonicalHash::digest(b"authoritative-semantic-image"),
-        vec![CanonicalHash::digest(b"lock-a")],
-        WorldgenLimitsV1::default(),
-    ))
+    GenerationPlanV1::compile(
+        GenerationPlanInputV1::new(
+            dimension_id(),
+            WorldSeedV1::from_integer(42),
+            default_config(),
+            7,
+            PlanActivationIdV1::from_hash(CanonicalHash::digest(activation)),
+            provider_offers(false),
+            role_vocabulary(),
+            role_bindings(),
+            block_catalog(),
+            CanonicalHash::digest(b"authoritative-semantic-image"),
+            vec![CanonicalHash::digest(b"lock-a")],
+            WorldgenLimitsV1::default(),
+        )
+        .with_surface_biome_terrain_programs(surface_terrain_programs(false, false)),
+    )
     .expect("activation fixture plan compiles")
 }
 fn fixture_input_with_defaults(offers: Vec<ProviderOfferV1>) -> GenerationPlanInputV1 {
@@ -1547,6 +1572,7 @@ fn fixture_input(
         locks,
         limits,
     )
+    .with_surface_biome_terrain_programs(surface_terrain_programs(false, false))
 }
 
 fn default_config() -> WorldgenConfigV1 {
@@ -1562,8 +1588,6 @@ fn provider_offers(reverse: bool) -> Vec<ProviderOfferV1> {
     let paths = [
         (ProviderSlotV1::GenerationCoordinator, "coordinator"),
         (ProviderSlotV1::StyleSelector, "selector"),
-        (ProviderSlotV1::TemperateTerrain, "temperate"),
-        (ProviderSlotV1::AridTerrain, "arid"),
         (ProviderSlotV1::TerrainTransition, "transition"),
         (ProviderSlotV1::CaveTopology, "cave"),
         (ProviderSlotV1::Materializer, "materializer"),
