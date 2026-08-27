@@ -101,7 +101,7 @@ pub use spawn::{
 };
 pub use terrain_config::{
     ClimateConfigV2, LandmassConfigV2, ReliefConfigV2, SurfaceWaterConfigV2, TerrainConfigV2,
-    TerrainPresetV2, UndergroundConfigV2, WorldBoundsV2,
+    UndergroundConfigV2, WorldBoundsV2,
 };
 pub use terrain_field::{TerrainColumnSampleV2, TerrainFamilyV2};
 pub use territory::{TerrainStyleV1, TerritoryQueryV1, TransitionMetadataV1};

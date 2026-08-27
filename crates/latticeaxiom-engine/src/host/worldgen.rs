@@ -24,13 +24,14 @@ use latticeaxiom_runtime_contracts::{
     WorldgenInspectReportV1, WorldgenInspectSamplesV1, compile_worldgen_inspect_report,
 };
 use latticeaxiom_storage::ChunkCoordinate;
+use latticeaxiom_terrenia_worldgen::TerrainPresetV2;
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkFaceV1,
     D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyOccupancyCandidateV1,
     HydrologyOccupancyConfigV1, MAX_BOUNDED_REGION_CHUNKS, NaturalLayerConfigV1,
     NaturalLayerInputV1, PlanActivationIdV1, ProviderGenerationIdentityV1, ProviderOfferV1,
     ProviderSlotV1, SpawnLocationV1, SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainConfigV2,
-    TerrainFamilyV2, TerrainPresetV2, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
+    TerrainFamilyV2, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
     WorldgenLimitsV1, cell_center_voxels_at_edge, required_spawn_chunks,
     select_safe_spawn_prefer_style,
 };

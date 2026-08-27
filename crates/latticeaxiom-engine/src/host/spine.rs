@@ -42,6 +42,7 @@ use latticeaxiom_storage::{
     PublicationReceipt, StoredChunk, TransactionId, VersionedPayload, WorldRevision,
     WorldTransaction,
 };
+use latticeaxiom_terrenia_worldgen::TerrainPresetV2;
 use latticeaxiom_voxel_mesh::{
     Aabb, Face, FaceDescriptor, GreedyMesher, LayerMergeKey, MeshBuffer, MeshReceipt, MeshSource,
     PaddedChunk, Voxel,
@@ -63,7 +64,7 @@ use latticeaxiom_world_db::{
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveOccupancyArbitrationV1,
     GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
-    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1, TerrainConfigV2, TerrainPresetV2, WorldSeedV1,
+    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1, TerrainConfigV2, WorldSeedV1,
 };
 
 use super::{

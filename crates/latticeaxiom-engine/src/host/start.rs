@@ -34,6 +34,7 @@ use latticeaxiom_start_ui::{
     ShellCapability, ShellEffect, ShellPackageProvider, WorldShellError, WorldShellRecord,
     WorldSort, WorldgenProfileOption, memory_session_store_id, memory_session_template,
 };
+use latticeaxiom_terrenia_worldgen::TerrainPresetV2;
 use latticeaxiom_world_catalog::{
     ReconciliationState, WorldOpenAction, WorldOpenPlan, WorldOpenRisk, WorldOpenStatus,
 };
@@ -43,7 +44,7 @@ use latticeaxiom_world_db::{
     FrozenLockReceiptV1, StorageDurabilityCapabilityV1, StoragePreflightStatusV1,
     WorldCreateRequestV1, WorldDbError, WorldRequirementClosureV1, WorldStorage,
 };
-use latticeaxiom_worldgen::{TerrainConfigV2, TerrainPresetV2};
+use latticeaxiom_worldgen::TerrainConfigV2;
 use thiserror::Error;
 
 use super::{

@@ -594,7 +594,7 @@ mod tests {
     use super::{
         TerrainFamilyV2, TerrainFieldV2, UNIT, climate_field, gradient_noise, quintic_fade,
     };
-    use crate::{TerrainPresetV2, WorldSeedV1, WorldgenSeedRootV2};
+    use crate::{TerrainConfigV2, WorldSeedV1, WorldgenSeedRootV2};
 
     #[test]
     fn quintic_fade_has_exact_endpoints() {
@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn balanced_macro_field_contains_land_ocean_and_mountain_systems() {
-        let config = TerrainPresetV2::Balanced.resolve();
+        let config = TerrainConfigV2::representative_test_baseline();
         let field = TerrainFieldV2::new(
             WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(42)),
             config,

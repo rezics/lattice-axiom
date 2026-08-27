@@ -4079,6 +4079,7 @@ dependencies = [
  "latticeaxiom-settings-ui",
  "latticeaxiom-start-ui",
  "latticeaxiom-storage",
+ "latticeaxiom-terrenia-worldgen",
  "latticeaxiom-voxel-mesh",
  "latticeaxiom-voxel-runtime",
  "latticeaxiom-world-catalog",
@@ -4247,6 +4248,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "latticeaxiom-terrenia-worldgen"
+version = "0.1.0"
+dependencies = [
+ "latticeaxiom-core",
+ "latticeaxiom-worldgen",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

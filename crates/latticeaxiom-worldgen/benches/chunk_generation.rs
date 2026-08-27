@@ -18,8 +18,8 @@ use latticeaxiom_worldgen::{
     D4RoleVocabularyV1, DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
     HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
     NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainConfigV2,
-    TerrainPresetV2, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenLimitsV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainConfigV2, TerrainStyleV1,
+    WorldSeedV1, WorldgenConfigV1, WorldgenLimitsV1,
 };
 
 const ROLE_TARGETS: [(D4MaterialRoleV1, &str); 16] = [
@@ -209,17 +209,27 @@ fn terrain_query_benchmarks(c: &mut Criterion, plan: &GenerationPlanV1) {
 }
 
 fn v2_terrain_benchmarks(c: &mut Criterion) {
-    let balanced = v2_fixture_plan(TerrainPresetV2::Balanced);
-    let wild = v2_fixture_plan(TerrainPresetV2::Wild);
-    let coordinate = surface_chunk(&balanced, -3, 5);
+    let baseline_config = TerrainConfigV2::for_legacy_spine(&WorldgenConfigV1 {
+        chunk_edge_voxels: 32,
+        world_floor_y: -128,
+        world_ceiling_y: 383,
+        ..WorldgenConfigV1::default()
+    });
+    let mut high_relief_config = baseline_config;
+    high_relief_config.relief.mountain_height_voxels = 360;
+    high_relief_config.relief.mountain_amount_per_1024 = 610;
+    high_relief_config.relief.roughness_per_1024 = 580;
+    let baseline = v2_fixture_plan(baseline_config);
+    let high_relief = v2_fixture_plan(high_relief_config);
+    let coordinate = surface_chunk(&baseline, -3, 5);
     let adjacent = AdjacentEpochSnapshotV1::all_unassigned(PlanningCellCoordinateV1::from_chunk(
         coordinate,
-        balanced.config().planning_cell_edge_chunks,
+        baseline.config().planning_cell_edge_chunks,
     ))
     .expect("V2 benchmark adjacency is representable");
-    c.bench_function("v2_balanced_chunk_32_cubic_snapshot_candidate", |bencher| {
+    c.bench_function("v2_baseline_chunk_32_cubic_snapshot_candidate", |bencher| {
         bencher.iter(|| {
-            balanced
+            baseline
                 .generate(ChunkGenerationRequestV1::new(
                     black_box(coordinate),
                     None,
@@ -231,8 +241,8 @@ fn v2_terrain_benchmarks(c: &mut Criterion) {
         });
     });
     for (name, plan) in [
-        ("v2_balanced_4096_terrain_columns", &balanced),
-        ("v2_wild_4096_terrain_columns", &wild),
+        ("v2_baseline_4096_terrain_columns", &baseline),
+        ("v2_high_relief_4096_terrain_columns", &high_relief),
     ] {
         c.bench_function(name, |bencher| {
             bencher.iter(|| {
@@ -466,8 +476,7 @@ fn natural_fixture_plan_with_config_and_terrain(
     GenerationPlanV1::compile(input).expect("natural benchmark plan is valid")
 }
 
-fn v2_fixture_plan(preset: TerrainPresetV2) -> GenerationPlanV1 {
-    let terrain = preset.resolve();
+fn v2_fixture_plan(terrain: TerrainConfigV2) -> GenerationPlanV1 {
     natural_fixture_plan_with_config_and_terrain(
         WorldgenConfigV1 {
             chunk_edge_voxels: 32,

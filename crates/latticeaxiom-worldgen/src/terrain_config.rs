@@ -1,94 +1,11 @@
-//! Resolved, bounded Worldgen V2 terrain presets.
+//! Resolved, bounded Worldgen V2 terrain configuration contracts.
 
-use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_bytes};
+use latticeaxiom_core::{CanonicalHash, canonical_json_bytes};
 use serde::{Deserialize, Serialize};
 
 use crate::{TerrainConfigHashV2, WorldgenConfigV1, WorldgenError, WorldgenResult};
 
 const MAX_RATIO: u16 = 1_024;
-
-/// Named world-creation terrain directions.
-///
-/// A preset is an authoring convenience. Generation consumes the fully
-/// resolved [`TerrainConfigV2`] returned by [`Self::resolve`].
-#[derive(
-    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum TerrainPresetV2 {
-    /// Broadly varied continents, relief, water, and climates.
-    #[default]
-    Balanced,
-    /// Large landmasses with long rivers and inland mountain chains.
-    Continental,
-    /// Ocean-dominant island chains with deeper basins.
-    Archipelago,
-    /// High relief dominated by continuous mountain systems.
-    Alpine,
-    /// Strongly eroded low relief, broad valleys, lakes, and wetlands.
-    Eroded,
-    /// Extreme vertical relief and rare unusual landforms.
-    Wild,
-}
-
-impl TerrainPresetV2 {
-    /// Built-in presets in stable user-facing order.
-    pub const ALL: [Self; 6] = [
-        Self::Balanced,
-        Self::Continental,
-        Self::Archipelago,
-        Self::Alpine,
-        Self::Eroded,
-        Self::Wild,
-    ];
-
-    /// Returns the stable persisted preset identifier.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Balanced => "balanced",
-            Self::Continental => "continental",
-            Self::Archipelago => "archipelago",
-            Self::Alpine => "alpine",
-            Self::Eroded => "eroded",
-            Self::Wild => "wild",
-        }
-    }
-
-    /// Returns the stable profile identity persisted by world creation.
-    #[must_use]
-    pub const fn profile_id_str(self) -> &'static str {
-        match self {
-            Self::Balanced => "latticeaxiom:worldgen-profile/balanced@2",
-            Self::Continental => "latticeaxiom:worldgen-profile/continental@2",
-            Self::Archipelago => "latticeaxiom:worldgen-profile/archipelago@2",
-            Self::Alpine => "latticeaxiom:worldgen-profile/alpine@2",
-            Self::Eroded => "latticeaxiom:worldgen-profile/eroded@2",
-            Self::Wild => "latticeaxiom:worldgen-profile/wild@2",
-        }
-    }
-
-    /// Resolves a stable creation-profile identity to a built-in preset.
-    #[must_use]
-    pub fn from_profile_id(profile: &StableId) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|preset| preset.profile_id_str() == profile.as_str())
-    }
-
-    /// Resolves this preset into every output-affecting terrain parameter.
-    #[must_use]
-    pub const fn resolve(self) -> TerrainConfigV2 {
-        match self {
-            Self::Balanced => TerrainConfigV2::balanced(),
-            Self::Continental => TerrainConfigV2::continental(),
-            Self::Archipelago => TerrainConfigV2::archipelago(),
-            Self::Alpine => TerrainConfigV2::alpine(),
-            Self::Eroded => TerrainConfigV2::eroded(),
-            Self::Wild => TerrainConfigV2::wild(),
-        }
-    }
-}
 
 /// Immutable vertical world contract resolved at creation time.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -220,64 +137,39 @@ pub struct TerrainConfigV2 {
 }
 
 impl TerrainConfigV2 {
-    /// Returns the standard 512-voxel balanced profile.
+    /// Creates a resolved configuration from validated semantic sections.
+    ///
+    /// Callers must invoke [`Self::validate_against`] before compiling a
+    /// generation plan. Product packages own defaults and profile selection.
     #[must_use]
-    pub const fn balanced() -> Self {
+    pub const fn from_parts(
+        world: WorldBoundsV2,
+        landmass: LandmassConfigV2,
+        relief: ReliefConfigV2,
+        water: SurfaceWaterConfigV2,
+        climate: ClimateConfigV2,
+        underground: UndergroundConfigV2,
+    ) -> Self {
+        Self {
+            world,
+            landmass,
+            relief,
+            water,
+            climate,
+            underground,
+        }
+    }
+
+    const fn legacy_baseline() -> Self {
         Self::new(
             8_192, -96, 192, 224, 1_536, 96, 22, 54, 28, 176, 2_048, 330, 210, 36, 520, 260, 18,
             384, 9, 6, 220, 180, true, 4_096, 820, 820, 48, 500, 150, 24, 360, 30, 18,
         )
     }
 
-    /// Returns a large-continent profile with long inland terrain systems.
-    #[must_use]
-    pub const fn continental() -> Self {
-        Self::new(
-            13_312, -230, 160, 96, 2_048, 88, 26, 66, 30, 184, 2_560, 360, 250, 42, 450, 230, 14,
-            512, 10, 7, 180, 130, true, 5_120, 760, 780, 56, 540, 142, 28, 330, 34, 18,
-        )
-    }
-
-    /// Returns an ocean-dominant island-chain profile.
-    #[must_use]
-    pub const fn archipelago() -> Self {
-        Self::new(
-            5_120, 190, 256, 620, 1_024, 144, 16, 36, 24, 126, 1_536, 270, 130, 28, 590, 300, 28,
-            256, 8, 5, 350, 100, true, 3_072, 900, 940, 36, 420, 155, 22, 420, 28, 16,
-        )
-    }
-
-    /// Returns a mountain-chain and deep-valley profile.
-    #[must_use]
-    pub const fn alpine() -> Self {
-        Self::new(
-            8_192, -120, 176, 150, 1_536, 104, 28, 62, 34, 248, 2_304, 540, 180, 30, 360, 320, 20,
-            384, 8, 8, 120, 90, true, 3_584, 860, 720, 42, 720, 175, 30, 300, 24, 20,
-        )
-    }
-
-    /// Returns an old, strongly eroded landscape with broad wetlands.
-    #[must_use]
-    pub const fn eroded() -> Self {
-        Self::new(
-            9_216, -140, 220, 180, 1_792, 78, 18, 42, 18, 92, 2_816, 230, 310, 24, 830, 120, 8,
-            448, 12, 4, 420, 520, true, 5_120, 700, 920, 72, 360, 118, 30, 470, 38, 14,
-        )
-    }
-
-    /// Returns a 1024-voxel extreme profile with uncommon high relief.
-    #[must_use]
-    pub const fn wild() -> Self {
-        let mut config = Self::new(
-            7_168, -100, 160, 260, 1_280, 176, 32, 86, 48, 360, 1_536, 610, 360, 74, 280, 580, 72,
-            320, 8, 9, 160, 100, true, 3_072, 920, 900, 32, 800, 220, 20, 500, 44, 26,
-        );
-        config.world = WorldBoundsV2 {
-            floor_y: -256,
-            ceiling_y: 767,
-            sea_level_y: 64,
-        };
-        config
+    #[cfg(test)]
+    pub(crate) const fn representative_test_baseline() -> Self {
+        Self::legacy_baseline()
     }
 
     #[allow(
@@ -375,7 +267,7 @@ impl TerrainConfigV2 {
     /// only the version-one spine record.
     #[must_use]
     pub fn for_legacy_spine(spine: &WorldgenConfigV1) -> Self {
-        let mut config = Self::balanced();
+        let mut config = Self::legacy_baseline();
         config.world.floor_y = spine.world_floor_y;
         config.world.ceiling_y = spine.world_ceiling_y;
         config.world.sea_level_y = spine
@@ -736,65 +628,14 @@ fn invalid(field: &'static str, reason: impl Into<String>) -> WorldgenError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use super::*;
 
     #[test]
-    fn every_builtin_preset_is_closed_and_valid() {
-        for preset in TerrainPresetV2::ALL {
-            let config = preset.resolve();
-            let spine = WorldgenConfigV1 {
-                world_floor_y: config.world.floor_y,
-                world_ceiling_y: config.world.ceiling_y,
-                ..WorldgenConfigV1::default()
-            };
-            assert!(config.validate_against(&spine).is_ok(), "{preset:?}");
-            assert!(config.canonical_hash().is_ok(), "{preset:?}");
-            let profile = preset
-                .profile_id_str()
-                .parse::<StableId>()
-                .expect("built-in profile identity is valid");
-            assert_eq!(TerrainPresetV2::from_profile_id(&profile), Some(preset));
-        }
-    }
-
-    #[test]
-    fn standard_profiles_use_a_512_voxel_column() {
-        for preset in [
-            TerrainPresetV2::Balanced,
-            TerrainPresetV2::Continental,
-            TerrainPresetV2::Archipelago,
-            TerrainPresetV2::Alpine,
-            TerrainPresetV2::Eroded,
-        ] {
-            let world = preset.resolve().world;
-            assert_eq!(world.floor_y, -128);
-            assert_eq!(world.ceiling_y, 383);
-            assert_eq!(world.ceiling_y - world.floor_y + 1, 512);
-        }
-        let wild = TerrainPresetV2::Wild.resolve().world;
-        assert_eq!(wild.ceiling_y - wild.floor_y + 1, 1_024);
-    }
-
-    #[test]
-    fn builtin_profiles_have_distinct_resolved_hashes() {
-        let hashes = TerrainPresetV2::ALL
-            .into_iter()
-            .map(|preset| {
-                preset
-                    .resolve()
-                    .canonical_hash()
-                    .expect("built-in profile canonicalizes")
-            })
-            .collect::<BTreeSet<_>>();
-        assert_eq!(hashes.len(), TerrainPresetV2::ALL.len());
-    }
-
-    #[test]
     fn resolved_config_rejects_unknown_fields() {
-        let mut value = serde_json::to_value(TerrainPresetV2::Balanced.resolve())
-            .unwrap_or(serde_json::Value::Null);
+        let mut value = serde_json::to_value(TerrainConfigV2::for_legacy_spine(
+            &WorldgenConfigV1::default(),
+        ))
+        .unwrap_or(serde_json::Value::Null);
         if let Some(object) = value.as_object_mut() {
             object.insert("mystery".to_owned(), serde_json::Value::Bool(true));
         }

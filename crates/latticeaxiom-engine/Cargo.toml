@@ -61,6 +61,7 @@ latticeaxiom-render-contracts = { path = "../latticeaxiom-render-contracts" }
 latticeaxiom-runtime-contracts = { path = "../latticeaxiom-runtime-contracts" }
 latticeaxiom-settings-ui.workspace = true
 latticeaxiom-start-ui.workspace = true
+latticeaxiom-terrenia-worldgen.workspace = true
 latticeaxiom-storage = { path = "../latticeaxiom-storage" }
 latticeaxiom-voxel-mesh = { path = "../latticeaxiom-voxel-mesh" }
 latticeaxiom-voxel-runtime = { path = "../latticeaxiom-voxel-runtime" }
