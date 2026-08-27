@@ -67,11 +67,15 @@ pub enum AuthoritativePlayerActionV1 {
     Pause = 7,
     /// Select a placement stack for the aimed block.
     PickBlock = 9,
+    /// Hold-to-sprint button.
+    Sprint = 10,
+    /// Hold-to-sneak button; while flying this descends.
+    Sneak = 11,
 }
 
 impl AuthoritativePlayerActionV1 {
     /// Frozen first-version player actions compiled from the catalog.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Move,
         Self::Look,
         Self::Jump,
@@ -80,6 +84,8 @@ impl AuthoritativePlayerActionV1 {
         Self::Inspect,
         Self::Pause,
         Self::PickBlock,
+        Self::Sprint,
+        Self::Sneak,
     ];
 
     /// Returns the catalog stable ID for this player action.
@@ -94,6 +100,8 @@ impl AuthoritativePlayerActionV1 {
             Self::Inspect => "latticeaxiom:action/gameplay/inspect@1",
             Self::Pause => "latticeaxiom:action/gameplay/pause@1",
             Self::PickBlock => "latticeaxiom:action/gameplay/pick-block@1",
+            Self::Sprint => "latticeaxiom:action/gameplay/sprint@1",
+            Self::Sneak => "latticeaxiom:action/gameplay/sneak@1",
         }
     }
 
@@ -109,6 +117,8 @@ impl AuthoritativePlayerActionV1 {
                 | Self::PlaceBlock
                 | Self::Inspect
                 | Self::PickBlock
+                | Self::Sprint
+                | Self::Sneak
         )
     }
 }

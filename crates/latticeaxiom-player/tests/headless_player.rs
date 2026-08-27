@@ -163,6 +163,206 @@ fn sixty_hz_jump_reaches_the_frozen_apex() {
     assert!((apex - 0.91 - 1.25).abs() < 0.08, "observed apex {apex}");
 }
 
+fn hold_forward_frames(count: u64, sprint: bool) -> impl Iterator<Item = PlayerActionFrameV1> {
+    (1..=count).map(move |generation| {
+        let mut held = PlayerActionButtonsV1::empty();
+        if sprint {
+            held.insert(PlayerActionV1::Sprint);
+        }
+        PlayerActionFrameV1 {
+            generation,
+            movement: ActionAxis2V1 { x: 0.0, y: 1.0 },
+            held,
+            ..PlayerActionFrameV1::default()
+        }
+    })
+}
+
+fn horizontal_distance_after(
+    frames: impl IntoIterator<Item = PlayerActionFrameV1>,
+    ticks: u32,
+) -> f32 {
+    let mut app = test_app();
+    let player = spawn_player(&mut app);
+    push_frames(&mut app, frames);
+    run_update_for_ticks(&mut app, ticks);
+    app.world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("player Transform remains present")
+        .translation
+        .z
+}
+
+#[test]
+fn forward_sprint_is_thirty_percent_faster_than_walk() {
+    let walked = horizontal_distance_after(hold_forward_frames(60, false), 60);
+    let sprinted = horizontal_distance_after(hold_forward_frames(60, true), 60);
+    assert!((walked + 4.50).abs() < 0.15, "walk distance was {walked}");
+    assert!(
+        (sprinted + 5.85).abs() < 0.20,
+        "sprint distance was {sprinted}"
+    );
+    assert!(
+        sprinted.abs() > walked.abs() + 1.0,
+        "sprint {sprinted} should outpace walk {walked}"
+    );
+}
+
+fn jump_edge_frame(generation: u64) -> PlayerActionFrameV1 {
+    let mut started = PlayerActionButtonsV1::empty();
+    let mut held = PlayerActionButtonsV1::empty();
+    started.insert(PlayerActionV1::Jump);
+    held.insert(PlayerActionV1::Jump);
+    PlayerActionFrameV1 {
+        generation,
+        started,
+        held,
+        ..PlayerActionFrameV1::default()
+    }
+}
+
+fn held_frame(generation: u64, action: PlayerActionV1) -> PlayerActionFrameV1 {
+    let mut held = PlayerActionButtonsV1::empty();
+    held.insert(action);
+    PlayerActionFrameV1 {
+        generation,
+        held,
+        ..PlayerActionFrameV1::default()
+    }
+}
+
+#[test]
+fn double_jump_enters_flight_and_holds_altitude() {
+    let mut app = test_app();
+    let player = spawn_player(&mut app);
+    push_frames(
+        &mut app,
+        (1..=8)
+            .map(|generation| PlayerActionFrameV1 {
+                generation,
+                ..PlayerActionFrameV1::default()
+            })
+            .chain(std::iter::once(jump_edge_frame(9)))
+            .chain(std::iter::once(jump_edge_frame(10)))
+            .chain((11..=40).map(|generation| PlayerActionFrameV1 {
+                generation,
+                ..PlayerActionFrameV1::default()
+            })),
+    );
+    run_update_for_ticks(&mut app, 10);
+    let after_toggle = *app
+        .world()
+        .entity(player)
+        .get::<PlayerControllerState>()
+        .expect("player bundle has controller state");
+    assert!(after_toggle.flying(), "second jump must enable flight");
+    let start_y = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("player Transform remains present")
+        .translation
+        .y;
+    run_update_for_ticks(&mut app, 30);
+    let end_y = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("player Transform remains present")
+        .translation
+        .y;
+    let flying = app
+        .world()
+        .entity(player)
+        .get::<PlayerControllerState>()
+        .expect("player bundle has controller state")
+        .flying();
+    assert!(flying, "idle flight must not fall out of the air");
+    assert!(
+        (end_y - start_y).abs() < 0.08,
+        "flight must cancel gravity: {start_y} -> {end_y}"
+    );
+}
+
+#[test]
+fn flight_ascends_with_jump_and_descends_with_sneak() {
+    let mut app = test_app();
+    let player = spawn_player(&mut app);
+    push_frames(
+        &mut app,
+        (1..=8)
+            .map(|generation| PlayerActionFrameV1 {
+                generation,
+                ..PlayerActionFrameV1::default()
+            })
+            .chain(std::iter::once(jump_edge_frame(9)))
+            .chain(std::iter::once(jump_edge_frame(10)))
+            .chain((11..=40).map(|generation| held_frame(generation, PlayerActionV1::Jump)))
+            .chain((41..=70).map(|generation| held_frame(generation, PlayerActionV1::Sneak))),
+    );
+    run_update_for_ticks(&mut app, 10);
+    let takeoff_y = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("player Transform remains present")
+        .translation
+        .y;
+    run_update_for_ticks(&mut app, 30);
+    let climbed_y = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("player Transform remains present")
+        .translation
+        .y;
+    assert!(
+        climbed_y - takeoff_y > 4.5,
+        "held jump while flying must climb: {takeoff_y} -> {climbed_y}"
+    );
+    run_update_for_ticks(&mut app, 30);
+    let descended_y = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("player Transform remains present")
+        .translation
+        .y;
+    assert!(
+        climbed_y - descended_y > 4.5,
+        "held sneak while flying must descend: {climbed_y} -> {descended_y}"
+    );
+}
+
+#[test]
+fn landing_while_flying_cancels_flight() {
+    let mut app = test_app();
+    let player = spawn_player(&mut app);
+    push_frames(
+        &mut app,
+        (1..=8)
+            .map(|generation| PlayerActionFrameV1 {
+                generation,
+                ..PlayerActionFrameV1::default()
+            })
+            .chain(std::iter::once(jump_edge_frame(9)))
+            .chain(std::iter::once(jump_edge_frame(10)))
+            .chain((11..=80).map(|generation| held_frame(generation, PlayerActionV1::Sneak))),
+    );
+    run_update_for_ticks(&mut app, 80);
+    let state = *app
+        .world()
+        .entity(player)
+        .get::<PlayerControllerState>()
+        .expect("player bundle has controller state");
+    assert!(
+        !state.flying(),
+        "touching walkable ground must cancel flight"
+    );
+    assert!(state.grounded(), "cancelled flight must land on the floor");
+}
+
 fn coyote_jump_velocity(target_airborne_tick: u8) -> Vec3 {
     let mut app = headless_app();
     app.world_mut().spawn((

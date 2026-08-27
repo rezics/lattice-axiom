@@ -33,7 +33,7 @@
       "latticeaxiom:action/gameplay/sprint@1": [
         {
           "kind": "keyboard",
-          "usage": "ShiftLeft",
+          "usage": "ControlLeft",
           "modifiers": {
             "shift": false,
             "control": false,

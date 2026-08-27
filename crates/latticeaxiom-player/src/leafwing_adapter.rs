@@ -54,6 +54,10 @@ pub enum LeafwingPlayerAction {
     SurfaceActivate,
     /// Runtime pick-block button.
     PickBlock,
+    /// Runtime sprint button.
+    Sprint,
+    /// Runtime sneak button.
+    Sneak,
 }
 
 /// Runtime-only Leafwing enum for compiled [`ClientSurfaceActionV1`] rows.
@@ -247,6 +251,12 @@ pub fn default_leafwing_input_map() -> InputMap<LeafwingPlayerAction> {
         .insert(LeafwingPlayerAction::PlaceBlock, MouseButton::Right)
         .insert(LeafwingPlayerAction::PlaceBlock, GamepadButton::East)
         .insert(LeafwingPlayerAction::PickBlock, MouseButton::Middle)
+        .insert(LeafwingPlayerAction::Sprint, KeyCode::ControlLeft)
+        .insert(LeafwingPlayerAction::Sprint, KeyCode::ControlRight)
+        .insert(LeafwingPlayerAction::Sprint, GamepadButton::LeftThumb)
+        .insert(LeafwingPlayerAction::Sneak, KeyCode::ShiftLeft)
+        .insert(LeafwingPlayerAction::Sneak, KeyCode::ShiftRight)
+        .insert(LeafwingPlayerAction::Sneak, GamepadButton::RightThumb)
         .insert(LeafwingPlayerAction::Inspect, KeyCode::KeyF)
         .insert(LeafwingPlayerAction::Inspect, GamepadButton::North)
         .insert(LeafwingPlayerAction::Pause, KeyCode::Escape)
@@ -429,6 +439,8 @@ fn player_button(player: AuthoritativePlayerActionV1) -> Option<LeafwingPlayerAc
         AuthoritativePlayerActionV1::Inspect => Some(LeafwingPlayerAction::Inspect),
         AuthoritativePlayerActionV1::Pause => Some(LeafwingPlayerAction::Pause),
         AuthoritativePlayerActionV1::PickBlock => Some(LeafwingPlayerAction::PickBlock),
+        AuthoritativePlayerActionV1::Sprint => Some(LeafwingPlayerAction::Sprint),
+        AuthoritativePlayerActionV1::Sneak => Some(LeafwingPlayerAction::Sneak),
         AuthoritativePlayerActionV1::Move | AuthoritativePlayerActionV1::Look => None,
     }
 }
@@ -624,6 +636,8 @@ fn sample_leafwing_state(
         (LeafwingPlayerAction::BreakBlock, PlayerActionV1::BreakBlock),
         (LeafwingPlayerAction::PlaceBlock, PlayerActionV1::PlaceBlock),
         (LeafwingPlayerAction::PickBlock, PlayerActionV1::PickBlock),
+        (LeafwingPlayerAction::Sprint, PlayerActionV1::Sprint),
+        (LeafwingPlayerAction::Sneak, PlayerActionV1::Sneak),
         (LeafwingPlayerAction::Inspect, PlayerActionV1::Inspect),
         (LeafwingPlayerAction::Pause, PlayerActionV1::Pause),
         (
@@ -810,6 +824,16 @@ mod tests {
         assert!(
             maps.gameplay()
                 .get_dual_axislike(&LeafwingPlayerAction::Move)
+                .is_some()
+        );
+        assert!(
+            maps.gameplay()
+                .get_buttonlike(&LeafwingPlayerAction::Sprint)
+                .is_some()
+        );
+        assert!(
+            maps.gameplay()
+                .get_buttonlike(&LeafwingPlayerAction::Sneak)
                 .is_some()
         );
         assert!(

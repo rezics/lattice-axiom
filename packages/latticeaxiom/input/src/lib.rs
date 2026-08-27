@@ -185,6 +185,8 @@ mod tests {
         assert_eq!(AuthoritativePlayerActionV1::Inspect as u8, 6);
         assert_eq!(AuthoritativePlayerActionV1::Pause as u8, 7);
         assert_eq!(AuthoritativePlayerActionV1::PickBlock as u8, 9);
+        assert_eq!(AuthoritativePlayerActionV1::Sprint as u8, 10);
+        assert_eq!(AuthoritativePlayerActionV1::Sneak as u8, 11);
     }
 
     #[test]
@@ -208,6 +210,16 @@ mod tests {
             compiled
                 .gameplay_map()
                 .contains_action(&action("latticeaxiom:action/gameplay/move@1"))
+        );
+        assert!(
+            compiled
+                .gameplay_map()
+                .contains_action(&action("latticeaxiom:action/gameplay/sprint@1"))
+        );
+        assert!(
+            compiled
+                .gameplay_map()
+                .contains_action(&action("latticeaxiom:action/gameplay/sneak@1"))
         );
         assert!(
             compiled

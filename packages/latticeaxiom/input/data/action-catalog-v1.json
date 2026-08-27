@@ -158,6 +158,58 @@
       ]
     },
     {
+      "id": "latticeaxiom:action/gameplay/sneak@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "sneak",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ShiftLeft",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ShiftRight",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "RightThumb"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/sprint@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "sprint",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ControlLeft",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ControlRight",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "LeftThumb"
+        }
+      ]
+    },
+    {
       "id": "latticeaxiom:action/hud/hotbar-next@1",
       "kind": "button",
       "context": "gameplay",

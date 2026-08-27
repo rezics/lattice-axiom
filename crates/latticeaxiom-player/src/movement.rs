@@ -30,6 +30,10 @@ const CONTROLLER_SKIN_M: f32 = 0.01;
 const MAX_SUPPORT_QUERY_HITS: u32 = 64;
 const STEP_EPSILON_M: f32 = 0.001;
 const SPECTATOR_SPEED_MPS: f32 = 12.0;
+const SPRINT_MULTIPLIER: f32 = 1.3;
+const FLY_SPEED_MPS: f32 = 10.80;
+const FLY_SPRINT_MULTIPLIER: f32 = 2.0;
+const FLY_TOGGLE_WINDOW_TICKS: u8 = 21;
 
 /// Frozen D2 movement profile from ADR 0025.
 #[derive(Clone, Copy, Component, Debug, PartialEq)]
@@ -243,6 +247,8 @@ pub struct PlayerControllerState {
     grounded: bool,
     ticks_since_grounded: u8,
     jump_buffer_remaining: u8,
+    flying: bool,
+    ticks_since_jump_started: u8,
 }
 
 impl PlayerControllerState {
@@ -263,6 +269,12 @@ impl PlayerControllerState {
     pub const fn jump_buffer_remaining(self) -> u8 {
         self.jump_buffer_remaining
     }
+
+    /// Returns whether creative flight is currently active.
+    #[must_use]
+    pub const fn flying(self) -> bool {
+        self.flying
+    }
 }
 
 impl Default for PlayerControllerState {
@@ -271,6 +283,8 @@ impl Default for PlayerControllerState {
             grounded: false,
             ticks_since_grounded: u8::MAX,
             jump_buffer_remaining: 0,
+            flying: false,
+            ticks_since_jump_started: u8::MAX,
         }
     }
 }
@@ -429,12 +443,19 @@ pub(crate) fn update_spectator(
         let input = frame.0.movement.clamp_unit();
         let local = Vec3::new(input.x, 0.0, -input.y);
         let horizontal = Quat::from_rotation_y(spectator.yaw_radians) * local;
-        let vertical = if frame.0.held.contains(PlayerActionV1::Jump) {
-            Vec3::Y
-        } else {
-            Vec3::ZERO
+        let jump_held = frame.0.held.contains(PlayerActionV1::Jump);
+        let sneak_held = frame.0.held.contains(PlayerActionV1::Sneak);
+        let vertical = match (jump_held, sneak_held) {
+            (true, false) => Vec3::Y,
+            (false, true) => Vec3::NEG_Y,
+            (true, true) | (false, false) => Vec3::ZERO,
         };
-        spectator.position += (horizontal + vertical) * SPECTATOR_SPEED_MPS * delta_seconds;
+        let speed = if frame.0.held.contains(PlayerActionV1::Sprint) {
+            SPECTATOR_SPEED_MPS * FLY_SPRINT_MULTIPLIER
+        } else {
+            SPECTATOR_SPEED_MPS
+        };
+        spectator.position += (horizontal + vertical) * speed * delta_seconds;
     }
 }
 
@@ -457,6 +478,11 @@ pub(crate) fn update_grounded(
     >,
 ) {
     for (entity, collider, mut transform, profile, mut state) in &mut players {
+        if state.flying {
+            state.grounded = false;
+            state.ticks_since_grounded = state.ticks_since_grounded.saturating_add(1);
+            continue;
+        }
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
         let nearest_walkable_distance = nearest_walkable_support(
             &spatial_query,
@@ -499,14 +525,27 @@ pub(crate) fn prepare_velocity(
     let delta_seconds = time.delta_secs();
     for (profile, frame, view, mut state, mut velocity) in &mut players {
         let input = frame.0.movement.clamp_unit();
+        let jump_started = frame.0.started.contains(PlayerActionV1::Jump);
+        let jump_held = frame.0.held.contains(PlayerActionV1::Jump);
+        let sprint_held = frame.0.held.contains(PlayerActionV1::Sprint);
+        let sneak_held = frame.0.held.contains(PlayerActionV1::Sneak);
+        apply_jump_and_fly_toggle(*profile, jump_started, &mut state);
+        let speed = horizontal_speed_mps(
+            profile.maximum_walk_speed_mps,
+            state.flying,
+            sprint_held,
+            sneak_held,
+            input.y,
+        );
         let local_direction = Vec3::new(input.x, 0.0, -input.y);
         let world_direction = Quat::from_rotation_y(view.yaw_radians) * local_direction;
-        velocity.x = world_direction.x * profile.maximum_walk_speed_mps;
-        velocity.z = world_direction.z * profile.maximum_walk_speed_mps;
-
+        velocity.x = world_direction.x * speed;
+        velocity.z = world_direction.z * speed;
         velocity.y = prepared_vertical_velocity(
             *profile,
-            frame.0.started.contains(PlayerActionV1::Jump),
+            jump_held,
+            sprint_held,
+            sneak_held,
             &mut state,
             velocity.y,
             delta_seconds,
@@ -514,15 +553,68 @@ pub(crate) fn prepare_velocity(
     }
 }
 
-fn prepared_vertical_velocity(
+fn horizontal_speed_mps(
+    walk_speed_mps: f32,
+    flying: bool,
+    sprint_held: bool,
+    sneak_held: bool,
+    forward: f32,
+) -> f32 {
+    if flying {
+        if sprint_held {
+            FLY_SPEED_MPS * FLY_SPRINT_MULTIPLIER
+        } else {
+            FLY_SPEED_MPS
+        }
+    } else if sprint_held && !sneak_held && forward > 0.0 {
+        walk_speed_mps * SPRINT_MULTIPLIER
+    } else {
+        walk_speed_mps
+    }
+}
+
+fn apply_jump_and_fly_toggle(
     profile: PlayerMovementProfileV1,
     jump_started: bool,
+    state: &mut PlayerControllerState,
+) {
+    if jump_started {
+        let within_toggle_window = state.ticks_since_jump_started <= FLY_TOGGLE_WINDOW_TICKS;
+        if state.flying && within_toggle_window {
+            state.flying = false;
+            state.jump_buffer_remaining = 0;
+        } else if !state.flying && !state.grounded && within_toggle_window {
+            state.flying = true;
+            state.jump_buffer_remaining = 0;
+        } else if !state.flying {
+            state.jump_buffer_remaining = profile.jump_buffer_ticks;
+        }
+        state.ticks_since_jump_started = 0;
+    }
+    state.ticks_since_jump_started = state.ticks_since_jump_started.saturating_add(1);
+}
+
+fn prepared_vertical_velocity(
+    profile: PlayerMovementProfileV1,
+    jump_held: bool,
+    sprint_held: bool,
+    sneak_held: bool,
     state: &mut PlayerControllerState,
     current_velocity_y: f32,
     delta_seconds: f32,
 ) -> f32 {
-    if jump_started {
-        state.jump_buffer_remaining = profile.jump_buffer_ticks;
+    if state.flying {
+        state.jump_buffer_remaining = 0;
+        let speed = if sprint_held {
+            FLY_SPEED_MPS * FLY_SPRINT_MULTIPLIER
+        } else {
+            FLY_SPEED_MPS
+        };
+        return match (jump_held, sneak_held) {
+            (true, false) => speed,
+            (false, true) => -speed,
+            (true, true) | (false, false) => 0.0,
+        };
     }
     let within_coyote = state.grounded || state.ticks_since_grounded <= profile.coyote_ticks;
     if state.jump_buffer_remaining > 0 && within_coyote {
@@ -562,6 +654,7 @@ pub(crate) fn move_players(
     for (entity, collider, profile, mut state, mut transform, mut velocity) in &mut players {
         let start = transform.translation;
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        let flying = state.flying;
         let mut hit_walkable_ground = false;
         let direct = move_and_slide.move_and_slide(
             collider,
@@ -584,7 +677,7 @@ pub(crate) fn move_players(
             },
         );
 
-        let stepped = if state.grounded {
+        let stepped = if state.grounded && !flying {
             try_step(
                 &move_and_slide,
                 collider,
@@ -610,6 +703,7 @@ pub(crate) fn move_players(
             velocity.0 = direct.projected_velocity;
             if hit_walkable_ground && velocity.y <= 0.0 {
                 velocity.y = 0.0;
+                state.flying = false;
                 state.grounded = true;
                 state.ticks_since_grounded = 0;
             }
@@ -920,18 +1014,20 @@ mod tests {
             grounded: false,
             ticks_since_grounded: 6,
             jump_buffer_remaining: 0,
+            flying: false,
+            ticks_since_jump_started: u8::MAX,
         };
-        let accepted_velocity =
-            prepared_vertical_velocity(profile, true, &mut accepted, -1.0, delta_seconds);
+        let accepted_velocity = tick_vertical(profile, true, &mut accepted, -1.0, delta_seconds);
         assert_eq!(accepted_velocity, JUMP_SPEED_MPS);
 
         let mut rejected = PlayerControllerState {
             grounded: false,
             ticks_since_grounded: 7,
             jump_buffer_remaining: 0,
+            flying: false,
+            ticks_since_jump_started: u8::MAX,
         };
-        let rejected_velocity =
-            prepared_vertical_velocity(profile, true, &mut rejected, -1.0, delta_seconds);
+        let rejected_velocity = tick_vertical(profile, true, &mut rejected, -1.0, delta_seconds);
         assert!(rejected_velocity < 0.0);
     }
 
@@ -943,40 +1039,92 @@ mod tests {
             grounded: false,
             ticks_since_grounded: u8::MAX,
             jump_buffer_remaining: 0,
+            flying: false,
+            ticks_since_jump_started: u8::MAX,
         };
 
         let mut sixth_tick = airborne;
-        let mut velocity =
-            prepared_vertical_velocity(profile, true, &mut sixth_tick, -1.0, delta_seconds);
+        let mut velocity = tick_vertical(profile, true, &mut sixth_tick, -1.0, delta_seconds);
         for _ in 0..4 {
-            velocity = prepared_vertical_velocity(
-                profile,
-                false,
-                &mut sixth_tick,
-                velocity,
-                delta_seconds,
-            );
+            velocity = tick_vertical(profile, false, &mut sixth_tick, velocity, delta_seconds);
         }
         sixth_tick.grounded = true;
-        velocity =
-            prepared_vertical_velocity(profile, false, &mut sixth_tick, velocity, delta_seconds);
+        velocity = tick_vertical(profile, false, &mut sixth_tick, velocity, delta_seconds);
         assert_eq!(velocity, JUMP_SPEED_MPS);
 
         let mut seventh_tick = airborne;
-        let mut velocity =
-            prepared_vertical_velocity(profile, true, &mut seventh_tick, -1.0, delta_seconds);
+        let mut velocity = tick_vertical(profile, true, &mut seventh_tick, -1.0, delta_seconds);
         for _ in 0..5 {
-            velocity = prepared_vertical_velocity(
-                profile,
-                false,
-                &mut seventh_tick,
-                velocity,
-                delta_seconds,
-            );
+            velocity = tick_vertical(profile, false, &mut seventh_tick, velocity, delta_seconds);
         }
         seventh_tick.grounded = true;
-        velocity =
-            prepared_vertical_velocity(profile, false, &mut seventh_tick, velocity, delta_seconds);
+        velocity = tick_vertical(profile, false, &mut seventh_tick, velocity, delta_seconds);
         assert_eq!(velocity, 0.0);
+    }
+
+    #[test]
+    fn sprint_requires_forward_and_is_blocked_by_sneak() {
+        let walk = PlayerMovementProfileV1::default().maximum_walk_speed_mps();
+        assert!(
+            (horizontal_speed_mps(walk, false, true, false, 1.0) - walk * SPRINT_MULTIPLIER).abs()
+                < f32::EPSILON
+        );
+        assert_eq!(horizontal_speed_mps(walk, false, true, false, 0.0), walk);
+        assert_eq!(horizontal_speed_mps(walk, false, true, true, 1.0), walk);
+        assert_eq!(
+            horizontal_speed_mps(walk, true, false, false, 0.0),
+            FLY_SPEED_MPS
+        );
+        assert_eq!(
+            horizontal_speed_mps(walk, true, true, false, 0.0),
+            FLY_SPEED_MPS * FLY_SPRINT_MULTIPLIER
+        );
+    }
+
+    #[test]
+    fn airborne_double_jump_toggles_flight_and_cancels_gravity() {
+        let profile = PlayerMovementProfileV1::default();
+        let delta_seconds = FIXED_HZ.recip();
+        let mut state = PlayerControllerState {
+            grounded: false,
+            ticks_since_grounded: 1,
+            jump_buffer_remaining: 0,
+            flying: false,
+            ticks_since_jump_started: 1,
+        };
+        let velocity = tick_vertical(profile, true, &mut state, JUMP_SPEED_MPS, delta_seconds);
+        assert!(state.flying);
+        assert_eq!(velocity, FLY_SPEED_MPS);
+
+        let hover = tick_vertical(profile, false, &mut state, 0.0, delta_seconds);
+        assert_eq!(hover, 0.0);
+
+        apply_jump_and_fly_toggle(profile, false, &mut state);
+        let climb =
+            prepared_vertical_velocity(profile, true, false, false, &mut state, 0.0, delta_seconds);
+        assert_eq!(climb, FLY_SPEED_MPS);
+        apply_jump_and_fly_toggle(profile, false, &mut state);
+        let descend =
+            prepared_vertical_velocity(profile, false, false, true, &mut state, 0.0, delta_seconds);
+        assert_eq!(descend, -FLY_SPEED_MPS);
+    }
+
+    fn tick_vertical(
+        profile: PlayerMovementProfileV1,
+        jump_started: bool,
+        state: &mut PlayerControllerState,
+        current_velocity_y: f32,
+        delta_seconds: f32,
+    ) -> f32 {
+        apply_jump_and_fly_toggle(profile, jump_started, state);
+        prepared_vertical_velocity(
+            profile,
+            jump_started,
+            false,
+            false,
+            state,
+            current_velocity_y,
+            delta_seconds,
+        )
     }
 }

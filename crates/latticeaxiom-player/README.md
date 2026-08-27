@@ -43,13 +43,15 @@ interfaces.
 ## Automated acceptance
 
 The headless integration suite uses Bevy `MinimalPlugins` plus Avian without a
-window or GPU. It checks command batching invariance, capsule walking, jump
-apex, command-input coyote and buffer boundaries, the inclusive 45°/rejected
-46° slope boundary, the inclusive 0.60 m/rejected 0.61 m step boundary, exact
-static-collider seams, 10 cm ground snap with a 1 cm controller skin, the
-shared 200 ms break/place limiter, the 5 m authoritative request interface,
-and the rule that detached spectators neither mutate the player body nor
-submit authoritative edits. No visual or manual acceptance is required.
+window or GPU. It checks command batching invariance, capsule walking, 1.3×
+forward sprint, double-jump creative flight with Space/Shift vertical and
+sprint-boosted air speed, jump apex, command-input coyote and buffer
+boundaries, the inclusive 45°/rejected 46° slope boundary, the inclusive
+0.60 m/rejected 0.61 m step boundary, exact static-collider seams, 10 cm
+ground snap with a 1 cm controller skin, the shared 200 ms break/place
+limiter, the 5 m authoritative request interface, and the rule that detached
+spectators neither mutate the player body nor submit authoritative edits. No
+visual or manual acceptance is required.
 
 ## Deferred D2 hardening
 

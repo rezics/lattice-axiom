@@ -16,7 +16,7 @@ use bevy::{
 pub(crate) fn setup_playable_hud(mut commands: Commands<'_, '_>) {
     commands
         .spawn((
-            Name::new("Playable HUD — WASD move; Space jump; LMB mine; RMB place; Esc pause"),
+            Name::new("Playable HUD — WASD move; Ctrl sprint; Space jump; Space×2 fly; Shift descend; LMB mine; RMB place; Esc pause"),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
@@ -129,7 +129,7 @@ fn spawn_hotbar(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
 fn spawn_control_legend(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
     parent
         .spawn((
-            Name::new("Controls — WASD move; Space jump; LMB mine; RMB place; Esc pause"),
+            Name::new("Controls — WASD move; Ctrl sprint; Space jump; Space×2 fly; Shift descend; LMB mine; RMB place; Esc pause"),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(18.0),
@@ -146,7 +146,9 @@ fn spawn_control_legend(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<
         .with_children(|legend| {
             for (name, color, width) in [
                 ("WASD movement", Color::srgb(0.25, 0.70, 0.66), 32.0),
-                ("Space jump", Color::srgb(0.88, 0.90, 0.84), 22.0),
+                ("Ctrl sprint", Color::srgb(0.20, 0.55, 0.82), 18.0),
+                ("Space jump / fly", Color::srgb(0.88, 0.90, 0.84), 22.0),
+                ("Shift descend", Color::srgb(0.62, 0.58, 0.42), 16.0),
                 ("Left mouse mine", Color::srgb(0.88, 0.59, 0.22), 14.0),
                 ("Right mouse place", Color::srgb(0.43, 0.27, 0.13), 14.0),
                 ("Escape pause", Color::srgb(0.75, 0.20, 0.17), 14.0),

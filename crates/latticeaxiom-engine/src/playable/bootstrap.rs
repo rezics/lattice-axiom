@@ -46,7 +46,7 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
         .insert_resource(seed_cells)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Lattice Axiom — WASD move · mouse look · Space jump · left break · right place · Esc pause".into(),
+                title: "Lattice Axiom — WASD move · mouse look · Ctrl sprint · Space jump · Space×2 fly · Shift descend · left break · right place · Esc pause".into(),
                 ..Window::default()
             }),
             ..WindowPlugin::default()

@@ -1000,7 +1000,7 @@ fn overlays_from_store(
     reason = "frozen first-playable action catalog is a closed table"
 )]
 fn default_binding_rows() -> Vec<SettingsBindingRow> {
-    const ACTIONS: [(&str, &str, &str, &str); 29] = [
+    const ACTIONS: [(&str, &str, &str, &str); 31] = [
         (
             "latticeaxiom:action/gameplay/move@1",
             "gameplay",
@@ -1048,6 +1048,18 @@ fn default_binding_rows() -> Vec<SettingsBindingRow> {
             "gameplay",
             "MouseMiddle",
             "MouseMiddle",
+        ),
+        (
+            "latticeaxiom:action/gameplay/sprint@1",
+            "gameplay",
+            "Ctrl",
+            "Ctrl",
+        ),
+        (
+            "latticeaxiom:action/gameplay/sneak@1",
+            "gameplay",
+            "Shift",
+            "Shift",
         ),
         (
             "latticeaxiom:action/ui/nav-up@1",

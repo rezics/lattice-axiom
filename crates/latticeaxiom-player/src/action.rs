@@ -35,6 +35,10 @@ pub enum PlayerActionV1 {
     SurfaceActivate = 8,
     /// Select or swap the inventory stack that places the aimed block.
     PickBlock = 9,
+    /// Hold-to-sprint button.
+    Sprint = 10,
+    /// Hold-to-sneak button; while flying this descends.
+    Sneak = 11,
 }
 
 impl From<AuthoritativePlayerActionV1> for PlayerActionV1 {
@@ -48,6 +52,8 @@ impl From<AuthoritativePlayerActionV1> for PlayerActionV1 {
             AuthoritativePlayerActionV1::Inspect => Self::Inspect,
             AuthoritativePlayerActionV1::Pause => Self::Pause,
             AuthoritativePlayerActionV1::PickBlock => Self::PickBlock,
+            AuthoritativePlayerActionV1::Sprint => Self::Sprint,
+            AuthoritativePlayerActionV1::Sneak => Self::Sneak,
         }
     }
 }
@@ -110,6 +116,8 @@ impl PlayerActionButtonsV1 {
     const PAUSE: u16 = 1 << 4;
     const SURFACE_ACTIVATE: u16 = 1 << 5;
     const PICK_BLOCK: u16 = 1 << 6;
+    const SPRINT: u16 = 1 << 7;
+    const SNEAK: u16 = 1 << 8;
 
     /// Returns an empty button set.
     #[must_use]
@@ -128,6 +136,8 @@ impl PlayerActionButtonsV1 {
             PlayerActionV1::Pause => Self::PAUSE,
             PlayerActionV1::SurfaceActivate => Self::SURFACE_ACTIVATE,
             PlayerActionV1::PickBlock => Self::PICK_BLOCK,
+            PlayerActionV1::Sprint => Self::SPRINT,
+            PlayerActionV1::Sneak => Self::SNEAK,
             PlayerActionV1::Move | PlayerActionV1::Look => return false,
         };
         self.0 & bit != 0
@@ -143,6 +153,8 @@ impl PlayerActionButtonsV1 {
             PlayerActionV1::Pause => Self::PAUSE,
             PlayerActionV1::SurfaceActivate => Self::SURFACE_ACTIVATE,
             PlayerActionV1::PickBlock => Self::PICK_BLOCK,
+            PlayerActionV1::Sprint => Self::SPRINT,
+            PlayerActionV1::Sneak => Self::SNEAK,
             PlayerActionV1::Move | PlayerActionV1::Look => return,
         };
         self.0 |= bit;
@@ -378,6 +390,8 @@ mod tests {
         assert_eq!(PlayerActionV1::Pause as u8, 7);
         assert_eq!(PlayerActionV1::SurfaceActivate as u8, 8);
         assert_eq!(PlayerActionV1::PickBlock as u8, 9);
+        assert_eq!(PlayerActionV1::Sprint as u8, 10);
+        assert_eq!(PlayerActionV1::Sneak as u8, 11);
     }
 
     #[test]

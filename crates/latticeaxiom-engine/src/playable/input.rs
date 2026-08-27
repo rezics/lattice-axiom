@@ -80,6 +80,18 @@ fn sample_keyboard_and_mouse(
     if keyboard.just_pressed(KeyCode::Space) {
         started.insert(PlayerActionV1::Jump);
     }
+    if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        held.insert(PlayerActionV1::Sprint);
+    }
+    if keyboard.just_pressed(KeyCode::ControlLeft) || keyboard.just_pressed(KeyCode::ControlRight) {
+        started.insert(PlayerActionV1::Sprint);
+    }
+    if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+        held.insert(PlayerActionV1::Sneak);
+    }
+    if keyboard.just_pressed(KeyCode::ShiftLeft) || keyboard.just_pressed(KeyCode::ShiftRight) {
+        started.insert(PlayerActionV1::Sneak);
+    }
     if mouse.just_pressed(MouseButton::Left) {
         started.insert(PlayerActionV1::BreakBlock);
     }

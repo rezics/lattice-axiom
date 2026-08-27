@@ -29,7 +29,7 @@ pub enum PlayerSystemSet {
     UpdateView,
     /// Query walkable ground against the previous completed physics state.
     ProbeGround,
-    /// Resolve buffered jump, coyote time, gravity, and target velocity.
+    /// Resolve sprint, flight, buffered jump, coyote time, gravity, and target velocity.
     PrepareMovement,
     /// Move the kinematic capsule through Avian queries.
     MoveCapsule,
