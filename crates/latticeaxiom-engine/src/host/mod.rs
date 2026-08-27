@@ -396,6 +396,7 @@ impl Plugin for ProductionHostPlugin {
             .add_observer(settings_view::settings_integer_slider_changed)
             .add_observer(hud::inventory_slot_activated)
             .add_observer(hud::recipe_activated)
+            .add_observer(hud::item_browser_activated)
             .add_systems(
                 Startup,
                 (
@@ -422,11 +423,13 @@ impl Plugin for ProductionHostPlugin {
                     pause::sync_settings_control_focus_visuals,
                     hud::activate_workbench_from_target,
                     surface::select_hotbar_from_surface,
+                    hud::capture_item_browser_search,
                     hud::sync_inventory_overlay,
                     hud::sync_workbench_overlay,
                     hud::sync_slot_pickable,
                     hud::sync_hand_recipe_list,
                     hud::sync_workbench_recipe_list,
+                    hud::sync_item_browser,
                 )
                     .chain()
                     .run_if(is_interactive_client),

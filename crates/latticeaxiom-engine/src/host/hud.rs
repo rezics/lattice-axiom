@@ -3,15 +3,22 @@
 use bevy::{
     ecs::observer::On,
     ecs::query::QueryFilter,
+    input::{
+        ButtonState,
+        keyboard::{Key, KeyboardInput},
+    },
     prelude::{
         AlignItems, BackgroundColor, BorderColor, Children, Color, Commands, Component, Display,
-        FlexDirection, FlexWrap, GlobalZIndex, JustifyContent, Name, Node, Overflow, Pickable,
-        PositionType, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With, Without,
+        Entity, FlexDirection, FlexWrap, GlobalZIndex, JustifyContent, MessageReader, Name, Node,
+        Overflow, Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, UiRect,
+        Val, With, Without,
     },
     ui::FocusPolicy,
     ui_widgets::{Activate, Button, ScrollArea},
 };
-use latticeaxiom_gameplay::{ContainerId, RecipeId, SlotIndex, WorkstationId};
+use latticeaxiom_gameplay::{
+    ContainerId, GameplayModeV1, ItemCategoryId, ItemId, RecipeId, SlotIndex, WorkstationId,
+};
 use latticeaxiom_player::{
     ActionState, BlockEditRejectV1, HeadlessTargetInspectV1, LeafwingPlayerAction, LocalPlayerInput,
 };
@@ -24,58 +31,141 @@ use super::{
 };
 
 const RECIPE_LIST_CAPACITY: usize = 24;
+const CATEGORY_TAB_CAPACITY: usize = 16;
+const ITEM_BROWSER_COLUMNS: usize = 8;
+const ITEM_BROWSER_ROWS: usize = 6;
+const ITEM_BROWSER_CAPACITY: usize = ITEM_BROWSER_COLUMNS * ITEM_BROWSER_ROWS;
+const ITEM_BROWSER_QUERY_CHARS: usize = 64;
 const HOST_WORKBENCH_CONTAINER: ContainerId = ContainerId::new(1);
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ProductionHudSurfaceStateV1 {
+    #[default]
+    Closed,
+    Inventory,
+    Workbench,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ItemBrowserStateV1 {
+    category: Option<ItemCategoryId>,
+    query: String,
+    search_focused: bool,
+    first_item_index: usize,
+    projection_dirty: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ItemBrowserTransitionV1 {
+    SelectCategory(Option<ItemCategoryId>),
+    FocusSearch(bool),
+    AppendSearch(String),
+    Backspace,
+    ClearSearch,
+    NavigatePage { delta: i8, item_count: usize },
+}
+
+impl ItemBrowserStateV1 {
+    fn apply(&mut self, transition: ItemBrowserTransitionV1) {
+        self.projection_dirty = true;
+        match transition {
+            ItemBrowserTransitionV1::SelectCategory(category) => {
+                self.category = category;
+                self.first_item_index = 0;
+                self.search_focused = false;
+            }
+            ItemBrowserTransitionV1::FocusSearch(focused) => self.search_focused = focused,
+            ItemBrowserTransitionV1::AppendSearch(text) => {
+                let remaining = ITEM_BROWSER_QUERY_CHARS.saturating_sub(self.query.chars().count());
+                self.query.extend(
+                    text.chars()
+                        .filter(|value| !value.is_control())
+                        .take(remaining),
+                );
+                self.first_item_index = 0;
+            }
+            ItemBrowserTransitionV1::Backspace => {
+                self.query.pop();
+                self.first_item_index = 0;
+            }
+            ItemBrowserTransitionV1::ClearSearch => {
+                self.query.clear();
+                self.first_item_index = 0;
+            }
+            ItemBrowserTransitionV1::NavigatePage { delta, item_count } => {
+                let last_page_start = item_count
+                    .saturating_sub(1)
+                    .checked_div(ITEM_BROWSER_CAPACITY)
+                    .unwrap_or(0)
+                    .saturating_mul(ITEM_BROWSER_CAPACITY);
+                self.first_item_index = match delta {
+                    -1 => self.first_item_index.saturating_sub(ITEM_BROWSER_CAPACITY),
+                    1 => self
+                        .first_item_index
+                        .saturating_add(ITEM_BROWSER_CAPACITY)
+                        .min(last_page_start),
+                    _ => self.first_item_index.min(last_page_start),
+                };
+            }
+        }
+    }
+}
+
 /// Latch for the in-session inventory and workbench overlays.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Resource)]
 pub(super) struct ProductionHudSurfaces {
-    inventory_open: bool,
-    workbench_open: bool,
+    surface: ProductionHudSurfaceStateV1,
     cursor_slot: Option<u16>,
+    browser: ItemBrowserStateV1,
 }
 
 impl ProductionHudSurfaces {
     /// Returns whether a blocking inventory or workbench overlay is open.
     #[must_use]
-    pub const fn inventory_open(self) -> bool {
-        self.inventory_open || self.workbench_open
+    pub const fn inventory_open(&self) -> bool {
+        !matches!(self.surface, ProductionHudSurfaceStateV1::Closed)
     }
 
     /// Returns whether the inventory panel itself is open.
     #[must_use]
-    pub const fn inventory_panel_open(self) -> bool {
-        self.inventory_open
+    pub const fn inventory_panel_open(&self) -> bool {
+        matches!(self.surface, ProductionHudSurfaceStateV1::Inventory)
     }
 
     /// Returns whether the workbench overlay is open.
     #[must_use]
-    pub const fn workbench_open(self) -> bool {
-        self.workbench_open
+    pub const fn workbench_open(&self) -> bool {
+        matches!(self.surface, ProductionHudSurfaceStateV1::Workbench)
     }
 
     /// Returns the latched click-to-swap source slot.
     #[must_use]
-    pub const fn cursor_slot(self) -> Option<u16> {
+    pub const fn cursor_slot(&self) -> Option<u16> {
         self.cursor_slot
     }
 
     /// Opens or closes the inventory panel. Closing also dismisses the workbench.
     pub const fn set_inventory_open(&mut self, open: bool) {
-        self.inventory_open = open;
         if open {
-            self.workbench_open = false;
+            self.surface = ProductionHudSurfaceStateV1::Inventory;
+            self.browser.projection_dirty = true;
         } else {
-            self.workbench_open = false;
+            self.surface = ProductionHudSurfaceStateV1::Closed;
             self.cursor_slot = None;
+            self.browser.search_focused = false;
         }
     }
 
     /// Opens or closes the workbench overlay. Opening dismisses the inventory panel.
     pub const fn set_workbench_open(&mut self, open: bool) {
-        self.workbench_open = open;
         if open {
-            self.inventory_open = false;
+            self.surface = ProductionHudSurfaceStateV1::Workbench;
             self.cursor_slot = None;
+            self.browser.search_focused = false;
+        } else {
+            self.surface = ProductionHudSurfaceStateV1::Closed;
+            self.cursor_slot = None;
+            self.browser.search_focused = false;
         }
     }
 
@@ -98,6 +188,15 @@ impl ProductionHudSurfaces {
                 Some((from, slot))
             }
         }
+    }
+
+    pub(super) const fn item_browser_search_focused(&self) -> bool {
+        self.browser.search_focused
+    }
+
+    pub(super) fn dismiss_item_browser_search(&mut self) {
+        self.browser
+            .apply(ItemBrowserTransitionV1::FocusSearch(false));
     }
 }
 
@@ -151,6 +250,40 @@ pub(super) struct ProductionRecipeButton {
     recipe: String,
     workbench: bool,
 }
+
+/// Clickable package-authored item-browser category tab. Empty means `All`.
+#[derive(Clone, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionItemCategoryButton {
+    index: usize,
+    category: String,
+}
+
+/// Clickable item-browser entry populated from the compiled gameplay catalog.
+#[derive(Clone, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionItemBrowserButton {
+    index: usize,
+    item: String,
+}
+
+/// Search field button and label container.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionItemBrowserSearch;
+
+/// Previous or next page control.
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+pub(super) struct ProductionItemBrowserPageButton(i8);
+
+/// Page-number label.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionItemBrowserPageLabel;
+
+/// Creative/survival interaction hint below the item browser.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionItemBrowserModeHint;
+
+/// Item grid root.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionItemBrowserGrid;
 
 /// Spawns a non-interactive crosshair, inspect, status, hotbar, and inventory.
 ///
@@ -337,6 +470,7 @@ fn spawn_hotbar(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
         });
 }
 
+#[allow(clippy::too_many_lines)] // Keep the one inventory hierarchy visible as a layout unit.
 fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
     parent
         .spawn((
@@ -361,49 +495,287 @@ fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                 .spawn((
                     Name::new("Inventory panel"),
                     Node {
-                        width: Val::Px(420.0),
-                        padding: UiRect::all(Val::Px(12.0)),
+                        width: Val::Px(860.0),
+                        max_width: Val::Percent(94.0),
+                        max_height: Val::Percent(94.0),
+                        padding: UiRect::all(Val::Px(14.0)),
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(8.0),
+                        row_gap: Val::Px(10.0),
                         ..Node::default()
                     },
                     BackgroundColor(Color::srgba(0.07, 0.09, 0.08, 0.94)),
                 ))
                 .with_children(|panel| {
                     panel.spawn((
-                        Text::new("Inventory — E closes · click slots to swap · 1-9 select hotbar"),
-                        ui_text_font(16.0),
+                        Text::new(
+                            "Inventory · E closes · click two slots to move · 1–9 or wheel selects",
+                        ),
+                        ui_text_font(17.0),
                         TextColor(Color::srgb(0.92, 0.93, 0.88)),
                     ));
                     panel
                         .spawn((
-                            Name::new("Inventory grid"),
+                            Name::new("Inventory and item browser"),
                             Node {
                                 flex_direction: FlexDirection::Row,
-                                flex_wrap: FlexWrap::Wrap,
-                                column_gap: Val::Px(4.0),
-                                row_gap: Val::Px(4.0),
-                                width: Val::Px(396.0),
+                                column_gap: Val::Px(18.0),
+                                align_items: AlignItems::FlexStart,
                                 ..Node::default()
                             },
                         ))
-                        .with_children(|grid| {
-                            for slot in 0..u16::try_from(INVENTORY_SLOTS).unwrap_or(36) {
-                                spawn_item_slot(
-                                    grid,
-                                    ProductionInventorySlot(slot),
-                                    format!("Inventory {slot}"),
-                                    40.0,
-                                );
-                            }
+                        .with_children(|content| {
+                            content
+                                .spawn((
+                                    Name::new("Backpack pane"),
+                                    Node {
+                                        width: Val::Px(396.0),
+                                        flex_direction: FlexDirection::Column,
+                                        row_gap: Val::Px(8.0),
+                                        ..Node::default()
+                                    },
+                                ))
+                                .with_children(|backpack| {
+                                    backpack.spawn((
+                                        Text::new("Backpack"),
+                                        ui_text_font(14.0),
+                                        TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                                    ));
+                                    backpack
+                                        .spawn((
+                                            Name::new("Inventory grid"),
+                                            Node {
+                                                flex_direction: FlexDirection::Row,
+                                                flex_wrap: FlexWrap::Wrap,
+                                                column_gap: Val::Px(4.0),
+                                                row_gap: Val::Px(4.0),
+                                                width: Val::Px(396.0),
+                                                ..Node::default()
+                                            },
+                                        ))
+                                        .with_children(|grid| {
+                                            for slot in
+                                                0..u16::try_from(INVENTORY_SLOTS).unwrap_or(36)
+                                            {
+                                                spawn_item_slot(
+                                                    grid,
+                                                    ProductionInventorySlot(slot),
+                                                    format!("Inventory {slot}"),
+                                                    40.0,
+                                                );
+                                            }
+                                        });
+                                    backpack.spawn((
+                                        Text::new("Hand recipes"),
+                                        ui_text_font(14.0),
+                                        TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                                    ));
+                                    spawn_recipe_list(
+                                        backpack,
+                                        ProductionHandRecipeList,
+                                        "Hand recipe list",
+                                        false,
+                                    );
+                                });
+                            spawn_item_browser(content);
                         });
-                    panel.spawn((
-                        Text::new("Hand recipes"),
-                        ui_text_font(14.0),
+                });
+        });
+}
+
+#[allow(clippy::too_many_lines)] // Keep the bounded browser hierarchy visible as a layout unit.
+fn spawn_item_browser(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
+    parent
+        .spawn((
+            Name::new("Item browser pane"),
+            Node {
+                width: Val::Px(390.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(7.0),
+                ..Node::default()
+            },
+            BackgroundColor(Color::srgba(0.045, 0.06, 0.052, 0.92)),
+        ))
+        .with_children(|browser| {
+            browser.spawn((
+                Text::new("Items"),
+                ui_text_font(14.0),
+                TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                Node {
+                    margin: UiRect::axes(Val::Px(8.0), Val::Px(0.0)),
+                    ..Node::default()
+                },
+            ));
+            browser
+                .spawn((
+                    Name::new("Item category tabs"),
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: Val::Px(3.0),
+                        row_gap: Val::Px(3.0),
+                        padding: UiRect::horizontal(Val::Px(6.0)),
+                        ..Node::default()
+                    },
+                ))
+                .with_children(|tabs| {
+                    for index in 0..CATEGORY_TAB_CAPACITY {
+                        tabs.spawn((
+                            Button,
+                            ProductionItemCategoryButton {
+                                index,
+                                category: String::new(),
+                            },
+                            Name::new(format!("Item category tab {index}")),
+                            Node {
+                                height: Val::Px(28.0),
+                                min_width: Val::Px(42.0),
+                                display: Display::None,
+                                padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                ..Node::default()
+                            },
+                            BackgroundColor(Color::srgb(0.12, 0.16, 0.14)),
+                            Pickable::default(),
+                        ))
+                        .with_children(|tab| {
+                            tab.spawn((
+                                Text::new(""),
+                                ui_text_font(11.0),
+                                TextColor(Color::srgb(0.92, 0.93, 0.88)),
+                            ));
+                        });
+                    }
+                });
+            browser
+                .spawn((
+                    ProductionItemBrowserGrid,
+                    Name::new("JEI-style item grid"),
+                    Node {
+                        width: Val::Px(364.0),
+                        min_height: Val::Px(272.0),
+                        flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: Val::Px(4.0),
+                        row_gap: Val::Px(4.0),
+                        margin: UiRect::horizontal(Val::Px(6.0)),
+                        ..Node::default()
+                    },
+                ))
+                .with_children(|grid| {
+                    for index in 0..ITEM_BROWSER_CAPACITY {
+                        grid.spawn((
+                            Button,
+                            ProductionItemBrowserButton {
+                                index,
+                                item: String::new(),
+                            },
+                            Name::new(format!("Item browser entry {index}")),
+                            Node {
+                                width: Val::Px(42.0),
+                                height: Val::Px(42.0),
+                                display: Display::None,
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                overflow: Overflow::clip(),
+                                ..Node::default()
+                            },
+                            BackgroundColor(empty_slot_color(false)),
+                            Pickable::default(),
+                        ))
+                        .with_children(|entry| {
+                            entry.spawn((
+                                Text::new(""),
+                                ui_text_font(9.0),
+                                TextColor(Color::srgb(0.96, 0.97, 0.92)),
+                            ));
+                        });
+                    }
+                });
+            browser
+                .spawn((
+                    Name::new("Item browser page controls"),
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(10.0),
+                        ..Node::default()
+                    },
+                ))
+                .with_children(|pages| {
+                    spawn_page_button(pages, -1, "‹");
+                    pages.spawn((
+                        ProductionItemBrowserPageLabel,
+                        Text::new("1 / 1"),
+                        ui_text_font(12.0),
                         TextColor(Color::srgb(0.82, 0.84, 0.78)),
                     ));
-                    spawn_recipe_list(panel, ProductionHandRecipeList, "Hand recipe list", false);
+                    spawn_page_button(pages, 1, "›");
                 });
+            browser
+                .spawn((
+                    Button,
+                    ProductionItemBrowserSearch,
+                    Name::new("Item browser search"),
+                    Node {
+                        width: Val::Px(364.0),
+                        height: Val::Px(30.0),
+                        margin: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+                        align_items: AlignItems::Center,
+                        ..Node::default()
+                    },
+                    BackgroundColor(Color::srgb(0.09, 0.12, 0.105)),
+                    Pickable::default(),
+                ))
+                .with_children(|search| {
+                    search.spawn((
+                        Text::new("Search items or #tags"),
+                        ui_text_font(12.0),
+                        TextColor(Color::srgb(0.68, 0.72, 0.66)),
+                    ));
+                });
+            browser.spawn((
+                ProductionItemBrowserModeHint,
+                Text::new("Creative: click an item to fill the selected hotbar slot"),
+                ui_text_font(11.0),
+                TextColor(Color::srgb(0.63, 0.68, 0.61)),
+                Node {
+                    margin: UiRect::horizontal(Val::Px(8.0)),
+                    ..Node::default()
+                },
+            ));
+        });
+}
+
+fn spawn_page_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    direction: i8,
+    label: &'static str,
+) {
+    parent
+        .spawn((
+            Button,
+            ProductionItemBrowserPageButton(direction),
+            Node {
+                width: Val::Px(28.0),
+                height: Val::Px(24.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..Node::default()
+            },
+            BackgroundColor(Color::srgb(0.12, 0.16, 0.14)),
+            Pickable::default(),
+        ))
+        .with_children(|button| {
+            button.spawn((
+                Text::new(label),
+                ui_text_font(14.0),
+                TextColor(Color::srgb(0.92, 0.93, 0.88)),
+            ));
         });
 }
 
@@ -464,46 +836,54 @@ fn spawn_recipe_list<M: Component>(
     name: &'static str,
     workbench: bool,
 ) {
-    parent
-        .spawn((
-            marker,
-            Name::new(name),
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                width: Val::Px(396.0),
-                ..Node::default()
+    let mut list = parent.spawn((
+        marker,
+        Name::new(name),
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            width: Val::Px(396.0),
+            height: if workbench { Val::Auto } else { Val::Px(224.0) },
+            overflow: if workbench {
+                Overflow::DEFAULT
+            } else {
+                Overflow::scroll_y()
             },
-        ))
-        .with_children(|list| {
-            for index in 0..RECIPE_LIST_CAPACITY {
-                list.spawn((
-                    Button,
-                    ProductionRecipeButton {
-                        recipe: String::new(),
-                        workbench,
-                    },
-                    Name::new(format!("{name} {index}")),
-                    Node {
-                        width: Val::Percent(100.0),
-                        height: Val::Px(28.0),
-                        display: Display::None,
-                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                        align_items: AlignItems::Center,
-                        ..Node::default()
-                    },
-                    BackgroundColor(Color::srgb(0.12, 0.16, 0.14)),
-                    Pickable::IGNORE,
-                ))
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new(""),
-                        ui_text_font(14.0),
-                        TextColor(Color::srgb(0.92, 0.93, 0.88)),
-                    ));
-                });
-            }
-        });
+            ..Node::default()
+        },
+    ));
+    if !workbench {
+        list.insert(ScrollArea);
+    }
+    list.with_children(|list| {
+        for index in 0..RECIPE_LIST_CAPACITY {
+            list.spawn((
+                Button,
+                ProductionRecipeButton {
+                    recipe: String::new(),
+                    workbench,
+                },
+                Name::new(format!("{name} {index}")),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(28.0),
+                    display: Display::None,
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                    align_items: AlignItems::Center,
+                    ..Node::default()
+                },
+                BackgroundColor(Color::srgb(0.12, 0.16, 0.14)),
+                Pickable::IGNORE,
+            ))
+            .with_children(|row| {
+                row.spawn((
+                    Text::new(""),
+                    ui_text_font(14.0),
+                    TextColor(Color::srgb(0.92, 0.93, 0.88)),
+                ));
+            });
+        }
+    });
 }
 
 fn spawn_item_slot<M: Component>(
@@ -737,6 +1117,322 @@ pub(super) fn recipe_activated(
     };
     let workstation = button.workbench.then_some(HOST_WORKBENCH_CONTAINER);
     let _receipt = spine.craft_recipe(&recipe, workstation);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ItemBrowserEntryV1 {
+    item: ItemId,
+    name: String,
+    icon: String,
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
+#[allow(clippy::too_many_arguments)] // Queries preserve disjoint typed widget boundaries.
+pub(super) fn item_browser_activated(
+    activate: On<'_, '_, Activate>,
+    pause: Res<'_, ProductionSessionPause>,
+    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+    spine: Res<'_, ProductionSpine>,
+    categories: Query<'_, '_, &ProductionItemCategoryButton, With<Button>>,
+    items: Query<'_, '_, &ProductionItemBrowserButton, With<Button>>,
+    search: Query<'_, '_, (), (With<ProductionItemBrowserSearch>, With<Button>)>,
+    pages: Query<'_, '_, &ProductionItemBrowserPageButton, With<Button>>,
+) {
+    if pause.is_paused() || !surfaces.inventory_panel_open() {
+        return;
+    }
+    if let Ok(button) = categories.get(activate.entity) {
+        let category = if button.category.is_empty() {
+            None
+        } else {
+            ItemCategoryId::parse(&button.category).ok()
+        };
+        surfaces
+            .browser
+            .apply(ItemBrowserTransitionV1::SelectCategory(category));
+        return;
+    }
+    if search.contains(activate.entity) {
+        surfaces
+            .browser
+            .apply(ItemBrowserTransitionV1::FocusSearch(true));
+        return;
+    }
+    if let Ok(button) = pages.get(activate.entity) {
+        let Some(catalog) = spine.gameplay_catalog() else {
+            return;
+        };
+        let item_count = filtered_item_browser_entries(&spine, &catalog, &surfaces.browser).len();
+        surfaces
+            .browser
+            .apply(ItemBrowserTransitionV1::NavigatePage {
+                delta: button.0,
+                item_count,
+            });
+        return;
+    }
+    let Ok(button) = items.get(activate.entity) else {
+        return;
+    };
+    surfaces
+        .browser
+        .apply(ItemBrowserTransitionV1::FocusSearch(false));
+    if spine.gameplay_mode() == Some(GameplayModeV1::Creative)
+        && let Ok(item) = ItemId::parse(&button.item)
+    {
+        let _ = spine.creative_pick_item(item);
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn capture_item_browser_search(
+    mut keyboard: MessageReader<'_, '_, KeyboardInput>,
+    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+) {
+    if !surfaces.inventory_panel_open() || !surfaces.item_browser_search_focused() {
+        return;
+    }
+    for event in keyboard.read() {
+        if event.state != ButtonState::Pressed {
+            continue;
+        }
+        match &event.logical_key {
+            Key::Backspace => surfaces.browser.apply(ItemBrowserTransitionV1::Backspace),
+            Key::Delete => surfaces.browser.apply(ItemBrowserTransitionV1::ClearSearch),
+            Key::Enter | Key::Escape => surfaces
+                .browser
+                .apply(ItemBrowserTransitionV1::FocusSearch(false)),
+            _ => {
+                if let Some(text) = &event.text {
+                    surfaces
+                        .browser
+                        .apply(ItemBrowserTransitionV1::AppendSearch(text.to_string()));
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::type_complexity)] // One bounded item-browser projection updates related widgets.
+#[allow(clippy::too_many_arguments)] // Queries preserve disjoint typed widget boundaries.
+#[allow(clippy::too_many_lines)] // One dirty projection keeps browser widget updates atomic.
+pub(super) fn sync_item_browser(
+    spine: Res<'_, ProductionSpine>,
+    mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+    mut category_buttons: Query<
+        '_,
+        '_,
+        (
+            &mut ProductionItemCategoryButton,
+            &mut Node,
+            &mut BackgroundColor,
+            &Children,
+        ),
+        (
+            With<Button>,
+            Without<ProductionItemBrowserButton>,
+            Without<ProductionItemBrowserSearch>,
+        ),
+    >,
+    mut item_buttons: Query<
+        '_,
+        '_,
+        (
+            &mut ProductionItemBrowserButton,
+            &mut Node,
+            &mut BackgroundColor,
+            &Children,
+        ),
+        (With<Button>, Without<ProductionItemCategoryButton>),
+    >,
+    mut search: Query<
+        '_,
+        '_,
+        (&mut BackgroundColor, &Children),
+        (
+            With<ProductionItemBrowserSearch>,
+            Without<ProductionItemBrowserButton>,
+            Without<ProductionItemCategoryButton>,
+        ),
+    >,
+    page_label: Query<'_, '_, Entity, With<ProductionItemBrowserPageLabel>>,
+    mode_hint: Query<'_, '_, Entity, With<ProductionItemBrowserModeHint>>,
+    mut labels: Query<'_, '_, &mut Text>,
+) {
+    if !surfaces.inventory_panel_open() || !surfaces.browser.projection_dirty {
+        return;
+    }
+    let Some(catalog) = spine.gameplay_catalog() else {
+        return;
+    };
+    let mut categories = catalog.categories().values().collect::<Vec<_>>();
+    categories
+        .sort_by(|left, right| (left.sort_order, &left.id).cmp(&(right.sort_order, &right.id)));
+    for (mut button, mut node, mut background, children) in &mut category_buttons {
+        let row = if button.index == 0 {
+            Some((None, "All"))
+        } else {
+            categories
+                .get(button.index - 1)
+                .map(|category| (Some(&category.id), category.display_name.as_str()))
+        };
+        let Some((category, label)) = row else {
+            button.category.clear();
+            node.display = Display::None;
+            continue;
+        };
+        button.category = category.map_or_else(String::new, ToString::to_string);
+        node.display = Display::Flex;
+        background.0 = if surfaces.browser.category.as_ref() == category {
+            selected_slot_color()
+        } else {
+            Color::srgb(0.12, 0.16, 0.14)
+        };
+        if let Some(entity) = children.first()
+            && let Ok(mut text) = labels.get_mut(*entity)
+            && text.0 != label
+        {
+            *text = Text::new(label);
+        }
+    }
+
+    let entries = filtered_item_browser_entries(&spine, &catalog, &surfaces.browser);
+    surfaces
+        .browser
+        .apply(ItemBrowserTransitionV1::NavigatePage {
+            delta: 0,
+            item_count: entries.len(),
+        });
+    let first = surfaces.browser.first_item_index;
+    for (mut button, mut node, mut background, children) in &mut item_buttons {
+        let Some(entry) = entries.get(first.saturating_add(button.index)) else {
+            button.item.clear();
+            node.display = Display::None;
+            continue;
+        };
+        button.item = entry.item.to_string();
+        node.display = Display::Flex;
+        background.0 = icon_swatch_color(&entry.icon);
+        let label = compact_item_label(&entry.name);
+        if let Some(entity) = children.first()
+            && let Ok(mut text) = labels.get_mut(*entity)
+            && text.0 != label
+        {
+            *text = Text::new(label);
+        }
+    }
+
+    let page_count = entries.len().div_ceil(ITEM_BROWSER_CAPACITY).max(1);
+    let page = first / ITEM_BROWSER_CAPACITY + 1;
+    if let Ok(entity) = page_label.single()
+        && let Ok(mut text) = labels.get_mut(entity)
+    {
+        let label = format!("{page} / {page_count}");
+        if text.0 != label {
+            *text = Text::new(label);
+        }
+    }
+    if let Ok((mut background, children)) = search.single_mut() {
+        background.0 = if surfaces.browser.search_focused {
+            Color::srgb(0.18, 0.23, 0.20)
+        } else {
+            Color::srgb(0.09, 0.12, 0.105)
+        };
+        let label = if surfaces.browser.query.is_empty() {
+            "Search items or #tags".to_owned()
+        } else if surfaces.browser.search_focused {
+            format!("> {}_", surfaces.browser.query)
+        } else {
+            format!("> {}", surfaces.browser.query)
+        };
+        if let Some(entity) = children.first()
+            && let Ok(mut text) = labels.get_mut(*entity)
+            && text.0 != label
+        {
+            *text = Text::new(label);
+        }
+    }
+    if let Ok(entity) = mode_hint.single()
+        && let Ok(mut text) = labels.get_mut(entity)
+    {
+        let label = if spine.gameplay_mode() == Some(GameplayModeV1::Creative) {
+            "Creative: click an item to fill the selected hotbar slot"
+        } else {
+            "Survival: browse and search registered items"
+        };
+        if text.0 != label {
+            *text = Text::new(label);
+        }
+    }
+    surfaces.browser.projection_dirty = false;
+}
+
+fn filtered_item_browser_entries(
+    spine: &ProductionSpine,
+    catalog: &latticeaxiom_gameplay::GameplayCatalog,
+    state: &ItemBrowserStateV1,
+) -> Vec<ItemBrowserEntryV1> {
+    let query = state.query.to_lowercase();
+    let tokens = query.split_whitespace().collect::<Vec<_>>();
+    catalog
+        .items()
+        .keys()
+        .filter(|item| {
+            state
+                .category
+                .as_ref()
+                .is_none_or(|category| catalog.category_for_item(item) == Some(category))
+        })
+        .filter_map(|item| {
+            let display = spine.content_display(item.as_str());
+            item_matches_search(catalog, item, &display.name, &tokens).then(|| ItemBrowserEntryV1 {
+                item: item.clone(),
+                name: display.name,
+                icon: display.icon,
+            })
+        })
+        .collect()
+}
+
+fn item_matches_search(
+    catalog: &latticeaxiom_gameplay::GameplayCatalog,
+    item: &ItemId,
+    display_name: &str,
+    tokens: &[&str],
+) -> bool {
+    let item_id = item.as_str().to_lowercase();
+    let display_name = display_name.to_lowercase();
+    let tags = catalog
+        .tags_for_item(item)
+        .into_iter()
+        .map(|tag| tag.as_str().to_lowercase())
+        .collect::<Vec<_>>();
+    tokens.iter().all(|token| {
+        if let Some(tag) = token.strip_prefix('#') {
+            !tag.is_empty() && tags.iter().any(|candidate| candidate.contains(tag))
+        } else {
+            item_id.contains(token)
+                || display_name.contains(token)
+                || tags.iter().any(|candidate| candidate.contains(token))
+        }
+    })
+}
+
+fn compact_item_label(display_name: &str) -> String {
+    let words = display_name
+        .split(|character: char| character == '-' || character.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.len() > 1 {
+        return words
+            .iter()
+            .filter_map(|word| word.chars().next())
+            .take(4)
+            .flat_map(char::to_uppercase)
+            .collect();
+    }
+    display_name.chars().take(6).collect()
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
@@ -1118,7 +1814,10 @@ fn hotbar_key_slot(code: bevy::input::keyboard::KeyCode) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HOTBAR_SLOTS, ProductionHudSurfaces, hotbar_key_slot, status_line};
+    use super::{
+        HOTBAR_SLOTS, ITEM_BROWSER_CAPACITY, ITEM_BROWSER_QUERY_CHARS, ItemBrowserStateV1,
+        ItemBrowserTransitionV1, ProductionHudSurfaces, hotbar_key_slot, status_line,
+    };
     use bevy::input::keyboard::KeyCode;
 
     #[test]
@@ -1150,5 +1849,55 @@ mod tests {
         let mining = status_line(Some(7), Some(12), 2, 2);
         assert!(mining.contains("Mine 7 left"), "{mining}");
         assert!(mining.contains("Tool 12"), "{mining}");
+    }
+
+    #[test]
+    fn item_browser_reducer_resets_filters_and_clamps_pages() {
+        let mut browser = ItemBrowserStateV1::default();
+        browser.apply(ItemBrowserTransitionV1::NavigatePage {
+            delta: 1,
+            item_count: ITEM_BROWSER_CAPACITY * 2 + 1,
+        });
+        assert_eq!(browser.first_item_index, ITEM_BROWSER_CAPACITY);
+        browser.apply(ItemBrowserTransitionV1::NavigatePage {
+            delta: 1,
+            item_count: ITEM_BROWSER_CAPACITY * 2 + 1,
+        });
+        assert_eq!(browser.first_item_index, ITEM_BROWSER_CAPACITY * 2);
+        browser.apply(ItemBrowserTransitionV1::NavigatePage {
+            delta: 1,
+            item_count: ITEM_BROWSER_CAPACITY * 2 + 1,
+        });
+        assert_eq!(browser.first_item_index, ITEM_BROWSER_CAPACITY * 2);
+
+        browser.apply(ItemBrowserTransitionV1::AppendSearch("stone".to_owned()));
+        assert_eq!(browser.first_item_index, 0);
+        assert_eq!(browser.query, "stone");
+        browser.apply(ItemBrowserTransitionV1::Backspace);
+        assert_eq!(browser.query, "ston");
+    }
+
+    #[test]
+    fn item_browser_reducer_bounds_search_input() {
+        let mut browser = ItemBrowserStateV1::default();
+        browser.apply(ItemBrowserTransitionV1::AppendSearch(
+            "x".repeat(ITEM_BROWSER_QUERY_CHARS + 8),
+        ));
+        assert_eq!(browser.query.chars().count(), ITEM_BROWSER_QUERY_CHARS);
+        browser.apply(ItemBrowserTransitionV1::ClearSearch);
+        assert!(browser.query.is_empty());
+    }
+
+    #[test]
+    fn inventory_and_workbench_are_mutually_exclusive_states() {
+        let mut surfaces = ProductionHudSurfaces::default();
+        surfaces.set_inventory_open(true);
+        assert!(surfaces.inventory_panel_open());
+        assert!(!surfaces.workbench_open());
+        surfaces.set_workbench_open(true);
+        assert!(!surfaces.inventory_panel_open());
+        assert!(surfaces.workbench_open());
+        surfaces.set_workbench_open(false);
+        assert!(!surfaces.inventory_open());
     }
 }

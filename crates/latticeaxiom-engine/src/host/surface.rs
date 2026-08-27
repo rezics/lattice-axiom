@@ -70,6 +70,21 @@ pub(super) fn apply_surface_actions(
         .any(|state| state.just_pressed(&LeafwingPlayerAction::Pause));
     let started = frame.started().clone();
     for action in started {
+        if surfaces.item_browser_search_focused()
+            && matches!(
+                action,
+                ClientSurfaceActionV1::Pause | ClientSurfaceActionV1::Back
+            )
+        {
+            surfaces.dismiss_item_browser_search();
+            frame.clear();
+            break;
+        }
+        if surfaces.item_browser_search_focused()
+            && action == ClientSurfaceActionV1::ToggleInventory
+        {
+            continue;
+        }
         let command = surface_command(
             router.inner().route().modal(),
             action,
@@ -145,10 +160,11 @@ fn sync_derived_state(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn select_hotbar_from_surface(
     pause: Res<'_, ProductionSessionPause>,
+    surfaces: Res<'_, ProductionHudSurfaces>,
     frame: Res<'_, SurfaceActionFrame>,
     spine: Res<'_, super::ProductionSpine>,
 ) {
-    if pause.is_paused() {
+    if pause.is_paused() || surfaces.item_browser_search_focused() {
         return;
     }
     for (action, slot) in [

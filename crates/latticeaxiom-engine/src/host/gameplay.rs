@@ -554,23 +554,37 @@ impl ProductionGameplay {
                 kind: "placement_item",
                 id: aimed.as_str().to_owned(),
             })?;
-        let inventory =
-            self.applier
-                .state()
-                .inventory(self.player)
-                .ok_or(GameplayReject::UnknownPlayer {
-                    player: self.player.as_bytes(),
-                })?;
+        self.creative_pick_item(transaction_id, item).map(Some)
+    }
+
+    /// Replaces the selected hotbar slot with one full catalog stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] unless this session has creative authority,
+    /// the item is registered, and the observed inventory revision is current.
+    pub(super) fn creative_pick_item(
+        &mut self,
+        transaction_id: TransactionId,
+        item: ItemId,
+    ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
+        let expected_inventory_revision = self
+            .applier
+            .state()
+            .inventory(self.player)
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: self.player.as_bytes(),
+            })?
+            .revision();
         self.execute(
             transaction_id,
             GameplayCommandV1::CreativePick(CreativePickCommandV1 {
                 player: self.player,
                 item,
                 slot: SlotIndex::new(self.hotbar_slot),
-                expected_inventory_revision: inventory.revision(),
+                expected_inventory_revision,
             }),
         )
-        .map(Some)
     }
 
     /// Recipe identities whose workstation matches and whose inputs are currently owned.

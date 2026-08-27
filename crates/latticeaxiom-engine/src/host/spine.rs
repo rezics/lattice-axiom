@@ -23,8 +23,8 @@ use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
     AuthorityTick, BlockId, BlockPosition, CommandOutcomeV1, ContainerId, ContainerStateV1,
     DimensionChunkKey, DropEntityId, GameplayCatalog, GameplayModeV1, GameplayReject,
-    InventoryInspectV1, ItemStackV1, PlayerId, ProcessId, RecipeId, RecipeInspectV1, SlotIndex,
-    TransferCommandV1, WorkstationId,
+    InventoryInspectV1, ItemId, ItemStackV1, PlayerId, ProcessId, RecipeId, RecipeInspectV1,
+    SlotIndex, TransferCommandV1, WorkstationId,
 };
 use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
@@ -2097,6 +2097,21 @@ impl ProductionSpine {
         inner.pick_aimed_block(self.storage.kernel())
     }
 
+    /// Gives one full catalog item stack to the selected creative hotbar slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GameplayReject`] when the product lock did not authorize
+    /// creative mode, the item is unknown, or storage publication fails.
+    pub fn creative_pick_item(&self, item: ItemId) -> Result<CommandOutcomeV1, GameplayReject> {
+        let mut inner = self
+            .lock_inner()
+            .map_err(|_| GameplayReject::StorageCommitMismatch {
+                resource: "spine_lock",
+            })?;
+        inner.creative_pick_item(self.storage.kernel(), item)
+    }
+
     /// Returns the immutable gameplay mode selected by the product lock.
     #[must_use]
     pub fn gameplay_mode(&self) -> Option<GameplayModeV1> {
@@ -3023,6 +3038,28 @@ impl ProductionSpineInner {
             })?;
         }
         Ok(())
+    }
+
+    fn creative_pick_item(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        item: ItemId,
+    ) -> Result<CommandOutcomeV1, GameplayReject> {
+        self.sync_gameplay_world(kernel)?;
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(GameplayReject::UnknownPlayer {
+                player: local_player_id().as_bytes(),
+            })?
+            .creative_pick_item(transaction, item)?;
+        commit_gameplay_storage(self, kernel, transaction, None, 0).map_err(|_| {
+            GameplayReject::StorageCommitMismatch {
+                resource: "creative_pick_item",
+            }
+        })?;
+        Ok(receipt.outcome)
     }
 
     fn sync_gameplay_world(
