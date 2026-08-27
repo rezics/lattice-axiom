@@ -5,10 +5,19 @@
   "coordinator_capability": "latticeaxiom:capability/worldgen-terrain-provider@2",
   "surface_territories": [
     {
+      "id": "terrenia:territory-domain/open-ocean",
+      "biome": "terrenia:biome/open-ocean",
+      "terrain_provider": "terrenia:worldgen-provider/terrain-base/open-ocean@1",
+      "terrain_algorithm": "marine-basin",
+      "terrain_base_role": "terrenia:block-role/temperate-gravel@1",
+      "spatial_influence": "surface",
+      "queryable": true
+    },
+    {
       "id": "terrenia:territory-domain/temperate-woodland",
       "biome": "terrenia:biome/temperate-woodland",
       "terrain_provider": "terrenia:worldgen-provider/terrain-base/temperate-woodland@1",
-      "terrain_algorithm": "continental-composite",
+      "terrain_algorithm": "temperate-relief",
       "terrain_base_role": "terrenia:block-role/temperate-surface@1",
       "spatial_influence": "surface",
       "queryable": true
@@ -17,7 +26,7 @@
       "id": "terrenia:territory-domain/arid-badlands",
       "biome": "terrenia:biome/arid-badlands",
       "terrain_provider": "terrenia:worldgen-provider/terrain-base/arid-badlands@1",
-      "terrain_algorithm": "continental-composite",
+      "terrain_algorithm": "arid-highlands",
       "terrain_base_role": "terrenia:block-role/arid-sand@1",
       "spatial_influence": "surface",
       "queryable": true
@@ -26,7 +35,7 @@
       "id": "terrenia:territory-domain/boreal-wetland",
       "biome": "terrenia:biome/boreal-wetland",
       "terrain_provider": "terrenia:worldgen-provider/terrain-base/boreal-wetland@1",
-      "terrain_algorithm": "continental-composite",
+      "terrain_algorithm": "boreal-lowlands",
       "terrain_base_role": "terrenia:block-role/snow@1",
       "spatial_influence": "surface",
       "queryable": true

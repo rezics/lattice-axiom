@@ -5,6 +5,52 @@
   "biomes": [
     {
       "header": {
+        "stable_id": "terrenia:biome/open-ocean",
+        "schema_id_and_major": "latticeaxiom:schema/biome-definition@1",
+        "content_revision": 1,
+        "declared_by_package": "@terrenia/worldgen"
+      },
+      "scope": "terrenia:biome-scope/overworld@1",
+      "spatial_influence": {
+        "horizontal_cells": 256,
+        "vertical_cells": 64
+      },
+      "territory_participation": {
+        "contract": "terrenia:territory-participation/surface-primary@1"
+      },
+      "boundary_contract": "terrenia:biome-boundary/deterministic-transition@1",
+      "channel_offers": [
+        {
+          "channel": "terrenia:generation-channel/terrain-base@1",
+          "value_schema": "terrenia:schema/terrain-density@1",
+          "compositor": "terrenia:compositor/territorial-delegation@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/surface-material@1",
+          "value_schema": "terrenia:schema/surface-material@1",
+          "compositor": "terrenia:compositor/exclusive-owner@1",
+          "max_values_per_chunk": 1024
+        },
+        {
+          "channel": "terrenia:generation-channel/hydrology-basin@1",
+          "value_schema": "terrenia:schema/hydrology-basin@1",
+          "compositor": "terrenia:compositor/constraint-set@1",
+          "max_values_per_chunk": 64
+        },
+        {
+          "channel": "terrenia:generation-channel/resource-field@1",
+          "value_schema": "terrenia:schema/resource-field@1",
+          "compositor": "terrenia:compositor/budgeted-merge@1",
+          "max_values_per_chunk": 128
+        }
+      ],
+      "emitted_intents": [],
+      "fallback": null,
+      "generation_revision": 1
+    },
+    {
+      "header": {
         "stable_id": "terrenia:biome/arid-badlands",
         "schema_id_and_major": "latticeaxiom:schema/biome-definition@1",
         "content_revision": 1,

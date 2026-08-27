@@ -590,7 +590,7 @@ impl NaturalSamplerV1 {
         style: TerrainStyleV1,
     ) -> D4MaterialRoleV1 {
         match style {
-            TerrainStyleV1::TemperateWoodland => D4MaterialRoleV1::Silt,
+            TerrainStyleV1::Marine | TerrainStyleV1::TemperateWoodland => D4MaterialRoleV1::Silt,
             TerrainStyleV1::AridBadlands => D4MaterialRoleV1::TemperateGravel,
             TerrainStyleV1::BorealWetland => {
                 if sample_hash_3d(self.basin_seed, x, 0, z) & 1 == 0 {
@@ -673,7 +673,7 @@ impl NaturalSamplerV1 {
                     Some(D4MaterialRoleV1::Peat)
                 }
             }
-            TerrainStyleV1::AridBadlands => None,
+            TerrainStyleV1::Marine | TerrainStyleV1::AridBadlands => None,
         }
     }
 
@@ -688,7 +688,7 @@ impl NaturalSamplerV1 {
             TerrainStyleV1::BorealWetland => {
                 Some((D4MaterialRoleV1::BorealLog, D4MaterialRoleV1::BorealLeaves))
             }
-            TerrainStyleV1::AridBadlands => None,
+            TerrainStyleV1::Marine | TerrainStyleV1::AridBadlands => None,
         }
     }
 
@@ -760,7 +760,7 @@ impl NaturalSamplerV1 {
         let threshold = match style {
             TerrainStyleV1::TemperateWoodland => 14,
             TerrainStyleV1::BorealWetland => self.config.pine_threshold_per_1024,
-            TerrainStyleV1::AridBadlands => return false,
+            TerrainStyleV1::Marine | TerrainStyleV1::AridBadlands => return false,
         };
         Self::sample_threshold(self.tree_seed, x, 0, z, threshold) && !self.in_river_channel(x, z)
     }
@@ -863,6 +863,7 @@ fn resolve_natural_roles(
 
 fn surface_role(style: TerrainStyleV1) -> D4MaterialRoleV1 {
     match style {
+        TerrainStyleV1::Marine => D4MaterialRoleV1::TemperateGravel,
         TerrainStyleV1::TemperateWoodland => D4MaterialRoleV1::TemperateSurface,
         TerrainStyleV1::AridBadlands => D4MaterialRoleV1::AridSand,
         TerrainStyleV1::BorealWetland => D4MaterialRoleV1::Snow,
@@ -871,6 +872,13 @@ fn surface_role(style: TerrainStyleV1) -> D4MaterialRoleV1 {
 
 fn shallow_role(style: TerrainStyleV1, roll: u64) -> D4MaterialRoleV1 {
     match style {
+        TerrainStyleV1::Marine => {
+            if roll & 1 == 0 {
+                D4MaterialRoleV1::Silt
+            } else {
+                D4MaterialRoleV1::TemperateGravel
+            }
+        }
         TerrainStyleV1::TemperateWoodland => match roll % 8 {
             0 => D4MaterialRoleV1::CoarseDirt,
             1 => D4MaterialRoleV1::RootedDirt,
@@ -896,6 +904,7 @@ fn shallow_role(style: TerrainStyleV1, roll: u64) -> D4MaterialRoleV1 {
 
 fn upper_rock_role(style: TerrainStyleV1, roll: u64) -> D4MaterialRoleV1 {
     match style {
+        TerrainStyleV1::Marine => D4MaterialRoleV1::TemperateBaseRock,
         TerrainStyleV1::TemperateWoodland => {
             if roll.is_multiple_of(7) {
                 D4MaterialRoleV1::TemperateSecondaryRock

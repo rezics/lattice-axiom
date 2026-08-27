@@ -346,6 +346,9 @@ fn old_materialized_epoch_is_returned_without_recomputation() {
     terrain_programs[0] = latticeaxiom_worldgen::SurfaceBiomeTerrainProgramV1::new(
         existing_program.biome_id().clone(),
         existing_program.material_style(),
+        existing_program.domain(),
+        existing_program.selection_priority(),
+        existing_program.selection(),
         existing_program.algorithm(),
         changed,
     );
@@ -790,6 +793,7 @@ fn both_fixture_styles_and_named_transition_are_queryable() {
     assert_eq!(
         found,
         BTreeSet::from([
+            TerrainStyleV1::Marine,
             TerrainStyleV1::TemperateWoodland,
             TerrainStyleV1::AridBadlands
         ])
@@ -801,6 +805,48 @@ fn both_fixture_styles_and_named_transition_are_queryable() {
     );
     assert_eq!(transition.boundary_distance_voxels(), 0);
     assert_eq!(transition.transition().width_voxels(), 8);
+}
+
+#[test]
+fn marine_and_land_ecologies_constrain_their_terrain_domains() {
+    let plan = fixture_plan(false, &[b"lock-a"]);
+    let edge = i64::from(plan.config().chunk_edge_voxels)
+        .saturating_mul(i64::from(plan.config().planning_cell_edge_chunks));
+    let sea = plan.terrain_config().world.sea_level_y;
+    let mut marine = None;
+    let mut land = None;
+    for cell_z in -64_i64..=64 {
+        for cell_x in -64_i64..=64 {
+            let x = cell_x.saturating_mul(edge).saturating_add(edge / 2);
+            let z = cell_z.saturating_mul(edge).saturating_add(edge / 2);
+            let style = plan.territory_query(x, z).winner();
+            let terrain = plan.terrain_column(x, z);
+            if style == TerrainStyleV1::Marine {
+                assert!(terrain.height() <= sea.saturating_sub(3));
+                assert!(matches!(
+                    terrain.family(),
+                    latticeaxiom_worldgen::TerrainFamilyV2::DeepOcean
+                        | latticeaxiom_worldgen::TerrainFamilyV2::ShallowOcean
+                ));
+                marine = Some((x, z));
+            } else {
+                if terrain.family() == latticeaxiom_worldgen::TerrainFamilyV2::LakeBasin {
+                    assert!(terrain.surface_water_y().is_some());
+                } else {
+                    assert!(terrain.height() >= sea.saturating_add(1));
+                }
+                land = Some((x, z));
+            }
+            if marine.is_some() && land.is_some() {
+                break;
+            }
+        }
+        if marine.is_some() && land.is_some() {
+            break;
+        }
+    }
+    assert!(marine.is_some(), "fixture must contain marine ecology");
+    assert!(land.is_some(), "fixture must contain land ecology");
 }
 
 #[test]
@@ -836,6 +882,7 @@ fn climate_selector_clusters_neighboring_planning_cells() {
     assert_eq!(
         styles,
         BTreeSet::from([
+            TerrainStyleV1::Marine,
             TerrainStyleV1::TemperateWoodland,
             TerrainStyleV1::AridBadlands,
         ])
@@ -1226,11 +1273,11 @@ fn fixed_algorithm_hashes_match_known_answer_vectors() {
         ],
         [
             "d50126fa9254fe1f5426e2f31d93ec43340d81506f6444e59662ce55198a9c9d".to_owned(),
-            "5450f019a0bd84c3bfa0dc19345c3c8e3237c153f6ba34cabfe0b647b3bbec2f".to_owned(),
+            "c5970c45b6db8a3352c83fe5e9d699a8067516822105a19516c84d03eaa0e9cd".to_owned(),
             "52898402e6d702372b222dba71d84b0b1bc4111800d40c74ad3ef3808401112c".to_owned(),
-            "c4d93c164d123a2c6c095f31513e2497c43a9e233c89efd544ad58bdec1d6793".to_owned(),
-            "b2b6ab4c5799b2a6e9f2034f89a8a03fbb1829af8920220d92089c0c7610041c".to_owned(),
-            "c77ac0f94216973ae96c6146093803d1d86c2ecd59cec26004251e34bb3eeb20".to_owned(),
+            "d05a60ad520a26d0ae971e26b3e5ae0175f3a250d62944919125b1a177657e82".to_owned(),
+            "927263566c46b5ad6e42d7935c1cfa5b7812bf4f3188ff719fe9700623fa6060".to_owned(),
+            "ffb5e9dae5539f1e644b766465026678bb53b966fd92bd1ddecbaf267a4e0590".to_owned(),
         ]
     );
 }
@@ -1243,14 +1290,15 @@ fn fixed_d4_snapshot_has_stable_golden_checksum() {
         .expect("golden chunk generates");
     assert_eq!(
         prepared(&outcome).checksum().to_string(),
-        "9c8fdf084840080d4cf3714d282857ee080fe5b4696740e19e2e97369ee4916d"
+        "e0be2f893e28f7a2a5e868c19aa825721399ae1d033e9b77fa4b33186037fb5b"
     );
 }
 
 #[test]
-fn both_style_surface_snapshots_have_independent_goldens() {
+fn surface_ecology_snapshots_have_independent_goldens() {
     let plan = fixture_plan(false, &[b"lock-a"]);
     let actual = [
+        TerrainStyleV1::Marine,
         TerrainStyleV1::TemperateWoodland,
         TerrainStyleV1::AridBadlands,
     ]
@@ -1267,14 +1315,19 @@ fn both_style_surface_snapshots_have_independent_goldens() {
         actual,
         vec![
             (
+                TerrainStyleV1::Marine,
+                ChunkCoordinate::new(-255, -2, -252),
+                "f98b63f25654d57a1a1cc7dacd64b0b8d1f3f5bcc01a4da27c65506677a64cd4".to_owned(),
+            ),
+            (
                 TerrainStyleV1::TemperateWoodland,
-                ChunkCoordinate::new(-191, -3, -252),
-                "2dd6e87b9aadf5d27568def0e11d1c1990b6c1abc0f65c63e71a2cb4be826ab2".to_owned(),
+                ChunkCoordinate::new(57, 1, -250),
+                "40c41346dbeef7975f587a9543c47473d7744dbe13afd44f1a1d657033f5092f".to_owned(),
             ),
             (
                 TerrainStyleV1::AridBadlands,
-                ChunkCoordinate::new(-255, -2, -252),
-                "d8d2596231b2df5934a9885d3f4c1fbe5ad3ebd6df9f0810dc8636c2af90b461".to_owned(),
+                ChunkCoordinate::new(257, 3, -36),
+                "45797abe46b49d1e3f2dde822a6f8e454887c895ab07bc8b3693ffda882c445a".to_owned(),
             ),
         ]
     );

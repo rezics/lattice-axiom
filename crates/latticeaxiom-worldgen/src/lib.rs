@@ -105,7 +105,10 @@ pub use terrain_config::{
     UndergroundConfigV2, WorldBoundsV2,
 };
 pub use terrain_field::{TerrainColumnSampleV2, TerrainFamilyV2};
-pub use terrain_program::{SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1, TerrainBaseAlgorithmV1};
+pub use terrain_program::{
+    BiomeSelectionRuleV1, SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1, SurfaceTerrainDomainV1,
+    TerrainBaseAlgorithmV1,
+};
 pub use territory::{TerrainStyleV1, TerritoryQueryV1, TransitionMetadataV1};
 
 pub use latticeaxiom_storage::{

@@ -8,10 +8,10 @@ use std::num::NonZeroU32;
 
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_worldgen::{
-    ClimateConfigV2, LandmassConfigV2, ProviderGenerationIdentityV1, ReliefConfigV2,
-    SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1, SurfaceWaterConfigV2, TerrainBaseAlgorithmV1,
-    TerrainConfigV2, TerrainStyleV1, UndergroundConfigV2, WorldBoundsV2, WorldgenError,
-    WorldgenResult,
+    BiomeSelectionRuleV1, ClimateConfigV2, LandmassConfigV2, ProviderGenerationIdentityV1,
+    ReliefConfigV2, SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1, SurfaceTerrainDomainV1,
+    SurfaceWaterConfigV2, TerrainBaseAlgorithmV1, TerrainConfigV2, TerrainStyleV1,
+    UndergroundConfigV2, WorldBoundsV2, WorldgenError, WorldgenResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -111,18 +111,69 @@ pub fn surface_biome_terrain_programs(
     implementation_fingerprint: CanonicalHash,
 ) -> WorldgenResult<Vec<SurfaceBiomeTerrainProgramV1>> {
     [
-        ("temperate-woodland", TerrainStyleV1::TemperateWoodland),
-        ("arid-badlands", TerrainStyleV1::AridBadlands),
-        ("boreal-wetland", TerrainStyleV1::BorealWetland),
+        (
+            "open-ocean",
+            TerrainStyleV1::Marine,
+            SurfaceTerrainDomainV1::Marine,
+            u16::MAX,
+            BiomeSelectionRuleV1::Fallback,
+            TerrainBaseAlgorithmV1::MarineBasin,
+        ),
+        (
+            "temperate-woodland",
+            TerrainStyleV1::TemperateWoodland,
+            SurfaceTerrainDomainV1::Land,
+            u16::MAX,
+            BiomeSelectionRuleV1::Fallback,
+            TerrainBaseAlgorithmV1::TemperateRelief,
+        ),
+        (
+            "arid-badlands",
+            TerrainStyleV1::AridBadlands,
+            SurfaceTerrainDomainV1::Land,
+            20,
+            BiomeSelectionRuleV1::AridityOrDry {
+                min_aridity: 96,
+                max_humidity: -384,
+            },
+            TerrainBaseAlgorithmV1::AridHighlands,
+        ),
+        (
+            "boreal-wetland",
+            TerrainStyleV1::BorealWetland,
+            SurfaceTerrainDomainV1::Land,
+            10,
+            BiomeSelectionRuleV1::ClimateRange {
+                min_temperature: -1_024,
+                max_temperature: -97,
+                min_humidity: -319,
+                max_humidity: 1_024,
+            },
+            TerrainBaseAlgorithmV1::BorealLowlands,
+        ),
     ]
     .into_iter()
-    .map(|(path, style)| terrain_program(path, style, implementation_fingerprint))
+    .map(|(path, style, domain, priority, selection, algorithm)| {
+        terrain_program(
+            path,
+            style,
+            domain,
+            priority,
+            selection,
+            algorithm,
+            implementation_fingerprint,
+        )
+    })
     .collect()
 }
 
 fn terrain_program(
     path: &str,
     style: TerrainStyleV1,
+    domain: SurfaceTerrainDomainV1,
+    selection_priority: u16,
+    selection: BiomeSelectionRuleV1,
+    algorithm: TerrainBaseAlgorithmV1,
     implementation_fingerprint: CanonicalHash,
 ) -> WorldgenResult<SurfaceBiomeTerrainProgramV1> {
     let biome = parse_program_identity(&format!("terrenia:biome/{path}"))?;
@@ -131,11 +182,14 @@ fn terrain_program(
     Ok(SurfaceBiomeTerrainProgramV1::new(
         SurfaceBiomeIdV1::new(biome)?,
         style,
-        TerrainBaseAlgorithmV1::ContinentalComposite,
+        domain,
+        selection_priority,
+        selection,
+        algorithm,
         ProviderGenerationIdentityV1::new(
             provider,
             NonZeroU32::MIN,
-            10,
+            11,
             implementation_fingerprint,
         ),
     ))
@@ -362,7 +416,7 @@ mod tests {
     fn every_surface_biome_owns_one_terrain_provider() {
         let programs = surface_biome_terrain_programs(CanonicalHash::digest("package"))
             .expect("package terrain programs are valid");
-        assert_eq!(programs.len(), 3);
+        assert_eq!(programs.len(), 4);
         assert_eq!(
             programs
                 .iter()

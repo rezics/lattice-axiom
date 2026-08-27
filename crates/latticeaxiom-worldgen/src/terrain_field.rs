@@ -154,14 +154,12 @@ impl TerrainFieldV2 {
         }
     }
 
-    fn sample_base(&self, x: i64, z: i64) -> BaseTerrainColumnV2 {
+    pub(crate) fn is_land(&self, x: i64, z: i64) -> bool {
+        self.landmass_value(x, z) >= 0
+    }
+
+    fn landmass_value(&self, x: i64, z: i64) -> i64 {
         let landmass = self.config.landmass;
-        let relief = self.config.relief;
-        let sea = i64::from(self.config.world.sea_level_y);
-        // Gradient fractals spend most samples near zero. Expanding the two
-        // land-mask fields before thresholding gives the presets meaningful
-        // continental interiors and ocean basins without changing their
-        // smooth interpolation or introducing hard cell boundaries.
         let continent = amplify(fractal_noise(
             self.continent_seed,
             x,
@@ -181,10 +179,21 @@ impl TerrainFieldV2 {
             .max(0)
             .saturating_mul(i64::from(landmass.island_weight_per_1024))
             .div_euclid(FIELD_UNIT);
-        let land = continent
+        continent
             .saturating_sub(i64::from(landmass.ocean_bias_per_1024))
             .saturating_add(island_peak)
-            .clamp(-FIELD_UNIT, FIELD_UNIT);
+            .clamp(-FIELD_UNIT, FIELD_UNIT)
+    }
+
+    fn sample_base(&self, x: i64, z: i64) -> BaseTerrainColumnV2 {
+        let landmass = self.config.landmass;
+        let relief = self.config.relief;
+        let sea = i64::from(self.config.world.sea_level_y);
+        // Gradient fractals spend most samples near zero. Expanding the two
+        // land-mask fields before thresholding gives the presets meaningful
+        // continental interiors and ocean basins without changing their
+        // smooth interpolation or introducing hard cell boundaries.
+        let land = self.landmass_value(x, z);
         let coast = i64::from(landmass.coast_width_per_1024).max(1);
 
         if land < 0 {

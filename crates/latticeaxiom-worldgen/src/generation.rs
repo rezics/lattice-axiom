@@ -1908,7 +1908,9 @@ impl GenerationPlanV1 {
             TerrainStyleV1::TemperateWoodland | TerrainStyleV1::BorealWetland => {
                 self.temperate_material(x, y, z, depth, counters)
             }
-            TerrainStyleV1::AridBadlands => self.arid_material(x, y, z, depth, counters),
+            TerrainStyleV1::Marine | TerrainStyleV1::AridBadlands => {
+                self.arid_material(x, y, z, depth, counters)
+            }
         }
     }
 

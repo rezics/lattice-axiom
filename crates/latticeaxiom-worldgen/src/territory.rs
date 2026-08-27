@@ -21,6 +21,8 @@ const HUMIDITY_SALT: u64 = 0xe703_7ed1_a0b4_28db;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TerrainStyleV1 {
+    /// Marine shelf and ocean-basin materials with no terrestrial vegetation.
+    Marine,
     /// Grass/dirt, mixed stone/limestone, and bounded oak vegetation.
     TemperateWoodland,
     /// Sand/red sand, sandstone strata, basalt, and copper resources.
@@ -31,7 +33,8 @@ pub enum TerrainStyleV1 {
 
 impl TerrainStyleV1 {
     /// Compatibility material styles in stable order.
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
+        Self::Marine,
         Self::TemperateWoodland,
         Self::AridBadlands,
         Self::BorealWetland,
@@ -255,9 +258,48 @@ impl TerritorySamplerV1 {
     }
 
     pub(crate) fn terrain_column(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
-        let territory = self.sample(x, z);
-        let biome_style = self.choose_material_style(x, z, territory);
-        self.terrain_programs.sample(biome_style, x, z)
+        let edge = self.planning_edge_voxels();
+        let cell_x = x.div_euclid(edge);
+        let cell_z = z.div_euclid(edge);
+        let blend_x = axis_blend(
+            x.rem_euclid(edge),
+            edge,
+            self.config.transition_width_voxels,
+        );
+        let blend_z = axis_blend(
+            z.rem_euclid(edge),
+            edge,
+            self.config.transition_width_voxels,
+        );
+        let neighbor_x = cell_x.saturating_add(blend_x.neighbor_offset);
+        let neighbor_z = cell_z.saturating_add(blend_z.neighbor_offset);
+
+        let current = self
+            .terrain_programs
+            .sample(self.style_for_cell(cell_x, cell_z), x, z);
+        if blend_x.neighbor_offset == 0 && blend_z.neighbor_offset == 0 {
+            return current;
+        }
+        let across_x = self
+            .terrain_programs
+            .sample(self.style_for_cell(neighbor_x, cell_z), x, z);
+        if blend_z.neighbor_offset == 0 {
+            return blend_terrain_columns(current, across_x, blend_x.current_weight, blend_x.total);
+        }
+        let across_z = self
+            .terrain_programs
+            .sample(self.style_for_cell(cell_x, neighbor_z), x, z);
+        if blend_x.neighbor_offset == 0 {
+            return blend_terrain_columns(current, across_z, blend_z.current_weight, blend_z.total);
+        }
+        let diagonal =
+            self.terrain_programs
+                .sample(self.style_for_cell(neighbor_x, neighbor_z), x, z);
+        let near_z =
+            blend_terrain_columns(current, across_x, blend_x.current_weight, blend_x.total);
+        let far_z =
+            blend_terrain_columns(across_z, diagonal, blend_x.current_weight, blend_x.total);
+        blend_terrain_columns(near_z, far_z, blend_z.current_weight, blend_z.total)
     }
 
     pub(crate) fn height(&self, x: i64, z: i64) -> i32 {
@@ -318,69 +360,28 @@ impl TerritorySamplerV1 {
 
     fn style_for_cell(&self, cell_x: i64, cell_z: i64) -> TerrainStyleV1 {
         let (temperature, humidity) = self.climate_for_cell(cell_x, cell_z);
-        let aridity = temperature.saturating_sub(humidity.div_euclid(3));
-        if self
-            .terrain_programs
-            .contains(TerrainStyleV1::BorealWetland)
-        {
-            if temperature < -96 && humidity > -320 {
-                TerrainStyleV1::BorealWetland
-            } else if aridity > 96 || humidity < -384 {
-                TerrainStyleV1::AridBadlands
-            } else {
-                TerrainStyleV1::TemperateWoodland
-            }
-        } else if aridity > 64 {
-            TerrainStyleV1::AridBadlands
-        } else {
-            TerrainStyleV1::TemperateWoodland
-        }
+        let edge = self.planning_edge_voxels();
+        let center_x = cell_x
+            .saturating_mul(edge)
+            .saturating_add(edge.div_euclid(2));
+        let center_z = cell_z
+            .saturating_mul(edge)
+            .saturating_add(edge.div_euclid(2));
+        self.terrain_programs
+            .select_style(center_x, center_z, temperature, humidity)
     }
 
     fn runner_up_style(&self, cell_x: i64, cell_z: i64, winner: TerrainStyleV1) -> TerrainStyleV1 {
-        if !self
-            .terrain_programs
-            .contains(TerrainStyleV1::BorealWetland)
-        {
-            return match winner {
-                TerrainStyleV1::TemperateWoodland => TerrainStyleV1::AridBadlands,
-                TerrainStyleV1::AridBadlands | TerrainStyleV1::BorealWetland => {
-                    TerrainStyleV1::TemperateWoodland
-                }
-            };
-        }
         let (temperature, humidity) = self.climate_for_cell(cell_x, cell_z);
-        let aridity = temperature.saturating_sub(humidity.div_euclid(3));
-        let arid_score = aridity
-            .saturating_sub(96)
-            .max(humidity.saturating_neg().saturating_sub(384));
-        let boreal_score = temperature
-            .saturating_neg()
-            .saturating_sub(96)
-            .min(humidity.saturating_add(320));
-        match winner {
-            TerrainStyleV1::TemperateWoodland => {
-                if boreal_score > arid_score {
-                    TerrainStyleV1::BorealWetland
-                } else {
-                    TerrainStyleV1::AridBadlands
-                }
-            }
-            TerrainStyleV1::AridBadlands => {
-                if boreal_score > 0 {
-                    TerrainStyleV1::BorealWetland
-                } else {
-                    TerrainStyleV1::TemperateWoodland
-                }
-            }
-            TerrainStyleV1::BorealWetland => {
-                if arid_score > 0 {
-                    TerrainStyleV1::AridBadlands
-                } else {
-                    TerrainStyleV1::TemperateWoodland
-                }
-            }
-        }
+        let edge = self.planning_edge_voxels();
+        let center_x = cell_x
+            .saturating_mul(edge)
+            .saturating_add(edge.div_euclid(2));
+        let center_z = cell_z
+            .saturating_mul(edge)
+            .saturating_add(edge.div_euclid(2));
+        self.terrain_programs
+            .runner_up_style(winner, center_x, center_z, temperature, humidity)
     }
 
     fn climate_for_cell(&self, cell_x: i64, cell_z: i64) -> (i64, i64) {
@@ -400,6 +401,77 @@ impl TerritorySamplerV1 {
             ))
             .div_euclid(1_024);
         (temperature, humidity)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AxisBlend {
+    neighbor_offset: i64,
+    current_weight: i64,
+    total: i64,
+}
+
+fn axis_blend(local: i64, edge: i64, width: u16) -> AxisBlend {
+    let width = i64::from(width).max(1);
+    let total = width.saturating_mul(2);
+    let east_distance = edge.saturating_sub(1).saturating_sub(local);
+    if local <= width {
+        AxisBlend {
+            neighbor_offset: -1,
+            current_weight: width.saturating_add(local),
+            total,
+        }
+    } else if east_distance <= width {
+        AxisBlend {
+            neighbor_offset: 1,
+            current_weight: width.saturating_add(east_distance),
+            total,
+        }
+    } else {
+        AxisBlend {
+            neighbor_offset: 0,
+            current_weight: total,
+            total,
+        }
+    }
+}
+
+fn blend_terrain_columns(
+    winner: TerrainColumnSampleV2,
+    adjacent: TerrainColumnSampleV2,
+    winner_weight: i64,
+    total: i64,
+) -> TerrainColumnSampleV2 {
+    let adjacent_weight = total.saturating_sub(winner_weight);
+    let height = i64::from(winner.height)
+        .saturating_mul(winner_weight)
+        .saturating_add(i64::from(adjacent.height).saturating_mul(adjacent_weight))
+        .div_euclid(total);
+    let surface_water_y = match (winner.surface_water_y, adjacent.surface_water_y) {
+        (Some(left), Some(right)) => Some(
+            i64::from(left)
+                .saturating_mul(winner_weight)
+                .saturating_add(i64::from(right).saturating_mul(adjacent_weight))
+                .div_euclid(total)
+                .try_into()
+                .unwrap_or(left),
+        ),
+        (left, right) => {
+            if winner_weight >= adjacent_weight {
+                left
+            } else {
+                right
+            }
+        }
+    };
+    TerrainColumnSampleV2 {
+        height: i32::try_from(height).unwrap_or(winner.height),
+        family: if winner_weight >= adjacent_weight {
+            winner.family
+        } else {
+            adjacent.family
+        },
+        surface_water_y,
     }
 }
 
