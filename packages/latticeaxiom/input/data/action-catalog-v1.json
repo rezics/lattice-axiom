@@ -218,6 +218,11 @@
       "defaults": [
         {
           "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-wheel-direction",
+          "direction": "Down"
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
           "kind": "gamepad-button",
           "button": "RightTrigger"
         }
@@ -230,6 +235,11 @@
       "rebindable": "none",
       "client_surface_action": "hotbar-previous",
       "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-wheel-direction",
+          "direction": "Up"
+        },
         {
           "schema": "latticeaxiom:schema/input-binding@1",
           "kind": "gamepad-button",

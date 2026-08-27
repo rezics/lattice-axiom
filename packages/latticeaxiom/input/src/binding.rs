@@ -44,6 +44,19 @@ pub enum MouseWheelAxisV1 {
     Y,
 }
 
+/// Button-like mouse-wheel direction.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum MouseWheelDirectionV1 {
+    /// Positive vertical wheel movement.
+    Up,
+    /// Negative vertical wheel movement.
+    Down,
+    /// Negative horizontal wheel movement.
+    Left,
+    /// Positive horizontal wheel movement.
+    Right,
+}
+
 /// Standard gamepad stick.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -93,6 +106,11 @@ pub enum InputBindingV1 {
         /// Wheel axis.
         axis: MouseWheelAxisV1,
     },
+    /// One button-like mouse-wheel direction.
+    MouseWheelDirection {
+        /// Direction that produces a rising button edge.
+        direction: MouseWheelDirectionV1,
+    },
     /// Standard gamepad button, including digital triggers.
     GamepadButton {
         /// Standard mapping name such as `South` or `RightTrigger`.
@@ -129,6 +147,7 @@ impl InputBindingV1 {
                 | Self::MouseButton { .. }
                 | Self::MouseMotion { .. }
                 | Self::MouseWheel { .. }
+                | Self::MouseWheelDirection { .. }
         )
     }
 
@@ -141,7 +160,7 @@ impl InputBindingV1 {
     pub(crate) fn validate_for_kind(&self, kind: ActionKindV1) -> Result<(), InputError> {
         match (kind, self) {
             (ActionKindV1::Button, Self::Keyboard { usage, .. }) => validate_usage(usage),
-            (ActionKindV1::Button, Self::MouseButton { .. })
+            (ActionKindV1::Button, Self::MouseButton { .. } | Self::MouseWheelDirection { .. })
             | (ActionKindV1::Axis2, Self::MouseWheel { .. }) => Ok(()),
             (ActionKindV1::Button, Self::GamepadButton { button }) => validate_usage(button),
             (
@@ -221,6 +240,10 @@ impl InputBindingV1 {
                 component: format!("{axis:?}"),
                 direction: "bidirectional".to_owned(),
                 deadzone_millis: 0,
+                modifiers: Vec::new(),
+            }],
+            Self::MouseWheelDirection { direction } => vec![OccupancyTokenV1::Button {
+                code: format!("mouse-wheel:{direction:?}"),
                 modifiers: Vec::new(),
             }],
             Self::GamepadButton { button } => vec![OccupancyTokenV1::Button {
@@ -319,6 +342,10 @@ fn validate_sensitivity(sensitivity: f32) -> Result<(), InputError> {
 impl TryFrom<Value> for InputBindingV1 {
     type Error = InputError;
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "all closed binding variants remain visibly decoded in one schema boundary"
+    )]
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         let Value::Object(mut object) = value else {
             return Err(InputError::InvalidBinding {
@@ -385,6 +412,13 @@ impl TryFrom<Value> for InputBindingV1 {
                 reject_leftovers(&object)?;
                 Ok(Self::MouseWheel {
                     axis: parse_wheel_axis(&axis)?,
+                })
+            }
+            "mouse-wheel-direction" => {
+                let direction = required_string(&mut object, "direction")?;
+                reject_leftovers(&object)?;
+                Ok(Self::MouseWheelDirection {
+                    direction: parse_wheel_direction(&direction)?,
                 })
             }
             "gamepad-button" => {
@@ -458,6 +492,16 @@ impl From<InputBindingV1> for Value {
             InputBindingV1::MouseWheel { axis } => {
                 object.insert("kind".to_owned(), Value::String("mouse-wheel".to_owned()));
                 object.insert("axis".to_owned(), Value::String(format!("{axis:?}")));
+            }
+            InputBindingV1::MouseWheelDirection { direction } => {
+                object.insert(
+                    "kind".to_owned(),
+                    Value::String("mouse-wheel-direction".to_owned()),
+                );
+                object.insert(
+                    "direction".to_owned(),
+                    Value::String(format!("{direction:?}")),
+                );
             }
             InputBindingV1::GamepadButton { button } => {
                 object.insert(
@@ -612,6 +656,18 @@ fn parse_wheel_axis(value: &str) -> Result<MouseWheelAxisV1, InputError> {
         "Y" => Ok(MouseWheelAxisV1::Y),
         other => Err(InputError::InvalidBinding {
             reason: format!("unknown mouse-wheel axis `{other}`"),
+        }),
+    }
+}
+
+fn parse_wheel_direction(value: &str) -> Result<MouseWheelDirectionV1, InputError> {
+    match value {
+        "Up" => Ok(MouseWheelDirectionV1::Up),
+        "Down" => Ok(MouseWheelDirectionV1::Down),
+        "Left" => Ok(MouseWheelDirectionV1::Left),
+        "Right" => Ok(MouseWheelDirectionV1::Right),
+        other => Err(InputError::InvalidBinding {
+            reason: format!("unknown mouse-wheel direction `{other}`"),
         }),
     }
 }

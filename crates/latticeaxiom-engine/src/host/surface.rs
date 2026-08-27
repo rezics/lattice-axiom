@@ -167,6 +167,25 @@ pub(super) fn select_hotbar_from_surface(
             return;
         }
     }
+    let next = frame.just_started(ClientSurfaceActionV1::HotbarNext);
+    let previous = frame.just_started(ClientSurfaceActionV1::HotbarPrevious);
+    let direction = match (next, previous) {
+        (true, false) => 1,
+        (false, true) => -1,
+        (true, true) | (false, false) => return,
+    };
+    let current = spine
+        .inventory_view()
+        .map_or(0, |inventory| inventory.hotbar_slot());
+    let _ = spine.select_hotbar_slot(cycled_hotbar_slot(current, direction));
+}
+
+const fn cycled_hotbar_slot(current: u16, direction: i8) -> u16 {
+    match direction {
+        1 => (current + 1) % super::HOTBAR_SLOTS,
+        -1 => (current + super::HOTBAR_SLOTS - 1) % super::HOTBAR_SLOTS,
+        _ => current,
+    }
 }
 
 /// Cursor policy derived from the live router.
@@ -188,5 +207,13 @@ mod tests {
             surface_command(GameModalV1::None, ClientSurfaceActionV1::Back, false,),
             Some(SurfaceCommandV1::Back)
         ));
+    }
+
+    #[test]
+    fn hotbar_cycle_wraps_in_both_directions() {
+        assert_eq!(cycled_hotbar_slot(0, 1), 1);
+        assert_eq!(cycled_hotbar_slot(8, 1), 0);
+        assert_eq!(cycled_hotbar_slot(0, -1), 8);
+        assert_eq!(cycled_hotbar_slot(4, -1), 3);
     }
 }

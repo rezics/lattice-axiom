@@ -7,7 +7,8 @@ use latticeaxiom_core::{CanonicalHash, PackageName, StableId, canonical_json_has
 use crate::{
     ActionKindV1, ActionSpecV1, AuthoritativePlayerActionV1, BindingProfileV1,
     ClientSurfaceActionV1, GamepadStickV1, InputActionsProviderV1, InputBindingV1, InputContextV1,
-    InputError, KeyModifierV1, MouseButtonV1, MouseWheelAxisV1, RebindablePolicyV1,
+    InputError, KeyModifierV1, MouseButtonV1, MouseWheelAxisV1, MouseWheelDirectionV1,
+    RebindablePolicyV1,
     catalog::{assert_static_enum_goldens, unique_sorted_actions},
     conflict::detect_same_context_conflicts,
     select_exactly_one_input_actions_provider,
@@ -83,6 +84,11 @@ pub enum LeafwingRecipeV1 {
     MouseWheel {
         /// Axis.
         axis: MouseWheelAxisV1,
+    },
+    /// Button-like mouse-wheel direction.
+    MouseWheelDirection {
+        /// Direction.
+        direction: MouseWheelDirectionV1,
     },
     /// Standard gamepad button.
     GamepadButton {
@@ -533,6 +539,11 @@ fn to_recipe(binding: &InputBindingV1) -> Option<LeafwingRecipeV1> {
             sensitivity: *sensitivity,
         }),
         InputBindingV1::MouseWheel { axis } => Some(LeafwingRecipeV1::MouseWheel { axis: *axis }),
+        InputBindingV1::MouseWheelDirection { direction } => {
+            Some(LeafwingRecipeV1::MouseWheelDirection {
+                direction: *direction,
+            })
+        }
         InputBindingV1::GamepadButton { button } => Some(LeafwingRecipeV1::GamepadButton {
             button: button.clone(),
         }),

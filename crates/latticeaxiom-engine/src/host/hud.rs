@@ -972,7 +972,7 @@ pub(super) fn sync_production_hotbar_hud(
         let stack = view
             .as_ref()
             .and_then(|view| view.slots().get(usize::from(slot.0))?.as_ref());
-        let (label, swatch) = slot_visual(spine.as_ref(), stack, slot.0);
+        let (label, swatch) = slot_visual(spine.as_ref(), stack);
         background.0 = swatch;
         set_slot_selector(
             children,
@@ -1009,7 +1009,7 @@ pub(super) fn sync_production_inventory_hud(
         let stack = view
             .as_ref()
             .and_then(|view| view.slots().get(usize::from(slot.0))?.as_ref());
-        let (label, swatch) = slot_visual(spine.as_ref(), stack, slot.0);
+        let (label, swatch) = slot_visual(spine.as_ref(), stack);
         let selected_hotbar = slot.0 < HOTBAR_SLOTS && slot.0 == selected;
         let latched = surfaces.cursor_slot() == Some(slot.0);
         background.0 = swatch;
@@ -1053,13 +1053,12 @@ fn set_slot_selector(
 fn slot_visual(
     spine: &ProductionSpine,
     stack: Option<&latticeaxiom_gameplay::ItemStackV1>,
-    slot: u16,
 ) -> (String, Color) {
     match stack {
         Some(stack) => {
             let display = spine.content_display(stack.item().as_str());
             (
-                format!("{}×{}", slot + 1, stack.quantity()),
+                stack.quantity().to_string(),
                 icon_swatch_color(&display.icon),
             )
         }

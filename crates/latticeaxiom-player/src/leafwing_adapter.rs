@@ -8,14 +8,17 @@ use bevy::{
 };
 use latticeaxiom_input::{
     AuthoritativePlayerActionV1, ClientSurfaceActionV1, CompiledInputCatalogV1,
-    CompiledLeafwingMapV1, GamepadStickV1, LeafwingRecipeV1, MouseButtonV1,
+    CompiledLeafwingMapV1, GamepadStickV1, LeafwingRecipeV1, MouseButtonV1, MouseWheelDirectionV1,
 };
 use leafwing_input_manager::{
     Actionlike,
     action_state::ActionState,
     input_map::InputMap,
     plugin::{InputManagerPlugin, InputManagerSystem},
-    prelude::{GamepadStick, MouseMove, VirtualDPad, WithDualAxisProcessingPipelineExt},
+    prelude::{
+        GamepadStick, MouseMove, MouseScrollDirection, VirtualDPad,
+        WithDualAxisProcessingPipelineExt,
+    },
 };
 
 use crate::{
@@ -427,7 +430,19 @@ fn apply_surface_recipe(
                 input_map.insert(action, gamepad);
             }
         }
+        LeafwingRecipeV1::MouseWheelDirection { direction } => {
+            input_map.insert(action, mouse_scroll_direction(*direction));
+        }
         _ => {}
+    }
+}
+
+const fn mouse_scroll_direction(direction: MouseWheelDirectionV1) -> MouseScrollDirection {
+    match direction {
+        MouseWheelDirectionV1::Up => MouseScrollDirection::UP,
+        MouseWheelDirectionV1::Down => MouseScrollDirection::DOWN,
+        MouseWheelDirectionV1::Left => MouseScrollDirection::LEFT,
+        MouseWheelDirectionV1::Right => MouseScrollDirection::RIGHT,
     }
 }
 
@@ -844,6 +859,16 @@ mod tests {
         assert!(
             maps.surface()
                 .get_buttonlike(&LeafwingSurfaceAction::HotbarSlot1)
+                .is_some()
+        );
+        assert!(
+            maps.surface()
+                .get_buttonlike(&LeafwingSurfaceAction::HotbarNext)
+                .is_some()
+        );
+        assert!(
+            maps.surface()
+                .get_buttonlike(&LeafwingSurfaceAction::HotbarPrevious)
                 .is_some()
         );
     }

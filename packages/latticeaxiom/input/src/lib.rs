@@ -22,7 +22,7 @@ pub use action::{
 };
 pub use binding::{
     GamepadStickV1, InputBindingV1, KeyModifierV1, MouseButtonV1, MouseWheelAxisV1,
-    OccupancyTokenV1,
+    MouseWheelDirectionV1, OccupancyTokenV1,
 };
 pub use catalog::{
     ActionCatalogDocumentV1, InputActionsProviderV1, parse_package_name,
@@ -235,6 +235,34 @@ mod tests {
             !compiled
                 .inventory_overlay_map()
                 .contains_action(&action("latticeaxiom:action/gameplay/move@1"))
+        );
+        let hotbar_next = compiled
+            .inventory_overlay_map()
+            .entries
+            .iter()
+            .find(|entry| entry.action_id.as_str() == ClientSurfaceActionV1::HotbarNext.stable_id())
+            .expect("hotbar next has a compiled surface entry");
+        assert!(
+            hotbar_next
+                .recipes
+                .contains(&LeafwingRecipeV1::MouseWheelDirection {
+                    direction: MouseWheelDirectionV1::Down,
+                })
+        );
+        let hotbar_previous = compiled
+            .inventory_overlay_map()
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.action_id.as_str() == ClientSurfaceActionV1::HotbarPrevious.stable_id()
+            })
+            .expect("hotbar previous has a compiled surface entry");
+        assert!(
+            hotbar_previous
+                .recipes
+                .contains(&LeafwingRecipeV1::MouseWheelDirection {
+                    direction: MouseWheelDirectionV1::Up,
+                })
         );
     }
 
