@@ -45,6 +45,10 @@ typed_hash!(
     "Canonical hash of a fully materialized `WorldgenConfigV1`."
 );
 typed_hash!(
+    TerrainConfigHashV2,
+    "Canonical hash of a fully resolved `TerrainConfigV2`."
+);
+typed_hash!(
     GeneratorFingerprintV1,
     "Aggregate fingerprint of the resolved output-affecting providers."
 );

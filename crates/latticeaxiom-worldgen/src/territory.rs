@@ -2,17 +2,15 @@ use latticeaxiom_core::{CanonicalHash, StableId};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, WorldSeedV1,
-    WorldgenConfigV1,
+    GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, TerrainConfigV2,
+    TerrainFamilyV2, WorldgenConfigV1, WorldgenSeedRootV2,
     hashes::{domain_hash, hash_u64},
-    terrain_field::{climate_field, terrain_shape},
+    terrain_field::{TerrainFieldV2, climate_field},
 };
 
 const TERRITORY_CELL_DOMAIN: &[u8] = b"latticeaxiom.territory-cell.v1\0";
 const STYLE_DOMAIN: &[u8] = b"latticeaxiom.d4-style.v1\0";
-const HEIGHT_DOMAIN: &[u8] = b"latticeaxiom.d4-height.v1\0";
 const TRANSITION_DOMAIN: &[u8] = b"latticeaxiom.d4-transition.v1\0";
-const CLIMATE_SCALE_CELLS: u16 = 8;
 const TEMPERATURE_SALT: u64 = 0xa076_1d64_78bd_642f;
 const HUMIDITY_SALT: u64 = 0xe703_7ed1_a0b4_28db;
 
@@ -28,16 +26,6 @@ pub enum TerrainStyleV1 {
     AridBadlands,
     /// Snow/peat/moss surfaces, slate, and bounded pine vegetation.
     BorealWetland,
-}
-
-impl TerrainStyleV1 {
-    pub(crate) const fn discriminant(self) -> u8 {
-        match self {
-            Self::TemperateWoodland => 0,
-            Self::AridBadlands => 1,
-            Self::BorealWetland => 2,
-        }
-    }
 }
 
 /// Metadata for the named deterministic transition at a territory boundary.
@@ -156,73 +144,44 @@ pub(crate) struct CompactTerritorySampleV1 {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct BorealTerrainParamsV1 {
-    pub(crate) provider: ProviderGenerationIdentityV1,
-    pub(crate) base_height: i32,
-    pub(crate) relief: u16,
-}
+pub(crate) struct BorealTerrainParamsV1;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TerritorySamplerV1 {
-    seed: WorldSeedV1,
+    seed_root: WorldgenSeedRootV2,
     input_hash: GenerationInputHashV1,
     config: WorldgenConfigV1,
+    terrain_config: TerrainConfigV2,
+    terrain: TerrainFieldV2,
     temperature_seed: u64,
     humidity_seed: u64,
     transition: ProviderGenerationIdentityV1,
-    temperate_height_seed: u64,
-    arid_height_seed: u64,
-    boreal_height_seed: Option<u64>,
     boreal: Option<BorealTerrainParamsV1>,
 }
 
 impl TerritorySamplerV1 {
     pub(crate) fn new(
-        seed: WorldSeedV1,
+        seed_root: WorldgenSeedRootV2,
         input_hash: GenerationInputHashV1,
         config: WorldgenConfigV1,
-        selector: &ProviderGenerationIdentityV1,
+        terrain_config: TerrainConfigV2,
         transition: ProviderGenerationIdentityV1,
-        temperate: &ProviderGenerationIdentityV1,
-        arid: &ProviderGenerationIdentityV1,
     ) -> Self {
-        let temperate_height_seed = height_seed(
-            seed,
-            input_hash,
-            temperate,
-            TerrainStyleV1::TemperateWoodland,
-        );
-        let arid_height_seed = height_seed(seed, input_hash, arid, TerrainStyleV1::AridBadlands);
-        let climate_seed = hash_u64(
-            STYLE_DOMAIN,
-            &[
-                seed.as_bytes(),
-                input_hash.as_bytes(),
-                selector.provider_stable_id().as_str().as_bytes(),
-                selector.implementation_fingerprint().as_bytes(),
-            ],
-        );
+        let climate_seed = hash_u64(STYLE_DOMAIN, &[seed_root.as_bytes()]);
         Self {
-            seed,
+            seed_root,
             input_hash,
             config,
+            terrain_config,
+            terrain: TerrainFieldV2::new(seed_root, terrain_config),
             temperature_seed: climate_seed ^ TEMPERATURE_SALT,
             humidity_seed: climate_seed ^ HUMIDITY_SALT,
             transition,
-            temperate_height_seed,
-            arid_height_seed,
-            boreal_height_seed: None,
             boreal: None,
         }
     }
 
     pub(crate) fn with_boreal(mut self, params: BorealTerrainParamsV1) -> Self {
-        self.boreal_height_seed = Some(height_seed(
-            self.seed,
-            self.input_hash,
-            &params.provider,
-            TerrainStyleV1::BorealWetland,
-        ));
         self.boreal = Some(params);
         self
     }
@@ -294,94 +253,16 @@ impl TerritorySamplerV1 {
         }
     }
 
-    #[allow(
-        clippy::similar_names,
-        reason = "winner/adjacent height and weight pairs mirror the blend equation"
-    )]
-    pub(crate) fn height(&self, x: i64, z: i64, sample: CompactTerritorySampleV1) -> i32 {
-        let edge = self.planning_edge_voxels();
-        let width = i64::from(self.config.transition_width_voxels);
-        let denominator = width.saturating_mul(2).max(1);
-        let x_blend = axis_blend(sample.cell_x, x.rem_euclid(edge), edge, width);
-        let z_blend = axis_blend(sample.cell_z, z.rem_euclid(edge), edge, width);
-        let mut cached_heights = [None; 3];
-        let current = self.raw_cell_height(
-            sample.cell_x,
-            sample.cell_z,
-            x,
-            z,
-            sample,
-            &mut cached_heights,
-        );
-        let current_row = if x_blend.adjacent == sample.cell_x {
-            current
-        } else {
-            let adjacent_x = self.raw_cell_height(
-                x_blend.adjacent,
-                sample.cell_z,
-                x,
-                z,
-                sample,
-                &mut cached_heights,
-            );
-            blend_height(current, adjacent_x, x_blend.current_weight, denominator)
-        };
-        if z_blend.adjacent == sample.cell_z {
-            return saturating_height(current_row);
-        }
-        let adjacent_z = self.raw_cell_height(
-            sample.cell_x,
-            z_blend.adjacent,
-            x,
-            z,
-            sample,
-            &mut cached_heights,
-        );
-        let adjacent_row = if x_blend.adjacent == sample.cell_x {
-            adjacent_z
-        } else {
-            let diagonal = self.raw_cell_height(
-                x_blend.adjacent,
-                z_blend.adjacent,
-                x,
-                z,
-                sample,
-                &mut cached_heights,
-            );
-            blend_height(adjacent_z, diagonal, x_blend.current_weight, denominator)
-        };
-        let blended = blend_height(
-            current_row,
-            adjacent_row,
-            z_blend.current_weight,
-            denominator,
-        );
-        saturating_height(blended)
+    pub(crate) fn height(&self, x: i64, z: i64, _sample: CompactTerritorySampleV1) -> i32 {
+        self.terrain.sample(x, z).height
     }
 
-    fn raw_cell_height(
-        &self,
-        cell_x: i64,
-        cell_z: i64,
-        x: i64,
-        z: i64,
-        sample: CompactTerritorySampleV1,
-        cached_heights: &mut [Option<i64>; 3],
-    ) -> i64 {
-        let style = if (cell_x, cell_z) == (sample.cell_x, sample.cell_z) {
-            sample.winner
-        } else if (cell_x, cell_z) == (sample.neighbor_x, sample.neighbor_z) {
-            sample.adjacent_style
-        } else {
-            self.style_for_cell(cell_x, cell_z)
-        };
-        let index = usize::from(style.discriminant());
-        if let Some(height) = cached_heights[index] {
-            return height;
-        }
-        let height = i64::from(self.raw_height(style, x, z));
-        cached_heights[index] = Some(height);
-        height
+    pub(crate) fn family(&self, x: i64, z: i64) -> TerrainFamilyV2 {
+        self.terrain.sample(x, z).family
+    }
+
+    pub(crate) fn surface_water_y(&self, x: i64, z: i64) -> Option<i32> {
+        self.terrain.sample(x, z).surface_water_y
     }
 
     pub(crate) fn choose_material_style(
@@ -400,7 +281,7 @@ impl TerritorySamplerV1 {
         let roll = hash_u64(
             TRANSITION_DOMAIN,
             &[
-                self.input_hash.as_bytes(),
+                self.seed_root.as_bytes(),
                 &x.to_be_bytes(),
                 &z.to_be_bytes(),
             ],
@@ -421,8 +302,7 @@ impl TerritorySamplerV1 {
         PlanningCellIdV1::from_hash(domain_hash(
             TERRITORY_CELL_DOMAIN,
             &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
+                self.seed_root.as_bytes(),
                 &cell_x.to_be_bytes(),
                 &cell_z.to_be_bytes(),
             ],
@@ -491,103 +371,38 @@ impl TerritorySamplerV1 {
     }
 
     fn climate_for_cell(&self, cell_x: i64, cell_z: i64) -> (i64, i64) {
-        (
-            climate_field(self.temperature_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS),
-            climate_field(self.humidity_seed, cell_x, cell_z, CLIMATE_SCALE_CELLS),
-        )
+        let edge = self.planning_edge_voxels().max(1);
+        let scale_cells = i64::from(self.terrain_config.climate.scale_voxels)
+            .div_euclid(edge)
+            .clamp(1, i64::from(u16::MAX));
+        let scale_cells = u16::try_from(scale_cells).unwrap_or(u16::MAX);
+        let center_x = cell_x
+            .saturating_mul(edge)
+            .saturating_add(edge.div_euclid(2));
+        let center_z = cell_z
+            .saturating_mul(edge)
+            .saturating_add(edge.div_euclid(2));
+        let altitude = i64::from(self.terrain.sample(center_x, center_z).height)
+            .saturating_sub(i64::from(self.terrain_config.world.sea_level_y))
+            .max(0);
+        let cooling = altitude
+            .saturating_mul(i64::from(
+                self.terrain_config.climate.altitude_cooling_per_1024,
+            ))
+            .div_euclid(128);
+        let temperature = climate_field(self.temperature_seed, cell_x, cell_z, scale_cells)
+            .saturating_mul(i64::from(
+                self.terrain_config.climate.temperature_variance_per_1024,
+            ))
+            .div_euclid(1_024)
+            .saturating_sub(cooling);
+        let humidity = climate_field(self.humidity_seed, cell_x, cell_z, scale_cells)
+            .saturating_mul(i64::from(
+                self.terrain_config.climate.humidity_variance_per_1024,
+            ))
+            .div_euclid(1_024);
+        (temperature, humidity)
     }
-
-    fn raw_height(&self, style: TerrainStyleV1, x: i64, z: i64) -> i32 {
-        let (base, relief, height_seed) = match style {
-            TerrainStyleV1::TemperateWoodland => (
-                self.config.temperate_base_height,
-                self.config.temperate_relief,
-                self.temperate_height_seed,
-            ),
-            TerrainStyleV1::AridBadlands => (
-                self.config.arid_base_height,
-                self.config.arid_relief,
-                self.arid_height_seed,
-            ),
-            TerrainStyleV1::BorealWetland => {
-                let boreal = self.boreal.as_ref();
-                (
-                    boreal.map_or(self.config.temperate_base_height, |params| {
-                        params.base_height
-                    }),
-                    boreal.map_or(self.config.temperate_relief, |params| params.relief),
-                    self.boreal_height_seed
-                        .unwrap_or(self.temperate_height_seed),
-                )
-            }
-        };
-        let shape = terrain_shape(height_seed, x, z, self.config.height_noise_scale_voxels);
-        let displacement = shape.saturating_mul(i64::from(relief)).div_euclid(1_024);
-        i32::try_from(i64::from(base).saturating_add(displacement)).unwrap_or(base)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct AxisBlend {
-    adjacent: i64,
-    current_weight: i64,
-}
-
-fn axis_blend(cell: i64, local: i64, edge: i64, width: i64) -> AxisBlend {
-    if local <= width {
-        AxisBlend {
-            adjacent: cell.saturating_sub(1),
-            current_weight: width.saturating_add(local),
-        }
-    } else {
-        let far_distance = edge.saturating_sub(1).saturating_sub(local);
-        if far_distance <= width {
-            AxisBlend {
-                adjacent: cell.saturating_add(1),
-                current_weight: width.saturating_add(far_distance),
-            }
-        } else {
-            AxisBlend {
-                adjacent: cell,
-                current_weight: width.saturating_mul(2),
-            }
-        }
-    }
-}
-
-fn blend_height(current: i64, adjacent: i64, current_weight: i64, denominator: i64) -> i64 {
-    current
-        .saturating_mul(current_weight)
-        .saturating_add(adjacent.saturating_mul(denominator.saturating_sub(current_weight)))
-        .div_euclid(denominator.max(1))
-}
-
-fn saturating_height(height: i64) -> i32 {
-    i32::try_from(height).unwrap_or_else(|_| {
-        if height.is_negative() {
-            i32::MIN
-        } else {
-            i32::MAX
-        }
-    })
-}
-
-fn height_seed(
-    seed: WorldSeedV1,
-    input_hash: GenerationInputHashV1,
-    provider: &ProviderGenerationIdentityV1,
-    style: TerrainStyleV1,
-) -> u64 {
-    hash_u64(
-        HEIGHT_DOMAIN,
-        &[
-            seed.as_bytes(),
-            input_hash.as_bytes(),
-            provider.provider_stable_id().as_str().as_bytes(),
-            provider.implementation_fingerprint().as_bytes(),
-            &[style.discriminant()],
-        ],
-    )
 }
 
 fn nearest_boundary(local_x: i64, local_z: i64, edge: i64) -> (BoundarySide, i64) {

@@ -199,8 +199,8 @@ fn two_underground_algorithms_are_distinct_and_preserve_outside_influence() {
     assert!(!outside_occupancy.is_raw_void());
     assert!(outside_occupancy.allows_solid_placement());
 
-    let graph_side = plan.cave_occupancy_arbitration(crystal[0], crystal[1], crystal[2] + 2);
-    let growth_side = plan.cave_occupancy_arbitration(limestone[0], limestone[1], limestone[2] + 2);
+    let graph_side = plan.cave_occupancy_arbitration(crystal[0], crystal[1], crystal[2] + 3);
+    let growth_side = plan.cave_occupancy_arbitration(limestone[0], limestone[1], limestone[2] + 3);
     assert!(graph_side.is_raw_void());
     assert!(!growth_side.is_raw_void());
 }

@@ -40,6 +40,7 @@ mod region;
 mod roles;
 mod seed;
 mod spawn;
+mod terrain_config;
 mod terrain_field;
 mod territory;
 
@@ -50,7 +51,8 @@ pub use cave::{
 pub use cave_topology::{
     CaveBranchContributorV1, CaveLayerCorridorV1, CaveLayerEntranceV1, CaveLayerPortalV1,
     CaveOwnedDomainV1, CaveTopologyAlgorithmV1, CaveTopologyLayerInputV1,
-    CaveVoxelPassabilityReceiptV1, cell_center_voxels, millimeters_to_voxels,
+    CaveVoxelPassabilityReceiptV1, cell_center_voxels, cell_center_voxels_at_edge,
+    millimeters_to_voxels,
 };
 pub use config::{WorldgenConfigV1, WorldgenLimitsV1};
 pub use epoch::{
@@ -68,7 +70,8 @@ pub use hashes::{
     AquiferBasinIdV1, BoundaryIdV1, CaveTopologyLayerHashV1, DrainageLinkIdV1, GenerationEpochIdV1,
     GenerationInputHashV1, GenerationProvenanceHashV1, GeneratorFingerprintV1,
     HydrologyOccupancyHashV1, LockedClosureFingerprintV1, NaturalLayerHashV1, PlanActivationIdV1,
-    PlanningCellIdV1, RiverBasinIdV1, SharedFaceHashV1, SnapshotChecksumV1, WorldgenConfigHashV1,
+    PlanningCellIdV1, RiverBasinIdV1, SharedFaceHashV1, SnapshotChecksumV1, TerrainConfigHashV2,
+    WorldgenConfigHashV1,
 };
 pub use hydrology::{
     AquiferSampleV1, DrainageSampleV1, HydrologyAccountingV1, HydrologyFaceContinuityV1,
@@ -90,12 +93,17 @@ pub use roles::{
     D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, D7_NATURAL_BLOCK_COUNT,
     FrozenRoleBindingsV1, NaturalRoleVocabularyV1,
 };
-pub use seed::WorldSeedV1;
+pub use seed::{WorldSeedV1, WorldgenSeedRootV2};
 pub use spawn::{
     AuthoredWorldgenBindingsV1, SpawnCellInspectionV1, SpawnCellOverrideV1, SpawnLocationV1,
     SpawnOccupancyViewV1, SpawnRejectV1, SpawnSearchBoundsV1, evaluate_spawn_column,
     inspect_spawn_cell, required_spawn_chunks, select_safe_spawn, select_safe_spawn_prefer_style,
 };
+pub use terrain_config::{
+    ClimateConfigV2, LandmassConfigV2, ReliefConfigV2, SurfaceWaterConfigV2, TerrainConfigV2,
+    TerrainPresetV2, UndergroundConfigV2, WorldBoundsV2,
+};
+pub use terrain_field::TerrainFamilyV2;
 pub use territory::{TerrainStyleV1, TerritoryQueryV1, TransitionMetadataV1};
 
 pub use latticeaxiom_storage::{

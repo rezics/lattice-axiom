@@ -8,6 +8,7 @@ use crate::hashes::concatenated_hash;
 
 const INTEGER_DOMAIN: &[u8] = b"latticeaxiom.world-seed.integer.v1\0";
 const TEXT_DOMAIN: &[u8] = b"latticeaxiom.world-seed.text.v1\0";
+const WORLDGEN_SEED_ROOT_DOMAIN: &[u8] = b"latticeaxiom.worldgen.seed-root.v2\0";
 
 /// Exact 32-byte world seed consumed by version-one generation algorithms.
 ///
@@ -49,6 +50,30 @@ impl WorldSeedV1 {
 impl fmt::Display for WorldSeedV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         CanonicalHash::from_bytes(self.0).fmt(formatter)
+    }
+}
+
+/// Version-two root for deterministic world-generation field seeds.
+///
+/// Only the persisted world seed contributes to this root. Generator
+/// revisions, provider fingerprints, package locks, and activation identities
+/// belong to provenance and compatibility checks; they must not silently
+/// re-roll unrelated terrain fields.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WorldgenSeedRootV2([u8; CanonicalHash::BYTE_LENGTH]);
+
+impl WorldgenSeedRootV2 {
+    /// Derives the version-two field root from a persisted world seed.
+    #[must_use]
+    pub fn from_world_seed(seed: WorldSeedV1) -> Self {
+        Self(concatenated_hash(WORLDGEN_SEED_ROOT_DOMAIN, &[seed.as_bytes()]).into_bytes())
+    }
+
+    /// Returns the exact root bytes consumed by stable field domains.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; CanonicalHash::BYTE_LENGTH] {
+        &self.0
     }
 }
 
@@ -115,5 +140,15 @@ mod tests {
         let encoded = serde_json::to_string(&seed).unwrap_or_default();
         assert_eq!(serde_json::from_str(&encoded).ok(), Some(seed));
         assert_eq!(encoded.len(), 66);
+    }
+
+    #[test]
+    fn worldgen_v2_root_depends_only_on_the_world_seed() {
+        let first = WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(42));
+        let second = WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(42));
+        let other = WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(43));
+
+        assert_eq!(first, second);
+        assert_ne!(first, other);
     }
 }

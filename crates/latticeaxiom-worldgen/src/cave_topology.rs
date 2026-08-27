@@ -14,9 +14,11 @@ use crate::{
 
 const TOPOLOGY_LAYER_DOMAIN: &[u8] = b"latticeaxiom.cave-topology-layer.v1\0";
 
-const COARSE_RADIUS_VOXELS: i64 = 3;
-const GRAPH_RADIUS_VOXELS: i64 = 2;
-const GROWTH_RADIUS_VOXELS: i64 = 1;
+const COARSE_RADIUS_VOXELS: i64 = 4;
+const GRAPH_RADIUS_VOXELS: i64 = 3;
+// A one-voxel radius is mathematically wider than the player capsule but is
+// not traversal-safe after voxelization at corridor and chunk boundaries.
+const GROWTH_RADIUS_VOXELS: i64 = 2;
 const INFLUENCE_RADIUS_VOXELS: i64 = 4;
 
 /// Distinct cave-topology algorithms used by the default domain and two children.
@@ -382,6 +384,8 @@ impl CaveVoxelPassabilityReceiptV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaveTopologyLayerInputV1 {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cell_edge_voxels: Option<u32>,
     default_domain: StableId,
     default_algorithm: CaveTopologyAlgorithmV1,
     domains: Vec<CaveOwnedDomainV1>,
@@ -471,6 +475,7 @@ impl CaveTopologyLayerInputV1 {
             ));
         }
         Ok(Self {
+            cell_edge_voxels: None,
             default_domain,
             default_algorithm,
             domains,
@@ -479,6 +484,27 @@ impl CaveTopologyLayerInputV1 {
             entrances,
             branch,
         })
+    }
+
+    /// Uses an explicit topology cell edge instead of the climate planning edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `cell_edge_voxels` is zero.
+    pub fn with_cell_edge_voxels(mut self, cell_edge_voxels: u32) -> WorldgenResult<Self> {
+        if cell_edge_voxels == 0 {
+            return Err(invalid_topology(
+                "topology cell edge must be greater than zero",
+            ));
+        }
+        self.cell_edge_voxels = Some(cell_edge_voxels);
+        Ok(self)
+    }
+
+    /// Returns the explicit topology cell edge, when authored.
+    #[must_use]
+    pub const fn cell_edge_voxels(&self) -> Option<u32> {
+        self.cell_edge_voxels
     }
 
     /// Returns the dimension-default topology domain.
@@ -545,6 +571,7 @@ impl CaveTopologyLayerInputV1 {
 #[derive(Clone, Debug)]
 pub(crate) struct TopologyFieldV1 {
     config: WorldgenConfigV1,
+    cell_edge_voxels: i64,
     default_domain: StableId,
     default_algorithm: CaveTopologyAlgorithmV1,
     domains: Vec<CaveOwnedDomainV1>,
@@ -577,8 +604,13 @@ impl TopologyOccupancySampleV1 {
 
 impl TopologyFieldV1 {
     pub(crate) fn compile(config: WorldgenConfigV1, layer: CaveTopologyLayerInputV1) -> Self {
+        let cell_edge_voxels = layer
+            .cell_edge_voxels
+            .map_or_else(|| planning_edge(&config), i64::from)
+            .max(1);
         Self {
             config,
+            cell_edge_voxels,
             default_domain: layer.default_domain,
             default_algorithm: layer.default_algorithm,
             domains: layer.domains,
@@ -615,6 +647,10 @@ impl TopologyFieldV1 {
 
     pub(crate) const fn branch(&self) -> &CaveBranchContributorV1 {
         &self.branch
+    }
+
+    pub(crate) fn cell_edge_voxels(&self) -> u32 {
+        u32::try_from(self.cell_edge_voxels).unwrap_or(u32::MAX)
     }
 
     pub(crate) fn in_declared_influence(&self, x: i64, y: i64, z: i64) -> bool {
@@ -774,12 +810,12 @@ impl TopologyFieldV1 {
     }
 
     fn planning_cell(&self, x: i64, z: i64) -> (i64, i64) {
-        let edge = planning_edge(&self.config);
+        let edge = self.cell_edge_voxels;
         (x.div_euclid(edge), z.div_euclid(edge))
     }
 
     fn cell_center(&self, cell_x: i64, cell_z: i64) -> (i64, i64) {
-        let edge = planning_edge(&self.config);
+        let edge = self.cell_edge_voxels;
         let half = edge.saturating_div(2);
         (
             cell_x.saturating_mul(edge).saturating_add(half),
@@ -1038,7 +1074,23 @@ pub fn cell_center_voxels(
     y_millimeters: i64,
     config: &WorldgenConfigV1,
 ) -> [i64; 3] {
-    let edge = planning_edge(config);
+    cell_center_voxels_at_edge(
+        cell_x,
+        cell_z,
+        y_millimeters,
+        u32::try_from(planning_edge(config)).unwrap_or(u32::MAX),
+    )
+}
+
+/// Converts a topology cell and y-millimeter height into a voxel center.
+#[must_use]
+pub fn cell_center_voxels_at_edge(
+    cell_x: i64,
+    cell_z: i64,
+    y_millimeters: i64,
+    cell_edge_voxels: u32,
+) -> [i64; 3] {
+    let edge = i64::from(cell_edge_voxels).max(1);
     let half = edge.saturating_div(2);
     [
         cell_x.saturating_mul(edge).saturating_add(half),

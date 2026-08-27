@@ -215,6 +215,59 @@ fn same_provider_revision_cannot_claim_two_fingerprints() {
 }
 
 #[test]
+fn coordinator_revision_changes_provenance_without_rerolling_fields() {
+    let first = fixture_plan(false, &[b"lock-a"]);
+    let mut offers = provider_offers(false);
+    let position = offers
+        .iter()
+        .position(|offer| offer.slot() == ProviderSlotV1::GenerationCoordinator)
+        .expect("fixture contains the generation coordinator");
+    offers[position] = ProviderOfferV1::new(
+        ProviderSlotV1::GenerationCoordinator,
+        ProviderGenerationIdentityV1::new(
+            stable_id("fixture:worldgen-provider/coordinator@1"),
+            NonZeroU32::MIN,
+            8,
+            CanonicalHash::digest(b"coordinator-implementation-v8"),
+        ),
+    );
+    let second = GenerationPlanV1::compile(fixture_input_with_defaults(offers))
+        .expect("updated coordinator plan compiles");
+
+    assert_eq!(first.seed_root(), second.seed_root());
+    assert_ne!(
+        first.generation_input_hash(),
+        second.generation_input_hash()
+    );
+    assert_ne!(first.generation_epoch(), second.generation_epoch());
+    for z in (-256..=256).step_by(17) {
+        for x in (-256..=256).step_by(17) {
+            assert_eq!(first.terrain_height(x, z), second.terrain_height(x, z));
+            assert_eq!(first.material_style(x, z), second.material_style(x, z));
+        }
+    }
+    let coordinate = ChunkCoordinate::new(-3, 2, 5);
+    let first_outcome = first
+        .generate(vacant_request(coordinate))
+        .expect("first coordinator generates");
+    let second_outcome = second
+        .generate(vacant_request(coordinate))
+        .expect("updated coordinator generates");
+    assert_eq!(
+        prepared(&first_outcome).draft(),
+        prepared(&second_outcome).draft()
+    );
+    assert_ne!(
+        prepared(&first_outcome).snapshot_bytes(),
+        prepared(&second_outcome).snapshot_bytes()
+    );
+    assert_ne!(
+        prepared(&first_outcome).receipt().canonical_bytes().ok(),
+        prepared(&second_outcome).receipt().canonical_bytes().ok()
+    );
+}
+
+#[test]
 fn lock_provenance_does_not_become_prng_salt() {
     let first = fixture_plan(false, &[b"artifact-a"]);
     let second = fixture_plan(false, &[b"artifact-b"]);
@@ -901,29 +954,35 @@ fn style_materialization_uses_role_resolved_concrete_blocks() {
 fn deterministic_two_style_corpus_materializes_every_required_role() {
     let plan = fixture_plan(false, &[b"lock-a"]);
     let mut used = BTreeSet::<StableId>::new();
-    'search: for chunk_z in -12..=12 {
-        for chunk_x in -12..=12 {
-            let world_x = i64::from(chunk_x).saturating_mul(8).saturating_add(4);
-            let world_z = i64::from(chunk_z).saturating_mul(8).saturating_add(4);
-            let surface_chunk_y = plan.terrain_height(world_x, world_z).div_euclid(8);
-            for offset_y in -3..=1 {
-                let coordinate = ChunkCoordinate::new(
-                    chunk_x,
-                    surface_chunk_y.saturating_add(offset_y),
-                    chunk_z,
-                );
-                let outcome = plan
-                    .generate(vacant_request(coordinate))
-                    .expect("bounded role corpus chunk generates");
-                let draft = prepared(&outcome).draft();
-                for index in draft.voxel_palette_indices() {
-                    used.insert(draft.palette()[usize::from(*index)].clone());
-                }
-                if ROLE_TARGETS
-                    .iter()
-                    .all(|(_, path)| used.contains(&block_id(path)))
-                {
-                    break 'search;
+    'search: for style in [
+        TerrainStyleV1::TemperateWoodland,
+        TerrainStyleV1::AridBadlands,
+    ] {
+        let center = find_surface_chunk(&plan, style);
+        for chunk_z in center.z.saturating_sub(12)..=center.z.saturating_add(12) {
+            for chunk_x in center.x.saturating_sub(12)..=center.x.saturating_add(12) {
+                let world_x = i64::from(chunk_x).saturating_mul(8).saturating_add(4);
+                let world_z = i64::from(chunk_z).saturating_mul(8).saturating_add(4);
+                let surface_chunk_y = plan.terrain_height(world_x, world_z).div_euclid(8);
+                for offset_y in -3..=1 {
+                    let coordinate = ChunkCoordinate::new(
+                        chunk_x,
+                        surface_chunk_y.saturating_add(offset_y),
+                        chunk_z,
+                    );
+                    let outcome = plan
+                        .generate(vacant_request(coordinate))
+                        .expect("bounded role corpus chunk generates");
+                    let draft = prepared(&outcome).draft();
+                    for index in draft.voxel_palette_indices() {
+                        used.insert(draft.palette()[usize::from(*index)].clone());
+                    }
+                    if ROLE_TARGETS
+                        .iter()
+                        .all(|(_, path)| used.contains(&block_id(path)))
+                    {
+                        break 'search;
+                    }
                 }
             }
         }
@@ -1150,9 +1209,9 @@ fn fixed_algorithm_hashes_match_known_answer_vectors() {
             "d50126fa9254fe1f5426e2f31d93ec43340d81506f6444e59662ce55198a9c9d".to_owned(),
             "27cc4f80bd6fe8f530ed76d60cd9e4cda9dbe1b062787bfa122085ae83fb57c4".to_owned(),
             "52898402e6d702372b222dba71d84b0b1bc4111800d40c74ad3ef3808401112c".to_owned(),
-            "1a6ab5de5bdcacb671498b32b46085b01e25de2ff2e31fb9b5f5fced97c40e09".to_owned(),
-            "b9d34472374d7b3a1558cca99e820e2243f531aed9044d2c04cf3243bbea820b".to_owned(),
-            "82dd0cd7c0ee48cfb094fce6c42a31350500f0193a7cfb64242735587314cce2".to_owned(),
+            "81e0f2c8ca3d68c14a7aae3d12b2638f0716db94d8fc1411932d1ccaedc0a896".to_owned(),
+            "adfe9dab6e17a3c55c290b32be645a016ab785386e57aeb0c570be3bb60cd8f3".to_owned(),
+            "84bea3380630d2c9f9b6d94187a8c35d9d83ab880e674339773ff428597734fc".to_owned(),
         ]
     );
 }
@@ -1165,7 +1224,7 @@ fn fixed_d4_snapshot_has_stable_golden_checksum() {
         .expect("golden chunk generates");
     assert_eq!(
         prepared(&outcome).checksum().to_string(),
-        "6f49fbbbf9aaaeddf2e5812ae406ae1e32eb500b1dc4f388f2be0d08cacab9bb"
+        "f835d1e4b05d34697670e2a119b8db0045e209b5bb5a3df18c76e3127117f028"
     );
 }
 
@@ -1190,13 +1249,13 @@ fn both_style_surface_snapshots_have_independent_goldens() {
         vec![
             (
                 TerrainStyleV1::TemperateWoodland,
-                ChunkCoordinate::new(-214, 2, -255),
-                "4152ed038eddeb819c188505aa4faf0e5258d9879ff0fa4eb3c2ba0c4a8edd2d".to_owned(),
+                ChunkCoordinate::new(-191, -3, -252),
+                "1476df8cb78759e6d27bf64eae322c5d4f0d421a8e7b30dc20fcf3f4eb30bd43".to_owned(),
             ),
             (
                 TerrainStyleV1::AridBadlands,
-                ChunkCoordinate::new(-108, 2, -255),
-                "60b2483c0d7fbc5e74c0512ea135d631798dad79334249540bcad2499d57ca5a".to_owned(),
+                ChunkCoordinate::new(-255, -2, -252),
+                "77427b7592cd4e2efae5077b51a69b7645a50f4fa2eb3a34e387f8a5564a2da5".to_owned(),
             ),
         ]
     );

@@ -5,9 +5,8 @@ use latticeaxiom_storage::ChunkCoordinate;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CaveTopologyAlgorithmV1, CaveVoxelPassabilityReceiptV1, GenerationInputHashV1,
-    ProviderGenerationIdentityV1, SharedFaceHashV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
-    WorldgenResult,
+    CaveTopologyAlgorithmV1, CaveVoxelPassabilityReceiptV1, SharedFaceHashV1, WorldgenConfigV1,
+    WorldgenError, WorldgenResult, WorldgenSeedRootV2,
     cave_topology::{CaveTopologyLayerInputV1, TopologyFieldV1},
     hashes::{domain_hash, hash_u64, sample_hash_3d},
 };
@@ -406,40 +405,21 @@ struct PortalContractV1 {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CaveSamplerV1 {
-    seed: WorldSeedV1,
-    input_hash: GenerationInputHashV1,
+    seed_root: WorldgenSeedRootV2,
     config: WorldgenConfigV1,
-    provider: ProviderGenerationIdentityV1,
     void_seed: u64,
     branch_seed: u64,
     topology: Option<TopologyFieldV1>,
 }
 
 impl CaveSamplerV1 {
-    pub(crate) fn new(
-        seed: WorldSeedV1,
-        input_hash: GenerationInputHashV1,
-        config: WorldgenConfigV1,
-        provider: ProviderGenerationIdentityV1,
-    ) -> Self {
-        let sample_seed = |domain| {
-            hash_u64(
-                domain,
-                &[
-                    seed.as_bytes(),
-                    input_hash.as_bytes(),
-                    provider.provider_stable_id().as_str().as_bytes(),
-                    provider.implementation_fingerprint().as_bytes(),
-                ],
-            )
-        };
+    pub(crate) fn new(seed_root: WorldgenSeedRootV2, config: WorldgenConfigV1) -> Self {
+        let sample_seed = |domain| hash_u64(domain, &[seed_root.as_bytes()]);
         let void_seed = sample_seed(CAVE_VOID_DOMAIN);
         let branch_seed = sample_seed(CAVE_BRANCH_DOMAIN);
         Self {
-            seed,
-            input_hash,
+            seed_root,
             config,
-            provider,
             void_seed,
             branch_seed,
             topology: None,
@@ -607,10 +587,7 @@ impl CaveSamplerV1 {
         Ok(SharedFaceKeyV1(SharedFaceHashV1::from_hash(domain_hash(
             SHARED_FACE_DOMAIN,
             &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.provider.provider_stable_id().as_str().as_bytes(),
-                self.provider.implementation_fingerprint().as_bytes(),
+                self.seed_root.as_bytes(),
                 &axis,
                 &first_bytes,
                 &second_bytes,
@@ -904,16 +881,10 @@ pub(crate) fn snapshot_checksum(bytes: &[u8]) -> crate::SnapshotChecksumV1 {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
-    use latticeaxiom_core::{CanonicalHash, StableId};
     use latticeaxiom_storage::ChunkCoordinate;
 
     use super::{CaveFieldPortalPlanV1, CaveSamplerV1, ChunkFaceV1};
-    use crate::{
-        GenerationInputHashV1, ProviderGenerationIdentityV1, WorldSeedV1, WorldgenConfigV1,
-        WorldgenError,
-    };
+    use crate::{WorldSeedV1, WorldgenConfigV1, WorldgenError, WorldgenSeedRootV2};
 
     #[test]
     fn shared_face_requests_are_direction_independent_from_both_sides() {
@@ -1106,17 +1077,8 @@ mod tests {
             ..WorldgenConfigV1::default()
         };
         CaveSamplerV1::new(
-            WorldSeedV1::from_integer(42),
-            GenerationInputHashV1::from_hash(CanonicalHash::digest(b"cave-occupancy-test")),
+            WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(42)),
             config,
-            ProviderGenerationIdentityV1::new(
-                "fixture:worldgen-provider/cave@1"
-                    .parse::<StableId>()
-                    .expect("fixture cave provider identity is valid"),
-                NonZeroU32::MIN,
-                8,
-                CanonicalHash::digest(b"cave-implementation-v8"),
-            ),
         )
     }
 }

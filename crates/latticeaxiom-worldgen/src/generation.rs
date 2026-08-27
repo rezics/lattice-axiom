@@ -16,8 +16,9 @@ use crate::{
     HydrologyOccupancyHashV1, HydrologyOccupancyInputV1, HydrologyOccupancySampleV1,
     LockedClosureFingerprintV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
     ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, ResourceFieldSampleV1,
-    RiverSampleV1, SnapshotChecksumV1, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1,
-    WorldgenConfigHashV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult,
+    RiverSampleV1, SnapshotChecksumV1, TerrainConfigHashV2, TerrainConfigV2, TerrainFamilyV2,
+    TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1, WorldgenConfigV1,
+    WorldgenError, WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
     cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
     hashes::{concatenated_hash, domain_hash, hash_u64, sample_hash_3d},
@@ -46,6 +47,8 @@ pub struct GenerationPlanInputV1 {
     dimension: DimensionId,
     world_seed: WorldSeedV1,
     config: WorldgenConfigV1,
+    terrain_config: TerrainConfigV2,
+    terrain_config_explicit: bool,
     generation_plan_revision: u64,
     plan_activation_id: PlanActivationIdV1,
     provider_offers: Vec<ProviderOfferV1>,
@@ -81,10 +84,13 @@ impl GenerationPlanInputV1 {
         locked_receipts: Vec<CanonicalHash>,
         limits: WorldgenLimitsV1,
     ) -> Self {
+        let terrain_config = TerrainConfigV2::for_legacy_spine(&config);
         Self {
             dimension,
             world_seed,
             config,
+            terrain_config,
+            terrain_config_explicit: false,
             generation_plan_revision,
             plan_activation_id,
             provider_offers,
@@ -98,6 +104,14 @@ impl GenerationPlanInputV1 {
             cave_topology: None,
             hydrology_occupancy: None,
         }
+    }
+
+    /// Replaces the compatibility terrain profile with a resolved V2 config.
+    #[must_use]
+    pub const fn with_terrain_config(mut self, terrain_config: TerrainConfigV2) -> Self {
+        self.terrain_config = terrain_config;
+        self.terrain_config_explicit = true;
+        self
     }
 
     /// Attaches the optional V5 natural layer. D4-only plans omit this.
@@ -342,6 +356,7 @@ pub struct GenerationReceiptV1 {
     generation_plan_revision: u64,
     generation_epoch: GenerationEpochIdV1,
     config_hash: WorldgenConfigHashV1,
+    terrain_config_hash: TerrainConfigHashV2,
     generator_fingerprint: GeneratorFingerprintV1,
     locked_closure_fingerprint: LockedClosureFingerprintV1,
     generation_input_hash: GenerationInputHashV1,
@@ -555,13 +570,16 @@ pub enum ChunkGenerationOutcomeV1 {
 pub struct GenerationPlanV1 {
     dimension: DimensionId,
     world_seed: WorldSeedV1,
+    seed_root: WorldgenSeedRootV2,
     config: WorldgenConfigV1,
+    terrain_config: TerrainConfigV2,
     generation_plan_revision: u64,
     plan_activation_id: PlanActivationIdV1,
     providers: ResolvedProvidersV1,
     roles: Vec<RoleBindingReceiptV1>,
     role_targets: BTreeMap<D4MaterialRoleV1, StableId>,
     config_hash: WorldgenConfigHashV1,
+    terrain_config_hash: TerrainConfigHashV2,
     generator_fingerprint: GeneratorFingerprintV1,
     locked_closure_fingerprint: LockedClosureFingerprintV1,
     generation_input_hash: GenerationInputHashV1,
@@ -592,6 +610,13 @@ impl GenerationPlanV1 {
     pub fn compile(input: GenerationPlanInputV1) -> WorldgenResult<Self> {
         preflight_plan_limits(&input)?;
         input.config.validate()?;
+        if input.terrain_config_explicit {
+            input.terrain_config.validate_against(&input.config)?;
+        } else {
+            input
+                .terrain_config
+                .validate_legacy_against(&input.config)?;
+        }
         preflight_plan_input_bytes(&input)?;
         let roles = resolve_roles(
             &input.role_vocabulary,
@@ -607,6 +632,8 @@ impl GenerationPlanV1 {
             .collect::<BTreeMap<_, _>>();
         let config_bytes = input.config.canonical_bytes()?;
         let config_hash = input.config.canonical_hash()?;
+        let terrain_config_bytes = input.terrain_config.canonical_bytes()?;
+        let terrain_config_hash = input.terrain_config.canonical_hash()?;
         let provider_bytes = encode_canonical("resolved providers", &providers.ordered())?;
         let role_bytes = encode_canonical("frozen D4 role receipts", &roles)?;
         let generator_fingerprint = providers.fingerprint();
@@ -620,11 +647,13 @@ impl GenerationPlanV1 {
             &[locked_bytes.as_slice()],
         ));
         let revision_bytes = input.generation_plan_revision.to_be_bytes();
+        let seed_root = WorldgenSeedRootV2::from_world_seed(input.world_seed);
         let d4_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
             GENERATION_INPUT_DOMAIN,
             &[
                 input.world_seed.as_bytes(),
                 config_bytes.as_slice(),
+                terrain_config_bytes.as_slice(),
                 &revision_bytes,
                 provider_bytes.as_slice(),
                 input.authoritative_semantic_receipt.as_bytes(),
@@ -643,32 +672,25 @@ impl GenerationPlanV1 {
                 &revision_bytes,
                 input.authoritative_semantic_receipt.as_bytes(),
                 config_hash.as_bytes(),
+                terrain_config_hash.as_bytes(),
                 provider_bytes.as_slice(),
             ],
         ));
 
         let mut territory = TerritorySamplerV1::new(
-            input.world_seed,
+            seed_root,
             d4_input_hash,
             input.config.clone(),
-            providers.identity(ProviderSlotV1::StyleSelector),
+            input.terrain_config,
             providers
                 .identity(ProviderSlotV1::TerrainTransition)
                 .clone(),
-            providers.identity(ProviderSlotV1::TemperateTerrain),
-            providers.identity(ProviderSlotV1::AridTerrain),
         );
-        let mut cave = CaveSamplerV1::new(
-            input.world_seed,
-            d4_input_hash,
-            input.config.clone(),
-            providers.identity(ProviderSlotV1::CaveTopology).clone(),
-        );
+        let mut cave = CaveSamplerV1::new(seed_root, input.config.clone());
         let mut roles = roles;
         let natural = if let Some(layer) = input.natural_layer {
             let sampler = NaturalSamplerV1::compile(
-                input.world_seed,
-                d4_input_hash,
+                seed_root,
                 &input.config,
                 input.limits,
                 layer,
@@ -716,9 +738,9 @@ impl GenerationPlanV1 {
         }
         let hydrology = match (input.hydrology_occupancy, natural.as_ref()) {
             (Some(layer), Some(natural_sampler)) => Some(HydrologySamplerV1::compile(
-                input.world_seed,
-                d4_input_hash,
+                seed_root,
                 &input.config,
+                &input.terrain_config,
                 natural_sampler,
                 layer,
             )?),
@@ -727,38 +749,23 @@ impl GenerationPlanV1 {
             }
             (None, _) => None,
         };
-        let material_seed = hash_u64(
-            MATERIAL_DOMAIN,
-            &[
-                input.world_seed.as_bytes(),
-                generation_input_hash.as_bytes(),
-            ],
-        );
-        let tree_seed = hash_u64(
-            TREE_DOMAIN,
-            &[
-                input.world_seed.as_bytes(),
-                generation_input_hash.as_bytes(),
-            ],
-        );
-        let ground_cover_seed = hash_u64(
-            GROUND_COVER_DOMAIN,
-            &[
-                input.world_seed.as_bytes(),
-                generation_input_hash.as_bytes(),
-            ],
-        );
+        let material_seed = hash_u64(MATERIAL_DOMAIN, &[seed_root.as_bytes()]);
+        let tree_seed = hash_u64(TREE_DOMAIN, &[seed_root.as_bytes()]);
+        let ground_cover_seed = hash_u64(GROUND_COVER_DOMAIN, &[seed_root.as_bytes()]);
 
         Ok(Self {
             dimension: input.dimension,
             world_seed: input.world_seed,
+            seed_root,
             config: input.config,
+            terrain_config: input.terrain_config,
             generation_plan_revision: input.generation_plan_revision,
             plan_activation_id: input.plan_activation_id,
             providers,
             roles,
             role_targets,
             config_hash,
+            terrain_config_hash,
             generator_fingerprint,
             locked_closure_fingerprint,
             generation_input_hash,
@@ -793,10 +800,22 @@ impl GenerationPlanV1 {
         self.world_seed
     }
 
+    /// Returns the version-two field root isolated from provenance revisions.
+    #[must_use]
+    pub const fn seed_root(&self) -> WorldgenSeedRootV2 {
+        self.seed_root
+    }
+
     /// Returns the closed integer configuration compiled into this plan.
     #[must_use]
     pub const fn config(&self) -> &WorldgenConfigV1 {
         &self.config
+    }
+
+    /// Returns the fully resolved Worldgen V2 terrain configuration.
+    #[must_use]
+    pub const fn terrain_config(&self) -> &TerrainConfigV2 {
+        &self.terrain_config
     }
 
     /// Returns the concrete block bound to a compiled D4 material purpose.
@@ -814,6 +833,12 @@ impl GenerationPlanV1 {
     #[must_use]
     pub const fn config_hash(&self) -> WorldgenConfigHashV1 {
         self.config_hash
+    }
+
+    /// Returns the canonical resolved terrain-configuration hash.
+    #[must_use]
+    pub const fn terrain_config_hash(&self) -> TerrainConfigHashV2 {
+        self.terrain_config_hash
     }
 
     /// Returns the aggregate generator fingerprint.
@@ -924,6 +949,14 @@ impl GenerationPlanV1 {
             .map(crate::cave_topology::TopologyFieldV1::entrances)
     }
 
+    /// Returns the resolved topology cell edge in world voxels.
+    #[must_use]
+    pub fn cave_topology_cell_edge_voxels(&self) -> Option<u32> {
+        self.cave
+            .topology()
+            .map(crate::cave_topology::TopologyFieldV1::cell_edge_voxels)
+    }
+
     /// Returns the bounded branch contributor compiled into topology.
     #[must_use]
     pub fn cave_topology_branch(&self) -> Option<&crate::CaveBranchContributorV1> {
@@ -954,6 +987,18 @@ impl GenerationPlanV1 {
         self.natural
             .as_ref()
             .map_or(height, |natural| natural.adjust_height(x, z, height))
+    }
+
+    /// Returns the inclusive standing-water level of an inland lake basin.
+    #[must_use]
+    pub fn surface_water_level(&self, x: i64, z: i64) -> Option<i32> {
+        self.territory.surface_water_y(x, z)
+    }
+
+    /// Returns the macro shape family independently from climate materials.
+    #[must_use]
+    pub fn terrain_family(&self, x: i64, z: i64) -> TerrainFamilyV2 {
+        self.territory.family(x, z)
     }
 
     /// Returns the locally queryable surface river sample at world `(x, z)`.
@@ -1024,6 +1069,7 @@ impl GenerationPlanV1 {
             occupancy.allows_fluid_occupancy(),
             self.river_sample(x, z),
             style,
+            self.surface_water_level(x, z),
         ))
     }
 
@@ -1107,6 +1153,7 @@ impl GenerationPlanV1 {
                     height,
                     self.river_sample(world_x, world_z),
                     style,
+                    self.surface_water_level(world_x, world_z),
                 ));
             }
         }
@@ -1443,6 +1490,7 @@ impl GenerationPlanV1 {
             generation_plan_revision: self.generation_plan_revision,
             generation_epoch: self.generation_epoch,
             config_hash: self.config_hash,
+            terrain_config_hash: self.terrain_config_hash,
             generator_fingerprint: self.generator_fingerprint,
             locked_closure_fingerprint: self.locked_closure_fingerprint,
             generation_input_hash: self.generation_input_hash,
@@ -2290,6 +2338,11 @@ struct SnapshotEnvelopeV1<'a> {
 
 fn preflight_plan_input_bytes(input: &GenerationPlanInputV1) -> WorldgenResult<()> {
     let mut total = 4_096_u64;
+    add_plan_bytes(
+        &mut total,
+        input.terrain_config.canonical_bytes()?.len(),
+        "terrain config bytes",
+    )?;
     add_plan_bytes(
         &mut total,
         input.dimension.as_str().len(),

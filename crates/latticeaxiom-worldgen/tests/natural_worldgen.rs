@@ -15,8 +15,8 @@ use latticeaxiom_worldgen::{
     ChunkGenerationOutcomeV1, ChunkGenerationRequestV1, D4MaterialRoleV1, D7_NATURAL_BLOCK_COUNT,
     DimensionId, ExistingSnapshotEvidenceV1, GenerationPlanInputV1, GenerationPlanV1,
     NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, WorldSeedV1, WorldgenConfigV1,
-    WorldgenError, WorldgenLimitsV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
+    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
 };
 use proptest::prelude::*;
 
@@ -156,10 +156,23 @@ fn river_distance_is_lipschitz_across_coarse_cell_boundaries() {
 fn exclusion_radius_rejects_closer_tree_anchors() {
     let plan = natural_plan(42, false);
     let radius = 5_i64;
+    let planning_edge = i64::from(plan.config().chunk_edge_voxels)
+        .saturating_mul(i64::from(plan.config().planning_cell_edge_chunks));
+    let sea = plan.terrain_config().world.sea_level_y;
+    let (center_x, center_z) = (-32_i64..=32)
+        .flat_map(|cell_z| (-32_i64..=32).map(move |cell_x| (cell_x, cell_z)))
+        .find_map(|(cell_x, cell_z)| {
+            let x = cell_x.saturating_mul(planning_edge);
+            let z = cell_z.saturating_mul(planning_edge);
+            (plan.territory_query(x, z).winner() == TerrainStyleV1::TemperateWoodland
+                && plan.terrain_height(x, z) > sea)
+                .then_some((x, z))
+        })
+        .expect("fixture seed contains dry temperate terrain");
     let mut drafts = std::collections::BTreeMap::new();
     let mut accepted = Vec::new();
-    for z in -16..16 {
-        for x in -16..16 {
+    for z in center_z.saturating_sub(32)..center_z.saturating_add(32) {
+        for x in center_x.saturating_sub(32)..center_x.saturating_add(32) {
             if is_natural_tree_column(&plan, x, z, &mut drafts) {
                 accepted.push((x, z));
             }
@@ -396,7 +409,8 @@ fn is_natural_tree_column(
     drafts: &mut std::collections::BTreeMap<ChunkCoordinate, latticeaxiom_worldgen::ChunkDraftV1>,
 ) -> bool {
     let height = i64::from(plan.terrain_height(x, z));
-    let chunk = column_chunk(x, z);
+    let trunk_y = height.saturating_add(1);
+    let chunk = column_chunk(x, trunk_y, z);
     let draft = drafts.entry(chunk).or_insert_with(|| {
         let outcome = plan
             .generate(plan.vacant_generation_request(chunk).unwrap())
@@ -416,7 +430,6 @@ fn is_natural_tree_column(
     let Ok(local_z) = u16::try_from(z.saturating_sub(origin_z)) else {
         return false;
     };
-    let trunk_y = height.saturating_add(1);
     let Ok(local_y) = u16::try_from(trunk_y.saturating_sub(origin_y)) else {
         return false;
     };
@@ -427,10 +440,10 @@ fn is_natural_tree_column(
         || block == plan.role_target(D4MaterialRoleV1::BorealLog)
 }
 
-fn column_chunk(x: i64, z: i64) -> ChunkCoordinate {
+fn column_chunk(x: i64, y: i64, z: i64) -> ChunkCoordinate {
     ChunkCoordinate::new(
         i32::try_from(x.div_euclid(16)).unwrap_or_default(),
-        1,
+        i32::try_from(y.div_euclid(16)).unwrap_or_default(),
         i32::try_from(z.div_euclid(16)).unwrap_or_default(),
     )
 }

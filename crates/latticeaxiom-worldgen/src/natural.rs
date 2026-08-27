@@ -8,11 +8,11 @@ use latticeaxiom_core::canonical_json_bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    D4BlockCatalogClosureV1, D4MaterialRoleV1, FrozenRoleBindingsV1, GenerationInputHashV1,
-    NaturalLayerHashV1, NaturalRoleVocabularyV1, PlacementPredicateKindV1,
-    PlacementPredicateReceiptV1, ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1,
-    RiverBasinIdV1, RoleBindingReceiptV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1,
-    WorldgenError, WorldgenLimitsV1, WorldgenResult,
+    D4BlockCatalogClosureV1, D4MaterialRoleV1, FrozenRoleBindingsV1, NaturalLayerHashV1,
+    NaturalRoleVocabularyV1, PlacementPredicateKindV1, PlacementPredicateReceiptV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, RiverBasinIdV1,
+    RoleBindingReceiptV1, TerrainStyleV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
+    WorldgenResult, WorldgenSeedRootV2,
     config::MAX_TERRAIN_RELIEF,
     hashes::{domain_hash, hash_u64, sample_hash_2d, sample_hash_3d},
     provider::ResolvedProvidersV1,
@@ -122,11 +122,11 @@ impl NaturalLayerConfigV1 {
             "river_cell_edge_voxels",
             self.river_cell_edge_voxels,
             8,
-            256,
+            4_096,
         )?;
         bounded_u16("river_width_voxels", self.river_width_voxels, 1, 16)?;
         bounded_u16("river_accumulation", self.river_accumulation, 1, 32)?;
-        bounded_u16("river_incision_voxels", self.river_incision_voxels, 0, 8)?;
+        bounded_u16("river_incision_voxels", self.river_incision_voxels, 0, 64)?;
         bounded_u16(
             "tree_exclusion_radius_voxels",
             self.tree_exclusion_radius_voxels,
@@ -311,8 +311,7 @@ impl ResourceFieldSampleV1 {
 /// Compiled, allocation-light V5 sampler used by chunk materialization.
 #[derive(Clone, Debug)]
 pub(crate) struct NaturalSamplerV1 {
-    seed: WorldSeedV1,
-    input_hash: GenerationInputHashV1,
+    seed_root: WorldgenSeedRootV2,
     config: NaturalLayerConfigV1,
     layer_hash: NaturalLayerHashV1,
     hydrology: ProviderGenerationIdentityV1,
@@ -332,8 +331,7 @@ impl NaturalSamplerV1 {
         reason = "natural-layer compilation keeps hash inputs explicit"
     )]
     pub(crate) fn compile(
-        seed: WorldSeedV1,
-        input_hash: GenerationInputHashV1,
+        seed_root: WorldgenSeedRootV2,
         spine: &WorldgenConfigV1,
         limits: WorldgenLimitsV1,
         layer: NaturalLayerInputV1,
@@ -357,30 +355,14 @@ impl NaturalSamplerV1 {
         let resources = required_natural(&resolved, ProviderSlotV1::Resources)?.clone();
         let vegetation = required_natural(&resolved, ProviderSlotV1::Vegetation)?.clone();
         let boreal_provider = required_natural(&resolved, ProviderSlotV1::BorealTerrain)?.clone();
-        let basin_seed = natural_sample_seed(BASIN_DOMAIN, seed, input_hash, &hydrology);
-        let geology_seed = natural_sample_seed(GEOLOGY_DOMAIN, seed, input_hash, &geology);
-        let resource_seed = natural_sample_seed(RESOURCE_DOMAIN, seed, input_hash, &resources);
-        let tree_seed = natural_sample_seed(TREE_DOMAIN, seed, input_hash, &vegetation);
-        let cover_seed = natural_sample_seed(COVER_DOMAIN, seed, input_hash, &vegetation);
+        let basin_seed = natural_sample_seed(BASIN_DOMAIN, seed_root);
+        let geology_seed = natural_sample_seed(GEOLOGY_DOMAIN, seed_root);
+        let resource_seed = natural_sample_seed(RESOURCE_DOMAIN, seed_root);
+        let tree_seed = natural_sample_seed(TREE_DOMAIN, seed_root);
+        let cover_seed = natural_sample_seed(COVER_DOMAIN, seed_root);
         let river_warp_seeds = [
-            hash_u64(
-                BASIN_DOMAIN,
-                &[
-                    seed.as_bytes(),
-                    input_hash.as_bytes(),
-                    hydrology.implementation_fingerprint().as_bytes(),
-                    b"river-warp-z",
-                ],
-            ),
-            hash_u64(
-                BASIN_DOMAIN,
-                &[
-                    seed.as_bytes(),
-                    input_hash.as_bytes(),
-                    hydrology.implementation_fingerprint().as_bytes(),
-                    b"river-warp-x",
-                ],
-            ),
+            hash_u64(BASIN_DOMAIN, &[seed_root.as_bytes(), b"river-warp-z"]),
+            hash_u64(BASIN_DOMAIN, &[seed_root.as_bytes(), b"river-warp-x"]),
         ];
         let receipts = resolve_natural_roles(&layer.vocabulary, bindings, catalog, d4_targets)?;
         let receipt_bytes =
@@ -406,8 +388,7 @@ impl NaturalSamplerV1 {
             ],
         ));
         Ok(Self {
-            seed,
-            input_hash,
+            seed_root,
             config: layer.config,
             layer_hash,
             hydrology,
@@ -417,11 +398,7 @@ impl NaturalSamplerV1 {
             tree_seed,
             cover_seed,
             river_warp_seeds,
-            boreal: BorealTerrainParamsV1 {
-                provider: boreal_provider,
-                base_height: layer.config.boreal_base_height,
-                relief: layer.config.boreal_relief,
-            },
+            boreal: BorealTerrainParamsV1,
             receipts,
         })
     }
@@ -451,9 +428,7 @@ impl NaturalSamplerV1 {
         let basin = RiverBasinIdV1::from_hash(domain_hash(
             BASIN_DOMAIN,
             &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.hydrology.implementation_fingerprint().as_bytes(),
+                self.seed_root.as_bytes(),
                 &local.cell_x.to_be_bytes(),
                 &local.cell_z.to_be_bytes(),
             ],
@@ -835,20 +810,8 @@ pub(crate) struct NaturalWorkCountersV1 {
     pub(crate) ground_cover_accepts: u64,
 }
 
-fn natural_sample_seed(
-    domain: &[u8],
-    seed: WorldSeedV1,
-    input_hash: GenerationInputHashV1,
-    provider: &ProviderGenerationIdentityV1,
-) -> u64 {
-    hash_u64(
-        domain,
-        &[
-            seed.as_bytes(),
-            input_hash.as_bytes(),
-            provider.implementation_fingerprint().as_bytes(),
-        ],
-    )
+fn natural_sample_seed(domain: &[u8], seed_root: WorldgenSeedRootV2) -> u64 {
+    hash_u64(domain, &[seed_root.as_bytes()])
 }
 
 fn required_natural(

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AquiferBasinIdV1, ChunkFaceV1, DrainageLinkIdV1, GenerationEpochIdV1, GenerationInputHashV1,
-    HydrologyOccupancyHashV1, NaturalSamplerV1, ProviderGenerationIdentityV1, RiverSampleV1,
-    TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError, WorldgenResult,
+    HydrologyOccupancyHashV1, NaturalSamplerV1, RiverSampleV1, TerrainConfigV2, TerrainStyleV1,
+    WorldgenConfigV1, WorldgenError, WorldgenResult, WorldgenSeedRootV2,
     hashes::{domain_hash, hash_u64},
 };
 
@@ -630,16 +630,15 @@ impl HydrologyOccupancyCandidateV1 {
 /// Compiled, allocation-light V6 occupancy sampler.
 #[derive(Clone, Debug)]
 pub(crate) struct HydrologySamplerV1 {
-    seed: WorldSeedV1,
-    input_hash: GenerationInputHashV1,
+    seed_root: WorldgenSeedRootV2,
     occupancy_hash: HydrologyOccupancyHashV1,
     config: HydrologyOccupancyConfigV1,
     fluids: HydrologyFluidBindingsV1,
-    hydrology: ProviderGenerationIdentityV1,
     world_floor_y: i32,
     world_ceiling_y: i32,
     sea_level_y: Option<i32>,
     river_incision_voxels: u16,
+    underground_rivers: bool,
 }
 
 /// Hydrology facts that are invariant along one world `(x, z)` column.
@@ -649,6 +648,8 @@ pub(crate) struct HydrologyColumnV1 {
     style: TerrainStyleV1,
     aquifer: AquiferSampleV1,
     drainage: DrainageSampleV1,
+    river_channel: bool,
+    standing_water_y: Option<i32>,
 }
 
 impl HydrologyColumnV1 {
@@ -659,9 +660,9 @@ impl HydrologyColumnV1 {
 
 impl HydrologySamplerV1 {
     pub(crate) fn compile(
-        seed: WorldSeedV1,
-        input_hash: GenerationInputHashV1,
+        seed_root: WorldgenSeedRootV2,
         spine: &WorldgenConfigV1,
+        terrain: &TerrainConfigV2,
         natural: &NaturalSamplerV1,
         layer: HydrologyOccupancyInputV1,
     ) -> WorldgenResult<Self> {
@@ -670,6 +671,7 @@ impl HydrologySamplerV1 {
             OCCUPANCY_DOMAIN,
             &[
                 layer.config.canonical_bytes()?.as_slice(),
+                terrain.canonical_bytes()?.as_slice(),
                 layer.fluids.water.as_str().as_bytes(),
                 layer.fluids.lava.as_str().as_bytes(),
                 layer.fluids.water_predicate.as_str().as_bytes(),
@@ -686,16 +688,15 @@ impl HydrologySamplerV1 {
             ],
         ));
         Ok(Self {
-            seed,
-            input_hash,
+            seed_root,
             occupancy_hash,
             config: layer.config,
             fluids: layer.fluids,
-            hydrology: natural.hydrology_identity().clone(),
             world_floor_y: spine.world_floor_y,
             world_ceiling_y: spine.world_ceiling_y,
             sea_level_y: layer.config.sea_level_y,
             river_incision_voxels: natural.config().river_incision_voxels,
+            underground_rivers: terrain.water.underground_rivers,
         })
     }
 
@@ -714,9 +715,7 @@ impl HydrologySamplerV1 {
         let basin = AquiferBasinIdV1::from_hash(domain_hash(
             AQUIFER_DOMAIN,
             &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.hydrology.implementation_fingerprint().as_bytes(),
+                self.seed_root.as_bytes(),
                 &cell_x.to_be_bytes(),
                 &cell_z.to_be_bytes(),
             ],
@@ -731,9 +730,7 @@ impl HydrologySamplerV1 {
         let rank = hash_u64(
             AQUIFER_DOMAIN,
             &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.hydrology.implementation_fingerprint().as_bytes(),
+                self.seed_root.as_bytes(),
                 &cell_x.to_be_bytes(),
                 &cell_z.to_be_bytes(),
             ],
@@ -752,14 +749,12 @@ impl HydrologySamplerV1 {
         z: i64,
         river: Option<RiverSampleV1>,
     ) -> DrainageSampleV1 {
-        let connected = river.is_some_and(RiverSampleV1::in_channel);
+        let connected = self.underground_rivers && river.is_some_and(RiverSampleV1::in_channel);
         let basin_bytes = river.map_or([0_u8; 32], |sample| *sample.basin().as_bytes());
         let link = DrainageLinkIdV1::from_hash(domain_hash(
             DRAINAGE_DOMAIN,
             &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.hydrology.implementation_fingerprint().as_bytes(),
+                self.seed_root.as_bytes(),
                 &x.to_be_bytes(),
                 &z.to_be_bytes(),
                 &basin_bytes,
@@ -781,8 +776,9 @@ impl HydrologySamplerV1 {
         cave_allows_fluid: bool,
         river: Option<RiverSampleV1>,
         style: TerrainStyleV1,
+        surface_water_y: Option<i32>,
     ) -> HydrologyOccupancySampleV1 {
-        let column = self.column(x, z, surface_y, river, style);
+        let column = self.column(x, z, surface_y, river, style, surface_water_y);
         self.occupy_column(x, y, z, cave_allows_fluid, column)
     }
 
@@ -793,12 +789,16 @@ impl HydrologySamplerV1 {
         surface_y: i32,
         river: Option<RiverSampleV1>,
         style: TerrainStyleV1,
+        surface_water_y: Option<i32>,
     ) -> HydrologyColumnV1 {
+        let river_channel = river.is_some_and(RiverSampleV1::in_channel);
         HydrologyColumnV1 {
             surface_y,
             style,
             aquifer: self.aquifer_sample(x, z, surface_y),
             drainage: self.drainage_sample(x, z, river),
+            river_channel,
+            standing_water_y: maximum_optional(self.sea_level_y, surface_water_y),
         }
     }
 
@@ -815,7 +815,6 @@ impl HydrologySamplerV1 {
         }
         let kind = occupancy_kind(
             y,
-            self.sea_level_y,
             self.river_incision_voxels,
             cave_allows_fluid,
             column,
@@ -862,7 +861,6 @@ impl HydrologySamplerV1 {
         }
         let below_kind = occupancy_kind(
             below,
-            self.sea_level_y,
             self.river_incision_voxels,
             cave_allows_fluid,
             column,
@@ -894,9 +892,7 @@ impl HydrologySamplerV1 {
         let rank = hash_u64(
             LAVA_DOMAIN,
             &[
-                self.seed.as_bytes(),
-                self.input_hash.as_bytes(),
-                self.hydrology.implementation_fingerprint().as_bytes(),
+                self.seed_root.as_bytes(),
                 &x.to_be_bytes(),
                 &y.to_be_bytes(),
                 &z.to_be_bytes(),
@@ -1113,7 +1109,6 @@ pub(crate) fn hydrology_face_hash(
 
 fn occupancy_kind(
     y: i64,
-    sea_level_y: Option<i32>,
     incision: u16,
     cave_allows_fluid: bool,
     column: HydrologyColumnV1,
@@ -1124,10 +1119,13 @@ fn occupancy_kind(
     if lava && cave_allows_fluid && y <= i64::from(column.aquifer.lava_table_y) {
         return HydrologyOccupancyKindV1::LavaPool;
     }
-    if y > surface && y <= channel_top && column.drainage.is_connected() {
+    if y > surface && y <= channel_top && column.river_channel {
         return HydrologyOccupancyKindV1::SurfaceChannel;
     }
-    if sea_level_y.is_some_and(|sea_level_y| y > surface && y <= i64::from(sea_level_y)) {
+    if column
+        .standing_water_y
+        .is_some_and(|water_y| y > surface && y <= i64::from(water_y))
+    {
         return HydrologyOccupancyKindV1::SurfaceWater;
     }
     if cave_allows_fluid && y <= surface && y > i64::from(column.aquifer.lava_table_y) {
@@ -1139,6 +1137,14 @@ fn occupancy_kind(
         }
     }
     HydrologyOccupancyKindV1::Empty
+}
+
+const fn maximum_optional(left: Option<i32>, right: Option<i32>) -> Option<i32> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(if left > right { left } else { right }),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
 }
 
 fn fluid_family(kind: HydrologyOccupancyKindV1) -> u8 {
