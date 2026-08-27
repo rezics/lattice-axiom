@@ -5,15 +5,15 @@
 
 use std::collections::BTreeMap;
 
-use latticeaxiom_core::{CanonicalHash, WorldId};
+use latticeaxiom_core::{CanonicalHash, StableId, WorldId};
 use latticeaxiom_world_catalog::{
     CatalogEntry, CatalogEntryState, CatalogProjection, CheckpointId, CheckpointPlan,
-    CheckpointReason, ClonePlan, CreateWorldPlan, DiskAdmission, DiskSample, DisplayName,
-    DisplayNameError, GIB, HeadroomInputs, LowDiskMonitor, ManagedTrashLocation, MoveToTrashPlan,
-    RecordedCheckpoint, RestoreMode, RestorePlanningOutcome, SealedActivationBindingV1,
-    StaleLeaseRecoveryPlan, TrashEntryId, TrashTombstone, WorldOpenPlan, WorldOpenStatus,
-    WorldRootId, WriterBarrier, WriterLeaseState, plan_checkpoint, plan_clone_world,
-    plan_create_world, plan_export_world, plan_recover_stale_lease,
+    CheckpointReason, ClonePlan, CreateWorldPlan, CreateWorldPlanInput, DiskAdmission, DiskSample,
+    DisplayName, DisplayNameError, GIB, HeadroomInputs, LowDiskMonitor, ManagedTrashLocation,
+    MoveToTrashPlan, RecordedCheckpoint, RestoreMode, RestorePlanningOutcome,
+    SealedActivationBindingV1, StaleLeaseRecoveryPlan, TrashEntryId, TrashTombstone, WorldOpenPlan,
+    WorldOpenStatus, WorldRootId, WriterBarrier, WriterLeaseState, plan_checkpoint,
+    plan_clone_world, plan_create_world, plan_export_world, plan_recover_stale_lease,
 };
 use latticeaxiom_world_db::{
     ActivationPermitV1, StoragePreflightStatusV1, WorldStoragePreflightV1,
@@ -24,7 +24,7 @@ use crate::{
     ClientShellGraph, HomePrimaryAction, LaunchHandoff, LaunchHandoffContext, LaunchHandoffError,
     LoadingState, QuickCreateIntent, SemanticCommand, ShellCommandError, ShellEffect, ShellScreen,
     StartShellModel, WorldCardMetadata, WorldLibraryState, WorldListModel, WorldShellError,
-    WorldShellRecord, WorldSort,
+    WorldShellRecord, WorldSort, WorldgenProfileOption,
 };
 
 /// Default allowlisted root used by the catalog shell until a host binds one.
@@ -101,6 +101,19 @@ impl WorldLibraryFlow {
         self.draft = Some(intent);
     }
 
+    /// Installs generation profiles exposed by the active game/template.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellCommandError`] when the catalog is ambiguous or invalid.
+    pub fn set_worldgen_profiles(
+        &mut self,
+        profiles: Vec<WorldgenProfileOption>,
+        selected: &StableId,
+    ) -> Result<(), ShellCommandError> {
+        self.shell.set_worldgen_profiles(profiles, selected)
+    }
+
     /// Supplies lock fingerprints required to seal [`LaunchHandoff`].
     pub const fn set_launch_context(&mut self, context: LaunchHandoffContext) {
         self.launch_context = Some(context);
@@ -131,12 +144,15 @@ impl WorldLibraryFlow {
             .map(WorldShellRecord::world_id)
             .collect();
         let plan = plan_create_world(
-            world_id,
-            self.root,
-            intent.display_name.clone(),
-            intent.template.clone(),
-            intent.root_game_package.clone(),
-            intent.profile_lock,
+            CreateWorldPlanInput {
+                world_id,
+                root: self.root,
+                display_name: intent.display_name.clone(),
+                template: intent.template.clone(),
+                root_game_package: intent.root_game_package.clone(),
+                profile_lock: intent.profile_lock,
+                generation_profile: intent.generation_profile.clone(),
+            },
             &live_ids,
         )?;
         let record = unpublished_record(&plan, self.now_ms)?;
@@ -280,7 +296,14 @@ impl WorldLibraryFlow {
         &mut self,
         command: &SemanticCommand,
     ) -> Result<WorldLibraryEffect, WorldLibraryError> {
-        match self.shell.inject(command)? {
+        let effect = self.shell.inject(command)?;
+        if effect == ShellEffect::WorldgenProfileSelected
+            && let Some(profile) = self.shell.selected_worldgen_profile().cloned()
+            && let Some(draft) = self.draft.as_mut()
+        {
+            draft.set_generation_profile(profile);
+        }
+        match effect {
             ShellEffect::RequestQuickCreate => {
                 let intent = self
                     .draft

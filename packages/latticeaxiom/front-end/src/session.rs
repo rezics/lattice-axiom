@@ -23,7 +23,7 @@ use thiserror::Error;
 use crate::{
     HomePrimaryAction, QuickCreateIntent, SemanticCommand, ShellCommandError, ShellEffect,
     ShellScreen, StartShellModel, WorldCardMetadata, WorldListModel, WorldShellError,
-    WorldShellRecord, WorldSort,
+    WorldShellRecord, WorldSort, WorldgenProfileOption,
 };
 
 /// Catalog root ordinal reserved for process-local memory sessions.
@@ -220,6 +220,19 @@ impl MemoryStartFlow {
         self.draft = Some(intent);
     }
 
+    /// Installs generation profiles exposed by the active game/template.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellCommandError`] when the catalog is ambiguous or invalid.
+    pub fn set_worldgen_profiles(
+        &mut self,
+        profiles: Vec<WorldgenProfileOption>,
+        selected: &StableId,
+    ) -> Result<(), ShellCommandError> {
+        self.shell.set_worldgen_profiles(profiles, selected)
+    }
+
     /// Clock used when semantic quick-create publishes a session world.
     #[must_use]
     pub const fn now_ms(&self) -> u64 {
@@ -278,7 +291,14 @@ impl MemoryStartFlow {
         &mut self,
         command: &SemanticCommand,
     ) -> Result<ShellEffect, MemoryStartError> {
-        Ok(self.shell.inject(command)?)
+        let effect = self.shell.inject(command)?;
+        if effect == ShellEffect::WorldgenProfileSelected
+            && let Some(profile) = self.shell.selected_worldgen_profile().cloned()
+            && let Some(draft) = self.draft.as_mut()
+        {
+            draft.set_generation_profile(profile);
+        }
+        Ok(effect)
     }
 
     /// Advertises the in-session pause overlay for a live world.

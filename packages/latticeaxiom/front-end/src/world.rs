@@ -602,6 +602,33 @@ pub struct QuickCreateIntent {
     pub root_game_package: PackageName,
     /// Current profile lock whose safe defaults are summarized in the UI.
     pub profile_lock: CanonicalHash,
+    /// Optional stable generation profile selected from the template's catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_profile: Option<StableId>,
+}
+
+/// One host-contributed world-generation profile shown by the creation shell.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorldgenProfileOption {
+    /// Stable profile identity persisted with the create plan.
+    pub id: StableId,
+    /// Short user-facing profile label.
+    pub label: String,
+    /// User-facing explanation of the profile's large-scale behavior.
+    pub description: String,
+}
+
+impl WorldgenProfileOption {
+    /// Creates one typed profile option from trusted package presentation data.
+    #[must_use]
+    pub fn new(id: StableId, label: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            id,
+            label: label.into(),
+            description: description.into(),
+        }
+    }
 }
 
 impl QuickCreateIntent {
@@ -623,7 +650,20 @@ impl QuickCreateIntent {
             template,
             root_game_package,
             profile_lock,
+            generation_profile: None,
         })
+    }
+
+    /// Attaches a stable generation profile chosen before publication.
+    #[must_use]
+    pub fn with_generation_profile(mut self, generation_profile: StableId) -> Self {
+        self.generation_profile = Some(generation_profile);
+        self
+    }
+
+    /// Updates the generation profile while the create draft remains unpublished.
+    pub fn set_generation_profile(&mut self, generation_profile: StableId) {
+        self.generation_profile = Some(generation_profile);
     }
 }
 

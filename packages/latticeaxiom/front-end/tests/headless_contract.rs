@@ -710,6 +710,58 @@ fn memory_create_list_continue_semantic_flow_preserves_world_id() {
 }
 
 #[test]
+fn creation_profile_selection_is_accessible_and_updates_the_typed_intent() {
+    let balanced = stable_id("example:worldgen-profile/balanced@2");
+    let alpine = stable_id("example:worldgen-profile/alpine@2");
+    let mut flow = MemoryStartFlow::new(shell_graph());
+    flow.set_worldgen_profiles(
+        vec![
+            WorldgenProfileOption::new(balanced.clone(), "Balanced", "Mixed terrain"),
+            WorldgenProfileOption::new(alpine.clone(), "Alpine", "High mountain systems"),
+        ],
+        &balanced,
+    )
+    .unwrap_or_else(|error| panic!("profile catalog: {error}"));
+    flow.set_draft(
+        QuickCreateIntent::new(
+            "Profiled Session",
+            memory_session_template(),
+            package("@example/game"),
+            CanonicalHash::digest(b"profile"),
+        )
+        .unwrap_or_else(|error| panic!("quick create: {error}"))
+        .with_generation_profile(balanced),
+    );
+    flow.apply_shell_command(&SemanticCommand {
+        target: SemanticNodeId::new("home/new-world")
+            .unwrap_or_else(|error| panic!("new-world target: {error}")),
+        action: SemanticActionId::Activate,
+        source: InputSource::Headless,
+    })
+    .unwrap_or_else(|error| panic!("open creation: {error}"));
+    let tree = flow.shell().semantic_tree();
+    assert!(
+        tree.find(&SemanticNodeId::new("new-world/profile-status").unwrap())
+            .is_some()
+    );
+
+    let effect = flow
+        .apply_shell_command(&SemanticCommand {
+            target: SemanticNodeId::new("new-world/profile/1")
+                .unwrap_or_else(|error| panic!("profile target: {error}")),
+            action: SemanticActionId::SelectWorldgenProfile,
+            source: InputSource::Headless,
+        })
+        .unwrap_or_else(|error| panic!("select profile: {error}"));
+    assert_eq!(effect, ShellEffect::WorldgenProfileSelected);
+    assert_eq!(
+        flow.draft()
+            .and_then(|intent| intent.generation_profile.as_ref()),
+        Some(&alpine)
+    );
+}
+
+#[test]
 fn memory_pause_save_exit_continue_semantic_flow_does_not_checkpoint() {
     let mut flow = MemoryStartFlow::new(shell_graph());
     let intent = QuickCreateIntent::new(

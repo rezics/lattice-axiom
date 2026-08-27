@@ -445,6 +445,12 @@ impl WorldRequirementClosureV1 {
         ))
     }
 
+    /// Returns immutable generator/profile identities and their exact digests.
+    #[must_use]
+    pub const fn generator_provenance(&self) -> &BTreeMap<StableId, DigestV1> {
+        &self.generator_provenance
+    }
+
     /// Returns whether `self` is a monotonic expansion of `previous`.
     #[must_use]
     pub fn is_monotonic_expansion_of(&self, previous: &Self) -> bool {

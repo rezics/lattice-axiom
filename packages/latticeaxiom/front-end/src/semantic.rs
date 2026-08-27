@@ -101,6 +101,8 @@ pub enum SemanticActionId {
     OpenSettings,
     /// Submit a quick-create intent.
     QuickCreate,
+    /// Select one host-contributed world-generation profile.
+    SelectWorldgenProfile,
     /// Continue the exact-ready recent world.
     ContinueWorld,
     /// Open the in-session pause overlay without mutating world state.

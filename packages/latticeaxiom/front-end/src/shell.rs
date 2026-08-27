@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use latticeaxiom_core::{CanonicalHash, CanonicalJsonError, WorldId, canonical_json_hash};
+use latticeaxiom_core::{
+    CanonicalHash, CanonicalJsonError, StableId, WorldId, canonical_json_hash,
+};
 use latticeaxiom_launcher::{
     LaunchAttempt, LaunchGeneration, LaunchIntentDraftV1, LaunchIntentV1, LaunchModelError,
     LaunchTargetV1, SettingTransactionRevision,
@@ -14,7 +16,7 @@ use crate::{
     ClientShellGraph, HomePrimaryAction, LoadingState, RecoveryCue, SemanticActionId,
     SemanticCommand, SemanticCommandError, SemanticNode, SemanticNodeId, SemanticRole,
     SemanticState, TrashedWorldRecord, WorldCardAction, WorldListModel, WorldShellRecord,
-    validate_semantic_command,
+    WorldgenProfileOption, validate_semantic_command,
 };
 
 /// Package-driven client-shell route.
@@ -59,6 +61,8 @@ pub struct StartShellModel {
     pub selected: Option<WorldId>,
     /// Current loading state when routed to Loading.
     pub loading: Option<LoadingState>,
+    worldgen_profiles: Vec<WorldgenProfileOption>,
+    selected_worldgen_profile: Option<StableId>,
 }
 
 impl StartShellModel {
@@ -72,7 +76,41 @@ impl StartShellModel {
             trash: Vec::new(),
             selected: None,
             loading: None,
+            worldgen_profiles: Vec::new(),
+            selected_worldgen_profile: None,
         }
+    }
+
+    /// Installs the bounded generation-profile catalog shown during creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellCommandError`] for duplicate identities, an empty
+    /// catalog, or a selected identity that is not present.
+    pub fn set_worldgen_profiles(
+        &mut self,
+        profiles: Vec<WorldgenProfileOption>,
+        selected: &StableId,
+    ) -> Result<(), ShellCommandError> {
+        if profiles.is_empty() || profiles.len() > 32 {
+            return Err(ShellCommandError::InvalidWorldgenProfiles);
+        }
+        let unique = profiles
+            .iter()
+            .map(|profile| &profile.id)
+            .collect::<BTreeSet<_>>();
+        if unique.len() != profiles.len() || !unique.contains(selected) {
+            return Err(ShellCommandError::InvalidWorldgenProfiles);
+        }
+        self.worldgen_profiles = profiles;
+        self.selected_worldgen_profile = Some(selected.clone());
+        Ok(())
+    }
+
+    /// Returns the currently selected generation profile, when configured.
+    #[must_use]
+    pub const fn selected_worldgen_profile(&self) -> Option<&StableId> {
+        self.selected_worldgen_profile.as_ref()
     }
 
     /// Returns the resolved package graph that owns this shell.
@@ -88,7 +126,7 @@ impl StartShellModel {
         let children = match self.screen {
             ShellScreen::Home => self.home_nodes(),
             ShellScreen::Worlds => self.world_nodes(),
-            ShellScreen::NewWorld => Self::new_world_nodes(),
+            ShellScreen::NewWorld => self.new_world_nodes(),
             ShellScreen::Settings => Self::settings_nodes(),
             ShellScreen::Loading => self.loading_nodes(),
             ShellScreen::Trash => self.trash_nodes(),
@@ -152,7 +190,9 @@ impl StartShellModel {
         } else if target == "home/worlds" || action == SemanticActionId::OpenWorlds {
             self.screen = ShellScreen::Worlds;
             ShellEffect::Navigate(ShellScreen::Worlds)
-        } else if target == "home/new-world" || action == SemanticActionId::QuickCreate {
+        } else if target == "home/new-world"
+            || (action == SemanticActionId::QuickCreate && self.screen != ShellScreen::NewWorld)
+        {
             self.screen = ShellScreen::NewWorld;
             ShellEffect::Navigate(ShellScreen::NewWorld)
         } else if target == "home/packages-profiles" {
@@ -223,7 +263,20 @@ impl StartShellModel {
                 .as_ref()
                 .ok_or(ShellCommandError::NoLoadingState)?;
             ShellEffect::CancelLoading(loading.cancel_disposition())
-        } else if target == "new-world/quick-create" {
+        } else if self.screen == ShellScreen::NewWorld
+            && (target.starts_with("new-world/profile/")
+                || action == SemanticActionId::SelectWorldgenProfile)
+        {
+            let selected = self
+                .worldgen_profiles
+                .iter()
+                .enumerate()
+                .find(|(index, _)| target == format!("new-world/profile/{index}"))
+                .map(|(_, profile)| profile.id.clone())
+                .ok_or(ShellCommandError::UnmappedCommand)?;
+            self.selected_worldgen_profile = Some(selected);
+            ShellEffect::WorldgenProfileSelected
+        } else if target == "new-world/quick-create" || action == SemanticActionId::QuickCreate {
             ShellEffect::RequestQuickCreate
         } else {
             return Err(ShellCommandError::UnmappedCommand);
@@ -456,8 +509,8 @@ impl StartShellModel {
         nodes
     }
 
-    fn new_world_nodes() -> Vec<SemanticNode> {
-        vec![
+    fn new_world_nodes(&self) -> Vec<SemanticNode> {
+        let mut nodes = vec![
             button(
                 "new-world/back",
                 "Back",
@@ -477,13 +530,47 @@ impl StartShellModel {
                 actions: BTreeSet::new(),
                 children: Vec::new(),
             },
-            button(
-                "new-world/quick-create",
-                "Quick Create",
-                "Resolve and publish a transaction from current safe defaults",
-                [SemanticActionId::Activate, SemanticActionId::QuickCreate],
-            ),
-        ]
+        ];
+        if let Some(selected) = self.selected_worldgen_profile.as_ref()
+            && let Some(profile) = self
+                .worldgen_profiles
+                .iter()
+                .find(|profile| &profile.id == selected)
+        {
+            nodes.push(SemanticNode {
+                id: node_id("new-world/profile-status"),
+                role: SemanticRole::Status,
+                name: "Terrain profile".to_owned(),
+                value: Some(profile.label.clone()),
+                description: Some(profile.description.clone()),
+                state: SemanticState::default(),
+                actions: BTreeSet::new(),
+                children: Vec::new(),
+            });
+        }
+        nodes.extend(
+            self.worldgen_profiles
+                .iter()
+                .enumerate()
+                .map(|(index, profile)| {
+                    button(
+                        &format!("new-world/profile/{index}"),
+                        profile.label.clone(),
+                        profile.description.clone(),
+                        [
+                            SemanticActionId::Activate,
+                            SemanticActionId::SelectWorldgenProfile,
+                        ],
+                    )
+                }),
+        );
+        nodes.push(button(
+            "new-world/quick-create",
+            "Create World",
+            "Publish a transaction with the selected resolved terrain profile",
+            [SemanticActionId::Activate, SemanticActionId::QuickCreate],
+        ));
+        nodes
     }
 
     fn settings_nodes() -> Vec<SemanticNode> {
@@ -732,6 +819,8 @@ pub enum ShellEffect {
     ReviewWorld(WorldId),
     /// Quick-create form should emit its typed intent.
     RequestQuickCreate,
+    /// The creation form selected a different generation profile.
+    WorldgenProfileSelected,
     /// Loading cancellation policy derived from the writer boundary.
     CancelLoading(crate::LoadingCancelDisposition),
     /// Host should flush dirty chunks through the sealed writer and close it.
@@ -783,6 +872,9 @@ pub enum ShellCommandError {
     /// Advertised command has no route mapping.
     #[error("semantic command is not mapped on the current route")]
     UnmappedCommand,
+    /// Host-contributed world-generation profiles are empty, duplicated, or mis-selected.
+    #[error("world-generation profile catalog is invalid")]
+    InvalidWorldgenProfiles,
 }
 
 /// Inputs needed to seal a replacement-process world launch intent.

@@ -158,6 +158,31 @@ pub struct CreateWorldPlan {
     pub root_game_package: PackageName,
     /// Profile lock whose safe defaults were summarized.
     pub profile_lock: CanonicalHash,
+    /// Optional stable generation profile selected during creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_profile: Option<StableId>,
+}
+
+/// Validated inputs used to form an immutable world creation plan.
+///
+/// Grouping the values keeps the planning boundary explicit as creation gains
+/// independently versioned options such as terrain profiles.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateWorldPlanInput {
+    /// Fresh `UUIDv4` identity.
+    pub world_id: WorldId,
+    /// Allowlisted storage root.
+    pub root: WorldRootId,
+    /// Validated player-visible name.
+    pub display_name: DisplayName,
+    /// Shell-visible template identity.
+    pub template: StableId,
+    /// Root game package resolved during create.
+    pub root_game_package: PackageName,
+    /// Profile lock whose safe defaults were summarized.
+    pub profile_lock: CanonicalHash,
+    /// Optional stable generation profile selected during creation.
+    pub generation_profile: Option<StableId>,
 }
 
 /// Failure to form a create plan.
@@ -174,24 +199,20 @@ pub enum CreateWorldPlanError {
 ///
 /// Returns [`CreateWorldPlanError::DuplicateWorldId`] when `world_id` is live.
 pub fn plan_create_world(
-    world_id: WorldId,
-    root: WorldRootId,
-    display_name: DisplayName,
-    template: StableId,
-    root_game_package: PackageName,
-    profile_lock: CanonicalHash,
+    input: CreateWorldPlanInput,
     live_world_ids: &BTreeSet<WorldId>,
 ) -> Result<CreateWorldPlan, CreateWorldPlanError> {
-    if live_world_ids.contains(&world_id) {
+    if live_world_ids.contains(&input.world_id) {
         return Err(CreateWorldPlanError::DuplicateWorldId);
     }
     Ok(CreateWorldPlan {
-        world_id,
-        location: LiveWorldLocation::new(root, world_id),
-        display_name,
-        template,
-        root_game_package,
-        profile_lock,
+        world_id: input.world_id,
+        location: LiveWorldLocation::new(input.root, input.world_id),
+        display_name: input.display_name,
+        template: input.template,
+        root_game_package: input.root_game_package,
+        profile_lock: input.profile_lock,
+        generation_profile: input.generation_profile,
     })
 }
 
@@ -493,24 +514,30 @@ mod tests {
         let live = BTreeSet::from([source_world]);
 
         let created = plan_create_world(
-            clone_world,
-            WorldRootId(1),
-            DisplayName::new("Clone").unwrap_or_else(|error| panic!("{error}")),
-            template(),
-            package(),
-            CanonicalHash::digest(b"profile"),
+            CreateWorldPlanInput {
+                world_id: clone_world,
+                root: WorldRootId(1),
+                display_name: DisplayName::new("Clone").unwrap_or_else(|error| panic!("{error}")),
+                template: template(),
+                root_game_package: package(),
+                profile_lock: CanonicalHash::digest(b"profile"),
+                generation_profile: None,
+            },
             &live,
         )
         .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(created.world_id, clone_world);
         assert_eq!(
             plan_create_world(
-                source_world,
-                WorldRootId(1),
-                created.display_name.clone(),
-                template(),
-                package(),
-                CanonicalHash::digest(b"profile"),
+                CreateWorldPlanInput {
+                    world_id: source_world,
+                    root: WorldRootId(1),
+                    display_name: created.display_name.clone(),
+                    template: template(),
+                    root_game_package: package(),
+                    profile_lock: CanonicalHash::digest(b"profile"),
+                    generation_profile: None,
+                },
                 &live,
             ),
             Err(CreateWorldPlanError::DuplicateWorldId)
