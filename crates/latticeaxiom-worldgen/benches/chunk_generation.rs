@@ -18,8 +18,8 @@ use latticeaxiom_worldgen::{
     D4RoleVocabularyV1, DimensionId, FrozenRoleBindingsV1, GenerationPlanInputV1, GenerationPlanV1,
     HydrologyFluidBindingsV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
     NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
-    WorldgenConfigV1, WorldgenLimitsV1,
+    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainConfigV2,
+    TerrainPresetV2, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenLimitsV1,
 };
 
 const ROLE_TARGETS: [(D4MaterialRoleV1, &str); 16] = [
@@ -134,6 +134,7 @@ fn generation_benchmarks(c: &mut Criterion) {
         });
     });
     terrain_query_benchmarks(c, &plan);
+    v2_terrain_benchmarks(c);
 }
 
 fn production_boreal_benchmark(c: &mut Criterion) {
@@ -205,6 +206,48 @@ fn terrain_query_benchmarks(c: &mut Criterion, plan: &GenerationPlanV1) {
             black_box(accumulator)
         });
     });
+}
+
+fn v2_terrain_benchmarks(c: &mut Criterion) {
+    let balanced = v2_fixture_plan(TerrainPresetV2::Balanced);
+    let wild = v2_fixture_plan(TerrainPresetV2::Wild);
+    let coordinate = surface_chunk(&balanced, -3, 5);
+    let adjacent = AdjacentEpochSnapshotV1::all_unassigned(PlanningCellCoordinateV1::from_chunk(
+        coordinate,
+        balanced.config().planning_cell_edge_chunks,
+    ))
+    .expect("V2 benchmark adjacency is representable");
+    c.bench_function("v2_balanced_chunk_32_cubic_snapshot_candidate", |bencher| {
+        bencher.iter(|| {
+            balanced
+                .generate(ChunkGenerationRequestV1::new(
+                    black_box(coordinate),
+                    None,
+                    CellEpochStateV1::Unassigned,
+                    adjacent.clone(),
+                    Vec::new(),
+                ))
+                .expect("V2 balanced benchmark chunk must remain valid")
+        });
+    });
+    for (name, plan) in [
+        ("v2_balanced_4096_terrain_columns", &balanced),
+        ("v2_wild_4096_terrain_columns", &wild),
+    ] {
+        c.bench_function(name, |bencher| {
+            bencher.iter(|| {
+                let mut accumulator = 0_i64;
+                for index in 0_i64..4_096 {
+                    let x = index.rem_euclid(64).saturating_mul(17).saturating_sub(544);
+                    let z = index.div_euclid(64).saturating_mul(17).saturating_sub(544);
+                    let sample = plan.terrain_column(black_box(x), black_box(z));
+                    accumulator ^= i64::from(sample.height());
+                    accumulator ^= i64::from(sample.surface_water_y().unwrap_or_default());
+                }
+                black_box(accumulator)
+            });
+        });
+    }
 }
 
 fn fixture_plan() -> GenerationPlanV1 {
@@ -341,6 +384,20 @@ fn natural_fixture_plan_with_config(
     natural_config: NaturalLayerConfigV1,
     include_hydrology_occupancy: bool,
 ) -> GenerationPlanV1 {
+    natural_fixture_plan_with_config_and_terrain(
+        config,
+        natural_config,
+        include_hydrology_occupancy,
+        None,
+    )
+}
+
+fn natural_fixture_plan_with_config_and_terrain(
+    config: WorldgenConfigV1,
+    natural_config: NaturalLayerConfigV1,
+    include_hydrology_occupancy: bool,
+    terrain_config: Option<TerrainConfigV2>,
+) -> GenerationPlanV1 {
     let bindings = AuthoredWorldgenBindingsV1::from_json(
         include_str!("../../../packages/terrenia/worldgen/data/authored-block-bindings-v1.json")
             .as_bytes(),
@@ -385,6 +442,9 @@ fn natural_fixture_plan_with_config(
         bindings.natural_vocabulary().expect("natural vocabulary"),
         natural_offers,
     ));
+    if let Some(terrain_config) = terrain_config {
+        input = input.with_terrain_config(terrain_config);
+    }
     if include_hydrology_occupancy {
         input = input.with_hydrology_occupancy(HydrologyOccupancyInputV1::new(
             HydrologyOccupancyConfigV1::default(),
@@ -404,6 +464,21 @@ fn natural_fixture_plan_with_config(
         ));
     }
     GenerationPlanV1::compile(input).expect("natural benchmark plan is valid")
+}
+
+fn v2_fixture_plan(preset: TerrainPresetV2) -> GenerationPlanV1 {
+    let terrain = preset.resolve();
+    natural_fixture_plan_with_config_and_terrain(
+        WorldgenConfigV1 {
+            chunk_edge_voxels: 32,
+            world_floor_y: terrain.world.floor_y,
+            world_ceiling_y: terrain.world.ceiling_y,
+            ..WorldgenConfigV1::default()
+        },
+        NaturalLayerConfigV1::default(),
+        false,
+        Some(terrain),
+    )
 }
 
 fn surface_chunk(plan: &GenerationPlanV1, chunk_x: i32, chunk_z: i32) -> ChunkCoordinate {

@@ -5,7 +5,7 @@ use crate::{
     GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, TerrainConfigV2,
     TerrainFamilyV2, WorldgenConfigV1, WorldgenSeedRootV2,
     hashes::{domain_hash, hash_u64},
-    terrain_field::{TerrainFieldV2, climate_field},
+    terrain_field::{TerrainColumnSampleV2, TerrainFieldV2, climate_field},
 };
 
 const TERRITORY_CELL_DOMAIN: &[u8] = b"latticeaxiom.territory-cell.v1\0";
@@ -253,8 +253,12 @@ impl TerritorySamplerV1 {
         }
     }
 
-    pub(crate) fn height(&self, x: i64, z: i64, _sample: CompactTerritorySampleV1) -> i32 {
-        self.terrain.sample(x, z).height
+    pub(crate) fn terrain_column(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
+        self.terrain.sample(x, z)
+    }
+
+    pub(crate) fn height(&self, x: i64, z: i64) -> i32 {
+        self.terrain_column(x, z).height
     }
 
     pub(crate) fn family(&self, x: i64, z: i64) -> TerrainFamilyV2 {

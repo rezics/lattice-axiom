@@ -103,7 +103,7 @@ pub use terrain_config::{
     ClimateConfigV2, LandmassConfigV2, ReliefConfigV2, SurfaceWaterConfigV2, TerrainConfigV2,
     TerrainPresetV2, UndergroundConfigV2, WorldBoundsV2,
 };
-pub use terrain_field::TerrainFamilyV2;
+pub use terrain_field::{TerrainColumnSampleV2, TerrainFamilyV2};
 pub use territory::{TerrainStyleV1, TerritoryQueryV1, TransitionMetadataV1};
 
 pub use latticeaxiom_storage::{

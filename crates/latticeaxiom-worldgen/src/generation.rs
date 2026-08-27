@@ -16,9 +16,9 @@ use crate::{
     HydrologyOccupancyHashV1, HydrologyOccupancyInputV1, HydrologyOccupancySampleV1,
     LockedClosureFingerprintV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
     ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, ResourceFieldSampleV1,
-    RiverSampleV1, SnapshotChecksumV1, TerrainConfigHashV2, TerrainConfigV2, TerrainFamilyV2,
-    TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1, WorldgenConfigV1,
-    WorldgenError, WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
+    RiverSampleV1, SnapshotChecksumV1, TerrainColumnSampleV2, TerrainConfigHashV2, TerrainConfigV2,
+    TerrainFamilyV2, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1,
+    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
     cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
     hashes::{concatenated_hash, domain_hash, hash_u64, sample_hash_3d},
@@ -578,6 +578,8 @@ pub struct GenerationPlanV1 {
     providers: ResolvedProvidersV1,
     roles: Vec<RoleBindingReceiptV1>,
     role_targets: BTreeMap<D4MaterialRoleV1, StableId>,
+    material_palette: Vec<StableId>,
+    role_palette_indices: BTreeMap<D4MaterialRoleV1, u16>,
     config_hash: WorldgenConfigHashV1,
     terrain_config_hash: TerrainConfigHashV2,
     generator_fingerprint: GeneratorFingerprintV1,
@@ -752,6 +754,7 @@ impl GenerationPlanV1 {
         let material_seed = hash_u64(MATERIAL_DOMAIN, &[seed_root.as_bytes()]);
         let tree_seed = hash_u64(TREE_DOMAIN, &[seed_root.as_bytes()]);
         let ground_cover_seed = hash_u64(GROUND_COVER_DOMAIN, &[seed_root.as_bytes()]);
+        let (material_palette, role_palette_indices) = compile_material_palette(&role_targets)?;
 
         Ok(Self {
             dimension: input.dimension,
@@ -764,6 +767,8 @@ impl GenerationPlanV1 {
             providers,
             roles,
             role_targets,
+            material_palette,
+            role_palette_indices,
             config_hash,
             terrain_config_hash,
             generator_fingerprint,
@@ -982,11 +987,17 @@ impl GenerationPlanV1 {
     /// Returns deterministic terrain height intent at world `(x, z)`.
     #[must_use]
     pub fn terrain_height(&self, x: i64, z: i64) -> i32 {
-        let sample = self.territory.sample(x, z);
-        let height = self.territory.height(x, z, sample);
-        self.natural
-            .as_ref()
-            .map_or(height, |natural| natural.adjust_height(x, z, height))
+        self.terrain_column(x, z).height()
+    }
+
+    /// Samples height, macro family, and standing water with one terrain-field evaluation.
+    #[must_use]
+    pub fn terrain_column(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
+        let mut sample = self.territory.terrain_column(x, z);
+        sample.height = self.natural.as_ref().map_or(sample.height, |natural| {
+            natural.adjust_height(x, z, sample.height)
+        });
+        sample
     }
 
     /// Returns the inclusive standing-water level of an inland lake basin.
@@ -1142,18 +1153,14 @@ impl GenerationPlanV1 {
             for local_x in 0..edge {
                 let world_x = local_world_axis(origin.0, local_x);
                 let world_z = local_world_axis(origin.2, local_z);
-                let height = self.terrain_height(world_x, world_z);
-                let territory = self.territory.sample(world_x, world_z);
-                let style = self
-                    .territory
-                    .choose_material_style(world_x, world_z, territory);
+                let column = self.generation_column(world_x, world_z);
                 columns.push(hydrology.column(
                     world_x,
                     world_z,
-                    height,
-                    self.river_sample(world_x, world_z),
-                    style,
-                    self.surface_water_level(world_x, world_z),
+                    column.height,
+                    column.river,
+                    column.material_style,
+                    column.surface_water_y,
                 ));
             }
         }
@@ -1546,6 +1553,27 @@ impl GenerationPlanV1 {
         )
     }
 
+    fn generation_column(&self, x: i64, z: i64) -> ColumnSampleV1 {
+        let terrain = self.territory.terrain_column(x, z);
+        let territory = self.territory.sample(x, z);
+        let river = self
+            .natural
+            .as_ref()
+            .map(|natural| natural.river_sample(x, z));
+        let height = self.natural.as_ref().map_or(terrain.height, |natural| {
+            natural.adjust_height_for_channel(
+                terrain.height,
+                river.is_some_and(RiverSampleV1::in_channel),
+            )
+        });
+        ColumnSampleV1 {
+            height,
+            material_style: self.territory.choose_material_style(x, z, territory),
+            river,
+            surface_water_y: terrain.surface_water_y,
+        }
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "the bounded hot path keeps allocation and diagnostic counters in one auditable flow"
@@ -1576,39 +1604,12 @@ impl GenerationPlanV1 {
                 let world_z = origin
                     .2
                     .saturating_add(i64::try_from(local_z).unwrap_or_default());
-                let sample = self.territory.sample(world_x, world_z);
-                let base_height = self.territory.height(world_x, world_z, sample);
-                let in_river_channel = self
-                    .natural
-                    .as_ref()
-                    .is_some_and(|natural| natural.in_river_channel(world_x, world_z));
-                let height = self.natural.as_ref().map_or(base_height, |natural| {
-                    natural.adjust_height_for_channel(base_height, in_river_channel)
-                });
-                let material_style = self
-                    .territory
-                    .choose_material_style(world_x, world_z, sample);
-                styles.insert(material_style);
-                columns.push(ColumnSampleV1 {
-                    height,
-                    material_style,
-                    in_river_channel,
-                });
+                let column = self.generation_column(world_x, world_z);
+                styles.insert(column.material_style);
+                columns.push(column);
             }
         }
 
-        let mut palette = self
-            .role_targets
-            .values()
-            .cloned()
-            .collect::<Vec<StableId>>();
-        palette.sort();
-        palette.dedup();
-        let palette_lookup = palette
-            .iter()
-            .enumerate()
-            .map(|(index, block)| (block.clone(), u16::try_from(index).unwrap_or(u16::MAX)))
-            .collect::<BTreeMap<_, _>>();
         let mut indices = Vec::with_capacity(usize::try_from(voxel_count).map_err(|_| {
             WorldgenError::ArithmeticOverflow {
                 operation: "voxel allocation length",
@@ -1657,10 +1658,9 @@ impl GenerationPlanV1 {
                         &mut counters,
                         &mut natural_counters,
                     );
-                    let block = self.role_target(purpose);
-                    let palette_index = palette_lookup.get(block).copied().ok_or(
+                    let palette_index = self.role_palette_indices.get(&purpose).copied().ok_or(
                         WorldgenError::ArithmeticOverflow {
-                            operation: "role target palette lookup",
+                            operation: "material role palette lookup",
                         },
                     )?;
                     indices.push(palette_index);
@@ -1689,7 +1689,7 @@ impl GenerationPlanV1 {
             });
         }
         let palette_and_index_bytes = voxel_count.saturating_mul(2).saturating_add(
-            palette
+            self.material_palette
                 .iter()
                 .map(|id| u64::try_from(id.as_str().len()).unwrap_or(u64::MAX))
                 .sum::<u64>(),
@@ -1728,7 +1728,7 @@ impl GenerationPlanV1 {
         Ok((
             ChunkDraftV1 {
                 edge_voxels: self.config.chunk_edge_voxels,
-                palette,
+                palette: self.material_palette.clone(),
                 voxel_palette_indices: indices,
             },
             diagnostics,
@@ -1834,7 +1834,7 @@ impl GenerationPlanV1 {
         let depth = i64::from(column.height).saturating_sub(y);
         if let Some(natural) = &self.natural {
             natural_counters.river_samples = natural_counters.river_samples.saturating_add(1);
-            if column.in_river_channel && y == i64::from(column.height) {
+            if column.in_river_channel() && y == i64::from(column.height) {
                 return natural.channel_bed_role(x, z, column.material_style);
             }
             natural_counters.geology_samples = natural_counters.geology_samples.saturating_add(1);
@@ -1939,7 +1939,7 @@ impl GenerationPlanV1 {
                 }
                 counters.tree_anchor_accepts = counters.tree_anchor_accepts.saturating_add(1);
                 counters.height_samples = counters.height_samples.saturating_add(1);
-                let anchor_height = i64::from(self.territory.height(anchor_x, anchor_z, sample));
+                let anchor_height = i64::from(self.territory.height(anchor_x, anchor_z));
                 for relative_y in 4..=MAX_TREE_HEIGHT {
                     for offset_z in -MAX_TREE_RADIUS..=MAX_TREE_RADIUS {
                         for offset_x in -MAX_TREE_RADIUS..=MAX_TREE_RADIUS {
@@ -2012,7 +2012,7 @@ impl GenerationPlanV1 {
                     world_x,
                     world_z,
                     column.material_style,
-                    column.in_river_channel,
+                    column.in_river_channel(),
                 ) {
                     counters.ground_cover_accepts = counters.ground_cover_accepts.saturating_add(1);
                     set_vegetation_role(
@@ -2188,7 +2188,46 @@ impl GenerationPlanV1 {
 struct ColumnSampleV1 {
     height: i32,
     material_style: TerrainStyleV1,
-    in_river_channel: bool,
+    river: Option<RiverSampleV1>,
+    surface_water_y: Option<i32>,
+}
+
+impl ColumnSampleV1 {
+    fn in_river_channel(self) -> bool {
+        self.river.is_some_and(RiverSampleV1::in_channel)
+    }
+}
+
+fn compile_material_palette(
+    role_targets: &BTreeMap<D4MaterialRoleV1, StableId>,
+) -> WorldgenResult<(Vec<StableId>, BTreeMap<D4MaterialRoleV1, u16>)> {
+    let mut palette = role_targets.values().cloned().collect::<Vec<_>>();
+    palette.sort();
+    palette.dedup();
+    let palette_lookup = palette
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            u16::try_from(index)
+                .map(|index| (block, index))
+                .map_err(|_| WorldgenError::ArithmeticOverflow {
+                    operation: "material palette index",
+                })
+        })
+        .collect::<WorldgenResult<BTreeMap<_, _>>>()?;
+    let role_indices = role_targets
+        .iter()
+        .map(|(purpose, block)| {
+            palette_lookup
+                .get(block)
+                .copied()
+                .map(|index| (*purpose, index))
+                .ok_or(WorldgenError::ArithmeticOverflow {
+                    operation: "compiled material role palette lookup",
+                })
+        })
+        .collect::<WorldgenResult<BTreeMap<_, _>>>()?;
+    Ok((palette, role_indices))
 }
 
 fn local_world_axis(origin: i64, local: usize) -> i64 {

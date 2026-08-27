@@ -129,6 +129,17 @@ fn terrain_density_uses_the_river_adjusted_surface() {
 }
 
 #[test]
+fn combined_terrain_column_matches_independent_queries() {
+    let plan = natural_plan(42, false);
+    for (x, z) in [(-257, -129), (-1, 0), (0, 0), (193, 511)] {
+        let column = plan.terrain_column(x, z);
+        assert_eq!(column.height(), plan.terrain_height(x, z));
+        assert_eq!(column.family(), plan.terrain_family(x, z));
+        assert_eq!(column.surface_water_y(), plan.surface_water_level(x, z));
+    }
+}
+
+#[test]
 fn river_distance_is_lipschitz_across_coarse_cell_boundaries() {
     let plan = natural_plan(42, false);
     for z in -96..96 {

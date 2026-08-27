@@ -55,10 +55,30 @@ pub enum TerrainFamilyV2 {
 
 /// Allocation-free macro-terrain sample for one world column.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TerrainColumnV2 {
+pub struct TerrainColumnSampleV2 {
     pub(crate) height: i32,
     pub(crate) family: TerrainFamilyV2,
     pub(crate) surface_water_y: Option<i32>,
+}
+
+impl TerrainColumnSampleV2 {
+    /// Returns the river-adjusted solid surface height.
+    #[must_use]
+    pub const fn height(self) -> i32 {
+        self.height
+    }
+
+    /// Returns the macro shape family independently from climate materials.
+    #[must_use]
+    pub const fn family(self) -> TerrainFamilyV2 {
+        self.family
+    }
+
+    /// Returns the inclusive standing-water level of an inland lake basin.
+    #[must_use]
+    pub const fn surface_water_y(self) -> Option<i32> {
+        self.surface_water_y
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -107,10 +127,10 @@ impl TerrainFieldV2 {
         }
     }
 
-    pub(crate) fn sample(&self, x: i64, z: i64) -> TerrainColumnV2 {
+    pub(crate) fn sample(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
         let base = self.sample_base(x, z);
-        let Some(lake) = self.lake_basin(x, z) else {
-            return TerrainColumnV2 {
+        let Some(lake) = self.lake_basin(x, z, base.height) else {
+            return TerrainColumnSampleV2 {
                 height: self.clamp_height(base.height),
                 family: base.family,
                 surface_water_y: None,
@@ -127,7 +147,7 @@ impl TerrainFieldV2 {
         let surface_water_y = self
             .clamp_height(lake.water_level_y)
             .max(height.saturating_add(1));
-        TerrainColumnV2 {
+        TerrainColumnSampleV2 {
             height,
             family: TerrainFamilyV2::LakeBasin,
             surface_water_y: Some(surface_water_y),
@@ -332,7 +352,7 @@ impl TerrainFieldV2 {
         (mask, lift)
     }
 
-    fn lake_basin(&self, x: i64, z: i64) -> Option<LakeBasinV2> {
+    fn lake_basin(&self, x: i64, z: i64, local_height: i64) -> Option<LakeBasinV2> {
         let amount = u64::from(self.config.water.lake_amount_per_1024);
         if amount == 0 {
             return None;
@@ -342,7 +362,6 @@ impl TerrainFieldV2 {
             .max(128);
         let cell_x = x.div_euclid(edge);
         let cell_z = z.div_euclid(edge);
-        let local_height = self.sample_base(x, z).height;
         let mut selected: Option<LakeBasinV2> = None;
         for candidate_z in cell_z.saturating_sub(1)..=cell_z.saturating_add(1) {
             for candidate_x in cell_x.saturating_sub(1)..=cell_x.saturating_add(1) {

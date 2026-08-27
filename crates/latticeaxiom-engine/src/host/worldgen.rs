@@ -358,12 +358,11 @@ fn spawn_bounds_at(
     half_extent: i64,
 ) -> Result<Option<SpawnSearchBoundsV1>, ProductionHostError> {
     let sea = plan.terrain_config().world.sea_level_y;
-    let height = plan.terrain_height(center_x, center_z);
-    let family = plan.terrain_family(center_x, center_z);
-    if height <= sea.saturating_add(2)
-        || plan.surface_water_level(center_x, center_z).is_some()
+    let terrain = plan.terrain_column(center_x, center_z);
+    if terrain.height() <= sea.saturating_add(2)
+        || terrain.surface_water_y().is_some()
         || matches!(
-            family,
+            terrain.family(),
             TerrainFamilyV2::DeepOcean
                 | TerrainFamilyV2::ShallowOcean
                 | TerrainFamilyV2::Coast
