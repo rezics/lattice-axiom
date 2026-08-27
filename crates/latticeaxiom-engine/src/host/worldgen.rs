@@ -1409,7 +1409,8 @@ mod tests {
 
     #[test]
     fn production_world_scale_matches_the_accepted_vertical_and_planning_contract() {
-        let config = spine_config();
+        let terrain = production_terrain_config();
+        let config = spine_config_for(&terrain);
 
         assert_eq!(config.chunk_edge_voxels, 32);
         assert_eq!(config.world_floor_y, -128);
@@ -1417,9 +1418,9 @@ mod tests {
         assert_eq!(config.world_ceiling_y - config.world_floor_y + 1, 512);
         assert_eq!(config.height_noise_scale_voxels, 32);
         assert_eq!(config.transition_width_voxels, 48);
-        assert_eq!(config.temperate_base_height, 86);
+        assert_eq!(config.temperate_base_height, terrain.world.sea_level_y);
         assert_eq!(config.temperate_relief, 128);
-        assert_eq!(config.arid_base_height, 86);
+        assert_eq!(config.arid_base_height, terrain.world.sea_level_y);
         assert_eq!(config.arid_relief, 128);
         assert_eq!(
             i32::from(config.chunk_edge_voxels) * i32::from(config.planning_cell_edge_chunks),
