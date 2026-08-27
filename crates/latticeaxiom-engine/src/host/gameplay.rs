@@ -8,14 +8,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use latticeaxiom_gameplay::{
     AuthorityTick, BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1,
     CommandOutcomeV1, ContainerId, ContainerOwnerComponentV1, ContainerStateV1, ContinuationId,
-    DimensionChunkKey, DimensionId, DropEntityId, DroppedItemV1, FaultInjection,
-    FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1, GameplayEditTarget, GameplayKernel,
-    GameplayLimits, GameplayReject, GameplayStorageDomain, IngredientV1, InventoryInspectV1,
-    InventoryStateV1, ItemId, ItemStackV1, ItemStateV1, MineCommandV1, MoveStackCommandV1,
-    PickupCommandV1, PlaceCommandV1, PlayerId, ProcessId, RecipeCraftCommandV1, RecipeId,
-    RecipeInspectV1, RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier,
-    RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex, StartProcessCommandV1, ToolClassId,
-    TransactionId, TransferCommandV1, WorkstationId, WorldId, WorldRevision,
+    CreativePickCommandV1, DimensionChunkKey, DimensionId, DropEntityId, DroppedItemV1,
+    FaultInjection, FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1, GameplayEditTarget,
+    GameplayKernel, GameplayLimits, GameplayModeV1, GameplayReject, GameplayRulesV1,
+    GameplayStorageDomain, IngredientV1, InventoryInspectV1, InventoryStateV1, ItemId, ItemStackV1,
+    ItemStateV1, MineCommandV1, MoveStackCommandV1, PickupCommandV1, PlaceCommandV1, PlayerId,
+    ProcessId, RecipeCraftCommandV1, RecipeId, RecipeInspectV1, RecipePatternV1,
+    ReferenceGameplayState, ReferencePlanApplier, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1,
+    SlotIndex, StartProcessCommandV1, ToolClassId, TransactionId, TransferCommandV1, WorkstationId,
+    WorldId, WorldRevision,
 };
 use latticeaxiom_player::BlockEditRejectV1;
 use latticeaxiom_storage::{ChangedDomains, PublicationReceipt};
@@ -30,6 +31,7 @@ const CRAFTING_GRID_ORIGIN: u16 = 27;
 #[derive(Clone, Debug)]
 pub(super) struct ProductionGameplay {
     applier: ReferencePlanApplier,
+    mode: GameplayModeV1,
     player: PlayerId,
     dimension: DimensionId,
     hotbar_slot: u16,
@@ -103,6 +105,7 @@ impl ProductionGameplay {
         loaded: BTreeMap<DimensionChunkKey, ChunkRevision>,
         world_revision: WorldRevision,
         chunk_edge: u16,
+        mode: GameplayModeV1,
     ) -> Result<Self, GameplayReject> {
         let mut state = ReferenceGameplayState::new(GameplayLimits::default())?;
         state.set_chunk_edge(chunk_edge)?;
@@ -116,7 +119,13 @@ impl ProductionGameplay {
         )?;
         state.seed_player(player, inventory)?;
         let mut session = Self {
-            applier: ReferencePlanApplier::try_new(world, state, catalog)?,
+            applier: ReferencePlanApplier::try_new_with_rules(
+                world,
+                state,
+                catalog,
+                GameplayRulesV1 { player_mode: mode },
+            )?,
+            mode,
             player,
             dimension,
             hotbar_slot: 0,
@@ -131,6 +140,10 @@ impl ProductionGameplay {
 
     pub(super) fn catalog(&self) -> &GameplayCatalog {
         self.applier.catalog()
+    }
+
+    pub(super) const fn mode(&self) -> GameplayModeV1 {
+        self.mode
     }
 
     /// Seeds a small, catalog-derived starting kit so a new session can place
@@ -500,28 +513,64 @@ impl ProductionGameplay {
         )
     }
 
-    /// Selects or swaps the inventory stack whose placement block equals `aimed`.
+    /// Selects, swaps, or creates the inventory stack whose placement block equals `aimed`.
     ///
-    /// Hotbar hits only change the selected slot. Body-inventory hits
-    /// [`Self::move_stack`] onto the selected hotbar slot. Missing stacks fail
-    /// closed as [`GameplayReject::EmptySlot`].
+    /// Hotbar hits only change the selected slot. Under survival rules,
+    /// body-inventory hits move onto the selected hotbar slot and missing stacks
+    /// fail closed. Under creative rules, other cases replace the selected slot
+    /// with a full catalog stack through the authoritative command pipeline.
     ///
     /// # Errors
     ///
-    /// Returns [`GameplayReject`] when no matching stack exists or the move fails.
+    /// Returns [`GameplayReject`] when the block has no placement item or the
+    /// authoritative inventory command fails.
     pub(super) fn pick_aimed_block(
         &mut self,
         transaction_id: TransactionId,
         aimed: &BlockId,
     ) -> Result<Option<RuntimePlanReceiptV1>, GameplayReject> {
-        let source = self.placing_slot(aimed)?;
-        if source.get() < HOTBAR_SLOTS {
-            self.select_hotbar_slot(source.get())?;
-            return Ok(None);
+        if let Ok(source) = self.placing_slot(aimed) {
+            if source.get() < HOTBAR_SLOTS {
+                self.select_hotbar_slot(source.get())?;
+                return Ok(None);
+            }
+            if self.mode == GameplayModeV1::Survival {
+                let destination = SlotIndex::new(self.hotbar_slot);
+                return self
+                    .move_stack(transaction_id, source, destination)
+                    .map(Some);
+            }
         }
-        let destination = SlotIndex::new(self.hotbar_slot);
-        self.move_stack(transaction_id, source, destination)
-            .map(Some)
+        if self.mode == GameplayModeV1::Survival {
+            return Err(GameplayReject::EmptySlot);
+        }
+        let item = self
+            .catalog()
+            .items()
+            .values()
+            .find(|item| item.placement_block.as_ref() == Some(aimed))
+            .map(|item| item.id.clone())
+            .ok_or_else(|| GameplayReject::UnknownReference {
+                kind: "placement_item",
+                id: aimed.as_str().to_owned(),
+            })?;
+        let inventory =
+            self.applier
+                .state()
+                .inventory(self.player)
+                .ok_or(GameplayReject::UnknownPlayer {
+                    player: self.player.as_bytes(),
+                })?;
+        self.execute(
+            transaction_id,
+            GameplayCommandV1::CreativePick(CreativePickCommandV1 {
+                player: self.player,
+                item,
+                slot: SlotIndex::new(self.hotbar_slot),
+                expected_inventory_revision: inventory.revision(),
+            }),
+        )
+        .map(Some)
     }
 
     /// Recipe identities whose workstation matches and whose inputs are currently owned.

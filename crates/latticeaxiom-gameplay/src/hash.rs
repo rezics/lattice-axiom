@@ -330,6 +330,13 @@ impl Encoder {
                 self.block_key(&command.target);
                 self.u64(command.expected_chunk_revision.get());
             }
+            GameplayCommandV1::CreativePick(command) => {
+                self.u8(10);
+                self.bytes(&command.player.as_bytes());
+                self.text(command.item.as_str());
+                self.u16(command.slot.get());
+                self.u64(command.expected_inventory_revision);
+            }
             GameplayCommandV1::Craft(command) => {
                 self.u8(4);
                 self.bytes(&command.player.as_bytes());
@@ -551,6 +558,11 @@ impl Encoder {
             CommandOutcomeV1::HotbarSelected { slot } => {
                 self.u8(10);
                 self.u16(slot.get());
+            }
+            CommandOutcomeV1::CreativeStackPicked { slot, item } => {
+                self.u8(11);
+                self.u16(slot.get());
+                self.text(item.as_str());
             }
             CommandOutcomeV1::ProcessScheduled {
                 continuation,

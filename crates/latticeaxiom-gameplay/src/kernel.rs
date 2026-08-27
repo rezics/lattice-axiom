@@ -4,9 +4,10 @@ use latticeaxiom_storage::{ChunkCommitReceipt, PublicationReceipt};
 
 use crate::{
     BreakProgressKey, BreakProgressV1, ChangedDomains, ChunkRevision, CommandEnvelopeV1,
-    CommandOutcomeV1, CommitReceipt, ContainerId, ContinuationId, DimensionChunkKey, DropEntityId,
-    DroppedItemV1, FaultInjection, FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1,
-    GameplayEditTarget, GameplayMutationIntentV1, GameplayPlanV1, GameplayReject,
+    CommandOutcomeV1, CommitReceipt, ContainerId, ContinuationId, CreativePickCommandV1,
+    DimensionChunkKey, DropEntityId, DroppedItemV1, FaultInjection, FurnaceContinuationV1,
+    GameplayCatalog, GameplayCommandV1, GameplayEditTarget, GameplayModeV1,
+    GameplayMutationIntentV1, GameplayPlanV1, GameplayReject, GameplayRulesV1,
     GameplayStorageDomain, InventoryStateV1, ItemStackV1, ItemStateV1, MineCommandV1,
     MoveStackCommandV1, PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipePatternV1,
     ReferenceGameplayState, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SelectHotbarCommandV1,
@@ -17,13 +18,25 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct GameplayKernel<'catalog> {
     catalog: &'catalog GameplayCatalog,
+    rules: GameplayRulesV1,
 }
 
 impl<'catalog> GameplayKernel<'catalog> {
     /// Creates a planner over one immutable compiled gameplay catalog.
     #[must_use]
     pub const fn new(catalog: &'catalog GameplayCatalog) -> Self {
-        Self { catalog }
+        Self {
+            catalog,
+            rules: GameplayRulesV1 {
+                player_mode: GameplayModeV1::Survival,
+            },
+        }
+    }
+
+    /// Creates a planner with host-authorized immutable gameplay rules.
+    #[must_use]
+    pub const fn with_rules(catalog: &'catalog GameplayCatalog, rules: GameplayRulesV1) -> Self {
+        Self { catalog, rules }
     }
 
     /// Returns the catalog bound to this planner.
@@ -51,6 +64,7 @@ impl<'catalog> GameplayKernel<'catalog> {
             GameplayCommandV1::DropItem(command) => self.plan_drop(state, command)?,
             GameplayCommandV1::Pickup(command) => self.plan_pickup(state, command)?,
             GameplayCommandV1::Place(command) => self.plan_place(state, command)?,
+            GameplayCommandV1::CreativePick(command) => self.plan_creative_pick(state, command)?,
             GameplayCommandV1::Craft(command) => self.plan_craft(state, command)?,
             GameplayCommandV1::Transfer(command) => self.plan_transfer(state, command)?,
             GameplayCommandV1::MoveStack(command) => self.plan_move_stack(state, command)?,
@@ -374,7 +388,9 @@ impl<'catalog> GameplayKernel<'catalog> {
                 .ok_or_else(|| GameplayReject::NotPlacementItem {
                     item: source.item().clone(),
                 })?;
-        after[command.slot.as_usize()] = source.with_quantity(source.quantity() - 1)?;
+        if self.rules.player_mode == GameplayModeV1::Survival {
+            after[command.slot.as_usize()] = source.with_quantity(source.quantity() - 1)?;
+        }
         let mut edits = inventory_diff(command.player, inventory, &after)?;
         edits.push(GameplayMutationIntentV1::Block {
             target: edit_target(chunk.clone(), GameplayStorageDomain::Voxels),
@@ -386,6 +402,50 @@ impl<'catalog> GameplayKernel<'catalog> {
             edits,
             CommandOutcomeV1::BlockPlaced {
                 affected_chunk: chunk,
+            },
+        ))
+    }
+
+    fn plan_creative_pick(
+        &self,
+        state: &ReferenceGameplayState,
+        command: &CreativePickCommandV1,
+    ) -> Result<(Vec<GameplayMutationIntentV1>, CommandOutcomeV1), GameplayReject> {
+        if self.rules.player_mode != GameplayModeV1::Creative {
+            return Err(GameplayReject::CreativeModeRequired);
+        }
+        let inventory = player_inventory(state, command.player)?;
+        if inventory.revision != command.expected_inventory_revision {
+            return Err(GameplayReject::StaleInventoryRevision {
+                expected: command.expected_inventory_revision,
+                actual: inventory.revision,
+            });
+        }
+        if command.slot.get() >= inventory.hotbar_slots {
+            return Err(GameplayReject::SlotOutOfRange {
+                slot: command.slot,
+                slots: usize::from(inventory.hotbar_slots),
+            });
+        }
+        let definition =
+            self.catalog
+                .item(&command.item)
+                .ok_or_else(|| GameplayReject::UnknownReference {
+                    kind: "item",
+                    id: command.item.as_str().to_owned(),
+                })?;
+        let stack = match definition.durability {
+            Some(durability) => ItemStackV1::tool(command.item.clone(), durability.get())?,
+            None => ItemStackV1::plain(command.item.clone(), definition.stack_limit.get())?,
+        };
+        self.catalog.validate_stack(&stack)?;
+        let mut after = inventory.slots.to_vec();
+        after[command.slot.as_usize()] = Some(stack);
+        Ok((
+            inventory_diff(command.player, inventory, &after)?,
+            CommandOutcomeV1::CreativeStackPicked {
+                slot: command.slot,
+                item: command.item.clone(),
             },
         ))
     }
@@ -851,6 +911,7 @@ pub struct ReferencePlanApplier {
     world: crate::WorldId,
     state: ReferenceGameplayState,
     catalog: GameplayCatalog,
+    rules: GameplayRulesV1,
     pending_storage_commit: Option<PendingStorageCommit>,
 }
 
@@ -873,6 +934,20 @@ impl ReferencePlanApplier {
         state: ReferenceGameplayState,
         catalog: GameplayCatalog,
     ) -> Result<Self, GameplayReject> {
+        Self::try_new_with_rules(world, state, catalog, GameplayRulesV1::default())
+    }
+
+    /// Validates loaded state and binds host-authorized immutable gameplay rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation failures as [`Self::try_new`].
+    pub fn try_new_with_rules(
+        world: crate::WorldId,
+        state: ReferenceGameplayState,
+        catalog: GameplayCatalog,
+        rules: GameplayRulesV1,
+    ) -> Result<Self, GameplayReject> {
         state.validate_loaded(&catalog)?;
         if let Some(pending) = &state.pending_receipt {
             return Err(GameplayReject::StorageCommitPending {
@@ -884,6 +959,7 @@ impl ReferencePlanApplier {
             world,
             state,
             catalog,
+            rules,
             pending_storage_commit: None,
         })
     }
@@ -1051,7 +1127,8 @@ impl ReferencePlanApplier {
                 observed_world_revision: self.state.observed_world_revision.get(),
             });
         }
-        let plan = GameplayKernel::new(&self.catalog).plan(&self.state, envelope)?;
+        let plan =
+            GameplayKernel::with_rules(&self.catalog, self.rules).plan(&self.state, envelope)?;
         self.apply_plan(plan, fault)
     }
 

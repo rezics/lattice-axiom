@@ -22,9 +22,9 @@ use latticeaxiom_content::{
 use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
     AuthorityTick, BlockId, BlockPosition, CommandOutcomeV1, ContainerId, ContainerStateV1,
-    DimensionChunkKey, DropEntityId, GameplayCatalog, GameplayReject, InventoryInspectV1,
-    ItemStackV1, PlayerId, ProcessId, RecipeId, RecipeInspectV1, SlotIndex, TransferCommandV1,
-    WorkstationId,
+    DimensionChunkKey, DropEntityId, GameplayCatalog, GameplayModeV1, GameplayReject,
+    InventoryInspectV1, ItemStackV1, PlayerId, ProcessId, RecipeId, RecipeInspectV1, SlotIndex,
+    TransferCommandV1, WorkstationId,
 };
 use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
@@ -760,6 +760,14 @@ impl ProductionSpine {
         terrain_config: TerrainConfigV2,
         world_store: Option<DeterministicWorldStorage>,
     ) -> Result<Self, ProductionHostError> {
+        let gameplay_mode = if super::capability_present(
+            &images.images().graph().capability_providers,
+            super::DEBUG_WORKBENCH_CAPABILITY,
+        ) {
+            GameplayModeV1::Creative
+        } else {
+            GameplayModeV1::Survival
+        };
         let config = super::worldgen::spine_config_for(&terrain_config);
         let chunk_edge = config.chunk_edge_voxels;
         let worldgen = host_worldgen_catalog(images)?;
@@ -898,7 +906,7 @@ impl ProductionSpine {
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
         prime_startup_working_set(&mut inner, &kernel, origin, FixedTick::new(0))?;
         inner.last_success = None;
-        bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk)?;
+        bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk, gameplay_mode)?;
         if let Some(session) = restored_session {
             restore_player_session(&mut inner, &session)?;
         }
@@ -2071,15 +2079,15 @@ impl ProductionSpine {
         })
     }
 
-    /// Selects or swaps the stack that places the live DDA target block.
+    /// Selects or obtains the stack that places the live DDA target block.
     ///
-    /// Reuses the latest crosshair hit. Missing stacks fail closed as
-    /// [`GameplayReject::EmptySlot`]. This is survival pick, not creative give.
+    /// Reuses the latest crosshair hit. Survival mode selects or moves an owned
+    /// stack; creative mode may create a full catalog stack in the selected slot.
     ///
     /// # Errors
     ///
-    /// Returns [`GameplayReject`] when no target is aimed, no matching stack
-    /// exists, or the inventory move fails.
+    /// Returns [`GameplayReject`] when no target is aimed, no placement item is
+    /// registered, or the authoritative inventory command fails.
     pub fn pick_aimed_block(&self) -> Result<(), GameplayReject> {
         let mut inner = self
             .lock_inner()
@@ -2087,6 +2095,14 @@ impl ProductionSpine {
                 resource: "spine_lock",
             })?;
         inner.pick_aimed_block(self.storage.kernel())
+    }
+
+    /// Returns the immutable gameplay mode selected by the product lock.
+    #[must_use]
+    pub fn gameplay_mode(&self) -> Option<GameplayModeV1> {
+        self.lock_inner()
+            .ok()
+            .and_then(|inner| inner.gameplay.as_ref().map(ProductionGameplay::mode))
     }
 
     /// Typed inventory inspect fragment. UI must not invent a second inventory.
@@ -5806,6 +5822,7 @@ fn bind_gameplay_session(
     kernel: &MemoryTransactionKernel,
     catalog: GameplayCatalog,
     spawn_chunk: ChunkCoordinate,
+    gameplay_mode: GameplayModeV1,
 ) -> Result<(), ProductionHostError> {
     let snapshot = kernel.reference_snapshot(inner.world)?;
     let mut loaded = BTreeMap::new();
@@ -5824,6 +5841,7 @@ fn bind_gameplay_session(
         loaded,
         snapshot.revision(),
         inner.chunk_edge,
+        gameplay_mode,
     )?);
     Ok(())
 }

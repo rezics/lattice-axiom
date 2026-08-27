@@ -19,9 +19,10 @@ use bevy::{
     render::{RenderPlugin, renderer::RenderDevice},
 };
 use latticeaxiom_compose::{
-    COMPOSITION_SCHEMA_VERSION, CompositionBootstrapV1, CompositionPolicy, CompositionSpec,
-    ExactRegistration, LOCK_SCHEMA_VERSION, LockActionMode, LockedGameGraph, LockedPackage,
-    ManifestProducer, NickelEvaluationLimits, NumericRegistrationId, PRODUCT_LOCK_FILE_NAME,
+    COMPOSITION_SCHEMA_VERSION, CapabilityCardinality, CapabilityRequirement,
+    CompositionBootstrapV1, CompositionPolicy, CompositionSpec, ExactRegistration,
+    LOCK_SCHEMA_VERSION, LockActionMode, LockedGameGraph, LockedPackage, ManifestProducer,
+    NickelEvaluationLimits, NumericRegistrationId, PRODUCT_LOCK_FILE_NAME,
     PRODUCT_LOCK_PRODUCER_MACHINE, PackageDomain, PackageRequest, ProductLockDraftV1,
     ProductLockError, ProductLockObjects, ProductLockProducerV1, ProductLockReceiptKind,
     ProfileKind, RealizationId, RealizationKind, RealizationPreference, RealizedDataRootV1,
@@ -48,12 +49,12 @@ use latticeaxiom_engine::{
     WorkingSetDiagnosticsV1, WorkstationId, compile_authored_gameplay_catalog,
     empty_gameplay_catalog,
 };
-use latticeaxiom_gameplay::BlockId;
+use latticeaxiom_gameplay::{BlockId, GameplayModeV1};
 use latticeaxiom_launcher::{
     ChildExitKindV1, HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1,
     SettingTransactionRevision,
 };
-use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1};
+use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1, TargetEyePoseV1};
 use latticeaxiom_registration::{
     CallbackDeclaration, CompiledRegistration, PackageRegistrationInput, ReceiptValidationError,
     RegistrationCompileInput, RegistrationCompiler, SystemDeclaration,
@@ -3068,11 +3069,33 @@ impl Fixture {
 
 #[allow(clippy::too_many_lines)]
 fn fixture() -> Fixture {
+    fixture_with_debug_workbench(false)
+}
+
+#[allow(clippy::too_many_lines)]
+fn fixture_with_debug_workbench(select_debug_workbench: bool) -> Fixture {
     let package = package_name("terrenia");
     let version = package_version("0.1.0");
     let source = source_id("latticeaxiom:source/terrenia");
     let profile = stable_id("latticeaxiom:profile/headless");
     let patterns = grant_patterns();
+    let debug_workbench = "latticeaxiom:capability/debug-workbench@1"
+        .parse::<CapabilityId>()
+        .expect("debug workbench capability is canonical");
+    let capabilities = if select_debug_workbench {
+        BTreeMap::from([(
+            debug_workbench.clone(),
+            CapabilityRequirement {
+                capability: debug_workbench.clone(),
+                version: version_requirement("^1.0.0"),
+                provider: Some(package.clone()),
+                cardinality: CapabilityCardinality::ExactlyOne,
+                domains: BTreeSet::from([PackageDomain::Authoritative]),
+            },
+        )])
+    } else {
+        BTreeMap::new()
+    };
     let composition = CompositionSpec {
         schema_version: COMPOSITION_SCHEMA_VERSION,
         profile: profile.clone(),
@@ -3086,7 +3109,7 @@ fn fixture() -> Fixture {
                 realization: RealizationPreference::Auto,
             },
         )]),
-        capabilities: BTreeMap::new(),
+        capabilities,
         features: BTreeMap::new(),
         parameters: BTreeMap::new(),
         semantic_bindings: BTreeMap::new(),
@@ -3149,6 +3172,23 @@ fn fixture() -> Fixture {
         .recompute_semantic_hash()
         .expect("fixture manifest canonicalizes");
 
+    let mut provided_capabilities = BTreeSet::from([
+        "latticeaxiom:capability/content-blocks@1"
+            .parse::<CapabilityId>()
+            .expect("content blocks capability is canonical"),
+        "latticeaxiom:capability/worldgen-terrain-provider@2"
+            .parse::<CapabilityId>()
+            .expect("worldgen terrain capability is canonical"),
+        "latticeaxiom:capability/sandbox-gameplay@1"
+            .parse::<CapabilityId>()
+            .expect("sandbox gameplay capability is canonical"),
+        "latticeaxiom:capability/sandbox-tools@1"
+            .parse::<CapabilityId>()
+            .expect("sandbox tools capability is canonical"),
+    ]);
+    if select_debug_workbench {
+        provided_capabilities.insert(debug_workbench.clone());
+    }
     let package_input = PackageRegistrationInput {
         manifest: manifest.clone(),
         schemas: BTreeMap::new(),
@@ -3172,20 +3212,7 @@ fn fixture() -> Fixture {
                 signature_hash: signature,
             },
         )]),
-        provided_capabilities: BTreeSet::from([
-            "latticeaxiom:capability/content-blocks@1"
-                .parse::<CapabilityId>()
-                .expect("content blocks capability is canonical"),
-            "latticeaxiom:capability/worldgen-terrain-provider@2"
-                .parse::<CapabilityId>()
-                .expect("worldgen terrain capability is canonical"),
-            "latticeaxiom:capability/sandbox-gameplay@1"
-                .parse::<CapabilityId>()
-                .expect("sandbox gameplay capability is canonical"),
-            "latticeaxiom:capability/sandbox-tools@1"
-                .parse::<CapabilityId>()
-                .expect("sandbox tools capability is canonical"),
-        ]),
+        provided_capabilities,
         semantic_grants: BTreeSet::new(),
     };
     let artifact = fixture_data_artifact(&package);
@@ -3257,6 +3284,11 @@ fn fixture() -> Fixture {
         graph_hash: CanonicalHash::digest(b"unsealed-graph"),
         lock_hash: CanonicalHash::digest(b"unsealed-lock"),
     };
+    if select_debug_workbench {
+        graph
+            .capability_providers
+            .insert(debug_workbench, vec![package.clone()]);
+    }
     graph.graph_hash = graph
         .recompute_graph_hash()
         .expect("fixture graph canonicalizes");
@@ -3423,7 +3455,16 @@ impl Drop for TestDirectory {
 
 #[allow(clippy::too_many_lines)]
 fn lock_boot_fixture() -> LockBootFixture {
-    let fixture = fixture();
+    lock_boot_fixture_from(fixture())
+}
+
+#[allow(clippy::too_many_lines)]
+fn creative_lock_boot_fixture() -> LockBootFixture {
+    lock_boot_fixture_from(fixture_with_debug_workbench(true))
+}
+
+#[allow(clippy::too_many_lines)]
+fn lock_boot_fixture_from(fixture: Fixture) -> LockBootFixture {
     let directory = TestDirectory::create();
     let source = b"terrenia-source".to_vec();
     let artifact = fixture_data_artifact(&fixture.package);
@@ -4548,10 +4589,14 @@ fn production_host_inspect_overlay_fills_harvest_and_omits_occupancy() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn production_host_pick_block_selects_swaps_and_rejects_when_absent() {
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "resident fixture coordinates are bounded far below exact f32 integer limits"
+)]
+fn production_host_creative_pick_block_selects_and_creates_catalog_stacks() {
     let _production_host_guard = production_host_test_guard();
     let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
-    let boot = lock_boot_fixture();
+    let boot = creative_lock_boot_fixture();
     let mut instance = EngineInstance::new_headless_host_from_lock_with_catalog(
         boot.prepared(),
         SPINE_TIMESTEP,
@@ -4564,18 +4609,46 @@ fn production_host_pick_block_selects_swaps_and_rejects_when_absent() {
         .get_resource::<ProductionSpine>()
         .expect("production spine is installed")
         .clone();
+    assert_eq!(spine.gameplay_mode(), Some(GameplayModeV1::Creative));
 
-    instance
-        .enqueue_headless_actions([
-            look_frame(1, -std::f32::consts::FRAC_PI_2, 0.7),
-            idle_frame(2),
-        ])
-        .expect("look frames enqueue");
-    instance.advance_fixed_ticks(3).expect("look ticks advance");
+    let (_, target, _) = first_resident_soil(&spine);
+    mine_until_broken(&spine, target);
+    let (forward, expected_block) = [
+        ([1.0, 0.0, 0.0], (1, 0, 0)),
+        ([-1.0, 0.0, 0.0], (-1, 0, 0)),
+        ([0.0, 1.0, 0.0], (0, 1, 0)),
+        ([0.0, -1.0, 0.0], (0, -1, 0)),
+        ([0.0, 0.0, 1.0], (0, 0, 1)),
+        ([0.0, 0.0, -1.0], (0, 0, -1)),
+    ]
+    .into_iter()
+    .find_map(|(forward, (dx, dy, dz))| {
+        let neighbor = latticeaxiom_gameplay::BlockPosition {
+            x: target.x.checked_add(dx)?,
+            y: target.y.checked_add(dy)?,
+            z: target.z.checked_add(dz)?,
+        };
+        spine
+            .inspect_occupancy(neighbor)
+            .ok()?
+            .solid
+            .map(|block| (forward, block))
+    })
+    .expect("the mined soil cell must expose a solid neighbor");
+    let target_eye = TargetEyePoseV1 {
+        origin_m: [
+            target.x as f32 + 0.5,
+            target.y as f32 + 0.5,
+            target.z as f32 + 0.5,
+        ],
+        forward,
+    };
+    spine.refresh_target(target_eye);
     let aimed = spine
         .current_target()
         .expect("pick-block needs a live DDA target")
         .block_id;
+    assert_eq!(aimed, expected_block);
     let placement_item = catalog
         .items()
         .values()
@@ -4590,6 +4663,11 @@ fn production_host_pick_block_selects_swaps_and_rejects_when_absent() {
     } else {
         other_item
     };
+    let placement_limit = catalog
+        .item(&placement_item)
+        .expect("placement item remains catalog-owned")
+        .stack_limit
+        .get();
 
     clear_inventory(&spine);
     spine
@@ -4602,7 +4680,7 @@ fn production_host_pick_block_selects_swaps_and_rejects_when_absent() {
         .select_hotbar_slot(0)
         .expect("unrelated hotbar slot is selected");
     instance
-        .enqueue_headless_actions([pick_block_frame(3)])
+        .enqueue_headless_actions([pick_block_frame(1)])
         .expect("pick-block frame enqueues");
     instance
         .advance_fixed_ticks(2)
@@ -4636,35 +4714,45 @@ fn production_host_pick_block_selects_swaps_and_rejects_when_absent() {
             Some(ItemStackV1::plain(placement_item.clone(), 4).expect("body placement stack")),
         )
         .expect("body inventory holds the placement stack");
+    spine.refresh_target(target_eye);
     spine
         .pick_aimed_block()
-        .expect("pick-block swaps a body stack onto the selected hotbar");
-    let after_swap = spine.inventory_view().expect("inventory after pick-swap");
-    assert_eq!(after_swap.hotbar_slot(), 0);
+        .expect("creative pick-block fills the selected hotbar");
+    let after_create = spine
+        .inventory_view()
+        .expect("inventory after creative pick");
+    assert_eq!(after_create.hotbar_slot(), 0);
     assert_eq!(
-        after_swap
+        after_create
             .slots()
             .first()
             .and_then(Option::as_ref)
-            .map(latticeaxiom_gameplay::ItemStackV1::item),
-        Some(&placement_item),
-        "aimed placement stack must land on the selected hotbar"
+            .map(|stack| (stack.item(), stack.quantity())),
+        Some((&placement_item, placement_limit)),
+        "creative pick must create a full catalog stack"
     );
     assert_eq!(
-        after_swap
+        after_create
             .slots()
             .get(usize::from(HOTBAR_SLOTS) + 3)
             .and_then(Option::as_ref)
             .map(latticeaxiom_gameplay::ItemStackV1::item),
-        Some(&other_item),
-        "previous hotbar stack must swap into the body slot"
+        Some(&placement_item),
+        "creative pick must not mutate the body inventory stack"
     );
 
     clear_inventory(&spine);
-    let rejected = spine.pick_aimed_block();
-    assert!(
-        matches!(rejected, Err(GameplayReject::EmptySlot)),
-        "pick-block must fail closed when the placement item is absent, got {rejected:?}"
+    spine.refresh_target(target_eye);
+    spine
+        .pick_aimed_block()
+        .expect("creative pick must work when the item is absent");
+    assert_eq!(
+        spine
+            .inventory_view()
+            .expect("inventory after absent creative pick")
+            .selected()
+            .map(|stack| (stack.item(), stack.quantity())),
+        Some((&placement_item, placement_limit))
     );
 }
 
@@ -4857,7 +4945,7 @@ fn production_host_places_torch_and_opens_chest_container_schema() {
         "chest must realize the generic container schema"
     );
 
-    let boot = lock_boot_fixture();
+    let boot = creative_lock_boot_fixture();
     let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
         boot.prepared(),
         SPINE_TIMESTEP,
@@ -4903,18 +4991,18 @@ fn production_host_places_torch_and_opens_chest_container_schema() {
     };
     let placed = spine
         .place_from_hotbar(place_anchor, BlockFaceV1::NegativeY)
-        .expect("torch placement consumes the catalog placement item");
+        .expect("creative torch placement uses the catalog placement item");
     let occupancy = spine
         .inspect_occupancy(placed.position)
         .expect("placed torch cell is inspectable");
     assert_eq!(occupancy.solid.as_ref(), Some(&torch_block));
-    assert!(
+    assert_eq!(
         spine
             .inventory_view()
             .expect("inventory is bound")
-            .count_item(&torch_item)
-            < 4,
-        "placing a torch must consume the placement stack"
+            .count_item(&torch_item),
+        4,
+        "the dev profile must retain creative placement stacks"
     );
 }
 

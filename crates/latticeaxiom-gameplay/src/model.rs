@@ -1390,6 +1390,23 @@ pub struct CommandEnvelopeV1 {
     pub command: GameplayCommandV1,
 }
 
+/// Authoritative player capability mode selected by the host profile.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum GameplayModeV1 {
+    /// Ordinary inventory costs and no authority-only item creation.
+    #[default]
+    Survival,
+    /// Placement retains inventory and pick-block may create a catalog item stack.
+    Creative,
+}
+
+/// Immutable gameplay rules bound to an authoritative planner instance.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GameplayRulesV1 {
+    /// Mode applied to the local authoritative player.
+    pub player_mode: GameplayModeV1,
+}
+
 /// Version-one sandbox command set.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GameplayCommandV1 {
@@ -1399,8 +1416,10 @@ pub enum GameplayCommandV1 {
     DropItem(DropItemCommandV1),
     /// Pick up a complete dropped stack atomically.
     Pickup(PickupCommandV1),
-    /// Consume a placement item and set an empty block cell.
+    /// Set an empty block cell, consuming the item when rules require it.
     Place(PlaceCommandV1),
+    /// Fill one hotbar slot from the catalog under creative authority.
+    CreativePick(CreativePickCommandV1),
     /// Execute a shaped or shapeless recipe.
     Craft(RecipeCraftCommandV1),
     /// Transfer a quantity between a player and persistent container.
@@ -1465,6 +1484,19 @@ pub struct PlaceCommandV1 {
     pub target: BlockKey,
     /// Storage-owned chunk revision observed by the placement query.
     pub expected_chunk_revision: ChunkRevision,
+}
+
+/// Authority-only creative pick-block payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreativePickCommandV1 {
+    /// Destination player inventory.
+    pub player: PlayerId,
+    /// Catalog item to place in the hotbar.
+    pub item: ItemId,
+    /// Destination hotbar slot.
+    pub slot: SlotIndex,
+    /// Observed player inventory revision.
+    pub expected_inventory_revision: u64,
 }
 
 /// Recipe command payload.
@@ -1757,6 +1789,13 @@ pub enum CommandOutcomeV1 {
         /// Selected hotbar index.
         slot: SlotIndex,
     },
+    /// A creative catalog stack replaced the selected hotbar slot.
+    CreativeStackPicked {
+        /// Destination hotbar slot.
+        slot: SlotIndex,
+        /// Concrete catalog item selected.
+        item: ItemId,
+    },
     /// Input and fuel were consumed and a continuation was staged.
     ProcessScheduled {
         /// New continuation.
@@ -2032,6 +2071,9 @@ pub enum GameplayReject {
         /// Slot count.
         slots: usize,
     },
+    /// An authority-only creative operation was requested under survival rules.
+    #[error("operation requires creative gameplay authority")]
+    CreativeModeRequired,
     /// A required slot is empty.
     #[error("required slot is empty")]
     EmptySlot,
@@ -2214,6 +2256,7 @@ impl GameplayReject {
             Self::BlockMissing => "gameplay.block_missing",
             Self::BlockOccupied => "gameplay.block_occupied",
             Self::SlotOutOfRange { .. } => "gameplay.slot_out_of_range",
+            Self::CreativeModeRequired => "gameplay.creative_mode_required",
             Self::EmptySlot => "gameplay.empty_slot",
             Self::SlotMismatch => "gameplay.slot_mismatch",
             Self::StackLimitExceeded { .. } => "gameplay.stack_limit_exceeded",

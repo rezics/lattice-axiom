@@ -15,12 +15,13 @@ use latticeaxiom_core::{CanonicalHash, SchemaId, StableId};
 use latticeaxiom_gameplay::{
     AuthorityTick, BlockDefinitionV1, BlockId, BlockKey, BlockPosition, CatalogLimits,
     ChunkCoordinate, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1, ContainerId,
-    ContainerOwnerComponentV1, ContainerStateV1, DimensionChunkKey, DimensionId, DropEntityId,
-    DropItemCommandV1, FaultInjection, FrozenItemRoleBindingV1, FuelRuleV1, GameplayCatalog,
-    GameplayCatalogSourceV1, GameplayCommandV1, GameplayEditTarget, GameplayKernel, GameplayLimits,
-    GameplayPlanV1, GameplayReject, GameplayStorageDomain, IngredientV1, InventoryStateV1,
-    ItemDefinitionV1, ItemId, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, ItemStackV1,
-    ItemStateV1, ItemTagDefinitionV1, ItemTagId, MineCommandV1, MiningRuleV1, MoveStackCommandV1,
+    ContainerOwnerComponentV1, ContainerStateV1, CreativePickCommandV1, DimensionChunkKey,
+    DimensionId, DropEntityId, DropItemCommandV1, FaultInjection, FrozenItemRoleBindingV1,
+    FuelRuleV1, GameplayCatalog, GameplayCatalogSourceV1, GameplayCommandV1, GameplayEditTarget,
+    GameplayKernel, GameplayLimits, GameplayModeV1, GameplayPlanV1, GameplayReject,
+    GameplayRulesV1, GameplayStorageDomain, IngredientV1, InventoryStateV1, ItemDefinitionV1,
+    ItemId, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, ItemStackV1, ItemStateV1,
+    ItemTagDefinitionV1, ItemTagId, MineCommandV1, MiningRuleV1, MoveStackCommandV1,
     PersistentEntityId, PickupCommandV1, PlaceCommandV1, PlayerId, ProcessDefinitionV1,
     RecipeCraftCommandV1, RecipeDefinitionV1, RecipeId, RecipePatternV1, ReferenceGameplayState,
     ReferencePlanApplier, RoleOutputV1, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1,
@@ -416,6 +417,7 @@ fn envelope(state: &ReferenceGameplayState, command: GameplayCommandV1) -> Comma
 #[derive(Debug)]
 struct FixtureAuthority {
     gameplay: ReferencePlanApplier,
+    rules: GameplayRulesV1,
     storage: MemoryTransactionKernel,
     storage_revisions: BTreeMap<DimensionChunkKey, ChunkRevision>,
 }
@@ -571,7 +573,8 @@ impl FixtureAuthority {
         catalog: &GameplayCatalog,
         envelope: &CommandEnvelopeV1,
     ) -> Result<RuntimePlanReceiptV1, GameplayReject> {
-        let plan = GameplayKernel::new(catalog).plan(self.gameplay.state(), envelope)?;
+        let plan = GameplayKernel::with_rules(catalog, self.rules)
+            .plan(self.gameplay.state(), envelope)?;
         let domains = capture_domains(&plan);
         let receipt = self.gameplay.apply_plan(plan, FaultInjection::None)?;
         self.commit_domains(envelope.transaction_id, &domains);
@@ -592,6 +595,14 @@ fn execute(
 }
 
 fn applier(state: ReferenceGameplayState, catalog: &GameplayCatalog) -> FixtureAuthority {
+    applier_with_rules(state, catalog, GameplayRulesV1::default())
+}
+
+fn applier_with_rules(
+    state: ReferenceGameplayState,
+    catalog: &GameplayCatalog,
+    rules: GameplayRulesV1,
+) -> FixtureAuthority {
     let world = fixture_world();
     let storage = MemoryTransactionKernel::new();
     let mut storage_revisions = BTreeMap::new();
@@ -652,10 +663,11 @@ fn applier(state: ReferenceGameplayState, catalog: &GameplayCatalog) -> FixtureA
             "fixture storage revision mismatch for {chunk:?}: {actual:?} != {expected:?}"
         );
     }
-    let gameplay = ReferencePlanApplier::try_new(world, state, catalog.clone())
+    let gameplay = ReferencePlanApplier::try_new_with_rules(world, state, catalog.clone(), rules)
         .unwrap_or_else(|error| panic!("fixture loaded-state validation failed: {error}"));
     FixtureAuthority {
         gameplay,
+        rules,
         storage,
         storage_revisions,
     }
@@ -1467,6 +1479,91 @@ fn loaded_empty_cell_is_distinct_from_an_unloaded_cell() {
         loaded_authority.state().block(&target).map(BlockId::as_str),
         Some("example:block/plank")
     );
+}
+
+#[test]
+fn gameplay_rules_keep_survival_costs_and_authorize_creative_pick() {
+    let catalog = catalog();
+    let mut initial = state_with_inventory(9);
+    seed_stack(&mut initial, PLAYER, 0, plain("example:item/plank", 2));
+    let target = block_key(&fixture_dimension(), BlockPosition { x: 3, y: 1, z: 0 });
+    let place = GameplayCommandV1::Place(PlaceCommandV1 {
+        player: PLAYER,
+        slot: SlotIndex::new(0),
+        target: target.clone(),
+        expected_chunk_revision: ChunkRevision::ZERO,
+    });
+
+    let mut survival = applier(initial.clone(), &catalog);
+    execute(&mut survival, &catalog, place.clone());
+    assert!(matches!(
+        survival
+            .state()
+            .inventory(PLAYER)
+            .and_then(|inventory| inventory.slot(SlotIndex::new(0)).ok().flatten()),
+        Some(stack) if stack.quantity() == 1
+    ));
+
+    let rules = GameplayRulesV1 {
+        player_mode: GameplayModeV1::Creative,
+    };
+    let mut creative = applier_with_rules(initial, &catalog, rules);
+    execute(&mut creative, &catalog, place);
+    assert!(matches!(
+        creative
+            .state()
+            .inventory(PLAYER)
+            .and_then(|inventory| inventory.slot(SlotIndex::new(0)).ok().flatten()),
+        Some(stack) if stack.quantity() == 2
+    ));
+
+    let inventory_revision = creative.state().inventory(PLAYER).map_or_else(
+        || panic!("creative inventory missing"),
+        InventoryStateV1::revision,
+    );
+    let item: ItemId = parsed("example:item/log");
+    let picked = execute(
+        &mut creative,
+        &catalog,
+        GameplayCommandV1::CreativePick(CreativePickCommandV1 {
+            player: PLAYER,
+            item: item.clone(),
+            slot: SlotIndex::new(1),
+            expected_inventory_revision: inventory_revision,
+        }),
+    );
+    assert!(matches!(
+        picked.outcome,
+        CommandOutcomeV1::CreativeStackPicked { slot, item: ref picked_item }
+            if slot == SlotIndex::new(1) && picked_item == &item
+    ));
+    let stack_limit = catalog.item(&item).map_or_else(
+        || panic!("creative item definition missing"),
+        |item| item.stack_limit.get(),
+    );
+    assert!(matches!(
+        creative
+            .state()
+            .inventory(PLAYER)
+            .and_then(|inventory| inventory.slot(SlotIndex::new(1)).ok().flatten()),
+        Some(stack) if stack.item() == &item && stack.quantity() == stack_limit
+    ));
+
+    let survival_inventory_revision = survival.state().inventory(PLAYER).map_or_else(
+        || panic!("survival inventory missing"),
+        InventoryStateV1::revision,
+    );
+    let rejected = GameplayCommandV1::CreativePick(CreativePickCommandV1 {
+        player: PLAYER,
+        item,
+        slot: SlotIndex::new(1),
+        expected_inventory_revision: survival_inventory_revision,
+    });
+    let rejected_envelope = envelope(survival.state(), rejected);
+    assert!(matches!(
+        survival.execute_committed(&catalog, &rejected_envelope),
+        Err(GameplayReject::CreativeModeRequired)
+    ));
 }
 
 fn state_seed_loaded_target(

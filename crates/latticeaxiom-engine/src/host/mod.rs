@@ -83,6 +83,7 @@ use thiserror::Error;
 
 const TARGET_INSPECT_SURFACE_CAPABILITY: &str = "latticeaxiom:capability/target-inspect-surface@1";
 const DIAGNOSTIC_REGISTRY_CAPABILITY: &str = "latticeaxiom:capability/diagnostic-registry@1";
+const DEBUG_WORKBENCH_CAPABILITY: &str = "latticeaxiom:capability/debug-workbench@1";
 
 pub use catalog::{
     AuthoredContentCatalogSourcesV1, AuthoredGameplayCatalogSourcesV1,
@@ -294,7 +295,7 @@ impl ProductionInspectSurface {
     }
 }
 
-fn capability_present(
+pub(super) fn capability_present(
     providers: &BTreeMap<CapabilityId, Vec<PackageName>>,
     capability: &str,
 ) -> bool {
