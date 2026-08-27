@@ -110,6 +110,25 @@ fn river_plan_is_continuous_across_style_boundaries() {
 }
 
 #[test]
+fn terrain_density_uses_the_river_adjusted_surface() {
+    let plan = natural_plan(42, false);
+    let (x, z) = (-256_i64..=256)
+        .flat_map(|z| (-256_i64..=256).map(move |x| (x, z)))
+        .find(|&(x, z)| {
+            plan.river_sample(x, z)
+                .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel)
+        })
+        .expect("fixture contains a surface river channel");
+    let surface_y = i64::from(plan.terrain_height(x, z));
+
+    assert!(plan.terrain_density(x, surface_y, z) >= 0);
+    assert!(
+        plan.terrain_density(x, surface_y.saturating_add(1), z) < 0,
+        "the first voxel above an incised river bed must be void"
+    );
+}
+
+#[test]
 fn river_distance_is_lipschitz_across_coarse_cell_boundaries() {
     let plan = natural_plan(42, false);
     for z in -96..96 {

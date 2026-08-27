@@ -1242,8 +1242,7 @@ impl GenerationPlanV1 {
     /// void. Minimal caves turn otherwise-solid samples negative.
     #[must_use]
     pub fn terrain_density(&self, x: i64, y: i64, z: i64) -> i64 {
-        let sample = self.territory.sample(x, z);
-        let height = self.territory.height(x, z, sample);
+        let height = self.terrain_height(x, z);
         if self.cave.is_void(x, y, z, height) {
             -1
         } else {
