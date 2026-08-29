@@ -482,7 +482,7 @@ fn emit_adapter_mesh<K, const N: usize>(
     })
 }
 
-fn block_color(block_id: &str) -> [f32; 4] {
+pub(super) fn block_color(block_id: &str) -> [f32; 4] {
     // Fallback presentation is keyed by the content path, not by a game
     // namespace.  A replacement package can therefore reuse the same basic
     // material vocabulary without changing engine code.

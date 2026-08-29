@@ -32,6 +32,8 @@ mod spine;
 mod start;
 mod stream;
 mod surface;
+#[cfg(feature = "client")]
+mod voxel_icon;
 mod worldgen;
 mod writer;
 
@@ -401,7 +403,8 @@ impl Plugin for ProductionHostPlugin {
             .add_systems(
                 Startup,
                 (
-                    spawn_production_hud_if_client,
+                    voxel_icon::build_production_voxel_icons,
+                    spawn_production_hud_if_client.after(voxel_icon::build_production_voxel_icons),
                     client::spawn_production_client_view,
                     pause::spawn_pause_overlay_if_client,
                     attach_initial_chunk_meshes.after(client::spawn_production_client_view),
@@ -436,6 +439,19 @@ impl Plugin for ProductionHostPlugin {
                     .run_if(is_interactive_client),
             )
             .add_systems(
+                Update,
+                (
+                    hud::sync_production_inspect_hud,
+                    hud::sync_production_working_set_hud,
+                    hud::sync_production_status_hud,
+                    hud::sync_production_hotbar_hud,
+                    hud::sync_production_inventory_hud,
+                )
+                    .chain()
+                    .after(hud::sync_item_browser)
+                    .run_if(is_interactive_client),
+            )
+            .add_systems(
                 FixedFirst,
                 pause::suppress_gameplay_while_paused.before(PlayerSystemSet::SampleInput),
             )
@@ -444,18 +460,6 @@ impl Plugin for ProductionHostPlugin {
                 pause::freeze_player_while_paused
                     .after(PlayerSystemSet::PrepareMovement)
                     .before(PlayerSystemSet::MoveCapsule),
-            )
-            .add_systems(
-                FixedPostUpdate,
-                (
-                    hud::sync_production_inspect_hud
-                        .after(refresh_crosshair_target)
-                        .after(sync_working_set_diagnostics),
-                    hud::sync_production_working_set_hud.after(sync_working_set_diagnostics),
-                    hud::sync_production_status_hud.after(refresh_crosshair_target),
-                    hud::sync_production_hotbar_hud.after(refresh_crosshair_target),
-                    hud::sync_production_inventory_hud.after(refresh_crosshair_target),
-                ),
             );
     }
 

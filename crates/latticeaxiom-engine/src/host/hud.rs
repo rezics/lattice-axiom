@@ -1,8 +1,10 @@
 //! Production HUD: crosshair, inspect, status, hotbar, and inventory.
 
 use bevy::{
+    asset::Handle,
     ecs::observer::On,
     ecs::query::QueryFilter,
+    image::{Image, TRANSPARENT_IMAGE_HANDLE},
     input::{
         ButtonState,
         keyboard::{Key, KeyboardInput},
@@ -14,6 +16,7 @@ use bevy::{
         Val, With, Without,
     },
     ui::FocusPolicy,
+    ui::widget::ImageNode,
     ui_widgets::{Activate, Button, ScrollArea},
 };
 use latticeaxiom_gameplay::{
@@ -28,6 +31,7 @@ use crate::ui_font::ui_text_font;
 use super::{
     HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionSessionPause, ProductionSpine,
     WorkingSetDiagnosticsV1, gameplay::ProductionInventoryView,
+    voxel_icon::ProductionVoxelIconCache,
 };
 
 const RECIPE_LIST_CAPACITY: usize = 24;
@@ -204,7 +208,7 @@ impl ProductionHudSurfaces {
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionInspectReadout;
 
-/// Marker on the inspect overlay's missing-presentation icon swatch.
+/// Marker on the inspect overlay's cached voxel thumbnail.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionInspectIcon;
 
@@ -223,6 +227,10 @@ pub(super) struct ProductionHotbarSlot(u16);
 /// Border-only selector drawn above a hotbar/inventory swatch.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionSlotSelector;
+
+/// Cached cube image drawn inside a hotbar or inventory slot.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionSlotVoxelIcon;
 
 /// Marker on the inventory overlay root.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
@@ -251,6 +259,10 @@ pub(super) struct ProductionRecipeButton {
     workbench: bool,
 }
 
+/// Cached output-item cube drawn on a recipe row.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionRecipeVoxelIcon;
+
 /// Clickable package-authored item-browser category tab. Empty means `All`.
 #[derive(Clone, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct ProductionItemCategoryButton {
@@ -264,6 +276,10 @@ pub(super) struct ProductionItemBrowserButton {
     index: usize,
     item: String,
 }
+
+/// Cached item cube drawn in one item-browser entry.
+#[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
+pub(super) struct ProductionItemBrowserVoxelIcon;
 
 /// Search field button and label container.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
@@ -380,13 +396,13 @@ fn spawn_inspect_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands
         .with_children(|overlay| {
             overlay.spawn((
                 ProductionInspectIcon,
-                Name::new("Inspect icon"),
+                Name::new("Inspect voxel icon"),
                 Node {
-                    width: Val::Px(18.0),
-                    height: Val::Px(18.0),
+                    width: Val::Px(38.0),
+                    height: Val::Px(38.0),
                     ..Node::default()
                 },
-                BackgroundColor(icon_swatch_color("")),
+                ImageNode::default(),
                 FocusPolicy::Pass,
                 Pickable::IGNORE,
             ));
@@ -686,9 +702,29 @@ fn spawn_item_browser(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_
                         ))
                         .with_children(|entry| {
                             entry.spawn((
+                                ProductionItemBrowserVoxelIcon,
+                                Name::new("Item browser voxel icon"),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: Val::Px(3.0),
+                                    top: Val::Px(3.0),
+                                    width: Val::Px(36.0),
+                                    height: Val::Px(36.0),
+                                    ..Node::default()
+                                },
+                                ImageNode::default(),
+                                Pickable::IGNORE,
+                            ));
+                            entry.spawn((
                                 Text::new(""),
                                 ui_text_font(9.0),
                                 TextColor(Color::srgb(0.96, 0.97, 0.92)),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    right: Val::Px(2.0),
+                                    bottom: Val::Px(1.0),
+                                    ..Node::default()
+                                },
                             ));
                         });
                     }
@@ -866,7 +902,7 @@ fn spawn_recipe_list<M: Component>(
                 Name::new(format!("{name} {index}")),
                 Node {
                     width: Val::Percent(100.0),
-                    height: Val::Px(28.0),
+                    height: Val::Px(36.0),
                     display: Display::None,
                     padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                     align_items: AlignItems::Center,
@@ -876,6 +912,18 @@ fn spawn_recipe_list<M: Component>(
                 Pickable::IGNORE,
             ))
             .with_children(|row| {
+                row.spawn((
+                    ProductionRecipeVoxelIcon,
+                    Name::new("Recipe output voxel icon"),
+                    Node {
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
+                        margin: UiRect::right(Val::Px(6.0)),
+                        ..Node::default()
+                    },
+                    ImageNode::default(),
+                    Pickable::IGNORE,
+                ));
                 row.spawn((
                     Text::new(""),
                     ui_text_font(14.0),
@@ -910,9 +958,29 @@ fn spawn_item_slot<M: Component>(
         ))
         .with_children(|slot| {
             slot.spawn((
+                ProductionSlotVoxelIcon,
+                Name::new("Slot voxel icon"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(3.0),
+                    top: Val::Px(3.0),
+                    width: Val::Px((size - 6.0).max(1.0)),
+                    height: Val::Px((size - 6.0).max(1.0)),
+                    ..Node::default()
+                },
+                ImageNode::default(),
+                Pickable::IGNORE,
+            ));
+            slot.spawn((
                 Text::new(""),
                 ui_text_font(12.0),
                 TextColor(Color::srgb(0.94, 0.95, 0.90)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(2.0),
+                    bottom: Val::Px(1.0),
+                    ..Node::default()
+                },
             ));
             slot.spawn((
                 ProductionSlotSelector,
@@ -1123,7 +1191,6 @@ pub(super) fn recipe_activated(
 struct ItemBrowserEntryV1 {
     item: ItemId,
     name: String,
-    icon: String,
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
@@ -1219,6 +1286,7 @@ pub(super) fn capture_item_browser_search(
 #[allow(clippy::too_many_lines)] // One dirty projection keeps browser widget updates atomic.
 pub(super) fn sync_item_browser(
     spine: Res<'_, ProductionSpine>,
+    voxel_icons: Option<Res<'_, ProductionVoxelIconCache>>,
     mut surfaces: ResMut<'_, ProductionHudSurfaces>,
     mut category_buttons: Query<
         '_,
@@ -1238,14 +1306,10 @@ pub(super) fn sync_item_browser(
     mut item_buttons: Query<
         '_,
         '_,
-        (
-            &mut ProductionItemBrowserButton,
-            &mut Node,
-            &mut BackgroundColor,
-            &Children,
-        ),
+        (&mut ProductionItemBrowserButton, &mut Node, &Children),
         (With<Button>, Without<ProductionItemCategoryButton>),
     >,
+    mut item_icons: Query<'_, '_, &mut ImageNode, With<ProductionItemBrowserVoxelIcon>>,
     mut search: Query<
         '_,
         '_,
@@ -1289,12 +1353,7 @@ pub(super) fn sync_item_browser(
         } else {
             Color::srgb(0.12, 0.16, 0.14)
         };
-        if let Some(entity) = children.first()
-            && let Ok(mut text) = labels.get_mut(*entity)
-            && text.0 != label
-        {
-            *text = Text::new(label);
-        }
+        set_child_text(children, label, &mut labels);
     }
 
     let entries = filtered_item_browser_entries(&spine, &catalog, &surfaces.browser);
@@ -1305,7 +1364,7 @@ pub(super) fn sync_item_browser(
             item_count: entries.len(),
         });
     let first = surfaces.browser.first_item_index;
-    for (mut button, mut node, mut background, children) in &mut item_buttons {
+    for (mut button, mut node, children) in &mut item_buttons {
         let Some(entry) = entries.get(first.saturating_add(button.index)) else {
             button.item.clear();
             node.display = Display::None;
@@ -1313,14 +1372,13 @@ pub(super) fn sync_item_browser(
         };
         button.item = entry.item.to_string();
         node.display = Display::Flex;
-        background.0 = icon_swatch_color(&entry.icon);
+        set_child_image(
+            children,
+            voxel_icons.as_deref().map(|icons| icons.item(&entry.item)),
+            &mut item_icons,
+        );
         let label = compact_item_label(&entry.name);
-        if let Some(entity) = children.first()
-            && let Ok(mut text) = labels.get_mut(*entity)
-            && text.0 != label
-        {
-            *text = Text::new(label);
-        }
+        set_child_text(children, &label, &mut labels);
     }
 
     let page_count = entries.len().div_ceil(ITEM_BROWSER_CAPACITY).max(1);
@@ -1346,12 +1404,7 @@ pub(super) fn sync_item_browser(
         } else {
             format!("> {}", surfaces.browser.query)
         };
-        if let Some(entity) = children.first()
-            && let Ok(mut text) = labels.get_mut(*entity)
-            && text.0 != label
-        {
-            *text = Text::new(label);
-        }
+        set_child_text(children, &label, &mut labels);
     }
     if let Ok(entity) = mode_hint.single()
         && let Ok(mut text) = labels.get_mut(entity)
@@ -1389,7 +1442,6 @@ fn filtered_item_browser_entries(
             item_matches_search(catalog, item, &display.name, &tokens).then(|| ItemBrowserEntryV1 {
                 item: item.clone(),
                 name: display.name,
-                icon: display.icon,
             })
         })
         .collect()
@@ -1438,6 +1490,7 @@ fn compact_item_label(display_name: &str) -> String {
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_hand_recipe_list(
     spine: Res<'_, ProductionSpine>,
+    voxel_icons: Option<Res<'_, ProductionVoxelIconCache>>,
     surfaces: Res<'_, ProductionHudSurfaces>,
     lists: Query<
         '_,
@@ -1454,6 +1507,7 @@ pub(super) fn sync_hand_recipe_list(
         (&mut ProductionRecipeButton, &mut Node, &Children),
         Without<ProductionHandRecipeList>,
     >,
+    mut recipe_icons: Query<'_, '_, &mut ImageNode, With<ProductionRecipeVoxelIcon>>,
     mut labels: Query<'_, '_, &mut Text>,
 ) {
     if !surfaces.inventory_panel_open() {
@@ -1468,12 +1522,25 @@ pub(super) fn sync_hand_recipe_list(
     let Some(children) = lists.iter().next() else {
         return;
     };
-    sync_recipe_buttons(children, &mut buttons, &mut labels, &recipes, false);
+    let catalog = spine.gameplay_catalog();
+    sync_recipe_buttons(
+        children,
+        &mut buttons,
+        &mut recipe_icons,
+        &mut labels,
+        &recipes,
+        RecipeProjectionV1 {
+            catalog: catalog.as_ref(),
+            voxel_icons: voxel_icons.as_deref(),
+            workbench: false,
+        },
+    );
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_workbench_recipe_list(
     spine: Res<'_, ProductionSpine>,
+    voxel_icons: Option<Res<'_, ProductionVoxelIconCache>>,
     surfaces: Res<'_, ProductionHudSurfaces>,
     lists: Query<
         '_,
@@ -1490,6 +1557,7 @@ pub(super) fn sync_workbench_recipe_list(
         (&mut ProductionRecipeButton, &mut Node, &Children),
         Without<ProductionWorkbenchRecipeList>,
     >,
+    mut recipe_icons: Query<'_, '_, &mut ImageNode, With<ProductionRecipeVoxelIcon>>,
     mut labels: Query<'_, '_, &mut Text>,
 ) {
     if !surfaces.workbench_open() {
@@ -1504,15 +1572,35 @@ pub(super) fn sync_workbench_recipe_list(
     let Some(children) = lists.iter().next() else {
         return;
     };
-    sync_recipe_buttons(children, &mut buttons, &mut labels, &recipes, true);
+    let catalog = spine.gameplay_catalog();
+    sync_recipe_buttons(
+        children,
+        &mut buttons,
+        &mut recipe_icons,
+        &mut labels,
+        &recipes,
+        RecipeProjectionV1 {
+            catalog: catalog.as_ref(),
+            voxel_icons: voxel_icons.as_deref(),
+            workbench: true,
+        },
+    );
+}
+
+#[derive(Clone, Copy)]
+struct RecipeProjectionV1<'a> {
+    catalog: Option<&'a latticeaxiom_gameplay::GameplayCatalog>,
+    voxel_icons: Option<&'a ProductionVoxelIconCache>,
+    workbench: bool,
 }
 
 fn sync_recipe_buttons<F: QueryFilter>(
     children: &Children,
     buttons: &mut Query<'_, '_, (&mut ProductionRecipeButton, &mut Node, &Children), F>,
+    recipe_icons: &mut Query<'_, '_, &mut ImageNode, With<ProductionRecipeVoxelIcon>>,
     labels: &mut Query<'_, '_, &mut Text>,
     recipes: &[RecipeId],
-    workbench: bool,
+    projection: RecipeProjectionV1<'_>,
 ) {
     for (index, child) in children.iter().enumerate() {
         let Ok((mut button, mut node, row_children)) = buttons.get_mut(*child) else {
@@ -1522,14 +1610,18 @@ fn sync_recipe_buttons<F: QueryFilter>(
             let id = recipe.as_str().to_owned();
             let label = recipe_row_label(recipe);
             button.recipe = id;
-            button.workbench = workbench;
+            button.workbench = projection.workbench;
             node.display = Display::Flex;
-            if let Some(label_entity) = row_children.first()
-                && let Ok(mut text) = labels.get_mut(*label_entity)
-                && text.0 != label
-            {
-                *text = Text::new(label);
-            }
+            let output = projection
+                .catalog
+                .and_then(|catalog| catalog.recipe(recipe).map(|recipe| (catalog, recipe)))
+                .and_then(|(catalog, recipe)| catalog.bindings().get(&recipe.output.role));
+            set_child_image(
+                row_children,
+                output.and_then(|item| projection.voxel_icons.map(|icons| icons.item(item))),
+                recipe_icons,
+            );
+            set_child_text(row_children, &label, labels);
         } else {
             button.recipe.clear();
             node.display = Display::None;
@@ -1564,8 +1656,9 @@ fn recipe_row_label(recipe: &RecipeId) -> String {
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_inspect_hud(
     spine: Res<'_, ProductionSpine>,
+    voxel_icons: Option<Res<'_, ProductionVoxelIconCache>>,
     mut readout: Query<'_, '_, &mut Text, With<ProductionInspectReadout>>,
-    mut icon: Query<'_, '_, &mut BackgroundColor, With<ProductionInspectIcon>>,
+    mut icon: Query<'_, '_, &mut ImageNode, With<ProductionInspectIcon>>,
 ) {
     let Ok(mut text) = readout.single_mut() else {
         return;
@@ -1575,14 +1668,13 @@ pub(super) fn sync_production_inspect_hud(
     if text.0 != label {
         *text = Text::new(label);
     }
-    let swatch = target.as_ref().map_or_else(
-        || icon_swatch_color(""),
-        |hit| icon_swatch_color(&hit.block_display_icon),
-    );
-    if let Ok(mut color) = icon.single_mut()
-        && color.0 != swatch
-    {
-        *color = BackgroundColor(swatch);
+    if let Ok(mut image) = icon.single_mut() {
+        let desired = target.as_ref().and_then(|hit| {
+            voxel_icons
+                .as_deref()
+                .map(|icons| icons.block(&hit.block_id))
+        });
+        set_image_node(&mut image, desired);
     }
 }
 
@@ -1653,8 +1745,10 @@ fn status_line(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_hotbar_hud(
     spine: Res<'_, ProductionSpine>,
+    voxel_icons: Option<Res<'_, ProductionVoxelIconCache>>,
     surfaces: Res<'_, ProductionHudSurfaces>,
-    mut slots: Query<'_, '_, (&ProductionHotbarSlot, &mut BackgroundColor, &Children)>,
+    slots: Query<'_, '_, (&ProductionHotbarSlot, &Children)>,
+    mut slot_icons: Query<'_, '_, &mut ImageNode, With<ProductionSlotVoxelIcon>>,
     mut labels: Query<'_, '_, &mut Text>,
     mut selectors: Query<'_, '_, (&mut Node, &mut BorderColor), With<ProductionSlotSelector>>,
 ) {
@@ -1662,14 +1756,18 @@ pub(super) fn sync_production_hotbar_hud(
     let selected = view
         .as_ref()
         .map_or(0, ProductionInventoryView::hotbar_slot);
-    for (slot, mut background, children) in &mut slots {
+    for (slot, children) in &slots {
         let selected_slot = slot.0 == selected;
         let latched = surfaces.cursor_slot() == Some(slot.0);
         let stack = view
             .as_ref()
             .and_then(|view| view.slots().get(usize::from(slot.0))?.as_ref());
-        let (label, swatch) = slot_visual(spine.as_ref(), stack);
-        background.0 = swatch;
+        let label = stack.map_or_else(String::new, |stack| stack.quantity().to_string());
+        set_child_image(
+            children,
+            stack.and_then(|stack| voxel_icons.as_deref().map(|icons| icons.item(stack.item()))),
+            &mut slot_icons,
+        );
         set_slot_selector(
             children,
             latched || selected_slot,
@@ -1680,20 +1778,17 @@ pub(super) fn sync_production_hotbar_hud(
             },
             &mut selectors,
         );
-        if let Some(child) = children.first()
-            && let Ok(mut text) = labels.get_mut(*child)
-            && text.0 != label
-        {
-            *text = Text::new(label);
-        }
+        set_child_text(children, &label, &mut labels);
     }
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_inventory_hud(
     spine: Res<'_, ProductionSpine>,
+    voxel_icons: Option<Res<'_, ProductionVoxelIconCache>>,
     surfaces: Res<'_, ProductionHudSurfaces>,
-    mut slots: Query<'_, '_, (&ProductionInventorySlot, &mut BackgroundColor, &Children)>,
+    slots: Query<'_, '_, (&ProductionInventorySlot, &Children)>,
+    mut slot_icons: Query<'_, '_, &mut ImageNode, With<ProductionSlotVoxelIcon>>,
     mut labels: Query<'_, '_, &mut Text>,
     mut selectors: Query<'_, '_, (&mut Node, &mut BorderColor), With<ProductionSlotSelector>>,
 ) {
@@ -1701,14 +1796,18 @@ pub(super) fn sync_production_inventory_hud(
     let selected = view
         .as_ref()
         .map_or(0, ProductionInventoryView::hotbar_slot);
-    for (slot, mut background, children) in &mut slots {
+    for (slot, children) in &slots {
         let stack = view
             .as_ref()
             .and_then(|view| view.slots().get(usize::from(slot.0))?.as_ref());
-        let (label, swatch) = slot_visual(spine.as_ref(), stack);
+        let label = stack.map_or_else(String::new, |stack| stack.quantity().to_string());
         let selected_hotbar = slot.0 < HOTBAR_SLOTS && slot.0 == selected;
         let latched = surfaces.cursor_slot() == Some(slot.0);
-        background.0 = swatch;
+        set_child_image(
+            children,
+            stack.and_then(|stack| voxel_icons.as_deref().map(|icons| icons.item(stack.item()))),
+            &mut slot_icons,
+        );
         set_slot_selector(
             children,
             latched || selected_hotbar,
@@ -1719,12 +1818,7 @@ pub(super) fn sync_production_inventory_hud(
             },
             &mut selectors,
         );
-        if let Some(child) = children.first()
-            && let Ok(mut text) = labels.get_mut(*child)
-            && text.0 != label
-        {
-            *text = Text::new(label);
-        }
+        set_child_text(children, &label, &mut labels);
     }
 }
 
@@ -1746,19 +1840,33 @@ fn set_slot_selector(
     }
 }
 
-fn slot_visual(
-    spine: &ProductionSpine,
-    stack: Option<&latticeaxiom_gameplay::ItemStackV1>,
-) -> (String, Color) {
-    match stack {
-        Some(stack) => {
-            let display = spine.content_display(stack.item().as_str());
-            (
-                stack.quantity().to_string(),
-                icon_swatch_color(&display.icon),
-            )
+fn set_child_image<F: QueryFilter>(
+    children: &Children,
+    desired: Option<&Handle<Image>>,
+    images: &mut Query<'_, '_, &mut ImageNode, F>,
+) {
+    for child in children {
+        if let Ok(mut image) = images.get_mut(*child) {
+            set_image_node(&mut image, desired);
         }
-        None => (String::new(), empty_slot_color(false)),
+    }
+}
+
+fn set_image_node(image: &mut ImageNode, desired: Option<&Handle<Image>>) {
+    let desired = desired.cloned().unwrap_or(TRANSPARENT_IMAGE_HANDLE);
+    if image.image != desired {
+        image.image = desired;
+    }
+}
+
+fn set_child_text(children: &Children, label: &str, labels: &mut Query<'_, '_, &mut Text>) {
+    for child in children {
+        if let Ok(mut text) = labels.get_mut(*child) {
+            if text.0 != label {
+                *text = Text::new(label);
+            }
+            return;
+        }
     }
 }
 
@@ -1772,25 +1880,6 @@ fn selected_slot_color() -> Color {
 
 fn latched_slot_color() -> Color {
     Color::srgb(0.62, 0.52, 0.28)
-}
-
-fn icon_swatch_color(icon: &str) -> Color {
-    if icon.is_empty() {
-        return Color::srgba(0.18, 0.20, 0.18, 0.85);
-    }
-    let mut hash = 2_166_136_261_u32;
-    for byte in icon.as_bytes() {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(16_777_619);
-    }
-    let red = 0.22 + f32::from(channel(hash >> 16)) / 255.0 * 0.55;
-    let green = 0.22 + f32::from(channel(hash >> 8)) / 255.0 * 0.55;
-    let blue = 0.22 + f32::from(channel(hash)) / 255.0 * 0.55;
-    Color::srgb(red, green, blue)
-}
-
-fn channel(value: u32) -> u8 {
-    u8::try_from(value & 0xff).unwrap_or(0)
 }
 
 /// Digit keys that select hotbar slots; used by tests of the shipped binding table.
