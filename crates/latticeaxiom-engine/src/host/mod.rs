@@ -415,7 +415,7 @@ impl Plugin for ProductionHostPlugin {
                     pause::sync_pause_overlay,
                     surface::apply_surface_actions,
                     pause::apply_settings_surface_actions,
-                    pause::update_cursor_capture,
+                    crate::cursor_capture::observe_primary_window_focus,
                     pause::sync_cursor_capture,
                     pause::sync_pause_menu_page,
                     settings_view::sync_settings_page,
@@ -696,7 +696,7 @@ pub(super) fn install_production_host(
     #[cfg(feature = "client")]
     {
         app.insert_resource(hud::ProductionHudSurfaces::default())
-            .insert_resource(pause::CursorCaptureState::default());
+            .init_resource::<crate::cursor_capture::ConfirmedPrimaryWindowFocus>();
     }
     #[cfg(feature = "client")]
     if let Some(terrain_palette) = terrain_palette {

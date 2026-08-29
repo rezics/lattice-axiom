@@ -10,7 +10,7 @@ use bevy::{
     ecs::change_detection::{DetectChanges, Ref},
     ecs::observer::On,
     ecs::query::{Has, Or},
-    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonInput, keyboard::KeyCode},
     input_focus::tab_navigation::{NavAction, TabGroup, TabIndex, TabNavigation},
     input_focus::{FocusCause, InputFocus, InputFocusVisible},
     picking::hover::Hovered,
@@ -25,7 +25,7 @@ use bevy::{
         Activate, Button, SetSliderValue, Slider, SliderPrecision, SliderRange, SliderStep,
         SliderThumb, SliderValue, SliderValueChange, TrackClick, ValueChange,
     },
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_input::ClientSurfaceActionV1;
@@ -46,6 +46,7 @@ use super::{
 };
 use crate::{
     EngineProfile,
+    cursor_capture::ConfirmedPrimaryWindowFocus,
     settings::{HostSettingsCatalog, HostSettingsError, HostUserSettings},
     ui_font::ui_text_font,
 };
@@ -621,25 +622,6 @@ fn slider_widget_values(state: SettingsIntegerSliderState) -> Option<(f32, f32, 
     (step > 0.0 && min <= max).then_some((value, min, max, step))
 }
 
-/// Explicit viewport-click latch for relative-mouse capture.
-///
-/// A focused window is not enough to capture the OS cursor: the player must
-/// click the viewport first, and focus loss or an overlay always releases it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
-pub(super) struct CursorCaptureState {
-    captured: bool,
-}
-
-impl CursorCaptureState {
-    pub(super) const fn captured(self) -> bool {
-        self.captured
-    }
-
-    fn set(&mut self, captured: bool) {
-        self.captured = captured;
-    }
-}
-
 /// Marker on the full-screen pause overlay.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
 pub(super) struct PauseOverlay;
@@ -1189,63 +1171,31 @@ pub(super) fn sync_pause_overlay(
     }
 }
 
-/// Latches capture only after a click in the viewport and releases it on any
-/// focus or modal transition.
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn update_cursor_capture(
-    mut capture: ResMut<'_, CursorCaptureState>,
-    pause: Res<'_, ProductionSessionPause>,
-    surfaces: Option<Res<'_, ProductionHudSurfaces>>,
-    router: Option<Res<'_, super::ProductionSurfaceRouter>>,
-    windows: Query<'_, '_, &Window, With<PrimaryWindow>>,
-    mouse: Res<'_, ButtonInput<MouseButton>>,
-    keyboard: Res<'_, ButtonInput<KeyCode>>,
-) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let blocked = pause.is_paused()
-        || surfaces.is_some_and(|surfaces| surfaces.inventory_open())
-        || router
-            .as_ref()
-            .is_some_and(|router| !super::surface::cursor_locked(router));
-    if !window.focused || blocked || keyboard.just_pressed(KeyCode::Escape) {
-        capture.set(false);
-        return;
-    }
-    if mouse.just_pressed(MouseButton::Left) && window.cursor_position().is_some() {
-        capture.set(true);
-    }
-}
-
-/// Locks the cursor only while the window is focused and the session is live.
+/// Locks the cursor exactly while the focused game route owns mouse look.
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_cursor_capture(
-    capture: Res<'_, CursorCaptureState>,
-    pause: Res<'_, ProductionSessionPause>,
-    surfaces: Option<Res<'_, ProductionHudSurfaces>>,
+    confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
     router: Option<Res<'_, super::ProductionSurfaceRouter>>,
-    windows: Query<'_, '_, &Window, With<PrimaryWindow>>,
-    mut cursors: Query<'_, '_, &mut CursorOptions, With<PrimaryWindow>>,
+    mut windows: Query<'_, '_, (Entity, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
-    let Ok(window) = windows.single() else {
+    let Ok((window, mut cursor)) = windows.single_mut() else {
         return;
     };
-    let Ok(mut cursor) = cursors.single_mut() else {
-        return;
-    };
-    let blocked = pause.is_paused()
-        || surfaces.is_some_and(|surfaces| surfaces.inventory_open())
-        || router
-            .as_ref()
-            .is_some_and(|router| !super::surface::cursor_locked(router));
-    let should_capture = capture.captured() && window.focused && !blocked;
+    let should_capture =
+        gameplay_cursor_should_lock(confirmed_focus.is_focused(window), router.as_deref());
     cursor.grab_mode = if should_capture {
         CursorGrabMode::Locked
     } else {
         CursorGrabMode::None
     };
     cursor.visible = !should_capture;
+}
+
+fn gameplay_cursor_should_lock(
+    window_focused: bool,
+    router: Option<&super::ProductionSurfaceRouter>,
+) -> bool {
+    window_focused && router.is_some_and(super::surface::cursor_locked)
 }
 
 /// Drops live walk, look, and edit input while the overlay is open.
@@ -1489,6 +1439,29 @@ const fn button_color(pressed: bool, hovered: bool, focused: bool) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_is_automatic_only_for_focused_gameplay() {
+        let mut router = super::super::ProductionSurfaceRouter::playing()
+            .expect("route vocabulary is supported");
+        assert!(gameplay_cursor_should_lock(true, Some(&router)));
+        assert!(!gameplay_cursor_should_lock(false, Some(&router)));
+        assert!(!gameplay_cursor_should_lock(true, None));
+
+        router
+            .apply(&latticeaxiom_client_ui::SurfaceCommandV1::ToggleInventory)
+            .expect("inventory opens from gameplay");
+        assert!(!gameplay_cursor_should_lock(true, Some(&router)));
+        router
+            .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
+            .expect("inventory closes back to gameplay");
+        assert!(gameplay_cursor_should_lock(true, Some(&router)));
+
+        router
+            .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Pause)
+            .expect("pause opens from gameplay");
+        assert!(!gameplay_cursor_should_lock(true, Some(&router)));
+    }
 
     #[test]
     fn view_distance_slider_projects_only_exact_widget_integers() {

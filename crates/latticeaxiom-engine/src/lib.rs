@@ -21,6 +21,8 @@
 
 #[cfg(feature = "client")]
 mod client;
+#[cfg(feature = "client")]
+mod cursor_capture;
 mod host;
 mod input;
 mod instance;

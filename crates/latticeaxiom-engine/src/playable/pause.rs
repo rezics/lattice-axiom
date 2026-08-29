@@ -5,37 +5,25 @@ use bevy::{
     app::AppExit,
     ecs::observer::On,
     ecs::query::Has,
-    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonInput, keyboard::KeyCode},
     picking::hover::Hovered,
     prelude::{
-        AlignItems, BackgroundColor, Color, Commands, Component, Display, FlexDirection,
+        AlignItems, BackgroundColor, Color, Commands, Component, Display, Entity, FlexDirection,
         GlobalZIndex, JustifyContent, MessageWriter, Name, Node, Pickable, PositionType, Query,
         Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
     },
     ui::{FocusPolicy, Pressed},
     ui_widgets::{Activate, Button},
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use latticeaxiom_player::{ActionFrameInbox, D2Player};
 
-use crate::ui_font::ui_text_font;
+use crate::{cursor_capture::ConfirmedPrimaryWindowFocus, ui_font::ui_text_font};
 
 /// In-session pause latch for the development playable fixture.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
 pub(super) struct PlayablePause {
     paused: bool,
-}
-
-/// Explicit viewport-click latch for relative-mouse capture.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
-pub(super) struct CursorCaptureState {
-    captured: bool,
-}
-
-impl CursorCaptureState {
-    fn set(&mut self, captured: bool) {
-        self.captured = captured;
-    }
 }
 
 impl PlayablePause {
@@ -163,42 +151,17 @@ pub(super) fn sync_pause_overlay(
     }
 }
 
-/// Latches capture after a viewport click and releases it on pause or focus loss.
-#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn update_cursor_capture(
-    mut capture: ResMut<'_, CursorCaptureState>,
-    pause: Res<'_, PlayablePause>,
-    windows: Query<'_, '_, &Window, With<PrimaryWindow>>,
-    mouse: Res<'_, ButtonInput<MouseButton>>,
-    keyboard: Res<'_, ButtonInput<KeyCode>>,
-) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    if !window.focused || pause.is_paused() || keyboard.just_pressed(KeyCode::Escape) {
-        capture.set(false);
-        return;
-    }
-    if mouse.just_pressed(MouseButton::Left) && window.cursor_position().is_some() {
-        capture.set(true);
-    }
-}
-
-/// Applies the cursor latch to the OS window.
+/// Locks the cursor exactly while focused gameplay owns mouse look.
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_cursor_capture(
-    capture: Res<'_, CursorCaptureState>,
     pause: Res<'_, PlayablePause>,
-    windows: Query<'_, '_, &Window, With<PrimaryWindow>>,
-    mut cursors: Query<'_, '_, &mut CursorOptions, With<PrimaryWindow>>,
+    confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
+    mut windows: Query<'_, '_, (Entity, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
-    let Ok(window) = windows.single() else {
+    let Ok((window, mut cursor)) = windows.single_mut() else {
         return;
     };
-    let Ok(mut cursor) = cursors.single_mut() else {
-        return;
-    };
-    let should_capture = capture.captured && window.focused && !pause.is_paused();
+    let should_capture = confirmed_focus.is_focused(window) && !pause.is_paused();
     cursor.grab_mode = if should_capture {
         CursorGrabMode::Locked
     } else {
