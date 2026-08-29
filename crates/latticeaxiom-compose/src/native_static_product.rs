@@ -1046,26 +1046,6 @@ fn generate_cargo_lock(
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct CargoMetadataMessage {
-    packages: Vec<CargoMetadataPackage>,
-    workspace_root: PathBuf,
-}
-
-#[derive(Deserialize)]
-struct CargoMetadataPackage {
-    id: String,
-    name: String,
-    source: Option<String>,
-    manifest_path: PathBuf,
-    targets: Vec<CargoMetadataTarget>,
-}
-
-#[derive(Deserialize)]
-struct CargoMetadataTarget {
-    src_path: PathBuf,
-}
-
 fn verify_cargo_metadata_containment(
     request: &NativeStaticProductBuildRequestV1,
     root: &Path,
@@ -1083,11 +1063,12 @@ fn verify_cargo_metadata_containment(
             source,
         })?;
     let output = require_success(&request.cargo_program, output)?;
-    let metadata: CargoMetadataMessage = serde_json::from_slice(&output.stdout)?;
+    let metadata: cargo_metadata::Metadata = serde_json::from_slice(&output.stdout)?;
     let canonical_root =
         fs::canonicalize(root).map_err(|source| NativeStaticProductBuildError::io(root, source))?;
-    let canonical_workspace_root = fs::canonicalize(&metadata.workspace_root)
-        .map_err(|source| NativeStaticProductBuildError::io(&metadata.workspace_root, source))?;
+    let workspace_root = metadata.workspace_root.as_std_path();
+    let canonical_workspace_root = fs::canonicalize(workspace_root)
+        .map_err(|source| NativeStaticProductBuildError::io(workspace_root, source))?;
     if canonical_workspace_root != canonical_root {
         return Err(NativeStaticProductBuildError::invalid(format!(
             "Cargo metadata workspace root {} escaped generated root {}",
@@ -1102,19 +1083,21 @@ fn verify_cargo_metadata_containment(
         })?;
     let mut product_package_id = None;
     for package in metadata.packages {
-        let manifest = fs::canonicalize(&package.manifest_path)
-            .map_err(|source| NativeStaticProductBuildError::io(&package.manifest_path, source))?;
+        let manifest_path = package.manifest_path.as_std_path();
+        let manifest = fs::canonicalize(manifest_path)
+            .map_err(|source| NativeStaticProductBuildError::io(manifest_path, source))?;
         if package.source.is_none() {
             require_path_below_generated_root(&canonical_root, &manifest, "Cargo manifest")?;
             for target in &package.targets {
-                let source = fs::canonicalize(&target.src_path)
-                    .map_err(|error| NativeStaticProductBuildError::io(&target.src_path, error))?;
+                let target_source = target.src_path.as_std_path();
+                let source = fs::canonicalize(target_source)
+                    .map_err(|error| NativeStaticProductBuildError::io(target_source, error))?;
                 require_path_below_generated_root(&canonical_root, &source, "Cargo target source")?;
             }
         }
         if package.name == NATIVE_STATIC_PRODUCT_BINARY_NAME
             && manifest == product_manifest
-            && product_package_id.replace(package.id).is_some()
+            && product_package_id.replace(package.id.repr).is_some()
         {
             return Err(NativeStaticProductBuildError::invalid(
                 "Cargo metadata emitted the generated product package more than once",
@@ -1144,21 +1127,6 @@ fn require_path_below_generated_root(
     }
 }
 
-#[derive(Deserialize)]
-struct CargoTargetMessage {
-    name: String,
-    kind: Vec<String>,
-    crate_types: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct CargoArtifactMessage {
-    reason: String,
-    package_id: String,
-    target: CargoTargetMessage,
-    executable: Option<PathBuf>,
-}
-
 fn build_product_executable(
     request: &NativeStaticProductBuildRequestV1,
     root: &Path,
@@ -1184,24 +1152,26 @@ fn build_product_executable(
             source,
         })?;
     let output = require_success(&request.cargo_program, output)?;
-    let mut executables = output
-        .stdout
-        .split(|byte| *byte == b'\n')
-        .filter_map(|line| serde_json::from_slice::<CargoArtifactMessage>(line).ok())
+    let mut executables = cargo_metadata::Message::parse_stream(io::Cursor::new(&output.stdout))
+        .filter_map(Result::ok)
         .filter_map(|message| {
-            (message.reason == "compiler-artifact"
-                && message.package_id == product_package_id
-                && message.target.name == NATIVE_STATIC_PRODUCT_BINARY_NAME)
-                .then_some(message)
+            let cargo_metadata::Message::CompilerArtifact(artifact) = message else {
+                return None;
+            };
+            (artifact.package_id.repr == product_package_id
+                && artifact.target.name == NATIVE_STATIC_PRODUCT_BINARY_NAME)
+                .then_some(artifact)
         })
-        .filter_map(|message| {
-            (message.target.kind.iter().any(|kind| kind == "bin")
-                && message
+        .filter_map(|artifact| {
+            (artifact
+                .target
+                .kind
+                .contains(&cargo_metadata::TargetKind::Bin)
+                && artifact
                     .target
                     .crate_types
-                    .iter()
-                    .any(|crate_type| crate_type == "bin"))
-            .then_some(message.executable)
+                    .contains(&cargo_metadata::CrateType::Bin))
+            .then_some(artifact.executable)
             .flatten()
         });
     let executable = executables
@@ -1212,7 +1182,7 @@ fn build_product_executable(
             "Cargo emitted multiple final product executables",
         ));
     }
-    Ok(executable)
+    Ok(executable.into_std_path_buf())
 }
 
 fn cargo_command(request: &NativeStaticProductBuildRequestV1, root: &Path) -> Command {

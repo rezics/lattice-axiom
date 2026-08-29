@@ -830,41 +830,6 @@ struct CargoManifestPackageV1 {
     name: String,
 }
 
-#[derive(Deserialize)]
-struct CargoMetadataV1 {
-    packages: Vec<CargoMetadataPackageV1>,
-    workspace_members: Vec<String>,
-    workspace_root: PathBuf,
-}
-
-#[derive(Deserialize)]
-struct CargoMetadataPackageV1 {
-    id: String,
-    name: String,
-    source: Option<String>,
-    manifest_path: PathBuf,
-    targets: Vec<CargoJsonTarget>,
-}
-
-#[derive(Deserialize)]
-struct CargoJsonMessage {
-    reason: String,
-    #[serde(default)]
-    package_id: String,
-    #[serde(default)]
-    target: Option<CargoJsonTarget>,
-    #[serde(default)]
-    filenames: Vec<PathBuf>,
-}
-
-#[derive(Deserialize, Eq, PartialEq)]
-struct CargoJsonTarget {
-    name: String,
-    kind: Vec<String>,
-    crate_types: Vec<String>,
-    src_path: PathBuf,
-}
-
 #[allow(clippy::too_many_lines)]
 /// One uniquely-owned `SourceBuild` tree. The tree is always ephemeral: only
 /// the verified artifact bytes leave it, through the caller's CAS publish.
@@ -1029,7 +994,7 @@ fn source_build_payload(
                 .workspace_members
                 .iter()
                 .any(|member| member == &candidate.id)
-            && fs::canonicalize(&candidate.manifest_path)
+            && fs::canonicalize(candidate.manifest_path.as_std_path())
                 .is_ok_and(|path| path == canonical_manifest_path)
     });
     let primary_package = primary_packages.next().ok_or_else(|| {
@@ -1059,7 +1024,7 @@ fn source_build_payload(
         .arg("--manifest-path")
         .arg(&manifest_path)
         .arg("--package")
-        .arg(&primary_package.name)
+        .arg(primary_package.name.as_ref())
         .arg("--lib")
         .arg("--release")
         .arg("--frozen")
@@ -1084,16 +1049,17 @@ fn source_build_payload(
             bounded_diagnostic(&output.stderr)
         )));
     }
-    let artifact_path = output
-        .stdout
-        .split(|byte| *byte == b'\n')
-        .filter_map(|line| serde_json::from_slice::<CargoJsonMessage>(line).ok())
-        .filter(|message| {
-            message.reason == "compiler-artifact"
-                && message.package_id == primary_package.id
-                && message.target.as_ref() == Some(expected_target)
+    let artifact_path = cargo_metadata::Message::parse_stream(io::Cursor::new(&output.stdout))
+        .filter_map(Result::ok)
+        .filter_map(|message| match message {
+            cargo_metadata::Message::CompilerArtifact(artifact) => Some(artifact),
+            _ => None,
         })
-        .flat_map(|message| message.filenames)
+        .filter(|artifact| {
+            artifact.package_id == primary_package.id
+                && cargo_targets_match(&artifact.target, expected_target)
+        })
+        .flat_map(|artifact| artifact.filenames)
         .find(|path| path.extension().is_some_and(|found| found == extension))
         .ok_or_else(|| {
             CliError::lock(format!(
@@ -1101,8 +1067,12 @@ fn source_build_payload(
                 package.manifest.name
             ))
         })?;
-    let bytes =
-        read_source_build_artifact(staging.path(), &staged_root, &target_dir, &artifact_path)?;
+    let bytes = read_source_build_artifact(
+        staging.path(),
+        &staged_root,
+        &target_dir,
+        artifact_path.as_std_path(),
+    )?;
     verify_materialized_source_snapshot(&package.snapshot, &staged_root)?;
     let payload = RealizedPayload {
         bytes,
@@ -1119,16 +1089,15 @@ fn load_cargo_metadata(
     cargo: &OsString,
     manifest_path: &Path,
     staged_root: &Path,
-) -> Result<CargoMetadataV1, CliError> {
-    let output = Command::new(cargo)
-        .arg("metadata")
-        .arg("--manifest-path")
-        .arg(manifest_path)
-        .arg("--format-version")
-        .arg("1")
-        .arg("--frozen")
-        .arg("--offline")
+) -> Result<cargo_metadata::Metadata, CliError> {
+    let mut metadata_command = cargo_metadata::MetadataCommand::new();
+    metadata_command
+        .cargo_path(PathBuf::from(cargo))
+        .manifest_path(manifest_path)
         .current_dir(staged_root)
+        .other_options(vec!["--frozen".to_owned(), "--offline".to_owned()]);
+    let output = metadata_command
+        .cargo_command()
         .output()
         .map_err(|source| CliError::io(manifest_path, &source))?;
     if !output.status.success() {
@@ -1137,28 +1106,33 @@ fn load_cargo_metadata(
             bounded_diagnostic(&output.stderr)
         )));
     }
-    let metadata: CargoMetadataV1 = serde_json::from_slice(&output.stdout).map_err(|error| {
-        CliError::lock(format!(
-            "Cargo metadata emitted an invalid primary-package receipt: {error}"
-        ))
-    })?;
+    let metadata: cargo_metadata::Metadata =
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            CliError::lock(format!(
+                "Cargo metadata emitted an invalid primary-package receipt: {error}"
+            ))
+        })?;
     verify_source_build_metadata_containment(&metadata, manifest_path, staged_root)?;
     Ok(metadata)
 }
 
-fn cargo_target_supports(target: &CargoJsonTarget, expected_crate_type: &str) -> bool {
-    target
-        .crate_types
-        .iter()
-        .any(|crate_type| crate_type == expected_crate_type)
-        && target
-            .kind
-            .iter()
-            .any(|kind| kind == "lib" || kind == expected_crate_type)
+fn cargo_target_supports(target: &cargo_metadata::Target, expected_crate_type: &str) -> bool {
+    let expected_target_kind = cargo_metadata::TargetKind::from(expected_crate_type);
+    let expected_crate_type = cargo_metadata::CrateType::from(expected_crate_type);
+    target.crate_types.contains(&expected_crate_type)
+        && (target.kind.contains(&cargo_metadata::TargetKind::Lib)
+            || target.kind.contains(&expected_target_kind))
+}
+
+fn cargo_targets_match(left: &cargo_metadata::Target, right: &cargo_metadata::Target) -> bool {
+    left.name == right.name
+        && left.kind == right.kind
+        && left.crate_types == right.crate_types
+        && left.src_path == right.src_path
 }
 
 fn verify_source_build_metadata_containment(
-    metadata: &CargoMetadataV1,
+    metadata: &cargo_metadata::Metadata,
     manifest_path: &Path,
     staged_root: &Path,
 ) -> Result<(), CliError> {
@@ -1172,8 +1146,9 @@ fn verify_source_build_metadata_containment(
     }
     let canonical_root =
         fs::canonicalize(staged_root).map_err(|source| CliError::io(staged_root, &source))?;
-    let canonical_workspace_root = fs::canonicalize(&metadata.workspace_root)
-        .map_err(|source| CliError::io(&metadata.workspace_root, &source))?;
+    let workspace_root = metadata.workspace_root.as_std_path();
+    let canonical_workspace_root =
+        fs::canonicalize(workspace_root).map_err(|source| CliError::io(workspace_root, &source))?;
     if canonical_workspace_root != canonical_root {
         return Err(CliError::lock(format!(
             "Cargo metadata workspace root {} escaped staged source root {}",
@@ -1194,12 +1169,16 @@ fn verify_source_build_metadata_containment(
         if package.source.is_some() {
             continue;
         }
-        let manifest =
-            canonical_source_build_regular_file(&package.manifest_path, "local Cargo manifest")?;
+        let manifest = canonical_source_build_regular_file(
+            package.manifest_path.as_std_path(),
+            "local Cargo manifest",
+        )?;
         require_source_build_path_below(&canonical_root, &manifest, "local Cargo manifest")?;
         for target in &package.targets {
-            let source =
-                canonical_source_build_regular_file(&target.src_path, "local Cargo target source")?;
+            let source = canonical_source_build_regular_file(
+                target.src_path.as_std_path(),
+                "local Cargo target source",
+            )?;
             require_source_build_path_below(&canonical_root, &source, "local Cargo target source")?;
         }
     }
