@@ -23,6 +23,7 @@ nickel-evaluator = ["dep:malachite-base", "dep:nickel-lang-core"]
 
 [dependencies]
 cargo_metadata.workspace = true
+clap.workspace = true
 latticeaxiom-core = { path = "../latticeaxiom-core" }
 malachite-base = { workspace = true, optional = true }
 nickel-lang-core = { workspace = true, optional = true }
