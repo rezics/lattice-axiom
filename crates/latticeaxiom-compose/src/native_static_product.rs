@@ -1962,39 +1962,33 @@ unsafe_code = "deny"
     }
 
     #[derive(Debug)]
-    struct TestDirectory(PathBuf);
+    struct TestDirectory(tempfile::TempDir);
 
     impl TestDirectory {
         fn new(label: &str) -> Self {
-            let sequence = NEXT_STAGING_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-native-static-{label}-{}-{sequence}",
-                std::process::id()
-            ));
-            fs::create_dir(&path)
-                .unwrap_or_else(|error| panic!("test directory must create: {error}"));
-            Self(path)
+            let prefix = format!("latticeaxiom-native-static-{label}-");
+            Self(
+                tempfile::Builder::new()
+                    .prefix(&prefix)
+                    .tempdir()
+                    .unwrap_or_else(|error| panic!("test directory must create: {error}")),
+            )
         }
 
         fn path(&self) -> &Path {
-            &self.0
+            self.0.path()
         }
 
         fn write(&self, logical: &str, bytes: &[u8]) {
             let path = self
                 .0
+                .path()
                 .join(logical.replace('/', std::path::MAIN_SEPARATOR_STR));
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)
                     .unwrap_or_else(|error| panic!("test parent must create: {error}"));
             }
             fs::write(&path, bytes).unwrap_or_else(|error| panic!("test file must write: {error}"));
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ignored = fs::remove_dir_all(&self.0);
         }
     }
 }

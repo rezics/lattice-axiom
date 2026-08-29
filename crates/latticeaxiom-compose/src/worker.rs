@@ -478,9 +478,8 @@ fn diagnostic_limit(evaluation: Option<&EvaluationPolicyReceipt>) -> usize {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use latticeaxiom_core::{
         CanonicalHash, PackageName, SourceId, SourceProvenance, StableId, TargetTriple,
@@ -828,30 +827,20 @@ mod tests {
     }
 
     struct TestDirectory {
-        path: PathBuf,
+        directory: tempfile::TempDir,
     }
 
     impl TestDirectory {
         fn new() -> Self {
-            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir()
-                .join(format!("latticeaxiom-worker-{}-{id}", std::process::id()));
-            fs::create_dir(&path)
+            let directory = tempfile::Builder::new()
+                .prefix("latticeaxiom-worker-")
+                .tempdir()
                 .unwrap_or_else(|error| panic!("fixture directory creation failed: {error}"));
-            Self { path }
+            Self { directory }
         }
 
         fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            if let Err(error) = fs::remove_dir_all(&self.path) {
-                panic!("fixture directory cleanup failed: {error}");
-            }
+            self.directory.path()
         }
     }
 }

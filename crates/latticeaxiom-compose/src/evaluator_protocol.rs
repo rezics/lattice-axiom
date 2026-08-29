@@ -1136,9 +1136,8 @@ impl WorkerProtocolError {
 #[cfg(test)]
 mod protocol_tests {
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use latticeaxiom_core::{CanonicalHash, SourceId, SourceProvenance, StableId, TargetTriple};
 
@@ -1573,30 +1572,20 @@ mod protocol_tests {
     }
 
     struct TestDirectory {
-        path: PathBuf,
+        directory: tempfile::TempDir,
     }
 
     impl TestDirectory {
         fn new() -> Self {
-            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-evaluator-protocol-{}-{id}",
-                std::process::id()
-            ));
-            fs::create_dir(&path)
+            let directory = tempfile::Builder::new()
+                .prefix("latticeaxiom-evaluator-protocol-")
+                .tempdir()
                 .unwrap_or_else(|error| panic!("fixture directory should be created: {error}"));
-            Self { path }
+            Self { directory }
         }
 
         fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            drop(fs::remove_dir_all(&self.path));
+            self.directory.path()
         }
     }
 }

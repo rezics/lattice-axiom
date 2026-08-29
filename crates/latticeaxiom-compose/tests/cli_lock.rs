@@ -27,11 +27,9 @@ fn verify_without_offline_frozen_flags_fails_closed() {
 #[test]
 fn frozen_verify_fails_on_missing_lock() {
     let cli_path = PathBuf::from(env!("CARGO_BIN_EXE_latticeaxiom-compose"));
-    let missing = std::env::temp_dir().join(format!(
-        "latticeaxiom-compose-missing-lock-{}-{}.lock",
-        std::process::id(),
-        "cli"
-    ));
+    let directory = tempfile::tempdir()
+        .unwrap_or_else(|error| panic!("temporary CLI directory creation failed: {error}"));
+    let missing = directory.path().join("missing.lock");
     let output = Command::new(&cli_path)
         .arg("verify")
         .arg("--offline")

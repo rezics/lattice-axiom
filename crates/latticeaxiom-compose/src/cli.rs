@@ -1932,39 +1932,25 @@ struct EvaluationPolicyReceipt<'a> {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
     static SOURCE_BUILD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    struct TestDirectory(PathBuf);
+    struct TestDirectory(tempfile::TempDir);
 
     impl TestDirectory {
         fn create() -> Self {
-            let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-compose-cli-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path)
-                .unwrap_or_else(|error| panic!("test directory was not created: {error}"));
             Self(
-                std::path::absolute(&path).unwrap_or_else(|error| {
-                    panic!("test directory was not made absolute: {error}")
-                }),
+                tempfile::Builder::new()
+                    .prefix("latticeaxiom-compose-cli-")
+                    .tempdir()
+                    .unwrap_or_else(|error| panic!("test directory was not created: {error}")),
             )
         }
 
         fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            self.0.path()
         }
     }
 

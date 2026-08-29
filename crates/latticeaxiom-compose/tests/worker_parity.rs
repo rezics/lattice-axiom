@@ -7,7 +7,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use latticeaxiom_compose::{
     AuthoringTarget, AuthorizedRoot, AuthorizedRootKind, ControlledEvaluation,
@@ -133,7 +132,7 @@ fn response_bytes_without_cli_newline(stdout: &[u8]) -> &[u8] {
 }
 
 struct ParityFixture {
-    directory: PathBuf,
+    _directory: tempfile::TempDir,
     snapshot: latticeaxiom_compose::SourceSnapshot,
     entry: SourceAddress,
     source_id: SourceId,
@@ -142,24 +141,20 @@ struct ParityFixture {
 
 impl ParityFixture {
     fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!(
-            "latticeaxiom-worker-parity-{}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir(&directory).unwrap_or_else(|error| {
-            panic!(
-                "failed to create parity fixture {}: {error}",
-                directory.display()
-            )
-        });
-        fs::write(directory.join("entry.ncl"), TOOL_PACKAGE)
+        let directory = tempfile::Builder::new()
+            .prefix("latticeaxiom-worker-parity-")
+            .tempdir()
+            .unwrap_or_else(|error| panic!("failed to create parity fixture: {error}"));
+        fs::write(directory.path().join("entry.ncl"), TOOL_PACKAGE)
             .unwrap_or_else(|error| panic!("failed to write parity source: {error}"));
         let source_id = SourceId::from_str("latticeaxiom:source/worker-parity")
             .unwrap_or_else(|error| panic!("fixture source ID is invalid: {error}"));
-        let root = AuthorizedRoot::new(source_id.clone(), AuthorizedRootKind::Test, &directory)
-            .unwrap_or_else(|error| panic!("fixture root is invalid: {error}"));
+        let root = AuthorizedRoot::new(
+            source_id.clone(),
+            AuthorizedRootKind::Test,
+            directory.path(),
+        )
+        .unwrap_or_else(|error| panic!("fixture root is invalid: {error}"));
         let snapshot = scan_source_snapshot(
             &root,
             SourceScanLimits {
@@ -170,9 +165,9 @@ impl ParityFixture {
         .unwrap_or_else(|error| panic!("fixture scan failed: {error}"));
         let entry = SourceAddress::new(source_id.clone(), "entry.ncl")
             .unwrap_or_else(|error| panic!("fixture entry is invalid: {error}"));
-        let request_path = directory.join("request.json");
+        let request_path = directory.path().join("request.json");
         let fixture = Self {
-            directory,
+            _directory: directory,
             snapshot,
             entry,
             source_id,
@@ -236,11 +231,5 @@ impl ParityFixture {
             .unwrap_or_else(|error| panic!("fixture request encoding failed: {error}"));
         fs::write(&self.request_path, bytes)
             .unwrap_or_else(|error| panic!("fixture request write failed: {error}"));
-    }
-}
-
-impl Drop for ParityFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
     }
 }

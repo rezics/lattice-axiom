@@ -1384,7 +1384,6 @@ fn replace_existing_lock(temp: &Path, dest: &Path) -> Result<(), ProductLockErro
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use latticeaxiom_core::SchemaId;
 
@@ -1394,44 +1393,21 @@ mod tests {
         SemanticCatalog, SettingsCatalog,
     };
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
     #[derive(Debug)]
-    struct TestDirectory(PathBuf);
+    struct TestDirectory(tempfile::TempDir);
 
     impl TestDirectory {
         fn create() -> Self {
-            let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-compose-product-lock-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path)
-                .unwrap_or_else(|error| panic!("test directory was not created: {error}"));
             Self(
-                fs::canonicalize(&path)
-                    .unwrap_or_else(|error| panic!("test directory did not canonicalize: {error}")),
+                tempfile::Builder::new()
+                    .prefix("latticeaxiom-compose-product-lock-")
+                    .tempdir()
+                    .unwrap_or_else(|error| panic!("test directory was not created: {error}")),
             )
         }
 
         fn lock_path(&self) -> PathBuf {
-            self.0.join(PRODUCT_LOCK_FILE_NAME)
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let temporary_root = fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|error| panic!("temporary root did not canonicalize: {error}"));
-            assert!(
-                self.0.starts_with(&temporary_root),
-                "refusing to delete a test directory outside the process temporary root"
-            );
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("test directory cleanup failed: {error}");
-            }
+            self.0.path().join(PRODUCT_LOCK_FILE_NAME)
         }
     }
 

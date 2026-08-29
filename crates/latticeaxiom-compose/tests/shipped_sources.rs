@@ -9,7 +9,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use latticeaxiom_compose::{
     AuthorizedRoot, AuthorizedRootKind, BootstrapSourceProviderV1, CapabilityCardinality,
@@ -31,7 +30,6 @@ const WORKSPACE_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const LIBRARY_SOURCE_ID: &str = "latticeaxiom:source/library-v3";
 const PROFILE_SOURCE_ID: &str = "latticeaxiom:source/shipped-profiles";
 const FIXTURE_PREFIX: &str = "latticeaxiom-shipped-source-fixture";
-static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PackageSource {
@@ -351,7 +349,7 @@ fn staged_adapter_ignores_moved_and_poisoned_origins_and_unreachable_files() {
     ]);
     let snapshot = scan_fixture_root("example:source/move-proof", &fixture.root);
     let request = single_root_request(&snapshot, "package.ncl");
-    let moved = fixture.base.join("moved-origin");
+    let moved = fixture.base.path().join("moved-origin");
     fs::rename(&fixture.root, &moved).expect("fixture origin can be moved after acquisition");
     fs::create_dir(&fixture.root).expect("poison replacement origin can be created");
     fs::write(
@@ -1295,31 +1293,17 @@ struct SmallOutput {
 }
 
 struct FixtureTree {
-    base: PathBuf,
+    base: tempfile::TempDir,
     root: PathBuf,
 }
 
 impl FixtureTree {
     fn new(files: &[(&str, &str)]) -> Self {
-        let parent = std::env::temp_dir();
-        let mut allocated = None;
-        for _ in 0..128 {
-            let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let base = parent.join(format!(
-                "{FIXTURE_PREFIX}-{}-{sequence:016x}",
-                std::process::id()
-            ));
-            match fs::create_dir(&base) {
-                Ok(()) => {
-                    allocated = Some(base);
-                    break;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(error) => panic!("could not create fixture root: {error}"),
-            }
-        }
-        let base = allocated.expect("a unique fixture directory is available");
-        let root = base.join("root");
+        let base = tempfile::Builder::new()
+            .prefix(FIXTURE_PREFIX)
+            .tempdir()
+            .expect("a unique fixture directory is available");
+        let root = base.path().join("root");
         fs::create_dir(&root).expect("fixture source root can be created");
         for (logical_path, contents) in files {
             let destination = root.join(logical_path);
@@ -1329,22 +1313,6 @@ impl FixtureTree {
             fs::write(&destination, contents).expect("fixture source can be written");
         }
         Self { base, root }
-    }
-}
-
-impl Drop for FixtureTree {
-    fn drop(&mut self) {
-        let Some(name) = self.base.file_name().and_then(|name| name.to_str()) else {
-            return;
-        };
-        if name.starts_with(FIXTURE_PREFIX)
-            && self
-                .base
-                .parent()
-                .is_some_and(|parent| parent == std::env::temp_dir())
-        {
-            let _ = fs::remove_dir_all(&self.base);
-        }
     }
 }
 

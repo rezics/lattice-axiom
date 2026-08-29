@@ -1240,11 +1240,7 @@ impl SourceScanError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     use super::*;
-
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn authorized_root_kind_uses_adr_wire_tokens() {
@@ -1616,32 +1612,27 @@ mod tests {
 
     #[derive(Debug)]
     struct TestDirectory {
-        path: PathBuf,
+        directory: tempfile::TempDir,
     }
 
     impl TestDirectory {
         fn new(label: &str) -> Self {
-            let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-imports-{}-{label}-{sequence}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).unwrap_or_else(|error| {
-                panic!(
-                    "failed to create test directory {}: {error}",
-                    path.display()
-                )
-            });
-            Self { path }
+            let prefix = format!("latticeaxiom-imports-{label}-");
+            let directory = tempfile::Builder::new()
+                .prefix(&prefix)
+                .tempdir()
+                .unwrap_or_else(|error| panic!("failed to create test directory: {error}"));
+            Self { directory }
         }
 
         fn path(&self) -> &Path {
-            &self.path
+            self.directory.path()
         }
 
         fn write(&self, logical_path: &str, bytes: &[u8]) {
             let path = self
-                .path
+                .directory
+                .path()
                 .join(logical_path.replace('/', std::path::MAIN_SEPARATOR_STR));
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap_or_else(|error| {
@@ -1651,12 +1642,6 @@ mod tests {
             fs::write(&path, bytes).unwrap_or_else(|error| {
                 panic!("failed to write test source {}: {error}", path.display())
             });
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ignored = fs::remove_dir_all(&self.path);
         }
     }
 }
