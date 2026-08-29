@@ -102,9 +102,6 @@ const VOXEL_SCHEMA_VERSION: u32 = 2;
 const CELL_OCCUPANCY_BYTES: usize = 4;
 /// One generated chunk is published per fixed slice so commits and projection stay bounded.
 const WORLDGEN_APPLY_JOB_CAP: usize = 1;
-/// Large worldgen candidates are memory-bandwidth heavy; keep their worker
-/// fan-out below the host-wide CPU budget so frame and derived work stay responsive.
-const WORLDGEN_DISPATCH_JOB_CAP: usize = 1;
 /// Halo capture stays bounded even when many Bevy worker slots become free together.
 const DERIVED_DISPATCH_JOB_CAP: usize = 1;
 /// One 32-cubic checkerboard mesh or collider fits below 10 MiB; retain
@@ -3556,7 +3553,7 @@ fn sync_working_set(
     admission: WorldgenAdmission,
 ) -> Result<(), ProductionHostError> {
     let (desired, prioritized, desired_key) = cached_desired_chunks(inner, origin, look_ahead);
-    refresh_residency(inner, origin, look_ahead, tick);
+    refresh_residency(inner, origin, look_ahead, tick)?;
     // Retain protection expires with time, even when the desired-set key does
     // not change again. Revisit the bounded resident set every fixed tick so a
     // view-distance shrink actually releases former core chunks after grace.
@@ -3623,7 +3620,7 @@ fn refresh_residency(
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
     tick: FixedTick,
-) {
+) -> Result<(), ProductionHostError> {
     let now = tick.get();
     let coordinates = inner.lifecycle.keys().copied().collect::<Vec<_>>();
     for coordinate in coordinates {
@@ -3638,12 +3635,30 @@ fn refresh_residency(
             }
             InterestClass::Retain | InterestClass::Prefetch => {}
         }
+        if inner.runtime.is_resident(coordinate)
+            && collider_interest_contains(coordinate, origin)
+            && !matches!(
+                inner.runtime.collider_safety(coordinate),
+                Some(ColliderSafetyState::Ready { .. })
+            )
+        {
+            inner.runtime.request_derived(
+                coordinate,
+                DerivedKind::Collider,
+                tick,
+                derived_request(stream_derived_priority(
+                    class,
+                    chebyshev_xz(coordinate, origin),
+                )),
+            )?;
+        }
         reconcile_render_scope(
             inner,
             coordinate,
             is_render_chunk(coordinate, origin, inner.clamps),
         );
     }
+    Ok(())
 }
 
 fn reconcile_render_scope(
@@ -3921,9 +3936,7 @@ fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostErro
             admission.in_flight_jobs(),
             inner.in_flight_worldgen_tasks.len(),
         );
-        let count = capacity
-            .min(WORLDGEN_DISPATCH_JOB_CAP)
-            .min(inner.pending_worldgen.len());
+        let count = worldgen_dispatch_count(capacity, inner.pending_worldgen.len());
         inner.pending_worldgen.drain(..count).collect::<Vec<_>>()
     };
     if inputs.is_empty() {
@@ -5418,13 +5431,20 @@ fn stream_derived_requests(
         class,
         chebyshev_xz(coordinate, origin),
     ));
-    if chebyshev_xz(coordinate, origin) <= COLLIDER_INTEREST_RADIUS_CHUNKS
-        && coordinate.y.abs_diff(origin.y) <= COLLIDER_INTEREST_RADIUS_CHUNKS
-    {
+    if collider_interest_contains(coordinate, origin) {
         DerivedRequestSet::new(request, request)
     } else {
         DerivedRequestSet::mesh_only(request)
     }
+}
+
+fn collider_interest_contains(coordinate: ChunkCoordinate, origin: ChunkCoordinate) -> bool {
+    chebyshev_xz(coordinate, origin) <= COLLIDER_INTEREST_RADIUS_CHUNKS
+        && coordinate.y.abs_diff(origin.y) <= COLLIDER_INTEREST_RADIUS_CHUNKS
+}
+
+fn worldgen_dispatch_count(available_cpu_slots: usize, pending_jobs: usize) -> usize {
+    available_cpu_slots.min(pending_jobs)
 }
 
 fn derived_requests(priority: DerivedPriority) -> DerivedRequestSet {
@@ -6057,8 +6077,9 @@ fn commit_gameplay_storage(
 mod tests {
     use super::{
         CollisionSemantics, HostVoxel, InterestClass, MAIN_WORLD_APPLY_JOB_CAP, MeshPresentation,
-        OccupiedBox, OccupiedCell, apply_waiting_derived, compound_collider, merge_occupied_boxes,
-        player_occupied_chunks, shared_cpu_slots_remaining, stream_derived_priority,
+        OccupiedBox, OccupiedCell, apply_waiting_derived, collider_interest_contains,
+        compound_collider, merge_occupied_boxes, player_occupied_chunks,
+        shared_cpu_slots_remaining, stream_derived_priority, worldgen_dispatch_count,
     };
     use bevy::prelude::Vec3;
     use latticeaxiom_storage::ChunkCoordinate;
@@ -6091,6 +6112,31 @@ mod tests {
         assert_eq!(shared_cpu_slots_remaining(6, 2, 3), 1);
         assert_eq!(shared_cpu_slots_remaining(6, 6, 3), 0);
         assert_eq!(shared_cpu_slots_remaining(6, 2, 8), 0);
+        assert_eq!(worldgen_dispatch_count(4, 8), 4);
+        assert_eq!(worldgen_dispatch_count(8, 3), 3);
+    }
+
+    #[test]
+    fn collider_interest_prepares_every_adjacent_chunk_before_entry() {
+        let origin = ChunkCoordinate::new(7, -2, 11);
+        for y in -3..=-1 {
+            for z in 10..=12 {
+                for x in 6..=8 {
+                    assert!(collider_interest_contains(
+                        ChunkCoordinate::new(x, y, z),
+                        origin
+                    ));
+                }
+            }
+        }
+        assert!(!collider_interest_contains(
+            ChunkCoordinate::new(9, -2, 11),
+            origin
+        ));
+        assert!(!collider_interest_contains(
+            ChunkCoordinate::new(7, 0, 11),
+            origin
+        ));
     }
 
     #[test]
