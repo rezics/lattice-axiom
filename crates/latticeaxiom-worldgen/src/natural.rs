@@ -16,6 +16,7 @@ use crate::{
     config::MAX_TERRAIN_RELIEF,
     hashes::{domain_hash, hash_u64, sample_hash_2d, sample_hash_3d},
     provider::ResolvedProvidersV1,
+    terrain_field::{DrainageFieldV3, DrainageSampleV3},
 };
 
 const NATURAL_LAYER_DOMAIN: &[u8] = b"latticeaxiom.natural-layer.v1\0";
@@ -286,7 +287,7 @@ impl RiverSampleV1 {
         self.in_channel
     }
 
-    /// Returns Chebyshev distance to the nearest channel centerline.
+    /// Returns the one-voxel-Lipschitz distance proxy to the shared drainage centerline.
     #[must_use]
     pub const fn distance_voxels(self) -> u32 {
         self.distance_voxels
@@ -319,7 +320,7 @@ pub(crate) struct NaturalSamplerV1 {
     resource_seed: u64,
     tree_seed: u64,
     cover_seed: u64,
-    river_warp_seeds: [u64; 2],
+    drainage: DrainageFieldV3,
     receipts: Vec<RoleBindingReceiptV1>,
 }
 
@@ -357,10 +358,7 @@ impl NaturalSamplerV1 {
         let resource_seed = natural_sample_seed(RESOURCE_DOMAIN, seed_root);
         let tree_seed = natural_sample_seed(TREE_DOMAIN, seed_root);
         let cover_seed = natural_sample_seed(COVER_DOMAIN, seed_root);
-        let river_warp_seeds = [
-            hash_u64(BASIN_DOMAIN, &[seed_root.as_bytes(), b"river-warp-z"]),
-            hash_u64(BASIN_DOMAIN, &[seed_root.as_bytes(), b"river-warp-x"]),
-        ];
+        let drainage = DrainageFieldV3::new(seed_root, layer.config.river_cell_edge_voxels);
         let receipts = resolve_natural_roles(&layer.vocabulary, bindings, catalog, d4_targets)?;
         let receipt_bytes =
             canonical_json_bytes(&receipts).map_err(|error| WorldgenError::CanonicalEncoding {
@@ -392,7 +390,7 @@ impl NaturalSamplerV1 {
             resource_seed,
             tree_seed,
             cover_seed,
-            river_warp_seeds,
+            drainage,
             receipts,
         })
     }
@@ -435,29 +433,40 @@ impl NaturalSamplerV1 {
     }
 
     fn local_river_sample(&self, x: i64, z: i64) -> LocalRiverSampleV1 {
-        let edge = i64::from(self.config.river_cell_edge_voxels.max(1));
-        let width = i64::from(self.config.river_width_voxels);
-        let cell = coarse_cell(x, z, edge);
-        let warp_z = interpolated_river_warp(self.river_warp_seeds[0], z, edge);
-        let warp_x = interpolated_river_warp(self.river_warp_seeds[1], x, edge);
-        let east_west = (x.saturating_add(warp_z)).rem_euclid(edge);
-        let north_south = (z.saturating_add(warp_x)).rem_euclid(edge);
-        let dist_ew = east_west.min(edge.saturating_sub(east_west));
-        let dist_ns = north_south.min(edge.saturating_sub(north_south));
-        let nearest = dist_ew.min(dist_ns);
-        let distance = u32::try_from(nearest.max(0)).unwrap_or(u32::MAX);
-        let sparse = self.basin_rank(cell.0, cell.1)
+        self.local_river_sample_with_drainage(x, z, None)
+    }
+
+    fn local_river_sample_with_drainage(
+        &self,
+        x: i64,
+        z: i64,
+        reused: Option<DrainageSampleV3>,
+    ) -> LocalRiverSampleV1 {
+        let drainage = reused
+            .filter(|sample| sample.edge_voxels == self.config.river_cell_edge_voxels)
+            .unwrap_or_else(|| self.drainage.sample(x, z));
+        let sparse = self.basin_rank(drainage.cell_x, drainage.cell_z)
             % u64::from(self.config.river_accumulation).saturating_add(2);
         LocalRiverSampleV1 {
-            cell_x: cell.0,
-            cell_z: cell.1,
-            in_channel: nearest <= width && sparse != 0,
-            distance_voxels: distance,
+            cell_x: drainage.cell_x,
+            cell_z: drainage.cell_z,
+            in_channel: drainage.distance_voxels <= u32::from(self.config.river_width_voxels)
+                && sparse != 0,
+            distance_voxels: drainage.distance_voxels,
         }
     }
 
-    pub(crate) fn adjust_height(&self, x: i64, z: i64, height: i32) -> i32 {
-        self.adjust_height_for_channel(height, self.in_river_channel(x, z))
+    pub(crate) fn adjust_height_with_drainage(
+        &self,
+        x: i64,
+        z: i64,
+        height: i32,
+        drainage: Option<DrainageSampleV3>,
+    ) -> i32 {
+        let in_channel = self
+            .local_river_sample_with_drainage(x, z, drainage)
+            .in_channel;
+        self.adjust_height_for_channel(height, in_channel)
     }
 
     pub(crate) fn adjust_height_for_channel(&self, height: i32, in_channel: bool) -> i32 {
@@ -927,38 +936,6 @@ fn upper_rock_role(style: TerrainStyleV1, roll: u64) -> D4MaterialRoleV1 {
         TerrainStyleV1::AridBadlands => D4MaterialRoleV1::AridBaseRock,
         TerrainStyleV1::BorealWetland => D4MaterialRoleV1::Slate,
     }
-}
-
-fn coarse_cell(x: i64, z: i64, edge: i64) -> (i64, i64) {
-    (x.div_euclid(edge), z.div_euclid(edge))
-}
-
-fn interpolated_river_warp(seed: u64, coordinate: i64, edge: i64) -> i64 {
-    let cell = coordinate.div_euclid(edge);
-    let local = coordinate.rem_euclid(edge);
-    let start = river_warp_anchor(seed, cell, edge);
-    let end = river_warp_anchor(seed, cell.saturating_add(1), edge);
-    start
-        .saturating_mul(edge.saturating_sub(local))
-        .saturating_add(end.saturating_mul(local))
-        .div_euclid(edge)
-}
-
-fn river_warp_anchor(seed: u64, cell: i64, edge: i64) -> i64 {
-    let coordinate_bits = u64::from_be_bytes(cell.to_be_bytes());
-    let rank = mix_coordinate(seed, coordinate_bits);
-    i64::try_from(rank % u64::try_from(edge).unwrap_or(1))
-        .unwrap_or_default()
-        .saturating_sub(edge.saturating_div(2))
-}
-
-fn mix_coordinate(seed: u64, coordinate: u64) -> u64 {
-    // The SplitMix64 finalizer is deterministic, allocation-free, and adequate
-    // for keyed procedural variation after the plan has derived the seed.
-    let mut mixed = seed.wrapping_add(coordinate.wrapping_mul(0x9e37_79b9_7f4a_7c15));
-    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    mixed ^ (mixed >> 31)
 }
 
 fn bounded_u16(field: &'static str, value: u16, minimum: u16, maximum: u16) -> WorldgenResult<()> {

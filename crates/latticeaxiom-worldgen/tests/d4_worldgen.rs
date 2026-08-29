@@ -1321,13 +1321,13 @@ fn surface_ecology_snapshots_have_independent_goldens() {
             ),
             (
                 TerrainStyleV1::TemperateWoodland,
-                ChunkCoordinate::new(57, 1, -250),
-                "40c41346dbeef7975f587a9543c47473d7744dbe13afd44f1a1d657033f5092f".to_owned(),
+                ChunkCoordinate::new(73, 1, -252),
+                "2365e624b563d2961d557479df6a0272d4c9f39eb6376cfc56b9eb79349845bc".to_owned(),
             ),
             (
                 TerrainStyleV1::AridBadlands,
                 ChunkCoordinate::new(257, 3, -36),
-                "45797abe46b49d1e3f2dde822a6f8e454887c895ab07bc8b3693ffda882c445a".to_owned(),
+                "c07f7868e4a071883459a610595ae94e42e759f1ab3908199c82e21716d5ca35".to_owned(),
             ),
         ]
     );

@@ -472,6 +472,7 @@ fn blend_terrain_columns(
             adjacent.family
         },
         surface_water_y,
+        drainage: winner.drainage,
     }
 }
 

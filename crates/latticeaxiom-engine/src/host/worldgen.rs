@@ -41,8 +41,8 @@ use super::{
     catalog::{HostWorldgenCatalog, package_registration_namespace},
 };
 
-/// Worldgen V2 deliberately invalidates V1 generation provenance.
-const WORLDGEN_PLAN_REVISION: u64 = 2;
+/// Worldgen V3 deliberately invalidates earlier terrain and hydrology provenance.
+const WORLDGEN_PLAN_REVISION: u64 = 3;
 
 /// Compiles the V5 plan bound to a reopened product lock and package catalog.
 pub(super) fn compile_plan(
@@ -488,7 +488,7 @@ const fn provider_revision(slot: ProviderSlotV1) -> u32 {
         | ProviderSlotV1::GenerationCoordinator => 8,
         ProviderSlotV1::CaveTopology | ProviderSlotV1::StyleSelector => 9,
         ProviderSlotV1::Geology | ProviderSlotV1::Resources | ProviderSlotV1::Vegetation => 2,
-        ProviderSlotV1::Hydrology => 3,
+        ProviderSlotV1::Hydrology => 4,
     }
 }
 

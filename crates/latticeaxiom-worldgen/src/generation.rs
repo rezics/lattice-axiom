@@ -1055,7 +1055,7 @@ impl GenerationPlanV1 {
     pub fn terrain_column(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
         let mut sample = self.territory.terrain_column(x, z);
         sample.height = self.natural.as_ref().map_or(sample.height, |natural| {
-            natural.adjust_height(x, z, sample.height)
+            natural.adjust_height_with_drainage(x, z, sample.height, sample.drainage)
         });
         sample
     }

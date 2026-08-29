@@ -2,8 +2,11 @@
 //!
 //! The field graph follows the same separation used by Minecraft's Overworld
 //! density router: broad continental shape, erosion, ridges, and local detail
-//! are sampled independently and then composed. Gradient selection and
-//! quintic interpolation are informed by `OpenSimplex2`, upstream revision
+//! are sampled independently and then composed. Low-frequency domain shifts
+//! break stationary noise patterns, while a shared drainage field carves
+//! valleys through uplift instead of treating erosion as uniform amplitude
+//! loss. Gradient selection and quintic interpolation are informed by
+//! `OpenSimplex2`, upstream revision
 //! `4cd120d35bfc27096698de90d1bcbf4f9d359a3b` (CC0-1.0), but this is a
 //! project-owned fixed-point implementation so authoritative output does not
 //! depend on platform floating-point behavior.
@@ -25,7 +28,49 @@ const DETAIL_V2_DOMAIN: &[u8] = b"latticeaxiom.terrain.detail.v2\0";
 const VOLCANO_V2_DOMAIN: &[u8] = b"latticeaxiom.terrain.volcano.v2\0";
 const WETLAND_V2_DOMAIN: &[u8] = b"latticeaxiom.terrain.wetland.v2\0";
 const LAKE_V2_DOMAIN: &[u8] = b"latticeaxiom.terrain.lake.v2\0";
+const RELIEF_WARP_X_V3_DOMAIN: &[u8] = b"latticeaxiom.terrain.relief-warp-x.v3\0";
+const RELIEF_WARP_Z_V3_DOMAIN: &[u8] = b"latticeaxiom.terrain.relief-warp-z.v3\0";
+const DRAINAGE_V3_DOMAIN: &[u8] = b"latticeaxiom.terrain.drainage.v3\0";
 const FIELD_UNIT: i64 = 1_024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DrainageSampleV3 {
+    pub(crate) cell_x: i64,
+    pub(crate) cell_z: i64,
+    pub(crate) edge_voxels: u16,
+    pub(crate) distance_voxels: u32,
+}
+
+/// Seeded continuous drainage potential shared by terrain carving and river water.
+#[derive(Clone, Debug)]
+pub(crate) struct DrainageFieldV3 {
+    seed: u64,
+    edge: i64,
+}
+
+impl DrainageFieldV3 {
+    pub(crate) fn new(seed_root: WorldgenSeedRootV2, edge: u16) -> Self {
+        Self {
+            seed: hash_u64(DRAINAGE_V3_DOMAIN, &[seed_root.as_bytes()]),
+            edge: i64::from(edge).max(1),
+        }
+    }
+
+    pub(crate) fn sample(&self, x: i64, z: i64) -> DrainageSampleV3 {
+        let potential = fractal_noise(self.seed, x, z, self.edge.saturating_mul(2), 3)
+            .abs()
+            .min(FIELD_UNIT);
+        let distance = potential
+            .saturating_mul(self.edge)
+            .div_euclid(FIELD_UNIT.saturating_mul(4));
+        DrainageSampleV3 {
+            cell_x: x.div_euclid(self.edge),
+            cell_z: z.div_euclid(self.edge),
+            edge_voxels: u16::try_from(self.edge).unwrap_or(u16::MAX),
+            distance_voxels: u32::try_from(distance).unwrap_or(u32::MAX),
+        }
+    }
+}
 
 /// Shape family selected independently from climate and surface material.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -59,6 +104,7 @@ pub struct TerrainColumnSampleV2 {
     pub(crate) height: i32,
     pub(crate) family: TerrainFamilyV2,
     pub(crate) surface_water_y: Option<i32>,
+    pub(crate) drainage: Option<DrainageSampleV3>,
 }
 
 impl TerrainColumnSampleV2 {
@@ -85,6 +131,7 @@ impl TerrainColumnSampleV2 {
 struct BaseTerrainColumnV2 {
     height: i64,
     family: TerrainFamilyV2,
+    drainage: Option<DrainageSampleV3>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -107,6 +154,8 @@ pub(crate) struct TerrainFieldV2 {
     volcano_seed: u64,
     wetland_seed: u64,
     lake_seed: u64,
+    relief_warp_seeds: [u64; 2],
+    drainage: DrainageFieldV3,
 }
 
 impl TerrainFieldV2 {
@@ -124,6 +173,8 @@ impl TerrainFieldV2 {
             volcano_seed: seed(VOLCANO_V2_DOMAIN),
             wetland_seed: seed(WETLAND_V2_DOMAIN),
             lake_seed: seed(LAKE_V2_DOMAIN),
+            relief_warp_seeds: [seed(RELIEF_WARP_X_V3_DOMAIN), seed(RELIEF_WARP_Z_V3_DOMAIN)],
+            drainage: DrainageFieldV3::new(seed_root, config.water.river_spacing_voxels),
         }
     }
 
@@ -134,6 +185,7 @@ impl TerrainFieldV2 {
                 height: self.clamp_height(base.height),
                 family: base.family,
                 surface_water_y: None,
+                drainage: base.drainage,
             };
         };
         let maximum_depth = i64::from(self.config.water.river_depth_voxels).saturating_add(4);
@@ -151,6 +203,7 @@ impl TerrainFieldV2 {
             height,
             family: TerrainFamilyV2::LakeBasin,
             surface_water_y: Some(surface_water_y),
+            drainage: base.drainage,
         }
     }
 
@@ -206,10 +259,11 @@ impl TerrainFieldV2 {
             .saturating_mul(FIELD_UNIT)
             .div_euclid(FIELD_UNIT.saturating_sub(coast).max(1))
             .clamp(0, FIELD_UNIT);
+        let (relief_x, relief_z) = self.relief_coordinates(x, z);
         let erosion = normalized(fractal_noise(
             self.erosion_seed,
-            x,
-            z,
+            relief_x,
+            relief_z,
             i64::from(landmass.continent_scale_voxels)
                 .div_euclid(3)
                 .max(64),
@@ -222,10 +276,16 @@ impl TerrainFieldV2 {
             .saturating_sub(erosion_loss)
             .clamp(96, FIELD_UNIT);
 
-        let (mountain_mask, mountain_lift) = self.mountain_lift(x, z, inland, preserved_relief);
-        let (plateau_mask, plateau_lift) = self.plateau_lift(x, z, inland);
-        let (hill, hill_lift, detail) = self.hill_and_detail(x, z, preserved_relief);
-        let (volcano_mask, volcano_lift) = self.volcano_lift(x, z, inland);
+        let (mountain_mask, mountain_lift) =
+            self.mountain_lift(relief_x, relief_z, inland, preserved_relief);
+        let (plateau_mask, plateau_lift) = self.plateau_lift(relief_x, relief_z, inland);
+        let regional_ruggedness =
+            smoothstep_fixed(normalized_above(FIELD_UNIT.saturating_sub(erosion), 384))
+                .max(mountain_mask)
+                .max(plateau_mask.div_euclid(2));
+        let (hill, hill_lift, detail) =
+            self.hill_and_detail(relief_x, relief_z, preserved_relief, regional_ruggedness);
+        let (volcano_mask, volcano_lift) = self.volcano_lift(relief_x, relief_z, inland);
 
         let coast_rise = land
             .min(coast)
@@ -234,7 +294,7 @@ impl TerrainFieldV2 {
         let continental_lift = inland
             .saturating_mul(i64::from(relief.continental_lift_voxels))
             .div_euclid(FIELD_UNIT);
-        let height = sea
+        let uncarved_height = sea
             .saturating_add(coast_rise)
             .saturating_add(continental_lift)
             .saturating_add(hill_lift)
@@ -242,7 +302,13 @@ impl TerrainFieldV2 {
             .saturating_add(mountain_lift)
             .saturating_add(volcano_lift)
             .saturating_add(detail);
-        let wetland_rank = normalized(fractal_noise(self.wetland_seed, x, z, 768, 3));
+        let positive_relief = mountain_lift
+            .saturating_add(plateau_lift)
+            .saturating_add(hill_lift.max(0))
+            .saturating_add(volcano_lift);
+        let (valley_incision, drainage) = self.valley_incision(x, z, land.max(0), positive_relief);
+        let height = uncarved_height.saturating_sub(valley_incision);
+        let wetland_rank = normalized(fractal_noise(self.wetland_seed, relief_x, relief_z, 768, 3));
         let wetland = height <= sea.saturating_add(i64::from(relief.base_height_voxels) / 2)
             && wetland_rank
                 < i64::from(self.config.water.wetland_amount_per_1024).clamp(0, FIELD_UNIT);
@@ -261,7 +327,62 @@ impl TerrainFieldV2 {
         } else {
             TerrainFamilyV2::Plains
         };
-        BaseTerrainColumnV2 { height, family }
+        BaseTerrainColumnV2 {
+            height,
+            family,
+            drainage: Some(drainage),
+        }
+    }
+
+    fn relief_coordinates(&self, x: i64, z: i64) -> (i64, i64) {
+        let mountain_scale = i64::from(self.config.relief.mountain_scale_voxels).max(64);
+        let warp_scale = mountain_scale.saturating_mul(2);
+        let warp_strength = mountain_scale.div_euclid(5).max(1);
+        let shift_x = gradient_noise(self.relief_warp_seeds[0], x, z, warp_scale)
+            .saturating_mul(warp_strength)
+            .div_euclid(FIELD_UNIT);
+        let shift_z = gradient_noise(self.relief_warp_seeds[1], x, z, warp_scale)
+            .saturating_mul(warp_strength)
+            .div_euclid(FIELD_UNIT);
+        (x.saturating_add(shift_x), z.saturating_add(shift_z))
+    }
+
+    fn valley_incision(
+        &self,
+        x: i64,
+        z: i64,
+        land_weight: i64,
+        positive_relief: i64,
+    ) -> (i64, DrainageSampleV3) {
+        let water = self.config.water;
+        let spacing = i64::from(water.river_spacing_voxels).max(64);
+        let valley_width = i64::from(water.river_width_voxels)
+            .saturating_mul(2)
+            .max(spacing.div_euclid(32))
+            .max(1);
+        let drainage = self.drainage.sample(x, z);
+        let approximate_distance = i64::from(drainage.distance_voxels);
+        if approximate_distance >= valley_width {
+            return (0, drainage);
+        }
+        let linear_profile = valley_width
+            .saturating_sub(approximate_distance)
+            .saturating_mul(FIELD_UNIT)
+            .div_euclid(valley_width);
+        let profile = smoothstep_fixed(linear_profile);
+        let erosion_coupling = positive_relief
+            .saturating_mul(i64::from(self.config.relief.erosion_strength_per_1024))
+            .div_euclid(FIELD_UNIT)
+            .div_euclid(2);
+        let maximum_incision = i64::from(water.river_depth_voxels)
+            .saturating_mul(2)
+            .saturating_add(erosion_coupling);
+        let incision = maximum_incision
+            .saturating_mul(profile)
+            .div_euclid(FIELD_UNIT)
+            .saturating_mul(land_weight.clamp(0, FIELD_UNIT))
+            .div_euclid(FIELD_UNIT);
+        (incision, drainage)
     }
 
     fn mountain_lift(&self, x: i64, z: i64, inland: i64, preserved: i64) -> (i64, i64) {
@@ -314,14 +435,20 @@ impl TerrainFieldV2 {
         (mask, lift)
     }
 
-    fn hill_and_detail(&self, x: i64, z: i64, preserved: i64) -> (i64, i64, i64) {
+    fn hill_and_detail(
+        &self,
+        x: i64,
+        z: i64,
+        preserved: i64,
+        regional_ruggedness: i64,
+    ) -> (i64, i64, i64) {
         let relief = self.config.relief;
         let hill = fractal_noise(
             self.hill_seed,
             x,
             z,
             i64::from(relief.mountain_scale_voxels)
-                .div_euclid(3)
+                .div_euclid(5)
                 .max(64),
             4,
         );
@@ -329,13 +456,28 @@ impl TerrainFieldV2 {
             .saturating_mul(i64::from(relief.hill_height_voxels))
             .div_euclid(FIELD_UNIT)
             .saturating_mul(preserved)
+            .div_euclid(FIELD_UNIT)
+            .saturating_mul(regional_ruggedness)
             .div_euclid(FIELD_UNIT);
-        let detail = fractal_noise(self.detail_seed, x, z, 96, 3)
+        let detail_scale = i64::from(relief.mountain_scale_voxels)
+            .div_euclid(16)
+            .clamp(64, 192);
+        let detail_amplitude = i64::from(relief.hill_height_voxels)
+            .div_euclid(2)
+            .saturating_add(8);
+        let detail = fractal_noise(self.detail_seed, x, z, detail_scale, 3)
             .saturating_mul(i64::from(relief.roughness_per_1024))
             .div_euclid(FIELD_UNIT)
-            .saturating_mul(8)
+            .saturating_mul(detail_amplitude)
+            .div_euclid(FIELD_UNIT)
+            .saturating_mul(regional_ruggedness)
             .div_euclid(FIELD_UNIT);
-        (hill, hill_lift, detail)
+        (
+            hill.saturating_mul(regional_ruggedness)
+                .div_euclid(FIELD_UNIT),
+            hill_lift,
+            detail,
+        )
     }
 
     fn volcano_lift(&self, x: i64, z: i64, inland: i64) -> (i64, i64) {
@@ -471,7 +613,11 @@ fn sample_ocean(
     } else {
         TerrainFamilyV2::ShallowOcean
     };
-    BaseTerrainColumnV2 { height, family }
+    BaseTerrainColumnV2 {
+        height,
+        family,
+        drainage: None,
+    }
 }
 
 fn normalized(value: i64) -> i64 {
@@ -491,6 +637,19 @@ fn normalized_above(value: i64, threshold: i64) -> i64 {
         .saturating_mul(FIELD_UNIT)
         .div_euclid(FIELD_UNIT.saturating_sub(threshold).max(1))
         .clamp(0, FIELD_UNIT)
+}
+
+fn smoothstep_fixed(value: i64) -> i64 {
+    let value = value.clamp(0, FIELD_UNIT);
+    value
+        .saturating_mul(value)
+        .div_euclid(FIELD_UNIT)
+        .saturating_mul(
+            FIELD_UNIT
+                .saturating_mul(3)
+                .saturating_sub(value.saturating_mul(2)),
+        )
+        .div_euclid(FIELD_UNIT)
 }
 
 const UNIT: i64 = 1_024;
@@ -682,5 +841,72 @@ mod tests {
         assert!(families.contains(&TerrainFamilyV2::MountainRange));
         assert!(families.contains(&TerrainFamilyV2::LakeBasin));
         assert!(lake_columns > 0);
+    }
+
+    #[test]
+    fn balanced_field_separates_quiet_plains_from_rugged_regions() {
+        let config = TerrainConfigV2::representative_test_baseline();
+        let field = TerrainFieldV2::new(
+            WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(42)),
+            config,
+        );
+        let mut land_columns = 0_u32;
+        let mut quiet_columns = 0_u32;
+        let mut rugged_columns = 0_u32;
+        for z in (-16_384_i64..=16_384).step_by(128) {
+            for x in (-16_384_i64..=16_384).step_by(128) {
+                let center = field.sample(x, z);
+                if matches!(
+                    center.family,
+                    TerrainFamilyV2::DeepOcean | TerrainFamilyV2::ShallowOcean
+                ) {
+                    continue;
+                }
+                let heights = [
+                    center.height,
+                    field.sample(x.saturating_sub(64), z).height,
+                    field.sample(x.saturating_add(64), z).height,
+                    field.sample(x, z.saturating_sub(64)).height,
+                    field.sample(x, z.saturating_add(64)).height,
+                ];
+                let minimum = heights.into_iter().min().unwrap_or(center.height);
+                let maximum = heights.into_iter().max().unwrap_or(center.height);
+                let local_relief = maximum.saturating_sub(minimum);
+                land_columns = land_columns.saturating_add(1);
+                quiet_columns = quiet_columns.saturating_add(u32::from(local_relief <= 4));
+                rugged_columns = rugged_columns.saturating_add(u32::from(local_relief >= 12));
+            }
+        }
+        assert!(
+            quiet_columns > land_columns / 5,
+            "quiet plains {quiet_columns}/{land_columns}"
+        );
+        assert!(
+            rugged_columns > land_columns / 100,
+            "rugged regions {rugged_columns}/{land_columns}"
+        );
+    }
+
+    #[test]
+    fn drainage_potential_is_lipschitz_and_contains_channel_centers() {
+        let field = super::DrainageFieldV3::new(
+            WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(42)),
+            384,
+        );
+        let mut minimum = u32::MAX;
+        let mut maximum = 0_u32;
+        for z in (-2_048_i64..=2_048).step_by(32) {
+            for x in (-2_048_i64..=2_048).step_by(32) {
+                let here = field.sample(x, z).distance_voxels;
+                let east = field.sample(x.saturating_add(1), z).distance_voxels;
+                let south = field.sample(x, z.saturating_add(1)).distance_voxels;
+                minimum = minimum.min(here);
+                maximum = maximum.max(here);
+                assert!(here.abs_diff(east) <= 1, "X step at ({x}, {z})");
+                assert!(here.abs_diff(south) <= 1, "Z step at ({x}, {z})");
+            }
+        }
+        assert!(minimum <= 1, "minimum drainage distance {minimum}");
+        assert!(maximum >= 32, "maximum drainage distance {maximum}");
     }
 }

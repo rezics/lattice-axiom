@@ -545,6 +545,12 @@ fn surface_terrain_programs(include_boreal: bool) -> Vec<SurfaceBiomeTerrainProg
 }
 
 fn v2_fixture_plan(terrain: TerrainConfigV2) -> GenerationPlanV1 {
+    let natural = NaturalLayerConfigV1 {
+        river_cell_edge_voxels: terrain.water.river_spacing_voxels,
+        river_width_voxels: terrain.water.river_width_voxels,
+        river_incision_voxels: terrain.water.river_depth_voxels,
+        ..NaturalLayerConfigV1::default()
+    };
     natural_fixture_plan_with_config_and_terrain(
         WorldgenConfigV1 {
             chunk_edge_voxels: 32,
@@ -552,7 +558,7 @@ fn v2_fixture_plan(terrain: TerrainConfigV2) -> GenerationPlanV1 {
             world_ceiling_y: terrain.world.ceiling_y,
             ..WorldgenConfigV1::default()
         },
-        NaturalLayerConfigV1::default(),
+        natural,
         false,
         Some(terrain),
     )
