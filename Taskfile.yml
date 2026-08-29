@@ -67,6 +67,21 @@ tasks:
     cmds:
       - python scripts/development/logdy_dev.py run -- cargo run -p latticeaxiom-engine
 
+  audit:upstream:
+    desc: Recheck upstream adapters, compatibility evidence, and advisories
+    cmds:
+      - cargo deny check advisories
+      - cargo test -p latticeaxiom-abi --all-features
+      - cargo test -p latticeaxiom-compose --all-features
+      - cargo test -p latticeaxiom-voxel-mesh --test block_mesh_audit
+      - cargo bench -p latticeaxiom-voxel-mesh --bench meshing --no-run
+      - task: logs:test
+
+  audit:upstream:bench:
+    desc: Compare the local and upstream opaque greedy meshers
+    cmds:
+      - cargo bench -p latticeaxiom-voxel-mesh --bench meshing -- greedy_meshing
+
   dev:plain:
     desc: Relock and launch the client without the Web log viewer
     deps:

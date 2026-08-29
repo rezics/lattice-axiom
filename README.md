@@ -76,6 +76,12 @@ logs:open` opens the viewer, while `task dev:plain` keeps the direct no-viewer
 loop. See [`docs/development/observability.md`](docs/development/observability.md)
 for ports, persistence, and the upstream decision record.
 
+`task audit:upstream` reruns the accepted-library adapters, the meshing
+compatibility corpus, benchmark compilation, Logdy launcher tests, and advisory
+policy. It requires `cargo-deny`. The complete decisions, including mature
+libraries that were evaluated but intentionally not adopted, are recorded in
+[`docs/development/upstream-library-audit.md`](docs/development/upstream-library-audit.md).
+
 `task lock` only writes the lock and CAS. `task verify` freeze-verifies an
 existing lock. `task --list` prints the available tasks. On Windows, `winget
 install Task.Task` provides the `task` binary. The development tasks also
