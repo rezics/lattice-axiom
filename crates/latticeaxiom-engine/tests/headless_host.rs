@@ -49,12 +49,15 @@ use latticeaxiom_engine::{
     WorkingSetDiagnosticsV1, WorkstationId, compile_authored_gameplay_catalog,
     empty_gameplay_catalog,
 };
-use latticeaxiom_gameplay::{BlockId, GameplayModeV1};
+use latticeaxiom_gameplay::{BlockId, GameplayModeV1, MiningStepCountV1, PlayerId};
 use latticeaxiom_launcher::{
     ChildExitKindV1, HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1,
     SettingTransactionRevision,
 };
-use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1, PlayerControllerState, TargetEyePoseV1};
+use latticeaxiom_player::{
+    AuthoritativeBlockEditRequestV1, BlockEditActionV1, BlockEditAuthority, BlockEditIntentV1,
+    BlockEditRejectV1, BlockFaceV1, PlayerControllerState, TargetEyePoseV1,
+};
 use latticeaxiom_registration::{
     CallbackDeclaration, CompiledRegistration, PackageRegistrationInput, ReceiptValidationError,
     RegistrationCompileInput, RegistrationCompiler, SystemDeclaration,
@@ -4818,6 +4821,11 @@ fn production_host_creative_pick_block_selects_and_creates_catalog_stacks() {
 }
 
 #[test]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::too_many_lines,
+    reason = "one regression covers target selection, creative authority, and atomic breaking"
+)]
 fn production_host_creative_mode_breaks_glass_without_a_tool() {
     let _production_host_guard = production_host_test_guard();
     let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
@@ -4828,6 +4836,13 @@ fn production_host_creative_mode_breaks_glass_without_a_tool() {
         .find(|item| item.placement_block.as_ref() == Some(&glass_block))
         .map(|item| item.id.clone())
         .expect("glass has a placement item");
+    let torch_block = parse_block("terrenia:block/torch");
+    let torch_item = catalog
+        .items()
+        .values()
+        .find(|item| item.placement_block.as_ref() == Some(&torch_block))
+        .map(|item| item.id.clone())
+        .expect("torch has a placement item");
     let boot = creative_lock_boot_fixture();
     let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
         boot.prepared(),
@@ -4862,11 +4877,96 @@ fn production_host_creative_mode_breaks_glass_without_a_tool() {
     assert_eq!(placed.position, target);
     assert_eq!(placed.new_content.as_ref(), Some(&glass_block));
 
-    let broken = spine
-        .mine_cell(target)
-        .expect("creative mode breaks glass in one authority command");
+    let air = parse_block("terrenia:block/air");
+    let (eye_cell, forward) = [
+        ((1, 0, 0), [-1.0, 0.0, 0.0]),
+        ((-1, 0, 0), [1.0, 0.0, 0.0]),
+        ((0, 1, 0), [0.0, -1.0, 0.0]),
+        ((0, -1, 0), [0.0, 1.0, 0.0]),
+        ((0, 0, 1), [0.0, 0.0, -1.0]),
+        ((0, 0, -1), [0.0, 0.0, 1.0]),
+    ]
+    .into_iter()
+    .find_map(|((dx, dy, dz), forward)| {
+        let neighbor = latticeaxiom_gameplay::BlockPosition {
+            x: target.x.checked_add(dx)?,
+            y: target.y.checked_add(dy)?,
+            z: target.z.checked_add(dz)?,
+        };
+        let solid = spine.inspect_occupancy(neighbor).ok()?.solid?;
+        (solid != air).then_some((neighbor, forward))
+    })
+    .expect("the surface fixture exposes one resident solid beside the glass");
+    spine
+        .mine_cell(eye_cell)
+        .expect("creative mode clears a resident cell for the DDA eye");
+    let target_eye = TargetEyePoseV1 {
+        origin_m: [
+            eye_cell.x as f32 + 0.5,
+            eye_cell.y as f32 + 0.5,
+            eye_cell.z as f32 + 0.5,
+        ],
+        forward,
+    };
+    spine.refresh_target(target_eye);
+    assert_eq!(
+        spine
+            .current_target()
+            .expect("crosshair DDA targets transparent glass")
+            .block_id,
+        glass_block
+    );
+    let mut authority = spine.clone();
+    let broken = BlockEditAuthority::apply(
+        &mut authority,
+        AuthoritativeBlockEditRequestV1 {
+            player: PlayerId::new(1),
+            fixed_tick: 1,
+            eye_pose: target_eye,
+            intent: BlockEditIntentV1 {
+                action: BlockEditActionV1::Break,
+                input_generation: 1,
+                placement_content: None,
+                client_observation: None,
+                mining_steps: MiningStepCountV1::ONE,
+            },
+        },
+    )
+    .expect("creative mode targets and breaks glass in one authority command");
     assert_eq!(broken.old_content.as_ref(), Some(&glass_block));
     assert_eq!(broken.new_content, None);
+
+    spine
+        .creative_pick_item(torch_item)
+        .expect("creative authority creates the torch placement stack");
+    spine
+        .place_from_hotbar(anchor, BlockFaceV1::NegativeY)
+        .expect("creative torch placement succeeds");
+    spine.refresh_target(target_eye);
+    assert_eq!(
+        spine
+            .current_target()
+            .expect("selection DDA targets a non-colliding torch")
+            .block_id,
+        torch_block
+    );
+    let broken = BlockEditAuthority::apply(
+        &mut authority,
+        AuthoritativeBlockEditRequestV1 {
+            player: PlayerId::new(1),
+            fixed_tick: 2,
+            eye_pose: target_eye,
+            intent: BlockEditIntentV1 {
+                action: BlockEditActionV1::Break,
+                input_generation: 2,
+                placement_content: None,
+                client_observation: None,
+                mining_steps: MiningStepCountV1::ONE,
+            },
+        },
+    )
+    .expect("creative mode targets and breaks a non-colliding torch");
+    assert_eq!(broken.old_content.as_ref(), Some(&torch_block));
 }
 
 #[test]

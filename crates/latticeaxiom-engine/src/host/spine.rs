@@ -312,8 +312,9 @@ pub struct WorldgenQueueSnapshotV1 {
 
 /// Versioned solid and orthogonal fluid occupancy of one committed cell.
 ///
-/// Collision and selection identities are catalog-owned policy references. This
-/// host does not apply them to physics or DDA until a consumer is ready.
+/// Collision and selection identities are catalog-owned policy references.
+/// Selection shapes determine cell-level DDA eligibility; exact partial-shape
+/// intersection remains owned by the corresponding policy implementation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CellOccupancyV1 {
     /// Inspected voxel in world cells.
@@ -328,9 +329,9 @@ pub struct CellOccupancyV1 {
     pub fluid: Option<StableId>,
     /// Authoritative per-cell fluid state when a fluid occupies the cell.
     pub fluid_state: Option<FluidStateV1>,
-    /// Versioned collision policy; unused by this host's physics.
+    /// Versioned collision policy.
     pub collision_policy: StableId,
-    /// Versioned selection policy; unused by this host's DDA.
+    /// Versioned selection policy used for cell-level DDA eligibility.
     pub selection_policy: StableId,
 }
 
@@ -501,6 +502,7 @@ pub(super) struct HostVoxel {
     pub(super) palette_index: u16,
     pub(super) fluid_palette_index: u16,
     collision_occupied: bool,
+    selection_occupied: bool,
     solid_style: Option<HostFaceStyle>,
     fluid_style: Option<HostFaceStyle>,
 }
@@ -515,6 +517,7 @@ impl HostVoxel {
             palette_index,
             fluid_palette_index,
             collision_occupied: presentation.solid_collision(palette_index),
+            selection_occupied: presentation.solid_selection(palette_index),
             solid_style: (palette_index != 0)
                 .then(|| presentation.solid(palette_index))
                 .flatten(),
@@ -522,6 +525,10 @@ impl HostVoxel {
                 .then(|| presentation.fluid(fluid_palette_index))
                 .flatten(),
         }
+    }
+
+    const fn selection_occupied(self) -> bool {
+        self.selection_occupied
     }
 
     fn from_solid(palette_index: u16, presentation: &HostPresentationIndex) -> Self {
@@ -3500,13 +3507,7 @@ impl ProductionSpineInner {
         );
         let outcome = self
             .runtime
-            .raycast_committed(query, |voxel| {
-                if voxel.collision_occupied() {
-                    CellSelection::Target
-                } else {
-                    CellSelection::PassThrough
-                }
-            })
+            .raycast_committed(query, selection_for_voxel)
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
         let hit = match outcome {
             DdaOutcome::Hit(cell) => cell,
@@ -3536,6 +3537,14 @@ impl ProductionSpineInner {
             revision: hit.revision(),
             voxel,
         })
+    }
+}
+
+const fn selection_for_voxel(voxel: &HostVoxel) -> CellSelection {
+    if voxel.selection_occupied() {
+        CellSelection::Target
+    } else {
+        CellSelection::PassThrough
     }
 }
 
@@ -6314,14 +6323,15 @@ mod tests {
         CollisionSemantics, HostVoxel, InterestClass, MAIN_WORLD_APPLY_JOB_CAP, MeshPresentation,
         OccupiedBox, OccupiedCell, apply_waiting_derived, collider_interest_contains,
         compound_collider, merge_occupied_boxes, player_collider_safety_chunks,
-        player_occupied_chunks, shared_cpu_slots_remaining, shared_lane_limit,
+        player_occupied_chunks, selection_for_voxel, shared_cpu_slots_remaining, shared_lane_limit,
         stream_derived_priority, worldgen_dispatch_count,
     };
     use bevy::prelude::Vec3;
     use latticeaxiom_storage::ChunkCoordinate;
     use latticeaxiom_voxel_mesh::{LayerMergeKey, MeshBuffer};
     use latticeaxiom_voxel_runtime::{
-        ApplyAdmission, DerivedApplyBudget, DerivedApplySlice, RuntimeLimits, WallClockNanos,
+        ApplyAdmission, CellSelection, DerivedApplyBudget, DerivedApplySlice, RuntimeLimits,
+        WallClockNanos,
     };
     use std::{
         collections::{BTreeSet, VecDeque},
@@ -6468,6 +6478,7 @@ mod tests {
             palette_index: 7,
             fluid_palette_index: 0,
             collision_occupied: false,
+            selection_occupied: false,
             solid_style: None,
             fluid_style: None,
         };
@@ -6477,6 +6488,14 @@ mod tests {
         };
         assert!(!passable.collision_occupied());
         assert!(solid.collision_occupied());
+
+        let selectable = HostVoxel {
+            selection_occupied: true,
+            ..passable
+        };
+        assert_eq!(selection_for_voxel(&passable), CellSelection::PassThrough);
+        assert_eq!(selection_for_voxel(&selectable), CellSelection::Target);
+        assert!(!selectable.collision_occupied());
     }
 
     #[test]

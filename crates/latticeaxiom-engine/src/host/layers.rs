@@ -1,12 +1,14 @@
 //! Locked terrain-layer compilation for production presentation.
 //!
-//! Layer tables are presentation-only. Compilation cannot change an
-//! authoritative catalog hash, snapshot bytes, or world identity.
+//! Layer-table fields are presentation-only. The compact palette index also
+//! copies collision and selection eligibility from the authoritative content
+//! catalog; those bits never derive from presentation data.
 
 use std::collections::BTreeSet;
 
 use latticeaxiom_content::{
-    CompiledFluidPaletteV1, ContentCatalogV1, ContentPresentationBindingV1, SolidOccupancyKindV1,
+    CompiledFluidPaletteV1, ContentCatalogV1, ContentPresentationBindingV1, SelectionShapeV1,
+    SolidOccupancyKindV1,
 };
 use latticeaxiom_core::StableId;
 use latticeaxiom_gameplay::BlockId;
@@ -50,12 +52,13 @@ impl HostFaceStyle {
     }
 }
 
-/// Palette-index lookup of compiled layer-table rows.
+/// Palette-index lookup of compiled layers and authoritative cell semantics.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct HostPresentationIndex {
     table: CompiledTerrainLayerTableV1,
     solids: Vec<Option<HostFaceStyle>>,
     solid_collision: Vec<bool>,
+    solid_selection: Vec<bool>,
     fluids: Vec<Option<HostFaceStyle>>,
 }
 
@@ -84,6 +87,7 @@ impl HostPresentationIndex {
     ) -> Result<Self, ProductionHostError> {
         let mut solids = Vec::with_capacity(solid_palette.len());
         let mut solid_collision = Vec::with_capacity(solid_palette.len());
+        let mut solid_selection = Vec::with_capacity(solid_palette.len());
         for block in solid_palette {
             let id = block.as_str().parse::<StableId>()?;
             let definition = catalog.block(&id).ok_or_else(|| {
@@ -104,6 +108,7 @@ impl HostPresentationIndex {
             );
             solids.push(style_for(&table, &id));
             solid_collision.push(occupied);
+            solid_selection.push(selection_shape_targets_cell(&state.selection)?);
         }
         let fluids = fluid_palette
             .entries()
@@ -114,6 +119,7 @@ impl HostPresentationIndex {
             table,
             solids,
             solid_collision,
+            solid_selection,
             fluids,
         })
     }
@@ -143,6 +149,15 @@ impl HostPresentationIndex {
             .unwrap_or(false)
     }
 
+    /// Returns whether a solid palette entry participates in gameplay DDA.
+    #[must_use]
+    pub(super) fn solid_selection(&self, palette_index: u16) -> bool {
+        self.solid_selection
+            .get(usize::from(palette_index))
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Fluid-layer style for a host fluid palette index.
     #[must_use]
     pub(super) fn fluid(&self, palette_index: u16) -> Option<HostFaceStyle> {
@@ -150,6 +165,26 @@ impl HostPresentationIndex {
             .get(usize::from(palette_index))
             .copied()
             .flatten()
+    }
+}
+
+fn selection_shape_targets_cell(selection: &SelectionShapeV1) -> Result<bool, ProductionHostError> {
+    let id = selection.as_stable_id();
+    let supported =
+        id.kind() == "selection-shape" && id.major().is_some_and(|major| major.get() == 1);
+    if !supported {
+        return Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "selection-shape",
+            id: id.to_string(),
+        });
+    }
+    match id.path() {
+        "none" => Ok(false),
+        "cube" | "full-cube" | "slab" | "stair" | "wall" | "cross" | "torch" => Ok(true),
+        _ => Err(ProductionHostError::MissingCatalogDefinition {
+            kind: "selection-shape-v1",
+            id: id.to_string(),
+        }),
     }
 }
 
@@ -279,10 +314,20 @@ struct AuthoredAssetRow {
 
 #[cfg(test)]
 mod tests {
+    use latticeaxiom_content::SelectionShapeV1;
+    use latticeaxiom_core::StableId;
     use latticeaxiom_render_contracts::TerrainMaterialPolicyV1;
     use latticeaxiom_voxel_mesh::{FaceOcclusion, MeshGroup};
 
-    use super::{face_occlusion, mesh_group};
+    use super::{face_occlusion, mesh_group, selection_shape_targets_cell};
+
+    fn selection(id: &str) -> SelectionShapeV1 {
+        SelectionShapeV1::new(
+            id.parse::<StableId>()
+                .unwrap_or_else(|error| panic!("fixture selection shape is canonical: {error}")),
+        )
+        .unwrap_or_else(|error| panic!("fixture selection shape is versioned: {error}"))
+    }
 
     #[test]
     fn policy_maps_to_mesh_group_and_does_not_full_occlude_cutout_or_fluids() {
@@ -313,6 +358,29 @@ mod tests {
         assert_eq!(
             face_occlusion(TerrainMaterialPolicyV1::Translucent),
             FaceOcclusion::Matching
+        );
+    }
+
+    #[test]
+    fn selection_eligibility_is_independent_from_solid_collision() {
+        assert!(
+            !selection_shape_targets_cell(&selection("terrenia:selection-shape/none@1"))
+                .expect("none is a supported selection shape")
+        );
+        assert!(
+            selection_shape_targets_cell(&selection("terrenia:selection-shape/full-cube@1"))
+                .expect("full cube is a supported selection shape")
+        );
+        assert!(
+            selection_shape_targets_cell(&selection("terrenia:selection-shape/torch@1"))
+                .expect("a non-colliding torch remains selectable")
+        );
+        assert!(
+            selection_shape_targets_cell(&selection("terrenia:selection-shape/cross@1"))
+                .expect("a non-colliding crossed plane remains selectable")
+        );
+        assert!(
+            selection_shape_targets_cell(&selection("terrenia:selection-shape/future@1")).is_err()
         );
     }
 }
