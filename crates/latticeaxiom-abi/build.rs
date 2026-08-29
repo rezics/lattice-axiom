@@ -183,12 +183,14 @@ fn c_header() -> String {
 }
 
 fn validate_layout(definition: &schema::StructDef) {
-    let mut cursor = 0;
-    let mut max_alignment = 1;
+    let mut cursor = 0_usize;
+    let mut max_alignment = 1_usize;
     for field in definition.fields {
         let alignment = field.wire_type.alignment();
         max_alignment = max_alignment.max(alignment);
-        cursor = align_up(cursor, alignment);
+        cursor = cursor
+            .checked_next_multiple_of(alignment)
+            .expect("schema alignment overflow");
         assert_eq!(
             cursor, field.offset,
             "schema offset mismatch for {}.{}",
@@ -204,17 +206,11 @@ fn validate_layout(definition: &schema::StructDef) {
         definition.name
     );
     assert_eq!(
-        align_up(cursor, max_alignment),
+        cursor
+            .checked_next_multiple_of(max_alignment)
+            .expect("schema alignment overflow"),
         definition.size,
         "schema size mismatch for {}",
         definition.name
     );
-}
-
-fn align_up(value: usize, alignment: usize) -> usize {
-    value
-        .checked_add(alignment - 1)
-        .expect("schema alignment overflow")
-        / alignment
-        * alignment
 }
