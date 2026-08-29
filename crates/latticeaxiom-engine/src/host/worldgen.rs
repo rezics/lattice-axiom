@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
 use bevy::prelude::Vec3;
+use bevy::tasks::AsyncComputeTaskPool;
 use latticeaxiom_compose::{LockedPackage, PlayableWorldHardLimitsV1};
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_player::PlayerMovementProfileV1;
@@ -26,12 +27,12 @@ use latticeaxiom_runtime_contracts::{
 use latticeaxiom_storage::ChunkCoordinate;
 use latticeaxiom_terrenia_worldgen::{TerrainPresetV2, surface_biome_terrain_programs};
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkFaceV1,
-    D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1, HydrologyOccupancyCandidateV1,
-    HydrologyOccupancyConfigV1, MAX_BOUNDED_REGION_CHUNKS, NaturalLayerConfigV1,
-    NaturalLayerInputV1, PlanActivationIdV1, ProviderGenerationIdentityV1, ProviderOfferV1,
-    ProviderSlotV1, SpawnLocationV1, SpawnOccupancyViewV1, SpawnSearchBoundsV1, TerrainConfigV2,
-    TerrainFamilyV2, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
+    AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkDraftV1,
+    ChunkFaceV1, D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1,
+    HydrologyOccupancyCandidateV1, HydrologyOccupancyConfigV1, MAX_BOUNDED_REGION_CHUNKS,
+    NaturalLayerConfigV1, NaturalLayerInputV1, PlanActivationIdV1, ProviderGenerationIdentityV1,
+    ProviderOfferV1, ProviderSlotV1, SpawnLocationV1, SpawnOccupancyViewV1, SpawnSearchBoundsV1,
+    TerrainConfigV2, TerrainFamilyV2, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError,
     WorldgenLimitsV1, cell_center_voxels_at_edge, required_spawn_chunks,
     select_safe_spawn_prefer_style,
 };
@@ -418,12 +419,41 @@ fn ready_spawn_occupancy(
         if batch.is_empty() {
             continue;
         }
-        let region = generate_plan_chunks(plan, batch.iter().copied())?;
-        for (coordinate, candidate) in region.candidates() {
-            occupancy.insert_ready_draft(coordinate, candidate.draft().clone());
+        for (coordinate, draft) in generate_spawn_drafts(plan, batch)? {
+            occupancy.insert_ready_draft(coordinate, draft);
         }
     }
     Ok(occupancy)
+}
+
+fn generate_spawn_drafts(
+    plan: &GenerationPlanV1,
+    coordinates: &[ChunkCoordinate],
+) -> Result<Vec<(ChunkCoordinate, ChunkDraftV1)>, ProductionHostError> {
+    if let Some(pool) = AsyncComputeTaskPool::try_get() {
+        return pool
+            .scope_with_executor(false, None, |scope| {
+                for coordinate in coordinates.iter().copied() {
+                    scope.spawn(async move {
+                        let region = generate_plan_chunks(plan, [coordinate])?;
+                        let draft = region
+                            .candidate(coordinate)
+                            .ok_or(ProductionHostError::MissingGeneratedChunk { coordinate })?
+                            .draft()
+                            .clone();
+                        Ok::<_, ProductionHostError>((coordinate, draft))
+                    });
+                }
+            })
+            .into_iter()
+            .collect();
+    }
+
+    let region = generate_plan_chunks(plan, coordinates.iter().copied())?;
+    Ok(region
+        .candidates()
+        .map(|(coordinate, candidate)| (coordinate, candidate.draft().clone()))
+        .collect())
 }
 
 #[allow(clippy::field_reassign_with_default)]

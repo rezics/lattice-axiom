@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_bytes};
 use latticeaxiom_storage::{ChunkCoordinate, ChunkRevisionExpectation, DimensionId};
@@ -493,6 +496,9 @@ pub struct D4SnapshotCandidateV1 {
     checksum: SnapshotChecksumV1,
     plan_activation_id: PlanActivationIdV1,
     expected_chunk_revision: ChunkRevisionExpectation,
+    // Ephemeral generation data reused by orthogonal occupancy layers. This is
+    // deliberately absent from the canonical snapshot envelope and checksum.
+    materialized_columns: Vec<ColumnSampleV1>,
 }
 
 impl D4SnapshotCandidateV1 {
@@ -608,7 +614,7 @@ pub struct GenerationPlanV1 {
     roles: Vec<RoleBindingReceiptV1>,
     role_targets: BTreeMap<D4MaterialRoleV1, StableId>,
     material_palette: Vec<StableId>,
-    role_palette_indices: BTreeMap<D4MaterialRoleV1, u16>,
+    role_palette_indices: [Option<u16>; D4MaterialRoleV1::COUNT],
     config_hash: WorldgenConfigHashV1,
     terrain_config_hash: TerrainConfigHashV2,
     generator_fingerprint: GeneratorFingerprintV1,
@@ -1156,7 +1162,7 @@ impl GenerationPlanV1 {
         &self,
         coordinate: ChunkCoordinate,
     ) -> WorldgenResult<HydrologyOccupancyCandidateV1> {
-        self.hydrology_occupancy_candidate_with_draft(coordinate, None)
+        self.hydrology_occupancy_candidate_with_draft(coordinate, None, None)
     }
 
     /// Builds hydrology occupancy by reusing cave decisions already frozen in
@@ -1186,14 +1192,19 @@ impl GenerationPlanV1 {
                 reason: "snapshot candidate does not belong to this generation plan".to_owned(),
             });
         }
-        self.hydrology_occupancy_candidate_with_draft(receipt.chunk(), Some(snapshot.draft()))
-            .map(Some)
+        self.hydrology_occupancy_candidate_with_draft(
+            receipt.chunk(),
+            Some(snapshot.draft()),
+            Some(&snapshot.materialized_columns),
+        )
+        .map(Some)
     }
 
     fn hydrology_occupancy_candidate_with_draft(
         &self,
         coordinate: ChunkCoordinate,
         draft: Option<&ChunkDraftV1>,
+        materialized_columns: Option<&[ColumnSampleV1]>,
     ) -> WorldgenResult<HydrologyOccupancyCandidateV1> {
         let Some(hydrology) = self.hydrology.as_ref() else {
             return Err(WorldgenError::InvalidHydrologyOccupancy {
@@ -1208,15 +1219,24 @@ impl GenerationPlanV1 {
             .transpose()?;
         let mut accounting = hydrology.start_accounting();
         let mut cells = Vec::new();
-        let mut columns = Vec::with_capacity(edge.saturating_mul(edge));
+        let expected_columns = edge.saturating_mul(edge);
+        if materialized_columns.is_some_and(|columns| columns.len() != expected_columns) {
+            return Err(WorldgenError::InvalidHydrologyOccupancy {
+                field: "snapshot",
+                reason: "snapshot column cache does not match its chunk edge".to_owned(),
+            });
+        }
+        let generation_columns = materialized_columns.map_or_else(
+            || Cow::Owned(self.materialize_columns(origin, edge)),
+            Cow::Borrowed,
+        );
+        let mut columns = Vec::with_capacity(expected_columns);
         for local_z in 0..edge {
             for local_x in 0..edge {
-                let world_x = local_world_axis(origin.0, local_x);
-                let world_z = local_world_axis(origin.2, local_z);
-                let column = self.generation_column(world_x, world_z);
+                let column = generation_columns[local_z.saturating_mul(edge) + local_x];
                 columns.push(hydrology.column(
-                    world_x,
-                    world_z,
+                    local_world_axis(origin.0, local_x),
+                    local_world_axis(origin.2, local_z),
                     column.height,
                     column.river,
                     column.material_style,
@@ -1534,7 +1554,8 @@ impl GenerationPlanV1 {
             self.limits,
         )?;
         let cave_field_requests = self.cave.face_requests(request.coordinate)?;
-        let (draft, diagnostics, styles_present) = self.materialize(request.coordinate)?;
+        let (draft, diagnostics, styles_present, materialized_columns) =
+            self.materialize(request.coordinate)?;
         let cave_occupancy_validations =
             self.validate_cave_face_occupancy(request.coordinate, &draft, &cave_field_requests)?;
         let mut placement_predicates = placement_predicate_receipts(diagnostics);
@@ -1595,6 +1616,7 @@ impl GenerationPlanV1 {
                 checksum,
                 plan_activation_id: self.plan_activation_id,
                 expected_chunk_revision: request.expected_chunk_revision,
+                materialized_columns,
             },
         )))
     }
@@ -1628,6 +1650,19 @@ impl GenerationPlanV1 {
         }
     }
 
+    fn materialize_columns(&self, origin: (i64, i64, i64), edge: usize) -> Vec<ColumnSampleV1> {
+        let mut columns = Vec::with_capacity(edge.saturating_mul(edge));
+        for local_z in 0..edge {
+            for local_x in 0..edge {
+                columns.push(self.generation_column(
+                    local_world_axis(origin.0, local_x),
+                    local_world_axis(origin.2, local_z),
+                ));
+            }
+        }
+        columns
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "the bounded hot path keeps allocation and diagnostic counters in one auditable flow"
@@ -1635,7 +1670,12 @@ impl GenerationPlanV1 {
     fn materialize(
         &self,
         coordinate: ChunkCoordinate,
-    ) -> WorldgenResult<(ChunkDraftV1, GenerationDiagnosticsV1, Vec<TerrainStyleV1>)> {
+    ) -> WorldgenResult<(
+        ChunkDraftV1,
+        GenerationDiagnosticsV1,
+        Vec<TerrainStyleV1>,
+        Vec<ColumnSampleV1>,
+    )> {
         let edge = usize::from(self.config.chunk_edge_voxels);
         let voxel_count = checked_cube_u64(u64::from(self.config.chunk_edge_voxels))?;
         let column_count = u64::from(self.config.chunk_edge_voxels)
@@ -1644,24 +1684,19 @@ impl GenerationPlanV1 {
                 operation: "chunk column count",
             })?;
         let origin = chunk_origin(coordinate, self.config.chunk_edge_voxels)?;
-        let mut columns = Vec::with_capacity(usize::try_from(column_count).map_err(|_| {
-            WorldgenError::ArithmeticOverflow {
+        let expected_columns =
+            usize::try_from(column_count).map_err(|_| WorldgenError::ArithmeticOverflow {
                 operation: "column allocation length",
-            }
-        })?);
+            })?;
+        let columns = self.materialize_columns(origin, edge);
+        if columns.len() != expected_columns {
+            return Err(WorldgenError::ArithmeticOverflow {
+                operation: "materialized column count",
+            });
+        }
         let mut styles = BTreeSet::new();
-        for local_z in 0..edge {
-            for local_x in 0..edge {
-                let world_x = origin
-                    .0
-                    .saturating_add(i64::try_from(local_x).unwrap_or_default());
-                let world_z = origin
-                    .2
-                    .saturating_add(i64::try_from(local_z).unwrap_or_default());
-                let column = self.generation_column(world_x, world_z);
-                styles.insert(column.material_style);
-                columns.push(column);
-            }
+        for column in &columns {
+            styles.insert(column.material_style);
         }
 
         let mut indices = Vec::with_capacity(usize::try_from(voxel_count).map_err(|_| {
@@ -1712,7 +1747,7 @@ impl GenerationPlanV1 {
                         &mut counters,
                         &mut natural_counters,
                     );
-                    let palette_index = self.role_palette_indices.get(&purpose).copied().ok_or(
+                    let palette_index = self.role_palette_indices[purpose.ordinal()].ok_or(
                         WorldgenError::ArithmeticOverflow {
                             operation: "material role palette lookup",
                         },
@@ -1790,6 +1825,7 @@ impl GenerationPlanV1 {
             },
             diagnostics,
             styles.into_iter().collect(),
+            columns,
         ))
     }
 
@@ -2285,7 +2321,7 @@ impl GenerationPlanV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ColumnSampleV1 {
     height: i32,
     material_style: TerrainStyleV1,
@@ -2305,7 +2341,7 @@ impl ColumnSampleV1 {
 
 fn compile_material_palette(
     role_targets: &BTreeMap<D4MaterialRoleV1, StableId>,
-) -> WorldgenResult<(Vec<StableId>, BTreeMap<D4MaterialRoleV1, u16>)> {
+) -> WorldgenResult<(Vec<StableId>, [Option<u16>; D4MaterialRoleV1::COUNT])> {
     let mut palette = role_targets.values().cloned().collect::<Vec<_>>();
     palette.sort();
     palette.dedup();
@@ -2320,18 +2356,17 @@ fn compile_material_palette(
                 })
         })
         .collect::<WorldgenResult<BTreeMap<_, _>>>()?;
-    let role_indices = role_targets
-        .iter()
-        .map(|(purpose, block)| {
+    let mut role_indices = [None; D4MaterialRoleV1::COUNT];
+    for (purpose, block) in role_targets {
+        let index =
             palette_lookup
                 .get(block)
                 .copied()
-                .map(|index| (*purpose, index))
                 .ok_or(WorldgenError::ArithmeticOverflow {
                     operation: "compiled material role palette lookup",
-                })
-        })
-        .collect::<WorldgenResult<BTreeMap<_, _>>>()?;
+                })?;
+        role_indices[purpose.ordinal()] = Some(index);
+    }
     Ok((palette, role_indices))
 }
 

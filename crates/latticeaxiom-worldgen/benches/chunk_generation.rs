@@ -105,6 +105,12 @@ fn generation_benchmarks(c: &mut Criterion) {
         });
     });
     production_boreal_benchmark(c);
+    hydrology_benchmarks(c);
+    terrain_query_benchmarks(c, &plan);
+    v2_terrain_benchmarks(c);
+}
+
+fn hydrology_benchmarks(c: &mut Criterion) {
     let hydrology_32 = hydrology_fixture_plan_with_edge(32);
     let hydrology_coordinate = surface_chunk(&hydrology_32, -3, 5);
     c.bench_function(
@@ -114,6 +120,26 @@ fn generation_benchmarks(c: &mut Criterion) {
                 hydrology_32
                     .hydrology_occupancy_candidate(black_box(hydrology_coordinate))
                     .expect("32-cubic hydrology benchmark chunk must remain valid")
+            });
+        },
+    );
+    c.bench_function(
+        "v6_hydrology_chunk_32_cubic_generation_pipeline",
+        |bencher| {
+            bencher.iter(|| {
+                let outcome = hydrology_32
+                    .generate(
+                        hydrology_32
+                            .vacant_generation_request(black_box(hydrology_coordinate))
+                            .expect("32-cubic hydrology benchmark request must remain valid"),
+                    )
+                    .expect("32-cubic hydrology benchmark snapshot must remain valid");
+                let ChunkGenerationOutcomeV1::Prepared(snapshot) = outcome else {
+                    panic!("benchmark request must prepare a snapshot candidate");
+                };
+                hydrology_32
+                    .hydrology_occupancy_candidate_for_snapshot(&snapshot)
+                    .expect("32-cubic snapshot reuse must remain valid")
             });
         },
     );
@@ -134,8 +160,6 @@ fn generation_benchmarks(c: &mut Criterion) {
                 .expect("32-cubic snapshot reuse must remain valid")
         });
     });
-    terrain_query_benchmarks(c, &plan);
-    v2_terrain_benchmarks(c);
 }
 
 fn production_boreal_benchmark(c: &mut Criterion) {

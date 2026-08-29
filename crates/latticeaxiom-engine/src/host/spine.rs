@@ -64,9 +64,9 @@ use latticeaxiom_world_db::{
     StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitRequestV1, WorldStorage,
 };
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveOccupancyArbitrationV1,
-    GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
-    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1, TerrainConfigV2, WorldSeedV1,
+    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, GenerationPlanV1, HydrologyFlowV1,
+    HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1, MAX_BOUNDED_REGION_CHUNKS,
+    SpawnLocationV1, TerrainConfigV2, WorldSeedV1,
 };
 
 use super::{
@@ -4055,34 +4055,36 @@ fn queue_worldgen(inner: &mut ProductionSpineInner, coordinates: Vec<ChunkCoordi
 }
 
 fn compute_worldgen(input: &WorldgenInput) -> ComputedWorldgen {
-    let result =
-        generate_plan_chunks(&input.materialization.plan, [input.coordinate]).and_then(|region| {
-            let candidate = region.candidate(input.coordinate).ok_or(
-                ProductionHostError::MissingGeneratedChunk {
-                    coordinate: input.coordinate,
-                },
-            )?;
-            let occupancy = input
-                .materialization
-                .plan
-                .hydrology_occupancy_candidate_for_snapshot(candidate)?;
-            let mut cells = draft_cells(
-                candidate.draft(),
-                &input.materialization.palette,
-                &input.materialization.presentation,
-            )?;
-            apply_hydrology_occupancy(&input.materialization, occupancy.as_ref(), &mut cells)?;
-            Ok(generated_chunk_payload(
-                &input.materialization.voxel_schema,
-                input.materialization.voxel_schema_version,
-                cells,
-            ))
-        });
+    let result = compute_worldgen_payload(&input.materialization, input.coordinate);
     ComputedWorldgen {
         ticket: input.ticket,
         coordinate: input.coordinate,
         result,
     }
+}
+
+fn compute_worldgen_payload(
+    materialization: &WorldgenMaterialization,
+    coordinate: ChunkCoordinate,
+) -> Result<GeneratedChunkPayload, ProductionHostError> {
+    let region = generate_plan_chunks(&materialization.plan, [coordinate])?;
+    let candidate = region
+        .candidate(coordinate)
+        .ok_or(ProductionHostError::MissingGeneratedChunk { coordinate })?;
+    let occupancy = materialization
+        .plan
+        .hydrology_occupancy_candidate_for_snapshot(candidate)?;
+    let mut cells = draft_cells(
+        candidate.draft(),
+        &materialization.palette,
+        &materialization.presentation,
+    )?;
+    apply_hydrology_occupancy(materialization, occupancy.as_ref(), &mut cells)?;
+    Ok(generated_chunk_payload(
+        &materialization.voxel_schema,
+        materialization.voxel_schema_version,
+        cells,
+    ))
 }
 
 fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
@@ -4155,6 +4157,9 @@ fn apply_ready_worldgen(
     let started = Instant::now();
     let budget = RuntimeLimits::main_world_apply_budget();
     let mut slice = DerivedApplySlice::new();
+    let mut coordinates = Vec::new();
+    let mut generated = BTreeMap::new();
+    let mut failed = None;
     loop {
         let ticket = WorldgenTicket(inner.next_worldgen_apply_sequence);
         let Some(bytes) = inner
@@ -4175,30 +4180,50 @@ fn apply_ready_worldgen(
         if inner.worldgen_tickets.get(&job.coordinate) != Some(&ticket) {
             continue;
         }
-        let result = match job.result {
-            Ok(payload) => publish_generated_cells(
-                inner,
-                kernel,
-                &[job.coordinate],
-                BTreeMap::from([(job.coordinate, payload)]),
-                tick,
-                origin,
-                look_ahead,
-            ),
-            Err(error) => Err(error),
-        };
         inner.worldgen_tickets.remove(&job.coordinate);
-        if let Err(error) = result {
-            if inner.lifecycle.get(&job.coordinate) == Some(&ChunkLifecycle::Generate) {
-                inner.lifecycle.remove(&job.coordinate);
-                inner.residency.remove(&job.coordinate);
+        match job.result {
+            Ok(payload) => {
+                coordinates.push(job.coordinate);
+                generated.insert(job.coordinate, payload);
             }
-            inner.desired_admission_cursor = 0;
-            return Err(error);
+            Err(error) => {
+                failed = Some((job.coordinate, error));
+                break;
+            }
         }
         slice.commit_applied(bytes, elapsed_nanos(started));
     }
+
+    if !generated.is_empty()
+        && let Err(error) = publish_generated_cells(
+            inner,
+            kernel,
+            &coordinates,
+            generated,
+            tick,
+            origin,
+            look_ahead,
+        )
+    {
+        for coordinate in coordinates {
+            clear_failed_generation(inner, coordinate);
+        }
+        inner.desired_admission_cursor = 0;
+        return Err(error);
+    }
+    if let Some((coordinate, error)) = failed {
+        clear_failed_generation(inner, coordinate);
+        inner.desired_admission_cursor = 0;
+        return Err(error);
+    }
     Ok(())
+}
+
+fn clear_failed_generation(inner: &mut ProductionSpineInner, coordinate: ChunkCoordinate) {
+    if inner.lifecycle.get(&coordinate) == Some(&ChunkLifecycle::Generate) {
+        inner.lifecycle.remove(&coordinate);
+        inner.residency.remove(&coordinate);
+    }
 }
 
 fn worldgen_retained_bytes(job: &ComputedWorldgen) -> u64 {
@@ -4284,29 +4309,36 @@ fn publish_startup_generated(
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
-    let region = generate_plan_chunks(&inner.plan, coordinates.iter().copied())?;
-    publish_generated_region(
-        inner,
-        kernel,
-        coordinates,
-        &region,
-        tick,
-        origin,
-        look_ahead,
-    )
-}
-
-fn publish_generated_region(
-    inner: &mut ProductionSpineInner,
-    kernel: &MemoryTransactionKernel,
-    coordinates: &[ChunkCoordinate],
-    region: &BoundedGeneratedRegionV1,
-    tick: FixedTick,
-    origin: ChunkCoordinate,
-    look_ahead: [i32; 2],
-) -> Result<(), ProductionHostError> {
+    let materialization = Arc::clone(&inner.worldgen_materialization);
+    let computed = AsyncComputeTaskPool::try_get().map_or_else(
+        || {
+            coordinates
+                .iter()
+                .copied()
+                .map(|coordinate| {
+                    (
+                        coordinate,
+                        compute_worldgen_payload(&materialization, coordinate),
+                    )
+                })
+                .collect()
+        },
+        |pool| {
+            pool.scope_with_executor(false, None, |scope| {
+                for coordinate in coordinates.iter().copied() {
+                    let materialization = Arc::clone(&materialization);
+                    scope.spawn(async move {
+                        (
+                            coordinate,
+                            compute_worldgen_payload(&materialization, coordinate),
+                        )
+                    });
+                }
+            })
+        },
+    );
     let mut generated = BTreeMap::new();
-    for (coordinate, candidate) in region.candidates() {
+    for (coordinate, payload) in computed {
         if !inner
             .lifecycle
             .get(&coordinate)
@@ -4314,19 +4346,7 @@ fn publish_generated_region(
         {
             continue;
         }
-        let occupancy = inner
-            .plan
-            .hydrology_occupancy_candidate_for_snapshot(candidate)?;
-        let mut cells = draft_cells(candidate.draft(), &inner.palette, &inner.presentation)?;
-        apply_hydrology_occupancy(
-            &inner.worldgen_materialization,
-            occupancy.as_ref(),
-            &mut cells,
-        )?;
-        generated.insert(
-            coordinate,
-            generated_chunk_payload(&inner.voxel_schema, inner.voxel_schema_version, cells),
-        );
+        generated.insert(coordinate, payload?);
     }
     publish_generated_cells(
         inner,

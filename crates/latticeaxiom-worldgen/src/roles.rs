@@ -105,6 +105,8 @@ pub enum D4MaterialRoleV1 {
 }
 
 impl D4MaterialRoleV1 {
+    pub(crate) const COUNT: usize = 38;
+
     /// Canonical order of all required D4 generator roles.
     pub const ALL: [Self; 16] = [
         Self::Empty,
@@ -150,6 +152,49 @@ impl D4MaterialRoleV1 {
         Self::BorealLog,
         Self::BorealLeaves,
     ];
+
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::TemperateSurface => 1,
+            Self::TemperateSubsurface => 2,
+            Self::TemperateBaseRock => 3,
+            Self::TemperateSecondaryRock => 4,
+            Self::TemperateClay => 5,
+            Self::TemperateGravel => 6,
+            Self::WoodlandLog => 7,
+            Self::WoodlandLeaves => 8,
+            Self::WoodlandGroundCover => 9,
+            Self::AridSand => 10,
+            Self::AridRedSand => 11,
+            Self::AridSandstone => 12,
+            Self::AridRedSandstone => 13,
+            Self::AridBaseRock => 14,
+            Self::CopperResource => 15,
+            Self::CoarseDirt => 16,
+            Self::RootedDirt => 17,
+            Self::Mud => 18,
+            Self::Silt => 19,
+            Self::Peat => 20,
+            Self::Snow => 21,
+            Self::Ice => 22,
+            Self::Moss => 23,
+            Self::Deepstone => 24,
+            Self::Granite => 25,
+            Self::Slate => 26,
+            Self::Tuff => 27,
+            Self::Calcite => 28,
+            Self::Dripstone => 29,
+            Self::CoalResource => 30,
+            Self::IronResource => 31,
+            Self::TinResource => 32,
+            Self::GoldResource => 33,
+            Self::SulfurResource => 34,
+            Self::CrystalResource => 35,
+            Self::BorealLog => 36,
+            Self::BorealLeaves => 37,
+        }
+    }
 
     /// Returns the stable canonical purpose name used in diagnostics.
     #[must_use]
@@ -534,6 +579,19 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
+
+    #[test]
+    fn material_role_ordinals_cover_the_dense_lookup_table_once() {
+        let ordinals = D4MaterialRoleV1::ALL
+            .into_iter()
+            .chain(D4MaterialRoleV1::NATURAL)
+            .map(D4MaterialRoleV1::ordinal)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(ordinals.len(), D4MaterialRoleV1::COUNT);
+        assert_eq!(ordinals.first(), Some(&0));
+        assert_eq!(ordinals.last(), Some(&(D4MaterialRoleV1::COUNT - 1)));
+    }
 
     #[test]
     fn frozen_binding_constructor_rejects_absolute_boundary_plus_one_early() {

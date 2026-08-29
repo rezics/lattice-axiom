@@ -509,19 +509,24 @@ impl EngineInstance {
     ) -> Result<Self, ProductionHostError> {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
-        let spine = ProductionSpine::materialize(&images)?;
-        Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
-            install_production_host(
-                app,
-                product_lock_hash,
-                spine,
-                inspect_surface,
-                true,
-                #[cfg(feature = "client")]
-                None,
-            );
-        })
-        .map_err(ProductionHostError::from)
+        let images_for_spine = images.clone();
+        let mut setup_error = None;
+        let instance =
+            Self::new_headless_with_setup(images.into_images(), fixed_timestep, |app| {
+                match ProductionSpine::materialize(&images_for_spine) {
+                    Ok(spine) => install_production_host(
+                        app,
+                        product_lock_hash,
+                        spine,
+                        inspect_surface,
+                        true,
+                        #[cfg(feature = "client")]
+                        None,
+                    ),
+                    Err(error) => setup_error = Some(error),
+                }
+            })?;
+        setup_error.map_or(Ok(instance), Err)
     }
 
     /// Builds a GPU-free production spine with a caller-supplied gameplay catalog.
@@ -540,19 +545,24 @@ impl EngineInstance {
     ) -> Result<Self, ProductionHostError> {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
-        let spine = ProductionSpine::materialize_with_catalog(&images, catalog)?;
-        Self::new_headless_with_setup(images.into_images(), fixed_timestep, move |app| {
-            install_production_host(
-                app,
-                product_lock_hash,
-                spine,
-                inspect_surface,
-                true,
-                #[cfg(feature = "client")]
-                None,
-            );
-        })
-        .map_err(ProductionHostError::from)
+        let images_for_spine = images.clone();
+        let mut setup_error = None;
+        let instance =
+            Self::new_headless_with_setup(images.into_images(), fixed_timestep, |app| {
+                match ProductionSpine::materialize_with_catalog(&images_for_spine, catalog) {
+                    Ok(spine) => install_production_host(
+                        app,
+                        product_lock_hash,
+                        spine,
+                        inspect_surface,
+                        true,
+                        #[cfg(feature = "client")]
+                        None,
+                    ),
+                    Err(error) => setup_error = Some(error),
+                }
+            })?;
+        setup_error.map_or(Ok(instance), Err)
     }
 
     /// Builds the process's sole interactive client with the production spine.
@@ -583,10 +593,24 @@ impl EngineInstance {
     ) -> Result<(Self, latticeaxiom_launcher::FreshClientAppLeaseProof), ProductionHostError> {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
-        let spine = ProductionSpine::materialize(&images)?;
-        let instance = Self::new_client_with_setup(images.into_images(), move |app| {
-            install_production_host(app, product_lock_hash, spine, inspect_surface, false, maps);
+        let images_for_spine = images.clone();
+        let mut setup_error = None;
+        let instance = Self::new_client_with_setup(images.into_images(), |app| {
+            match ProductionSpine::materialize(&images_for_spine) {
+                Ok(spine) => install_production_host(
+                    app,
+                    product_lock_hash,
+                    spine,
+                    inspect_surface,
+                    false,
+                    maps,
+                ),
+                Err(error) => setup_error = Some(error),
+            }
         })?;
+        if let Some(error) = setup_error {
+            return Err(error);
+        }
         Ok((instance, lease.into_app_created_proof()))
     }
 
