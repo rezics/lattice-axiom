@@ -83,6 +83,10 @@ accepted = ["AGPL-3.0-only"]
 [latticeaxiom-storage]
 accepted = ["AGPL-3.0-only"]
 
+[latticeaxiom-terrenia-worldgen]
+# Package-local crate owned by packages/terrenia/worldgen.
+accepted = ["AGPL-3.0-only"]
+
 [latticeaxiom-territory]
 accepted = ["AGPL-3.0-only"]
 

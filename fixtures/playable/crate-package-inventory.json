@@ -143,6 +143,13 @@
       "notes": "Not the complete D3 WorldStorage boundary. V2 may use memory behind production interfaces without claiming durability. Add typed metadata, requirement closure, wire envelope, and a physical backend in this kernel family, not a parallel storage crate."
     },
     {
+      "name": "latticeaxiom-terrenia-worldgen",
+      "path": "packages/terrenia/worldgen",
+      "disposition": "adapt",
+      "v1_role": "Terrenia-owned world-generation profiles, terrain presets, and biome policy.",
+      "notes": "Package-local policy crate for @terrenia/worldgen. It resolves Terrenia defaults into generic latticeaxiom-worldgen contracts without moving package policy into the engine or generic worldgen crate."
+    },
+    {
       "name": "latticeaxiom-territory",
       "path": "crates/latticeaxiom-territory",
       "disposition": "adapt",
