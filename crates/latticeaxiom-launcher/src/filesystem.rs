@@ -1210,49 +1210,35 @@ fn reject_symlinked_components(path: &Path) -> Result<(), IntentStoreError> {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     use super::*;
 
-    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
     const INTENT: &[u8] = br#"{"schema_version":1}"#;
     const NEXT_INTENT: &[u8] = br#"{"schema_version":1,"generation":2}"#;
     const RECOVERY: &[u8] = br#"{"schema_version":1,"kind":"recovery","checksum":"test"}"#;
 
     #[derive(Debug)]
-    struct TestDirectory(PathBuf);
+    struct TestDirectory {
+        path: PathBuf,
+        _directory: tempfile::TempDir,
+    }
 
     impl TestDirectory {
         fn create() -> Self {
-            let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-launcher-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir(&path)
+            let directory = tempfile::Builder::new()
+                .prefix("latticeaxiom-launcher-")
+                .tempdir()
                 .unwrap_or_else(|error| panic!("test directory was not created: {error}"));
-            Self(
-                fs::canonicalize(path)
-                    .unwrap_or_else(|error| panic!("test directory did not canonicalize: {error}")),
-            )
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let temporary_root = fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|error| panic!("temporary root did not canonicalize: {error}"));
-            assert!(self.0.starts_with(&temporary_root));
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("test directory cleanup failed: {error}");
+            let path = fs::canonicalize(directory.path())
+                .unwrap_or_else(|error| panic!("test directory did not canonicalize: {error}"));
+            Self {
+                path,
+                _directory: directory,
             }
         }
     }
 
     fn open(directory: &TestDirectory) -> FileLaunchIntentStore {
-        FileLaunchIntentStore::open(&directory.0)
+        FileLaunchIntentStore::open(&directory.path)
             .unwrap_or_else(|error| panic!("store did not open: {error}"))
     }
 
@@ -1525,7 +1511,7 @@ mod tests {
     #[test]
     fn child_exit_publish_consume_and_quarantine_are_one_shot() {
         let directory = TestDirectory::create();
-        let mut store = FileChildExitStore::open(&directory.0)
+        let mut store = FileChildExitStore::open(&directory.path)
             .unwrap_or_else(|error| panic!("child-exit store did not open: {error}"));
         let hash = CanonicalHash::digest(INTENT);
         assert_published(&store.publish(INTENT));
@@ -1555,12 +1541,12 @@ mod tests {
         ));
         let directory = TestDirectory::create();
         let leaf = directory
-            .0
+            .path
             .file_name()
             .unwrap_or_else(|| panic!("test directory has no final component"));
         let with_dot = PathBuf::from(format!(
             r"{}\..\{}",
-            directory.0.display(),
+            directory.path.display(),
             leaf.to_string_lossy()
         ));
         assert!(matches!(
@@ -1575,10 +1561,10 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let directory = TestDirectory::create();
-        let outside = directory.0.with_extension("outside");
+        let outside = directory.path.with_extension("outside");
         fs::write(&outside, b"secret")
             .unwrap_or_else(|error| panic!("outside fixture was not written: {error}"));
-        symlink(&outside, directory.0.join(PENDING_FILE))
+        symlink(&outside, directory.path.join(PENDING_FILE))
             .unwrap_or_else(|error| panic!("symlink fixture was not created: {error}"));
         let mut store = open(&directory);
         assert!(matches!(

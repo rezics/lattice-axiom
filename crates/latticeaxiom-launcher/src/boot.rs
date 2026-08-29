@@ -275,9 +275,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::Debug;
     use std::fs;
-    use std::io;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use latticeaxiom_compose::{
         CompositionBootstrapV1, LOCK_SCHEMA_VERSION, LockActionMode, LockedGameGraph,
@@ -298,43 +296,27 @@ mod tests {
         SettingTransactionRevision,
     };
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDirectory(PathBuf);
+    struct TestDirectory {
+        path: PathBuf,
+        _directory: tempfile::TempDir,
+    }
 
     impl TestDirectory {
         fn create() -> Self {
-            let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-launcher-boot-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path)
+            let directory = tempfile::Builder::new()
+                .prefix("latticeaxiom-launcher-boot-")
+                .tempdir()
                 .unwrap_or_else(|error| panic!("test directory was not created: {error}"));
-            Self(
-                fs::canonicalize(&path)
-                    .unwrap_or_else(|error| panic!("test directory did not canonicalize: {error}")),
-            )
+            let path = fs::canonicalize(directory.path())
+                .unwrap_or_else(|error| panic!("test directory did not canonicalize: {error}"));
+            Self {
+                path,
+                _directory: directory,
+            }
         }
 
         fn lock_path(&self) -> PathBuf {
-            self.0.join(PRODUCT_LOCK_FILE_NAME)
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let temporary_root = fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|error| panic!("temporary root did not canonicalize: {error}"));
-            assert!(
-                self.0.starts_with(&temporary_root),
-                "refusing to delete a test directory outside the process temporary root"
-            );
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("test directory cleanup failed: {error}");
-            }
+            self.path.join(PRODUCT_LOCK_FILE_NAME)
         }
     }
 
@@ -637,7 +619,7 @@ path = "packages/terrain"
     fn missing_lock_refuses_before_runtime_image() {
         let directory = TestDirectory::create();
         let (_, objects, host) = persist_fixture(&directory);
-        let missing = directory.0.join("absent.lock");
+        let missing = directory.path.join("absent.lock");
         match ReopenedFinalLockV1::reopen_frozen(&missing, &objects, &host) {
             Err(ProductLockBootError::ProductLock(ProductLockError::MissingLock { path })) => {
                 assert_eq!(path, missing);

@@ -1207,12 +1207,7 @@ fn store_failure_code(error: &IntentStoreError) -> (LaunchPhaseV1, LaunchFailure
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        fs, io,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::{collections::VecDeque, fs, path::PathBuf};
 
     use latticeaxiom_core::WorldId;
 
@@ -1227,39 +1222,26 @@ mod tests {
 
     use super::*;
 
-    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
-
     #[derive(Debug)]
-    struct TestDirectory(PathBuf);
+    struct TestDirectory {
+        path: PathBuf,
+        _directory: tempfile::TempDir,
+    }
 
     impl TestDirectory {
         fn create() -> Self {
-            let temporary_root = fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|error| panic!("temporary root did not canonicalize: {error}"));
-            let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-            let path = temporary_root.join(format!(
-                "latticeaxiom-launcher-supervisor-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).unwrap_or_else(|error| {
-                panic!("supervisor test directory was not created: {error}")
-            });
-            let canonical = fs::canonicalize(path).unwrap_or_else(|error| {
+            let directory = tempfile::Builder::new()
+                .prefix("latticeaxiom-launcher-supervisor-")
+                .tempdir()
+                .unwrap_or_else(|error| {
+                    panic!("supervisor test directory was not created: {error}")
+                });
+            let path = fs::canonicalize(directory.path()).unwrap_or_else(|error| {
                 panic!("supervisor test directory did not canonicalize: {error}")
             });
-            Self(canonical)
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let temporary_root = fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|error| panic!("temporary root did not canonicalize: {error}"));
-            assert!(self.0.starts_with(&temporary_root));
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("supervisor test directory cleanup failed: {error}");
+            Self {
+                path,
+                _directory: directory,
             }
         }
     }
@@ -1391,9 +1373,9 @@ mod tests {
     }
 
     fn open_stores(directory: &TestDirectory) -> (FileLaunchIntentStore, FileChildExitStore) {
-        let intent = FileLaunchIntentStore::open(&directory.0)
+        let intent = FileLaunchIntentStore::open(&directory.path)
             .unwrap_or_else(|error| panic!("intent store did not open: {error}"));
-        let exit = FileChildExitStore::open(&directory.0)
+        let exit = FileChildExitStore::open(&directory.path)
             .unwrap_or_else(|error| panic!("child-exit store did not open: {error}"));
         (intent, exit)
     }

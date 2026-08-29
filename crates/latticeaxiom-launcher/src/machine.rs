@@ -1542,12 +1542,7 @@ fn push_failure(failures: &mut Vec<LaunchFailureReceiptV1>, failure: LaunchFailu
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        fs, io,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::{collections::VecDeque, fs, io, path::PathBuf};
 
     use latticeaxiom_core::WorldId;
 
@@ -1562,39 +1557,24 @@ mod tests {
 
     use super::*;
 
-    static NEXT_MACHINE_TEMP: AtomicU64 = AtomicU64::new(1);
-
     #[derive(Debug)]
-    struct MachineTestDirectory(PathBuf);
+    struct MachineTestDirectory {
+        path: PathBuf,
+        _directory: tempfile::TempDir,
+    }
 
     impl MachineTestDirectory {
         fn create() -> Self {
-            let temporary_root = fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|error| panic!("temporary root did not canonicalize: {error}"));
-            let serial = NEXT_MACHINE_TEMP.fetch_add(1, Ordering::Relaxed);
-            let path = temporary_root.join(format!(
-                "latticeaxiom-launcher-machine-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir(&path)
+            let directory = tempfile::Builder::new()
+                .prefix("latticeaxiom-launcher-machine-")
+                .tempdir()
                 .unwrap_or_else(|error| panic!("machine test directory was not created: {error}"));
-            let canonical = fs::canonicalize(path).unwrap_or_else(|error| {
+            let path = fs::canonicalize(directory.path()).unwrap_or_else(|error| {
                 panic!("machine test directory did not canonicalize: {error}")
             });
-            assert!(canonical.starts_with(&temporary_root));
-            Self(canonical)
-        }
-    }
-
-    impl Drop for MachineTestDirectory {
-        fn drop(&mut self) {
-            let temporary_root = fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|error| panic!("temporary root did not canonicalize: {error}"));
-            assert!(self.0.starts_with(&temporary_root));
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("machine test directory cleanup failed: {error}");
+            Self {
+                path,
+                _directory: directory,
             }
         }
     }
@@ -3083,7 +3063,7 @@ mod tests {
     #[test]
     fn real_file_store_durably_boots_target_and_recovery() {
         let target_directory = MachineTestDirectory::create();
-        let mut target_store = FileLaunchIntentStore::open(&target_directory.0)
+        let mut target_store = FileLaunchIntentStore::open(&target_directory.path)
             .unwrap_or_else(|error| panic!("target file store did not open: {error}"));
         let world_id = WorldId::new_v4();
         let mut publisher = ClientTransitionMachine::from_active(initial_shell())
@@ -3129,7 +3109,7 @@ mod tests {
         assert_eq!(target_slot.disposition(), Some(SlotDisposition::Consumed));
 
         let recovery_directory = MachineTestDirectory::create();
-        let mut recovery_store = FileLaunchIntentStore::open(&recovery_directory.0)
+        let mut recovery_store = FileLaunchIntentStore::open(&recovery_directory.path)
             .unwrap_or_else(|error| panic!("recovery file store did not open: {error}"));
         assert_eq!(
             recovery_store.publish(b"not-json").ok(),
