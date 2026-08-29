@@ -1724,8 +1724,16 @@ impl ProductionSpine {
         let (occupied, edge) = {
             let mut inner = self.lock_inner()?;
             let translation = inner.player_pose.translation;
-            let mut occupied = player_occupied_chunks(translation, inner.chunk_edge)?;
-            if let Some(origin) = translation_chunk(translation, inner.chunk_edge) {
+            let mut occupied = player_collider_safety_chunks(
+                translation,
+                inner.chunk_edge,
+                inner.clamps.vertical_min_chunk,
+                inner.clamps.vertical_max_chunk,
+            )?;
+            if let Some(origin) = translation_chunk(translation, inner.chunk_edge)
+                && (inner.clamps.vertical_min_chunk..=inner.clamps.vertical_max_chunk)
+                    .contains(&origin.y)
+            {
                 occupied.insert(origin);
                 let priority = derived_request(DerivedPriority::COLLIDER_SAFETY);
                 for &coordinate in &occupied {
@@ -4384,9 +4392,14 @@ fn collider_safety_ready(
     inner: &ProductionSpineInner,
     occupied: &BTreeSet<ChunkCoordinate>,
 ) -> bool {
-    occupied
-        .iter()
-        .all(|coordinate| cave_entry_ready_inner(inner, *coordinate))
+    // Movement depends on the revision-matched collider only. Mesh readiness is
+    // presentation state and must not hold controls closed behind render work.
+    occupied.iter().all(|coordinate| {
+        matches!(
+            inner.runtime.collider_safety(*coordinate),
+            Some(ColliderSafetyState::Ready { .. })
+        )
+    })
 }
 
 fn dispatch_derived_batch(
@@ -5731,6 +5744,20 @@ fn player_occupied_chunks(
     Ok(chunks)
 }
 
+fn player_collider_safety_chunks(
+    translation: Vec3,
+    edge: u16,
+    vertical_min_chunk: i32,
+    vertical_max_chunk: i32,
+) -> Result<BTreeSet<ChunkCoordinate>, ProductionHostError> {
+    let mut chunks = player_occupied_chunks(translation, edge)?;
+    // The authored vertical domain is the complete voxel/collider domain.
+    // Air above and below it has no chunk to generate, so waiting for one would
+    // make creative flight lock permanently at the world boundary.
+    chunks.retain(|coordinate| (vertical_min_chunk..=vertical_max_chunk).contains(&coordinate.y));
+    Ok(chunks)
+}
+
 fn startup_safety_chunks(
     translation: Vec3,
     edge: u16,
@@ -6078,8 +6105,9 @@ mod tests {
     use super::{
         CollisionSemantics, HostVoxel, InterestClass, MAIN_WORLD_APPLY_JOB_CAP, MeshPresentation,
         OccupiedBox, OccupiedCell, apply_waiting_derived, collider_interest_contains,
-        compound_collider, merge_occupied_boxes, player_occupied_chunks,
-        shared_cpu_slots_remaining, stream_derived_priority, worldgen_dispatch_count,
+        compound_collider, merge_occupied_boxes, player_collider_safety_chunks,
+        player_occupied_chunks, shared_cpu_slots_remaining, stream_derived_priority,
+        worldgen_dispatch_count,
     };
     use bevy::prelude::Vec3;
     use latticeaxiom_storage::ChunkCoordinate;
@@ -6163,6 +6191,24 @@ mod tests {
         let centered = player_occupied_chunks(Vec3::new(4.0, 4.0, 4.0), 8)
             .expect("finite centered pose maps to one chunk");
         assert_eq!(centered, BTreeSet::from([ChunkCoordinate::new(0, 0, 0)]));
+    }
+
+    #[test]
+    fn collider_safety_ignores_air_outside_the_generated_vertical_domain() {
+        let above = player_collider_safety_chunks(Vec3::new(4.0, 40.0, 4.0), 8, 0, 3)
+            .expect("finite player pose maps to chunks");
+        assert!(above.is_empty());
+
+        let below = player_collider_safety_chunks(Vec3::new(4.0, -8.0, 4.0), 8, 0, 3)
+            .expect("finite player pose maps to chunks");
+        assert!(below.is_empty());
+
+        let crossing_ceiling = player_collider_safety_chunks(Vec3::new(4.0, 31.5, 4.0), 8, 0, 3)
+            .expect("finite player pose maps to chunks");
+        assert_eq!(
+            crossing_ceiling,
+            BTreeSet::from([ChunkCoordinate::new(0, 3, 0)])
+        );
     }
 
     fn cell(x: u16, y: u16, z: u16) -> OccupiedCell {
