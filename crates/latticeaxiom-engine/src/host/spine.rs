@@ -52,10 +52,11 @@ use latticeaxiom_voxel_runtime::{
     ColliderSemanticFingerprint, CollisionSemantics, CommittedChunkProjection, CompletionOutcome,
     DdaOrigin, DdaOutcome, DdaQuery, DerivedApplyBudget, DerivedApplySlice, DerivedInput,
     DerivedKind, DerivedMemoryBudget, DerivedOwner, DerivedPriority, DerivedQueueLimits,
-    DerivedRequest, DerivedRequestSet, DispatchOutcome, EvictionLeaseGeneration, ExecutorFinish,
-    ExecutorOutcome, FixedTick, MeshSemanticFingerprint, RetainedBytes, RuntimeDiagnostics,
-    RuntimeGeneration, RuntimeLimits, VoxelCoordinate, VoxelRuntime, WallClockNanos,
-    WorkerAbortOutcome, WorkingSetScope, WorldEpoch, cpu_heavy_concurrency, host_parallelism,
+    DerivedRequest, DerivedRequestSet, DispatchOutcome, EnqueueDecision, EvictionLeaseGeneration,
+    ExecutorFinish, ExecutorOutcome, FixedTick, MeshSemanticFingerprint, RetainedBytes,
+    RuntimeDiagnostics, RuntimeGeneration, RuntimeLimits, VoxelCoordinate, VoxelRuntime,
+    WallClockNanos, WorkerAbortOutcome, WorkingSetScope, WorldEpoch, cpu_heavy_concurrency,
+    host_parallelism,
 };
 use latticeaxiom_world_db::{
     AuthoritativeMetadataInputV1, CommitDurabilityV1, DeterministicWorldStorage, PersistedChunkV1,
@@ -3665,6 +3666,65 @@ fn refresh_residency(
             coordinate,
             is_render_chunk(coordinate, origin, inner.clamps),
         );
+    }
+    retry_missing_render_meshes(inner, origin, look_ahead, tick)
+}
+
+/// Refills mesh work rejected by an earlier bounded-queue admission.
+///
+/// Projection may make more render-scoped chunks resident than the mesh queue
+/// can accept in one slice. A rejected request carries no pending work, so it
+/// must be retried until every current render target has accepted geometry.
+/// The refill consumes only currently free pending slots and remains bounded by
+/// the accepted ADR 0026 queue cap.
+fn retry_missing_render_meshes(
+    inner: &mut ProductionSpineInner,
+    origin: ChunkCoordinate,
+    look_ahead: [i32; 2],
+    tick: FixedTick,
+) -> Result<(), ProductionHostError> {
+    let mesh_pending = inner.runtime.diagnostics().mesh().pending();
+    let mut available = DerivedQueueLimits::MESH_JOB_CAP.saturating_sub(mesh_pending);
+    if available == 0 {
+        return Ok(());
+    }
+
+    let clamps = inner.clamps;
+    let render_scope = &inner.render_scope;
+    let derived = &inner.derived;
+    let edited = &inner.edited;
+    let runtime = &mut inner.runtime;
+    for &coordinate in render_scope {
+        if !runtime.is_resident(coordinate)
+            || derived
+                .get(&coordinate)
+                .is_some_and(|derived| derived.geometry.is_some())
+        {
+            continue;
+        }
+        let class = interest_class(coordinate, origin, clamps, look_ahead, edited);
+        let receipt = runtime.request_derived(
+            coordinate,
+            DerivedKind::Mesh,
+            tick,
+            derived_request(stream_derived_priority(
+                class,
+                chebyshev_xz(coordinate, origin),
+            )),
+        )?;
+        match receipt.decision() {
+            EnqueueDecision::Enqueued => {
+                available = available.saturating_sub(1);
+                if available == 0 {
+                    break;
+                }
+            }
+            EnqueueDecision::Replaced | EnqueueDecision::AlreadyQueued => {}
+            EnqueueDecision::RejectedCapacity => break,
+            EnqueueDecision::RejectedMemoryBudget => {
+                return Err(ProductionHostError::DerivedMemory);
+            }
+        }
     }
     Ok(())
 }

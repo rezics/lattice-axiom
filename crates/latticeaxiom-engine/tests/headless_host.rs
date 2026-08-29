@@ -1093,6 +1093,50 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
 }
 
 #[test]
+fn render_mesh_backpressure_eventually_fills_every_resident_render_slot() {
+    let _production_host_guard = production_host_test_guard();
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let limits = spine.hard_limits().expect("host clamps are installed");
+    let max_resident = usize::try_from(limits.max_resident_chunks).expect("resident cap fits");
+
+    await_resident_count(&mut instance, &spine, max_resident, 10_240);
+
+    let mut elapsed = 0_u32;
+    while usize::try_from(spine.working_set_diagnostics().visible()).unwrap_or(usize::MAX)
+        < spine.render_scoped_chunks().len()
+        && elapsed < 10_240
+    {
+        instance
+            .advance_fixed_ticks(16)
+            .expect("mesh backpressure recovery advances");
+        std::thread::park_timeout(ASYNC_TEST_POLL_INTERVAL);
+        elapsed = elapsed.saturating_add(16);
+    }
+
+    let rendered = spine.render_scoped_chunks();
+    let diagnostics = spine.working_set_diagnostics();
+    assert_eq!(
+        usize::try_from(diagnostics.visible()).expect("visible count fits"),
+        rendered.len(),
+        "every resident render target must eventually carry accepted geometry after the bounded mesh queue drains; elapsed={elapsed}, diagnostics={diagnostics:?}, queues={:?}",
+        spine.derived_queue_snapshot(),
+    );
+    assert_eq!(
+        rendered.len(),
+        max_resident,
+        "the fixture must saturate the 1,183-chunk render scope that exceeds the 128-job mesh queue"
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn derived_queues_stay_bounded_during_async_traversal() {
     let _production_host_guard = production_host_test_guard();
