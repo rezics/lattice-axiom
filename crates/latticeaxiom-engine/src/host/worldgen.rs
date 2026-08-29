@@ -235,18 +235,22 @@ pub(super) fn validated_spawn(
     Err(ProductionHostError::NoSafeSpawn)
 }
 
-/// Returns bounded dry-land windows in deterministic expanding-ring order.
+/// Returns bounded topology-first and dry-land fallback windows.
 fn host_spawn_bounds(
     plan: &GenerationPlanV1,
 ) -> Result<Vec<SpawnSearchBoundsV1>, ProductionHostError> {
     const COARSE_STEP: i64 = 128;
     const MAX_RING: i64 = 256;
     const MAX_CANDIDATES: usize = 32;
+    const MAX_TOPOLOGY_CANDIDATES: usize = MAX_CANDIDATES / 2;
     const HALF_EXTENT: i64 = 8;
     let mut candidates = Vec::with_capacity(MAX_CANDIDATES);
     let mut centers = BTreeSet::new();
     if let Some(portals) = plan.cave_topology_portals() {
         for portal in portals {
+            if candidates.len() >= MAX_TOPOLOGY_CANDIDATES {
+                break;
+            }
             let [center_x, _, center_z] = portal.anchor_voxels();
             push_topology_spawn_bounds(
                 center_x,
@@ -267,6 +271,9 @@ fn host_spawn_bounds(
             .iter()
             .flat_map(latticeaxiom_worldgen::CaveLayerEntranceV1::cells)
         {
+            if candidates.len() >= MAX_TOPOLOGY_CANDIDATES {
+                break;
+            }
             let [center_x, _, center_z] = cell_center_voxels_at_edge(
                 cell[0],
                 cell[1],
@@ -280,9 +287,6 @@ fn host_spawn_bounds(
                 &mut centers,
                 &mut candidates,
             )?;
-            if candidates.len() == MAX_CANDIDATES {
-                return Ok(candidates);
-            }
         }
     }
     for ring in 0_i64..=MAX_RING {
@@ -1412,10 +1416,10 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        compile_host_worldgen_inspect, generate_plan_chunks, hydrology_occupancy_config,
-        hydrology_occupancy_config_for, natural_layer_config, occupancy_candidate_is_current,
-        production_terrain_config, provider_offers, required_cave_entrance, spawn_center,
-        spine_config, spine_config_for, validated_spawn,
+        compile_host_worldgen_inspect, generate_plan_chunks, host_spawn_bounds,
+        hydrology_occupancy_config, hydrology_occupancy_config_for, natural_layer_config,
+        occupancy_candidate_is_current, production_terrain_config, provider_offers,
+        required_cave_entrance, spawn_center, spine_config, spine_config_for, validated_spawn,
     };
     use latticeaxiom_core::CanonicalHash;
     use latticeaxiom_runtime_contracts::{
@@ -1668,6 +1672,28 @@ mod tests {
         assert!((center.x - (f32::from(x) + 0.5)).abs() < f32::EPSILON);
         assert!((center.z - (f32::from(z) + 0.5)).abs() < f32::EPSILON);
         assert!(center.y > f32::from(footing_y));
+    }
+
+    #[test]
+    fn topology_candidates_leave_bounded_fallbacks_across_seed_corpus() {
+        let bindings = authored_bindings();
+        for seed in 0..32 {
+            let plan = fixture_plan(seed);
+            let bounds = host_spawn_bounds(&plan).expect("spawn bounds remain valid");
+            assert!(
+                bounds.len() <= 32,
+                "seed {seed} produced {} bounds",
+                bounds.len()
+            );
+            assert!(
+                bounds.len() > 16,
+                "seed {seed} did not retain dry-land fallback windows"
+            );
+            assert!(
+                validated_spawn(&plan, &bindings).is_ok(),
+                "seed {seed} must select a safe spawn"
+            );
+        }
     }
 
     #[test]

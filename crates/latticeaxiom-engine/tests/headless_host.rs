@@ -2194,7 +2194,7 @@ fn home_preflight_game_save_and_quit_returns_home() {
     };
     let mut instance = start
         .play_headless(created, 20, SPINE_TIMESTEP)
-        .expect("game host starts from the same lock");
+        .unwrap_or_else(|error| panic!("world {created} starts from the same lock: {error:?}"));
     start.pause_session(&mut instance).expect("pause");
     start
         .save_and_quit(created, instance, &mut writer_host, EMPTY_SETTINGS_REVISION)
@@ -2224,7 +2224,7 @@ fn durable_save_and_quit_returns_child_result_and_reopens_edits_and_inventory() 
         .expect("create provisions durable storage");
     let mut instance = start
         .play_headless(created, 20, SPINE_TIMESTEP)
-        .expect("game host starts from the same lock");
+        .unwrap_or_else(|error| panic!("world {created} starts from the same lock: {error:?}"));
     instance
         .advance_fixed_ticks(1)
         .expect("one production tick plays");
