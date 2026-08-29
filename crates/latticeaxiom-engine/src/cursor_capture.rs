@@ -1,6 +1,7 @@
 //! Backend-confirmed primary-window focus for relative mouse capture.
 
 use bevy::{
+    ecs::system::NonSendMarker,
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     prelude::{Entity, MessageReader, Query, ResMut, Resource, With},
     window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window, WindowFocused},
@@ -138,13 +139,16 @@ impl CursorCaptureState {
 ///
 /// The state advances to an applied variant only after the native winit calls
 /// return successfully. This keeps input ownership fail-closed when centering,
-/// grabbing, or releasing fails at the operating-system boundary.
+/// grabbing, or releasing fails at the operating-system boundary. The
+/// [`NonSendMarker`] proof keeps access to winit's thread-local window table on
+/// the event-loop thread that owns it.
 pub(crate) fn apply_cursor_capture(
     capture: &mut CursorCaptureState,
     capture_allowed: bool,
     window_entity: Entity,
     window: &mut Window,
     cursor: &mut CursorOptions,
+    _main_thread: &NonSendMarker,
 ) -> Result<(), CursorCaptureBackendError> {
     if !capture_allowed {
         capture.request_release();

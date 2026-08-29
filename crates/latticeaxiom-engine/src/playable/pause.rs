@@ -5,6 +5,7 @@ use bevy::{
     app::AppExit,
     ecs::observer::On,
     ecs::query::Has,
+    ecs::system::NonSendMarker,
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     picking::hover::Hovered,
     prelude::{
@@ -201,6 +202,7 @@ pub(super) fn sync_cursor_capture(
     mut capture: ResMut<'_, CursorCaptureState>,
     confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
     mut windows: Query<'_, '_, (Entity, &mut Window, &mut CursorOptions), With<PrimaryWindow>>,
+    main_thread: NonSendMarker,
 ) {
     let Ok((window_entity, mut window, mut cursor)) = windows.single_mut() else {
         return;
@@ -212,6 +214,7 @@ pub(super) fn sync_cursor_capture(
         window_entity,
         &mut window,
         &mut cursor,
+        &main_thread,
     ) {
         bevy::log::warn!(error = %error, "cursor capture transition failed");
     }

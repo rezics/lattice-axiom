@@ -10,6 +10,7 @@ use bevy::{
     ecs::change_detection::{DetectChanges, Ref},
     ecs::observer::On,
     ecs::query::{Has, Or},
+    ecs::system::NonSendMarker,
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     input_focus::tab_navigation::{NavAction, TabGroup, TabIndex, TabNavigation},
     input_focus::{FocusCause, InputFocus, InputFocusVisible},
@@ -1398,6 +1399,7 @@ pub(super) fn sync_cursor_capture(
     confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
     router: Option<Res<'_, super::ProductionSurfaceRouter>>,
     mut windows: Query<'_, '_, (Entity, &mut Window, &mut CursorOptions), With<PrimaryWindow>>,
+    main_thread: NonSendMarker,
 ) {
     let Ok((window_entity, mut window, mut cursor)) = windows.single_mut() else {
         return;
@@ -1410,6 +1412,7 @@ pub(super) fn sync_cursor_capture(
         window_entity,
         &mut window,
         &mut cursor,
+        &main_thread,
     ) {
         bevy::log::warn!(error = %error, "cursor capture transition failed");
     }
@@ -1675,6 +1678,22 @@ const fn button_color(pressed: bool, hovered: bool, focused: bool) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_cursor_sync_is_forced_onto_the_winit_main_thread() {
+        use bevy::ecs::{
+            system::{IntoSystem, System},
+            world::World,
+        };
+
+        let mut world = World::new();
+        let mut system = IntoSystem::into_system(sync_cursor_capture);
+        system.initialize(&mut world);
+        assert!(
+            !system.is_send(),
+            "winit's thread-local window table is empty on Bevy worker threads"
+        );
+    }
 
     #[test]
     fn cursor_requires_a_focused_viewport_gesture_and_never_auto_recaptures() {
