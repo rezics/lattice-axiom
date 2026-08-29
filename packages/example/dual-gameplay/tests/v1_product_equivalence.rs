@@ -11,14 +11,11 @@
 use std::{
     collections::BTreeMap,
     fmt::Debug,
-    fs, io,
+    fs,
     num::{NonZeroU8, NonZeroU32},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -472,44 +469,20 @@ fn compose_final_lock_fixture() -> ReopenedFinalLockV1 {
     reopened
 }
 
-struct TestDirectory(PathBuf);
+struct TestDirectory(tempfile::TempDir);
 
 impl TestDirectory {
     fn create() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        loop {
-            let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-dual-final-lock-{}-{serial}",
-                std::process::id()
-            ));
-            match fs::create_dir(&path) {
-                Ok(()) => {
-                    return Self(path);
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => panic!("typed final-lock fixture directory: {error}"),
-            }
-        }
+        Self(
+            tempfile::Builder::new()
+                .prefix("latticeaxiom-dual-final-lock-")
+                .tempdir()
+                .unwrap_or_else(|error| panic!("typed final-lock fixture directory: {error}")),
+        )
     }
 
     fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        let temporary_root = std::env::temp_dir();
-        assert!(
-            self.0.starts_with(&temporary_root),
-            "refusing to remove a fixture outside the process temporary root"
-        );
-        if let Err(error) = fs::remove_dir_all(&self.0)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            panic!("typed final-lock fixture cleanup failed: {error}");
-        }
+        self.0.path()
     }
 }
 
