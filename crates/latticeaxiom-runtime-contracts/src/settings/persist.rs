@@ -1192,9 +1192,13 @@ fn platform_sync_directory(root: &Path) -> Result<(), LocalSettingsPersistError>
 mod tests {
     use super::*;
     use std::io;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+    fn test_directory(prefix: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir()
+            .unwrap_or_else(|error| panic!("test directory was not created: {error}"))
+    }
 
     fn user_envelope(scale: f64) -> LatticeLocalSettingsV1 {
         next_user_envelope(&LatticeLocalSettingsV1::empty(), scale)
@@ -1283,11 +1287,8 @@ mod tests {
 
     #[test]
     fn failed_backup_restore_reports_visible_state_uncertainty() {
-        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "latticeaxiom-recovery-fault-{}-{serial}",
-            std::process::id()
-        ));
+        let directory = test_directory("latticeaxiom-recovery-fault-");
+        let root = directory.path();
         let temporary = root.join("temporary-settings.json");
         let destination = root.join("settings.json");
         let mut rename_call = 0_u8;
@@ -1314,11 +1315,8 @@ mod tests {
 
     #[test]
     fn successful_backup_restore_remains_an_ordinary_rollback_error() {
-        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "latticeaxiom-recovery-success-{}-{serial}",
-            std::process::id()
-        ));
+        let directory = test_directory("latticeaxiom-recovery-success-");
+        let root = directory.path();
         let temporary = root.join("temporary-settings.json");
         let destination = root.join("settings.json");
         let mut rename_call = 0_u8;
@@ -1401,12 +1399,8 @@ mod tests {
 
     #[test]
     fn filesystem_round_trip_survives_replacement_process_restart() {
-        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "latticeaxiom-local-settings-{}-{serial}",
-            std::process::id()
-        ));
-        let store = match FilesystemLocalSettingsStore::open(&path) {
+        let directory = test_directory("latticeaxiom-local-settings-");
+        let store = match FilesystemLocalSettingsStore::open(directory.path()) {
             Ok(value) => value,
             Err(error) => panic!("open failed: {error}"),
         };
@@ -1415,7 +1409,7 @@ mod tests {
             Ok(_) => {}
             Err(error) => panic!("filesystem persist failed: {error}"),
         }
-        let reopened = match FilesystemLocalSettingsStore::open(&path) {
+        let reopened = match FilesystemLocalSettingsStore::open(directory.path()) {
             Ok(value) => value,
             Err(error) => panic!("reopen failed: {error}"),
         };
@@ -1425,6 +1419,5 @@ mod tests {
         };
         assert_eq!(loaded.origin(), &LocalSettingsOrigin::Complete);
         assert_eq!(loaded.envelope(), &envelope);
-        let _ = fs::remove_dir_all(&path);
     }
 }

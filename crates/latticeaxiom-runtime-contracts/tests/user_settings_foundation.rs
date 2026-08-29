@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use latticeaxiom_compose::SettingScope;
 use latticeaxiom_core::{CanonicalHash, StableId};
@@ -38,8 +37,6 @@ const NEWER_ENVELOPE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/settings/newer-user-settings.json"
 );
-
-static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 fn read(path: &str) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|error| panic!("fixture `{path}` must be readable: {error}"))
@@ -193,13 +190,12 @@ fn persist_survives_replacement_process_and_cannot_roll_back() {
     apply
         .prepare()
         .unwrap_or_else(|error| panic!("apply prepare: {error}"));
-    let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!(
-        "latticeaxiom-settings-foundation-{}-{serial}",
-        std::process::id()
-    ));
-    let store =
-        FilesystemLocalSettingsStore::open(&root).unwrap_or_else(|error| panic!("open: {error}"));
+    let directory = tempfile::Builder::new()
+        .prefix("latticeaxiom-settings-foundation-")
+        .tempdir()
+        .unwrap_or_else(|error| panic!("test directory was not created: {error}"));
+    let store = FilesystemLocalSettingsStore::open(directory.path())
+        .unwrap_or_else(|error| panic!("open: {error}"));
     let (persisted, batch) = apply
         .persist(&store, &current, lock)
         .unwrap_or_else(|error| panic!("persist: {error}"));
@@ -207,8 +203,8 @@ fn persist_survives_replacement_process_and_cannot_roll_back() {
     assert_eq!(apply.phase(), SettingsTransactionPhase::Committed);
     assert!(apply.rollback_before_persist().is_err());
 
-    let reopened =
-        FilesystemLocalSettingsStore::open(&root).unwrap_or_else(|error| panic!("reopen: {error}"));
+    let reopened = FilesystemLocalSettingsStore::open(directory.path())
+        .unwrap_or_else(|error| panic!("reopen: {error}"));
     let loaded = reopened
         .load()
         .unwrap_or_else(|error| panic!("reload: {error}"));
@@ -230,7 +226,6 @@ fn persist_survives_replacement_process_and_cannot_roll_back() {
             .map(StoredSettingEntryV1::value),
         Some(&serde_json::json!(12))
     );
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
