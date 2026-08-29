@@ -1119,14 +1119,16 @@ fn authored_gameplay_source(
     let processes = ingest_processes(json_array(&rules, "processes")?, &mut workstations)?;
     let fuel_rules = ingest_fuel_rules(json_array(&rules, "fuel_rules")?)?;
     let tags = ingest_item_tags(json_array(&rules, "item_tags")?)?;
-    let drop_tables = drop_table_map(json_array(&rules, "drop_tables")?)?;
     let tool_requirements = tool_requirement_map(json_array(&rules, "tool_requirements")?)?;
+    let mining_rules = mining_rule_ids(json_array(&rules, "mining_rules")?)?;
+    let drop_tables = drop_table_map(json_array(&rules, "drop_tables")?, &tool_requirements)?;
     Ok(GameplayCatalogSourceV1 {
         items: items.into_values().collect(),
         blocks: compile_blocks(
             json_array(&blocks, "blocks")?,
             &drop_tables,
             &tool_requirements,
+            &mining_rules,
         )?,
         tools: compile_tools(json_array(&tools, "tools")?)?,
         tags,
@@ -1498,6 +1500,7 @@ fn compile_blocks(
     rows: &[Value],
     drop_tables: &BTreeMap<String, latticeaxiom_gameplay::ItemStackV1>,
     tool_requirements: &BTreeMap<String, Option<ToolRequirementV1>>,
+    mining_rules: &BTreeSet<String>,
 ) -> Result<Vec<BlockDefinitionV1>, ProductionHostError> {
     let mut blocks = Vec::new();
     for row in rows {
@@ -1527,6 +1530,13 @@ fn compile_blocks(
         let rules = definition
             .get("rules")
             .ok_or(ProductionHostError::InvalidCatalogField { field: "rules" })?;
+        let mining_rule_id = json_text(rules, "mining_rule")?;
+        if !mining_rules.contains(mining_rule_id) {
+            return Err(ProductionHostError::MissingCatalogDefinition {
+                kind: "mining-rule",
+                id: mining_rule_id.to_owned(),
+            });
+        }
         let drop_id = json_text(rules, "drop_table")?;
         let Some(drop) = drop_tables.get(drop_id).cloned() else {
             return Err(ProductionHostError::MissingCatalogDefinition {
@@ -1574,9 +1584,26 @@ fn compile_tools(rows: &[Value]) -> Result<Vec<ToolDefinitionV1>, ProductionHost
 
 fn drop_table_map(
     rows: &[Value],
+    tool_requirements: &BTreeMap<String, Option<ToolRequirementV1>>,
 ) -> Result<BTreeMap<String, latticeaxiom_gameplay::ItemStackV1>, ProductionHostError> {
     let mut tables = BTreeMap::new();
+    let mut ids = BTreeSet::new();
     for row in rows {
+        let id = json_text(row, "id")?;
+        if !ids.insert(id.to_owned()) {
+            return Err(ProductionHostError::InvalidCatalogField {
+                field: "duplicate-drop-table",
+            });
+        }
+        for field in ["mining_speed_predicate", "drop_predicate"] {
+            let requirement = json_text(row, field)?;
+            if !tool_requirements.contains_key(requirement) {
+                return Err(ProductionHostError::MissingCatalogDefinition {
+                    kind: "tool-requirement",
+                    id: requirement.to_owned(),
+                });
+            }
+        }
         let outputs = json_array(row, "outputs")?;
         if outputs.len() != 1 {
             continue;
@@ -1584,11 +1611,23 @@ fn drop_table_map(
         let item = json_text(&outputs[0], "item")?;
         let quantity = json_quantity(&outputs[0], "quantity")?;
         tables.insert(
-            json_text(row, "id")?.to_owned(),
+            id.to_owned(),
             latticeaxiom_gameplay::ItemStackV1::plain(ItemId::parse(item)?, quantity.get())?,
         );
     }
     Ok(tables)
+}
+
+fn mining_rule_ids(rows: &[Value]) -> Result<BTreeSet<String>, ProductionHostError> {
+    let mut rules = BTreeSet::new();
+    for row in rows {
+        if !rules.insert(json_text(row, "id")?.to_owned()) {
+            return Err(ProductionHostError::InvalidCatalogField {
+                field: "duplicate-mining-rule",
+            });
+        }
+    }
+    Ok(rules)
 }
 
 fn tool_requirement_map(
@@ -1616,7 +1655,14 @@ fn tool_requirement_map(
                     minimum_tier,
                 })
             };
-        requirements.insert(json_text(row, "id")?.to_owned(), required);
+        if requirements
+            .insert(json_text(row, "id")?.to_owned(), required)
+            .is_some()
+        {
+            return Err(ProductionHostError::InvalidCatalogField {
+                field: "duplicate-tool-requirement",
+            });
+        }
     }
     Ok(requirements)
 }
@@ -1692,6 +1738,7 @@ mod tests {
 
     use latticeaxiom_compose::RealizedDataRootV1;
     use latticeaxiom_core::{CanonicalLogicalPath, StableId};
+    use serde_json::Value;
 
     use super::{
         AuthoredContentCatalogSourcesV1, AuthoredGameplayCatalogSourcesV1,
@@ -1730,14 +1777,21 @@ mod tests {
         })
     }
 
-    fn test_gameplay_catalog() -> Result<GameplayCatalog, super::ProductionHostError> {
+    fn compile_gameplay_fixture(
+        blocks: &str,
+        rules: &str,
+    ) -> Result<GameplayCatalog, super::ProductionHostError> {
         compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
-            blocks: AUTHORED_BLOCKS_JSON,
-            rules: AUTHORED_RULES_JSON,
+            blocks,
+            rules,
             browser: AUTHORED_ITEM_BROWSER_JSON,
             tools: AUTHORED_TOOLS_JSON,
             d9_block_ids: D9_BLOCK_IDS,
         })
+    }
+
+    fn test_gameplay_catalog() -> Result<GameplayCatalog, super::ProductionHostError> {
+        compile_gameplay_fixture(AUTHORED_BLOCKS_JSON, AUTHORED_RULES_JSON)
     }
 
     fn fixture_registration_ids(ids: &[&str]) -> Vec<StableId> {
@@ -1936,6 +1990,92 @@ mod tests {
             "compiled GameplayCatalog is missing golden IDs: {missing:?}"
         );
         assert_eq!(catalog.blocks().len(), golden.len() - missing.len());
+    }
+
+    #[test]
+    fn gameplay_compiler_fails_closed_for_dangling_mining_rule() {
+        let mut blocks: Value = serde_json::from_str(AUTHORED_BLOCKS_JSON)
+            .expect("Terrenia authored blocks are valid JSON");
+        let row = blocks["blocks"]
+            .as_array_mut()
+            .expect("the authored block catalog has block rows")
+            .iter_mut()
+            .find(|row| {
+                row.pointer("/physical/hardness_ticks")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|ticks| ticks > 0)
+            })
+            .expect("the authored block catalog has a mineable block");
+        let missing_id = "fixture:mining-rule/missing@1";
+        *row.pointer_mut("/definition/rules/mining_rule")
+            .expect("mineable blocks declare a mining rule") = Value::String(missing_id.to_owned());
+        let blocks = serde_json::to_string(&blocks).expect("the mutated catalog serializes");
+
+        let error = compile_gameplay_fixture(&blocks, AUTHORED_RULES_JSON)
+            .expect_err("a dangling mining-rule reference must fail closed");
+        assert!(matches!(
+            error,
+            super::ProductionHostError::MissingCatalogDefinition {
+                kind: "mining-rule",
+                ref id,
+            } if id == missing_id
+        ));
+    }
+
+    #[test]
+    fn gameplay_compiler_fails_closed_for_dangling_drop_predicate() {
+        let mut rules: Value = serde_json::from_str(AUTHORED_RULES_JSON)
+            .expect("Terrenia authored gameplay rules are valid JSON");
+        let row = rules["drop_tables"]
+            .as_array_mut()
+            .expect("the authored gameplay rules have drop tables")
+            .first_mut()
+            .expect("the authored gameplay rules have at least one drop table");
+        let missing_id = "fixture:tool-requirement/missing@1";
+        row["drop_predicate"] = Value::String(missing_id.to_owned());
+        let rules = serde_json::to_string(&rules).expect("the mutated rules serialize");
+
+        let error = compile_gameplay_fixture(AUTHORED_BLOCKS_JSON, &rules)
+            .expect_err("a dangling drop predicate must fail closed");
+        assert!(matches!(
+            error,
+            super::ProductionHostError::MissingCatalogDefinition {
+                kind: "tool-requirement",
+                ref id,
+            } if id == missing_id
+        ));
+    }
+
+    #[test]
+    fn gameplay_compiler_rejects_duplicate_rule_definitions() {
+        for (collection, expected_field) in [
+            ("mining_rules", "duplicate-mining-rule"),
+            ("tool_requirements", "duplicate-tool-requirement"),
+            ("drop_tables", "duplicate-drop-table"),
+        ] {
+            let mut rules: Value = serde_json::from_str(AUTHORED_RULES_JSON)
+                .expect("Terrenia authored gameplay rules are valid JSON");
+            let rows = rules[collection]
+                .as_array_mut()
+                .unwrap_or_else(|| panic!("{collection} is an authored array"));
+            let duplicate = rows
+                .first()
+                .cloned()
+                .unwrap_or_else(|| panic!("{collection} has an authored row"));
+            rows.push(duplicate);
+            let rules = serde_json::to_string(&rules).expect("the mutated rules serialize");
+
+            let error = compile_gameplay_fixture(AUTHORED_BLOCKS_JSON, &rules)
+                .expect_err("a duplicate authored definition must fail closed");
+            match error {
+                super::ProductionHostError::InvalidCatalogField { field } => {
+                    assert_eq!(field, expected_field, "{collection}");
+                }
+                other => panic!(
+                    "{collection} produced the wrong error; expected {expected_field}, got {other}"
+                ),
+            }
+        }
     }
 
     #[test]
