@@ -32,6 +32,7 @@ latticeaxiom-gameplay.workspace = true
 latticeaxiom-launcher.workspace = true
 latticeaxiom-packages.workspace = true
 latticeaxiom-storage.workspace = true
+tempfile.workspace = true
 
 [[bench]]
 name = "ffi_batch_calls"

@@ -88,6 +88,7 @@ latticeaxiom-packages = { path = "../latticeaxiom-packages" }
 latticeaxiom-player = { path = "../latticeaxiom-player" }
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 
 [lints]
