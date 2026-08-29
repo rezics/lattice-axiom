@@ -306,43 +306,27 @@ fn preferred_host_target() -> Option<TargetTriple> {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::{ProductionClientError, load_lock_verified_images};
-    use std::{
-        fs, io,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::fs;
 
-    struct TestDirectory(PathBuf);
+    struct TestDirectory(tempfile::TempDir);
 
     impl TestDirectory {
         fn create() -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(0);
-            let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-engine-client-boot-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path).expect("test directory was created");
-            Self(fs::canonicalize(&path).expect("test directory canonicalized"))
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("test directory cleanup failed: {error}");
-            }
+            Self(
+                tempfile::Builder::new()
+                    .prefix("latticeaxiom-engine-client-boot-")
+                    .tempdir()
+                    .expect("test directory was created"),
+            )
         }
     }
 
     #[test]
     fn missing_lock_fails_closed() {
         let directory = TestDirectory::create();
-        match load_lock_verified_images(&directory.0) {
+        match load_lock_verified_images(directory.0.path()) {
             Err(ref error @ ProductionClientError::MissingLock { ref path }) => {
-                assert_eq!(path, &directory.0.join("latticeaxiom.lock"));
+                assert_eq!(path, &directory.0.path().join("latticeaxiom.lock"));
                 assert_eq!(
                     error.recovery_hint(),
                     Some(ProductionClientError::LOCK_COMMAND)
@@ -360,11 +344,11 @@ mod tests {
     #[test]
     fn missing_cas_fails_closed() {
         let directory = TestDirectory::create();
-        fs::write(directory.0.join("latticeaxiom.lock"), b"{}")
+        fs::write(directory.0.path().join("latticeaxiom.lock"), b"{}")
             .expect("placeholder lock bytes were written");
-        match load_lock_verified_images(&directory.0) {
+        match load_lock_verified_images(directory.0.path()) {
             Err(ref error @ ProductionClientError::MissingCas { ref path }) => {
-                assert_eq!(path, &directory.0.join("catalog").join("cas"));
+                assert_eq!(path, &directory.0.path().join("catalog").join("cas"));
                 assert_eq!(
                     error.recovery_hint(),
                     Some(ProductionClientError::LOCK_COMMAND)

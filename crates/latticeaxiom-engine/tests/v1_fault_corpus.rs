@@ -7,7 +7,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    fs,
     path::PathBuf,
     str::FromStr,
 };
@@ -235,13 +235,13 @@ fn package_lock_and_receipt_faults_fail_closed_before_a_writer_opens() {
     assert_eq!(tampered.expected, "WorldDbError::MissingEngineBuildId");
 
     let directory = TestDirectory::create();
-    let missing_path = directory.0.join(PRODUCT_LOCK_FILE_NAME);
+    let missing_path = directory.0.path().join(PRODUCT_LOCK_FILE_NAME);
     match reopen_product_lock(&missing_path) {
         Err(ProductLockError::MissingLock { path }) => assert_eq!(path, missing_path),
         other => panic!("missing lock must fail closed, got {other:?}"),
     }
 
-    let corrupt_path = directory.0.join("corrupt.lock");
+    let corrupt_path = directory.0.path().join("corrupt.lock");
     fs::write(
         &corrupt_path,
         load_input(corrupt.input.as_deref().expect("corrupt-lock input")),
@@ -1081,28 +1081,15 @@ struct UnsupportedGpuSpec {
     presentation_optional: bool,
 }
 
-struct TestDirectory(PathBuf);
+struct TestDirectory(tempfile::TempDir);
 
 impl TestDirectory {
     fn create() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "latticeaxiom-engine-v1-fault-corpus-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos())
-        ));
-        fs::create_dir_all(&path).expect("temp dir");
-        Self(fs::canonicalize(&path).expect("canonical temp dir"))
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.0)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            panic!("temp dir cleanup failed: {error}");
-        }
+        Self(
+            tempfile::Builder::new()
+                .prefix("latticeaxiom-engine-v1-fault-corpus-")
+                .tempdir()
+                .expect("temp dir"),
+        )
     }
 }

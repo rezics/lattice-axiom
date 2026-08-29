@@ -410,8 +410,6 @@ fn recovery_ack(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io, path::PathBuf};
-
     use latticeaxiom_core::StableId;
     use latticeaxiom_input::BindingProfileV1;
 
@@ -439,34 +437,20 @@ mod tests {
         assert_eq!(loaded.get(), 1);
     }
 
-    struct TestDirectory(PathBuf);
+    struct TestDirectory(tempfile::TempDir);
 
     impl TestDirectory {
         fn create() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-engine-supervisor-settings-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |duration| duration.as_nanos())
-            ));
-            fs::create_dir_all(&path)
-                .unwrap_or_else(|error| panic!("supervisor test directory: {error}"));
-            Self(path)
+            Self(
+                tempfile::Builder::new()
+                    .prefix("latticeaxiom-engine-supervisor-settings-")
+                    .tempdir()
+                    .unwrap_or_else(|error| panic!("supervisor test directory: {error}")),
+            )
         }
 
         fn path(&self) -> &std::path::Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("supervisor test directory cleanup failed: {error}");
-            }
+            self.0.path()
         }
     }
 }

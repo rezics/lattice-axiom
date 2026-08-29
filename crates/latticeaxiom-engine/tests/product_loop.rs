@@ -3,7 +3,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    fs,
     path::PathBuf,
 };
 
@@ -43,7 +43,7 @@ fn headless_move_inspect_break_place_share_player_action_discriminants() {
 #[test]
 fn rebind_survives_replacement_process_restart() {
     let directory = TestDirectory::create();
-    let mut settings = HostUserSettings::load(&directory.0).expect("empty settings load");
+    let mut settings = HostUserSettings::load(directory.0.path()).expect("empty settings load");
     let compiled = compile_shipped_catalog(&BindingProfileV1::empty());
     let inventory = action("latticeaxiom:action/hud/toggle-inventory@1");
     let rebound = compiled
@@ -57,9 +57,9 @@ fn rebind_survives_replacement_process_restart() {
         )
         .expect("KeyI is free");
     settings
-        .persist_binding_profile(&directory.0, rebound)
+        .persist_binding_profile(directory.0.path(), rebound)
         .expect("binding profile persists atomically");
-    let restored = HostUserSettings::load(&directory.0).expect("settings reopen");
+    let restored = HostUserSettings::load(directory.0.path()).expect("settings reopen");
     let compiled = compile_shipped_catalog(restored.binding_profile());
     let bindings = &compiled
         .action_by_id(&inventory)
@@ -191,28 +191,15 @@ fn action(id: &str) -> StableId {
     id.parse().expect("action id")
 }
 
-struct TestDirectory(PathBuf);
+struct TestDirectory(tempfile::TempDir);
 
 impl TestDirectory {
     fn create() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "latticeaxiom-engine-product-loop-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos())
-        ));
-        fs::create_dir_all(&path).expect("temp dir");
-        Self(fs::canonicalize(&path).expect("canonical temp dir"))
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.0)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            panic!("temp dir cleanup failed: {error}");
-        }
+        Self(
+            tempfile::Builder::new()
+                .prefix("latticeaxiom-engine-product-loop-")
+                .tempdir()
+                .expect("temp dir"),
+        )
     }
 }

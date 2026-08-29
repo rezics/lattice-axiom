@@ -3,12 +3,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    fs,
     path::{Path, PathBuf},
-    sync::{
-        Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -3471,42 +3468,24 @@ impl LockBootFixture {
     }
 }
 
-struct TestDirectory(PathBuf);
+struct TestDirectory(tempfile::TempDir);
 
 impl TestDirectory {
     fn create() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "latticeaxiom-engine-lock-boot-{}-{serial}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).expect("test directory was created");
-        Self(fs::canonicalize(&path).expect("test directory canonicalized"))
+        Self(
+            tempfile::Builder::new()
+                .prefix("latticeaxiom-engine-lock-boot-")
+                .tempdir()
+                .expect("test directory was created"),
+        )
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        self.0.path()
     }
 
     fn lock_path(&self) -> PathBuf {
-        self.0.join(PRODUCT_LOCK_FILE_NAME)
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        let temporary_root =
-            fs::canonicalize(std::env::temp_dir()).expect("temporary root canonicalized");
-        assert!(
-            self.0.starts_with(&temporary_root),
-            "refusing to delete a test directory outside the process temporary root"
-        );
-        if let Err(error) = fs::remove_dir_all(&self.0)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            panic!("test directory cleanup failed: {error}");
-        }
+        self.0.path().join(PRODUCT_LOCK_FILE_NAME)
     }
 }
 
