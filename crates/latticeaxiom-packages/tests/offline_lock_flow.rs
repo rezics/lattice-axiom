@@ -2,9 +2,7 @@
 
 use std::fmt::Debug;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use latticeaxiom_compose::{
     ArtifactIntent, COMPOSITION_BOOTSTRAP_FILE_NAME, LockActionMode, PRODUCT_LOCK_FILE_NAME,
@@ -18,48 +16,20 @@ use latticeaxiom_packages::{
     verify_product_lock_from_cas,
 };
 
-static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
 #[derive(Debug)]
-struct TestDirectory(PathBuf);
+struct TestDirectory(tempfile::TempDir);
 
 impl TestDirectory {
     fn create() -> Self {
-        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "latticeaxiom-packages-offline-lock-{}-{serial}",
-            std::process::id()
-        ));
-        succeeded(fs::create_dir_all(&path));
-        Self(if path.is_absolute() {
-            path
-        } else {
-            succeeded(std::path::absolute(&path))
-        })
+        Self(succeeded(
+            tempfile::Builder::new()
+                .prefix("latticeaxiom-packages-offline-lock-")
+                .tempdir(),
+        ))
     }
 
     fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        let temporary_root = std::env::temp_dir();
-        let temporary_root = if temporary_root.is_absolute() {
-            temporary_root
-        } else {
-            succeeded(std::path::absolute(&temporary_root))
-        };
-        assert!(
-            self.0.starts_with(&temporary_root),
-            "refusing to delete a test directory outside the process temporary root"
-        );
-        if let Err(error) = fs::remove_dir_all(&self.0)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            panic!("test directory cleanup failed: {error}");
-        }
+        self.0.path()
     }
 }
 

@@ -779,7 +779,6 @@ struct CatalogIdentityV1 {
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use latticeaxiom_compose::ForbiddenManifestConstruct;
 
@@ -787,51 +786,21 @@ mod tests {
     use crate::cas::MemoryCas;
     use crate::error::CasError;
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
     #[derive(Debug)]
-    struct TestDirectory(PathBuf);
+    struct TestDirectory(tempfile::TempDir);
 
     impl TestDirectory {
         fn create() -> Self {
-            let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "latticeaxiom-packages-catalog-{}-{serial}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path)
-                .unwrap_or_else(|error| panic!("test directory was not created: {error}"));
-            Self(if path.is_absolute() {
-                path
-            } else {
-                std::path::absolute(&path)
-                    .unwrap_or_else(|error| panic!("test directory was not absolute: {error}"))
-            })
+            Self(
+                tempfile::Builder::new()
+                    .prefix("latticeaxiom-packages-catalog-")
+                    .tempdir()
+                    .unwrap_or_else(|error| panic!("test directory was not created: {error}")),
+            )
         }
 
         fn child(&self, name: &str) -> PathBuf {
-            self.0.join(name)
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let temporary_root = std::env::temp_dir();
-            let temporary_root = if temporary_root.is_absolute() {
-                temporary_root
-            } else {
-                std::path::absolute(&temporary_root)
-                    .unwrap_or_else(|error| panic!("temporary root was not absolute: {error}"))
-            };
-            assert!(
-                self.0.starts_with(&temporary_root),
-                "refusing to delete a test directory outside the process temporary root"
-            );
-            if let Err(error) = fs::remove_dir_all(&self.0)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                panic!("test directory cleanup failed: {error}");
-            }
+            self.0.path().join(name)
         }
     }
 
