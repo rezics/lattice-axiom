@@ -21,6 +21,8 @@ mod gameplay;
 mod hud;
 mod layers;
 #[cfg(feature = "client")]
+mod mining_ring;
+#[cfg(feature = "client")]
 mod pause;
 mod profile;
 mod session;
@@ -456,6 +458,7 @@ impl Plugin for ProductionHostPlugin {
                 (
                     hud::sync_production_inspect_hud,
                     hud::sync_production_working_set_hud,
+                    mining_ring::sync_mining_ring,
                     hud::sync_production_status_hud,
                     hud::sync_production_hotbar_hud,
                     hud::sync_production_inventory_hud,
@@ -752,6 +755,7 @@ pub(super) fn install_production_host(
     #[cfg(feature = "client")]
     {
         app.insert_resource(hud::ProductionHudSurfaces::default())
+            .init_resource::<mining_ring::ProductionMiningRingState>()
             .init_resource::<crate::cursor_capture::ConfirmedPrimaryWindowFocus>()
             .init_resource::<crate::cursor_capture::CursorCaptureState>()
             .init_resource::<ClientInputOwnership>();

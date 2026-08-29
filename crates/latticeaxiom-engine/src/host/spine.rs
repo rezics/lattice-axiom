@@ -30,8 +30,8 @@ use latticeaxiom_player::{
     AuthoritativeBlockEditRequestV1, AuthoritativeMiningCancelRequestV1,
     AuthoritativeTargetInspectRequestV1, BlockEditActionV1, BlockEditAuthority, BlockEditRejectV1,
     BlockEditSuccessV1, BlockFaceV1, ClientTargetObservationV1, HeadlessTargetInspectV1,
-    MAX_BLOCK_EDIT_REACH_M, MiningCancelSuccessV1, PlayerMovementProfileV1, TargetEyePoseV1,
-    TargetInspectRejectV1, occupancy_line,
+    MAX_BLOCK_EDIT_REACH_M, MiningCancelSuccessV1, MiningProgressV1, PlayerMovementProfileV1,
+    TargetEyePoseV1, TargetInspectRejectV1, occupancy_line,
 };
 use latticeaxiom_runtime_contracts::{
     EngineEpoch, WorldEpoch as InspectWorldEpoch, WorldgenInspectReportV1,
@@ -79,7 +79,7 @@ use super::{
         ContentDisplayCatalogV1, ContentDisplayLabelV1, lock_selected_content_display_catalog,
     },
     fluid::{HostFluidTickV1, tick_simulated as tick_simulated_fluids},
-    gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject, remaining_work},
+    gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject},
     layers::{HostFaceStyle, HostPresentationIndex},
     profile::StreamingProfileEvidenceV1,
     session::{DurablePlayerSessionV1, PLAYER_SESSION_ENTITY},
@@ -2813,7 +2813,8 @@ impl ProductionSpineInner {
                 accumulated,
                 required,
             } => Err(BlockEditRejectV1::RequiresProgress {
-                remaining_work: remaining_work(accumulated, required),
+                progress: MiningProgressV1::new(accumulated, required)
+                    .map_err(|_| BlockEditRejectV1::StorageUnavailable)?,
             }),
             CommandOutcomeV1::BlockBroken { drop, .. } => {
                 let _ = self.pickup_drop(kernel, drop);

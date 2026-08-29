@@ -1136,12 +1136,6 @@ fn fallback_tool_class() -> ToolClassId {
     }
 }
 
-/// Remaining work advertised when a mine command only advanced progress.
-#[must_use]
-pub(super) const fn remaining_work(accumulated: u32, required: u32) -> u32 {
-    required.saturating_sub(accumulated)
-}
-
 #[cfg(test)]
 mod tests {
     use latticeaxiom_gameplay::GameplayReject;

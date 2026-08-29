@@ -32,7 +32,8 @@ pub use edit::{
     BlockEditAuthority, BlockEditAuthorityResource, BlockEditInputStateV1, BlockEditIntentV1,
     BlockEditReceiptV1, BlockEditRejectV1, BlockEditSuccessV1, BlockFaceV1,
     CANONICAL_MINING_STEPS_PER_SECOND, ClientTargetObservationV1, MAX_BLOCK_EDIT_REACH_M,
-    MiningCancelReceiptV1, MiningCancelSuccessV1, TargetEyePoseV1,
+    MiningCancelReceiptV1, MiningCancelSuccessV1, MiningProgressError, MiningProgressV1,
+    TargetEyePoseV1,
 };
 pub use inspect::{
     AuthoritativeTargetInspectRequestV1, HeadlessTargetInspectV1, TargetInspectReceiptV1,

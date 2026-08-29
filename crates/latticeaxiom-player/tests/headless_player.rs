@@ -25,9 +25,9 @@ use latticeaxiom_player::{
     ActionAxis2V1, ActionFrameInbox, AuthoritativeBlockEditRequestV1,
     AuthoritativeMiningCancelRequestV1, BlockEditAuthority, BlockEditAuthorityResource,
     BlockEditRejectV1, BlockEditSuccessV1, D2PlayerBundle, DetachedSpectator,
-    MiningCancelSuccessV1, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
-    PlayerControllerState, PlayerFixedTick, PlayerPlugin, SimulationClock, SimulationTickRate,
-    SimulationTickRateRequest,
+    MiningCancelSuccessV1, MiningProgressV1, PlayerActionButtonsV1, PlayerActionFrameV1,
+    PlayerActionV1, PlayerControllerState, PlayerFixedTick, PlayerPlugin, SimulationClock,
+    SimulationTickRate, SimulationTickRateRequest,
 };
 
 const FIXED_HZ: f32 = 60.0;
@@ -833,7 +833,9 @@ impl BlockEditAuthority for ProgressAuthority {
         _request: AuthoritativeBlockEditRequestV1,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
         self.applies.fetch_add(1, Ordering::Relaxed);
-        Err(BlockEditRejectV1::RequiresProgress { remaining_work: 5 })
+        Err(BlockEditRejectV1::RequiresProgress {
+            progress: MiningProgressV1::new(3, 8).expect("fixture progress is incomplete"),
+        })
     }
 
     fn cancel_mining(

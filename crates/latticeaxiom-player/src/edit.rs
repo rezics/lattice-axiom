@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU32};
 
 use bevy::prelude::{Component, Message, Resource};
 use latticeaxiom_gameplay::{
@@ -129,6 +129,94 @@ impl AuthoritativeBlockEditRequestV1 {
     }
 }
 
+/// Validated authoritative progress for an incomplete mining operation.
+///
+/// The completed work is always non-zero and strictly less than the non-zero
+/// required work. A completed break is represented by [`BlockEditSuccessV1`],
+/// so the progress DTO cannot accidentally encode both incomplete and complete.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MiningProgressV1 {
+    completed_work: NonZeroU32,
+    required_work: NonZeroU32,
+}
+
+impl MiningProgressV1 {
+    /// Creates validated incomplete mining progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns a zero-work error when either value is zero, or
+    /// [`MiningProgressError::AlreadyComplete`] when `completed_work` has
+    /// reached or exceeded `required_work`.
+    pub const fn new(completed_work: u32, required_work: u32) -> Result<Self, MiningProgressError> {
+        let Some(completed_work) = NonZeroU32::new(completed_work) else {
+            return Err(MiningProgressError::ZeroCompletedWork);
+        };
+        let Some(required_work) = NonZeroU32::new(required_work) else {
+            return Err(MiningProgressError::ZeroRequiredWork);
+        };
+        if completed_work.get() >= required_work.get() {
+            return Err(MiningProgressError::AlreadyComplete {
+                completed_work: completed_work.get(),
+                required_work: required_work.get(),
+            });
+        }
+        Ok(Self {
+            completed_work,
+            required_work,
+        })
+    }
+
+    /// Returns deterministic work accepted by authority.
+    #[must_use]
+    pub const fn completed_work(self) -> u32 {
+        self.completed_work.get()
+    }
+
+    /// Returns deterministic work required to break the target.
+    #[must_use]
+    pub const fn required_work(self) -> u32 {
+        self.required_work.get()
+    }
+
+    /// Returns deterministic work still required to break the target.
+    #[must_use]
+    pub const fn remaining_work(self) -> u32 {
+        self.required_work.get() - self.completed_work.get()
+    }
+}
+
+impl fmt::Display for MiningProgressV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} of {} work units",
+            self.completed_work, self.required_work
+        )
+    }
+}
+
+/// Invalid values at the authoritative mining-progress boundary.
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum MiningProgressError {
+    /// An emitted progress receipt must contain accepted work.
+    #[error("completed mining work must be greater than zero")]
+    ZeroCompletedWork,
+    /// A break contract cannot require zero work.
+    #[error("required mining work must be greater than zero")]
+    ZeroRequiredWork,
+    /// Incomplete progress cannot represent an already completed break.
+    #[error(
+        "incomplete mining progress {completed_work} must be below required work {required_work}"
+    )]
+    AlreadyComplete {
+        /// Work claimed as completed.
+        completed_work: u32,
+        /// Work required by authority.
+        required_work: u32,
+    },
+}
+
 /// Stable authoritative block-edit rejection.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum BlockEditRejectV1 {
@@ -171,10 +259,10 @@ pub enum BlockEditRejectV1 {
     #[error("selected tool is broken")]
     ToolBroken,
     /// The action contributes progress but has not completed the break.
-    #[error("block edit requires {remaining_work} more work units")]
+    #[error("block edit is incomplete at {progress}")]
     RequiresProgress {
-        /// Remaining deterministic work units.
-        remaining_work: u32,
+        /// Validated authoritative progress.
+        progress: MiningProgressV1,
     },
     /// Place was requested without stable content.
     #[error("no placement content was supplied")]
@@ -395,6 +483,29 @@ mod tests {
         assert_eq!(
             cadence.sample_break(true, 240).steps,
             Some(MiningStepCountV1::ONE)
+        );
+    }
+
+    #[test]
+    fn mining_progress_cannot_encode_zero_required_or_completed_work() {
+        let progress = MiningProgressV1::new(3, 8).expect("three of eight is incomplete");
+        assert_eq!(progress.completed_work(), 3);
+        assert_eq!(progress.required_work(), 8);
+        assert_eq!(progress.remaining_work(), 5);
+        assert_eq!(
+            MiningProgressV1::new(0, 8),
+            Err(MiningProgressError::ZeroCompletedWork)
+        );
+        assert_eq!(
+            MiningProgressV1::new(1, 0),
+            Err(MiningProgressError::ZeroRequiredWork)
+        );
+        assert_eq!(
+            MiningProgressV1::new(8, 8),
+            Err(MiningProgressError::AlreadyComplete {
+                completed_work: 8,
+                required_work: 8,
+            })
         );
     }
 

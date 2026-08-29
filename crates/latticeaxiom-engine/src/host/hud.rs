@@ -23,7 +23,8 @@ use latticeaxiom_gameplay::{
     ContainerId, GameplayModeV1, ItemCategoryId, ItemId, RecipeId, SlotIndex, WorkstationId,
 };
 use latticeaxiom_player::{
-    ActionState, BlockEditRejectV1, HeadlessTargetInspectV1, LeafwingPlayerAction, LocalPlayerInput,
+    ActionState, BlockEditRejectV1, ClientInputOwnership, HeadlessTargetInspectV1,
+    LeafwingPlayerAction, LocalPlayerInput,
 };
 
 use crate::ui_font::ui_text_font;
@@ -336,21 +337,22 @@ fn spawn_crosshair(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) 
         .spawn((
             Name::new("Aim crosshair"),
             Node {
-                width: Val::Px(22.0),
-                height: Val::Px(22.0),
+                width: Val::Px(48.0),
+                height: Val::Px(48.0),
                 ..Node::default()
             },
             FocusPolicy::Pass,
             Pickable::IGNORE,
         ))
         .with_children(|crosshair| {
+            super::mining_ring::spawn_mining_ring(crosshair);
             crosshair.spawn((
                 Name::new("Crosshair horizontal stroke"),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(1.0),
-                    top: Val::Px(10.0),
-                    width: Val::Px(20.0),
+                    left: Val::Px(17.0),
+                    top: Val::Px(23.0),
+                    width: Val::Px(14.0),
                     height: Val::Px(2.0),
                     ..Node::default()
                 },
@@ -362,10 +364,10 @@ fn spawn_crosshair(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) 
                 Name::new("Crosshair vertical stroke"),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(10.0),
-                    top: Val::Px(1.0),
+                    left: Val::Px(23.0),
+                    top: Val::Px(17.0),
                     width: Val::Px(2.0),
-                    height: Val::Px(20.0),
+                    height: Val::Px(14.0),
                     ..Node::default()
                 },
                 BackgroundColor(Color::srgba(0.96, 0.97, 0.92, 0.9)),
@@ -420,7 +422,7 @@ fn spawn_status_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<
     parent.spawn((
         ProductionStatusReadout,
         Name::new("Status strip"),
-        Text::new(status_line(None, None, 1, 1)),
+        Text::new(status_line("Mine —", None, 1, 1)),
         ui_text_font(16.0),
         TextColor(Color::srgb(0.94, 0.86, 0.72)),
         Node {
@@ -1007,11 +1009,12 @@ fn spawn_item_slot<M: Component>(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn activate_workbench_from_target(
     pause: Res<'_, ProductionSessionPause>,
+    ownership: Res<'_, ClientInputOwnership>,
     action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
     spine: Res<'_, ProductionSpine>,
     mut surfaces: ResMut<'_, ProductionHudSurfaces>,
 ) {
-    if pause.is_paused() {
+    if pause.is_paused() || !ownership.owns_gameplay_input() {
         return;
     }
     if !action_states
@@ -1254,9 +1257,14 @@ pub(super) fn item_browser_activated(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn capture_item_browser_search(
     mut keyboard: MessageReader<'_, '_, KeyboardInput>,
+    ownership: Res<'_, ClientInputOwnership>,
     mut surfaces: ResMut<'_, ProductionHudSurfaces>,
 ) {
-    if !surfaces.inventory_panel_open() || !surfaces.item_browser_search_focused() {
+    if *ownership == ClientInputOwnership::Released
+        || !surfaces.inventory_panel_open()
+        || !surfaces.item_browser_search_focused()
+    {
+        keyboard.clear();
         return;
     }
     for event in keyboard.read() {
@@ -1707,10 +1715,8 @@ pub(super) fn sync_production_status_hud(
     let Ok(mut text) = readout.single_mut() else {
         return;
     };
-    let mining = match spine.last_reject() {
-        Some(BlockEditRejectV1::RequiresProgress { remaining_work }) => Some(remaining_work),
-        _ => None,
-    };
+    let reject = spine.last_reject();
+    let mining = mining_status_line(reject.as_ref());
     let durability = spine.inventory_view().and_then(|view| {
         let stack = view.selected()?;
         match stack.state() {
@@ -1721,7 +1727,7 @@ pub(super) fn sync_production_status_hud(
         }
     });
     let label = status_line(
-        mining,
+        &mining,
         durability,
         spine.admitted_view_distance(),
         spine.effective_view_distance(),
@@ -1732,14 +1738,24 @@ pub(super) fn sync_production_status_hud(
 }
 
 fn status_line(
-    mining: Option<u32>,
+    mining: &str,
     durability: Option<u32>,
     admitted_view: u32,
     effective_view: u32,
 ) -> String {
-    let mine = mining.map_or_else(|| "Mine —".to_owned(), |left| format!("Mine {left} left"));
     let tool = durability.map_or_else(|| "Tool —".to_owned(), |left| format!("Tool {left}"));
-    format!("{mine}  {tool}  View {effective_view}/{admitted_view}")
+    format!("{mining}  {tool}  View {effective_view}/{admitted_view}")
+}
+
+fn mining_status_line(reject: Option<&BlockEditRejectV1>) -> String {
+    match reject {
+        Some(BlockEditRejectV1::RequiresTool { required }) => {
+            format!("Mine needs {required}")
+        }
+        Some(BlockEditRejectV1::ToolBroken) => "Mine tool broken".to_owned(),
+        Some(BlockEditRejectV1::NotBreakable) => "Mine unbreakable".to_owned(),
+        _ => "Mine —".to_owned(),
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
@@ -1905,9 +1921,34 @@ fn hotbar_key_slot(code: bevy::input::keyboard::KeyCode) -> Option<u16> {
 mod tests {
     use super::{
         HOTBAR_SLOTS, ITEM_BROWSER_CAPACITY, ITEM_BROWSER_QUERY_CHARS, ItemBrowserStateV1,
-        ItemBrowserTransitionV1, ProductionHudSurfaces, hotbar_key_slot, status_line,
+        ItemBrowserTransitionV1, ProductionHudSurfaces, hotbar_key_slot, mining_status_line,
+        spawn_production_hud, status_line,
     };
-    use bevy::input::keyboard::KeyCode;
+    use bevy::{
+        app::{App, Startup},
+        input::keyboard::KeyCode,
+        prelude::{Display, Node, With},
+    };
+    use latticeaxiom_player::BlockEditRejectV1;
+
+    use super::super::mining_ring::{ProductionMiningRing, ProductionMiningRingSegment};
+
+    #[test]
+    fn crosshair_spawns_a_hidden_thirty_two_segment_ring() {
+        let mut app = App::new();
+        app.add_systems(Startup, spawn_production_hud);
+        app.update();
+
+        let world = app.world_mut();
+        let segment_count = world
+            .query::<&ProductionMiningRingSegment>()
+            .iter(world)
+            .count();
+        assert_eq!(segment_count, 32);
+        let mut roots = world.query_filtered::<&Node, With<ProductionMiningRing>>();
+        let root = roots.single(world).expect("one mining ring is spawned");
+        assert_eq!(root.display, Display::None);
+    }
 
     #[test]
     fn inventory_click_latches_then_submits_move_and_same_slot_clears() {
@@ -1932,12 +1973,32 @@ mod tests {
 
     #[test]
     fn status_line_includes_mining_and_view_distance_without_fake_vitality() {
-        let idle = status_line(None, None, 4, 2);
+        let idle_mining = mining_status_line(None);
+        let idle = status_line(&idle_mining, None, 4, 2);
         assert!(!idle.contains("Vitality"), "{idle}");
         assert!(idle.contains("View 2/4"), "{idle}");
-        let mining = status_line(Some(7), Some(12), 2, 2);
-        assert!(mining.contains("Mine 7 left"), "{mining}");
+        let progress = BlockEditRejectV1::RequiresProgress {
+            progress: latticeaxiom_player::MiningProgressV1::new(3, 10)
+                .expect("fixture progress is incomplete"),
+        };
+        let mining_label = mining_status_line(Some(&progress));
+        let mining = status_line(&mining_label, Some(12), 2, 2);
+        assert!(mining.contains("Mine —"), "{mining}");
+        assert!(
+            !mining.contains("left"),
+            "progress belongs to the ring: {mining}"
+        );
         assert!(mining.contains("Tool 12"), "{mining}");
+
+        let required = BlockEditRejectV1::RequiresTool {
+            required: "latticeaxiom:tool-class/pickaxe@1"
+                .parse()
+                .expect("pickaxe tool class is canonical"),
+        };
+        assert!(
+            mining_status_line(Some(&required)).contains("pickaxe"),
+            "tool requirements must be visible"
+        );
     }
 
     #[test]
