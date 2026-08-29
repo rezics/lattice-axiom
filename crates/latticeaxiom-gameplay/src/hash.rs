@@ -309,6 +309,11 @@ impl Encoder {
                     None => self.u8(0),
                 }
                 self.drop_id(command.reserved_drop);
+                self.u16(command.steps.get());
+            }
+            GameplayCommandV1::CancelMining(command) => {
+                self.u8(11);
+                self.bytes(&command.player.as_bytes());
             }
             GameplayCommandV1::DropItem(command) => {
                 self.u8(1);
@@ -520,6 +525,10 @@ impl Encoder {
                 self.u8(0);
                 self.u32(*accumulated);
                 self.u32(*required);
+            }
+            CommandOutcomeV1::MiningCancelled { had_progress } => {
+                self.u8(11);
+                self.u8(u8::from(*had_progress));
             }
             CommandOutcomeV1::BlockBroken {
                 drop,

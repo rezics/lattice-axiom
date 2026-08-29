@@ -3,10 +3,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use latticeaxiom_storage::{ChunkCommitReceipt, PublicationReceipt};
 
 use crate::{
-    BreakProgressKey, BreakProgressV1, ChangedDomains, ChunkRevision, CommandEnvelopeV1,
-    CommandOutcomeV1, CommitReceipt, ContainerId, ContinuationId, CreativePickCommandV1,
-    DimensionChunkKey, DropEntityId, DroppedItemV1, FaultInjection, FurnaceContinuationV1,
-    GameplayCatalog, GameplayCommandV1, GameplayEditTarget, GameplayModeV1,
+    BreakProgressKey, BreakProgressV1, CancelMiningCommandV1, ChangedDomains, ChunkRevision,
+    CommandEnvelopeV1, CommandOutcomeV1, CommitReceipt, ContainerId, ContinuationId,
+    CreativePickCommandV1, DimensionChunkKey, DropEntityId, DroppedItemV1, FaultInjection,
+    FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1, GameplayEditTarget, GameplayModeV1,
     GameplayMutationIntentV1, GameplayPlanV1, GameplayReject, GameplayRulesV1,
     GameplayStorageDomain, InventoryStateV1, ItemStackV1, ItemStateV1, MineCommandV1,
     MoveStackCommandV1, PlaceCommandV1, PlayerId, RecipeCraftCommandV1, RecipePatternV1,
@@ -61,6 +61,7 @@ impl<'catalog> GameplayKernel<'catalog> {
         validate_envelope(state, envelope)?;
         let (edits, outcome) = match &envelope.command {
             GameplayCommandV1::Mine(command) => self.plan_mine(state, command)?,
+            GameplayCommandV1::CancelMining(command) => Self::plan_cancel_mining(state, command)?,
             GameplayCommandV1::DropItem(command) => self.plan_drop(state, command)?,
             GameplayCommandV1::Pickup(command) => self.plan_pickup(state, command)?,
             GameplayCommandV1::Place(command) => self.plan_place(state, command)?,
@@ -131,7 +132,7 @@ impl<'catalog> GameplayKernel<'catalog> {
         }
 
         let mut inventory_after = inventory.slots.to_vec();
-        let work = if let Some(slot) = command.tool_slot {
+        let work_per_step = if let Some(slot) = command.tool_slot {
             let stack = slot_ref(&inventory_after, slot)?
                 .as_ref()
                 .ok_or(GameplayReject::EmptySlot)?;
@@ -167,6 +168,9 @@ impl<'catalog> GameplayKernel<'catalog> {
             }
             1
         };
+        let work = work_per_step
+            .checked_mul(u32::from(command.steps.get()))
+            .ok_or(GameplayReject::QuantityOverflow)?;
 
         let key = BreakProgressKey {
             player: command.player,
@@ -194,16 +198,26 @@ impl<'catalog> GameplayKernel<'catalog> {
                     )?,
                 });
             }
+            let mut edits = Vec::with_capacity(2);
+            if let Some(stale) = stale_mining_progress_edit(
+                state,
+                command.player,
+                Some(&key.block),
+                &inventory.target,
+            ) {
+                edits.push(stale);
+            }
+            edits.push(GameplayMutationIntentV1::BreakProgress {
+                target: inventory.target.clone(),
+                key,
+                before: before_progress,
+                after: Some(BreakProgressV1 {
+                    block,
+                    accumulated_work: accumulated,
+                }),
+            });
             return Ok((
-                vec![GameplayMutationIntentV1::BreakProgress {
-                    target: inventory.target.clone(),
-                    key,
-                    before: before_progress,
-                    after: Some(BreakProgressV1 {
-                        block,
-                        accumulated_work: accumulated,
-                    }),
-                }],
+                edits,
                 CommandOutcomeV1::MiningProgress {
                     accumulated,
                     required,
@@ -232,7 +246,13 @@ impl<'catalog> GameplayKernel<'catalog> {
 
         let voxel_target = edit_target(chunk.clone(), GameplayStorageDomain::Voxels);
         let entity_target = edit_target(chunk.clone(), GameplayStorageDomain::PersistentEntities);
-        let mut edits = inventory_diff(command.player, inventory, &inventory_after)?;
+        let mut edits = Vec::with_capacity(6);
+        if let Some(stale) =
+            stale_mining_progress_edit(state, command.player, Some(&key.block), &inventory.target)
+        {
+            edits.push(stale);
+        }
+        edits.extend(inventory_diff(command.player, inventory, &inventory_after)?);
         edits.extend([
             GameplayMutationIntentV1::Block {
                 target: voxel_target,
@@ -263,6 +283,18 @@ impl<'catalog> GameplayKernel<'catalog> {
                 affected_chunk: chunk,
             },
         ))
+    }
+
+    fn plan_cancel_mining(
+        state: &ReferenceGameplayState,
+        command: &CancelMiningCommandV1,
+    ) -> Result<(Vec<GameplayMutationIntentV1>, CommandOutcomeV1), GameplayReject> {
+        let inventory = player_inventory(state, command.player)?;
+        let progress_edit =
+            stale_mining_progress_edit(state, command.player, None, &inventory.target);
+        let had_progress = progress_edit.is_some();
+        let edits = progress_edit.into_iter().collect();
+        Ok((edits, CommandOutcomeV1::MiningCancelled { had_progress }))
     }
     fn plan_drop(
         &self,
@@ -898,6 +930,26 @@ impl<'catalog> GameplayKernel<'catalog> {
     }
 }
 
+fn stale_mining_progress_edit(
+    state: &ReferenceGameplayState,
+    player: crate::PlayerId,
+    retained_target: Option<&crate::BlockKey>,
+    storage_scope: &GameplayEditTarget,
+) -> Option<GameplayMutationIntentV1> {
+    state
+        .break_progress
+        .iter()
+        .find(|(key, _)| {
+            key.player == player && retained_target.is_none_or(|retained| &key.block != retained)
+        })
+        .map(|(key, progress)| GameplayMutationIntentV1::BreakProgress {
+            target: storage_scope.clone(),
+            key: key.clone(),
+            before: Some(progress.clone()),
+            after: None,
+        })
+}
+
 /// Fault-injectable in-memory plan applier for conformance tests and hosts.
 ///
 /// The applier is bound to one authoritative world and owns the exact catalog
@@ -1372,7 +1424,9 @@ fn storage_capture_domains(
 ) -> BTreeMap<DimensionChunkKey, ChangedDomains> {
     let mut chunks: BTreeMap<DimensionChunkKey, ChangedDomains> = BTreeMap::new();
     for edit in edits {
-        let target = edit.target();
+        let Some(target) = edit.storage_capture_target() else {
+            continue;
+        };
         let domain = match target.domain {
             GameplayStorageDomain::Voxels => ChangedDomains::VOXELS,
             GameplayStorageDomain::PersistentEntities => ChangedDomains::PERSISTENT_ENTITIES,

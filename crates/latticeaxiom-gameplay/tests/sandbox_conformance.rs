@@ -13,20 +13,21 @@ use std::{
 
 use latticeaxiom_core::{CanonicalHash, SchemaId, StableId};
 use latticeaxiom_gameplay::{
-    AuthorityTick, BlockDefinitionV1, BlockId, BlockKey, BlockPosition, CatalogLimits,
-    ChunkCoordinate, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1, ContainerId,
-    ContainerOwnerComponentV1, ContainerStateV1, CreativePickCommandV1, DimensionChunkKey,
-    DimensionId, DropEntityId, DropItemCommandV1, FaultInjection, FrozenItemRoleBindingV1,
-    FuelRuleV1, GameplayCatalog, GameplayCatalogSourceV1, GameplayCommandV1, GameplayEditTarget,
-    GameplayKernel, GameplayLimits, GameplayModeV1, GameplayPlanV1, GameplayReject,
-    GameplayRulesV1, GameplayStorageDomain, IngredientV1, InventoryStateV1, ItemDefinitionV1,
-    ItemId, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId, ItemStackV1, ItemStateV1,
-    ItemTagDefinitionV1, ItemTagId, MineCommandV1, MiningRuleV1, MoveStackCommandV1,
-    PersistentEntityId, PickupCommandV1, PlaceCommandV1, PlayerId, ProcessDefinitionV1,
-    RecipeCraftCommandV1, RecipeDefinitionV1, RecipeId, RecipePatternV1, ReferenceGameplayState,
-    ReferencePlanApplier, RoleOutputV1, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1,
-    SelectHotbarCommandV1, SlotIndex, StartProcessCommandV1, ToolClassId, ToolDefinitionV1,
-    ToolRequirementV1, TransactionId, WorkstationDefinitionV1, WorkstationId, WorldRevision,
+    AuthorityTick, BlockDefinitionV1, BlockId, BlockKey, BlockPosition, CancelMiningCommandV1,
+    CatalogLimits, ChunkCoordinate, ChunkRevision, CommandEnvelopeV1, CommandOutcomeV1,
+    ContainerId, ContainerOwnerComponentV1, ContainerStateV1, CreativePickCommandV1,
+    DimensionChunkKey, DimensionId, DropEntityId, DropItemCommandV1, FaultInjection,
+    FrozenItemRoleBindingV1, FuelRuleV1, GameplayCatalog, GameplayCatalogSourceV1,
+    GameplayCommandV1, GameplayEditTarget, GameplayKernel, GameplayLimits, GameplayModeV1,
+    GameplayPlanV1, GameplayReject, GameplayRulesV1, GameplayStorageDomain, IngredientV1,
+    InventoryStateV1, ItemDefinitionV1, ItemId, ItemPredicateV1, ItemRoleDefinitionV1, ItemRoleId,
+    ItemStackV1, ItemStateV1, ItemTagDefinitionV1, ItemTagId, MineCommandV1, MiningRuleV1,
+    MiningStepCountV1, MoveStackCommandV1, PersistentEntityId, PickupCommandV1, PlaceCommandV1,
+    PlayerId, ProcessDefinitionV1, RecipeCraftCommandV1, RecipeDefinitionV1, RecipeId,
+    RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier, RoleOutputV1,
+    RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SelectHotbarCommandV1, SlotIndex,
+    StartProcessCommandV1, ToolClassId, ToolDefinitionV1, ToolRequirementV1, TransactionId,
+    WorkstationDefinitionV1, WorkstationId, WorldRevision,
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkData, ChunkKey, ChunkMutation,
@@ -421,6 +422,7 @@ struct FixtureAuthority {
     rules: GameplayRulesV1,
     storage: MemoryTransactionKernel,
     storage_revisions: BTreeMap<DimensionChunkKey, ChunkRevision>,
+    next_transaction: u128,
 }
 
 impl Deref for FixtureAuthority {
@@ -506,13 +508,16 @@ fn fixture_commit_receipt(
 fn capture_domains(plan: &GameplayPlanV1) -> BTreeMap<DimensionChunkKey, ChangedDomains> {
     let mut domains: BTreeMap<DimensionChunkKey, ChangedDomains> = BTreeMap::new();
     for edit in plan.edits() {
-        let domain = match edit.target().domain {
+        let Some(target) = edit.storage_capture_target() else {
+            continue;
+        };
+        let domain = match target.domain {
             GameplayStorageDomain::Voxels => ChangedDomains::VOXELS,
             GameplayStorageDomain::PersistentEntities => ChangedDomains::PERSISTENT_ENTITIES,
             GameplayStorageDomain::Continuations => ChangedDomains::CONTINUATIONS,
         };
         domains
-            .entry(edit.target().chunk.clone())
+            .entry(target.chunk.clone())
             .and_modify(|captured| *captured = captured.union(domain))
             .or_insert(domain);
     }
@@ -520,6 +525,16 @@ fn capture_domains(plan: &GameplayPlanV1) -> BTreeMap<DimensionChunkKey, Changed
 }
 
 impl FixtureAuthority {
+    fn next_envelope(&mut self, command: GameplayCommandV1) -> CommandEnvelopeV1 {
+        let transaction_id = TransactionId::from_u128(self.next_transaction);
+        self.next_transaction = self.next_transaction.saturating_add(1);
+        CommandEnvelopeV1 {
+            transaction_id,
+            expected_world_revision: self.gameplay.state().observed_world_revision(),
+            command,
+        }
+    }
+
     fn commit_domains(
         &mut self,
         transaction_id: TransactionId,
@@ -588,7 +603,7 @@ fn execute(
     catalog: &GameplayCatalog,
     command: GameplayCommandV1,
 ) -> RuntimePlanReceiptV1 {
-    let envelope = envelope(authority.state(), command);
+    let envelope = authority.next_envelope(command);
     match authority.execute_committed(catalog, &envelope) {
         Ok(receipt) => receipt,
         Err(error) => panic!("fixture command failed: {} ({})", error, error.code()),
@@ -604,6 +619,7 @@ fn applier_with_rules(
     catalog: &GameplayCatalog,
     rules: GameplayRulesV1,
 ) -> FixtureAuthority {
+    let next_transaction = u128::from(state.observed_world_revision().get()).saturating_add(1);
     let world = fixture_world();
     let storage = MemoryTransactionKernel::new();
     let mut storage_revisions = BTreeMap::new();
@@ -671,6 +687,7 @@ fn applier_with_rules(
         rules,
         storage,
         storage_revisions,
+        next_transaction,
     }
 }
 fn drop_from(receipt: &RuntimePlanReceiptV1) -> latticeaxiom_gameplay::DropEntityId {
@@ -753,6 +770,7 @@ fn command_input_journey_collects_crafts_mines_and_places_without_loss() {
             target: block_key(&dimension, log_position),
             expected_chunk_revision: ChunkRevision::ZERO,
             tool_slot: None,
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     ));
     execute(
@@ -796,6 +814,7 @@ fn command_input_journey_collects_crafts_mines_and_places_without_loss() {
             target: block_key(&dimension, ore_position),
             expected_chunk_revision: first_ore_revision,
             tool_slot: Some(SlotIndex::new(1)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     assert!(matches!(
@@ -818,6 +837,7 @@ fn command_input_journey_collects_crafts_mines_and_places_without_loss() {
             target: block_key(&dimension, ore_position),
             expected_chunk_revision: second_ore_revision,
             tool_slot: Some(SlotIndex::new(1)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     ));
     execute(
@@ -865,12 +885,97 @@ fn command_input_journey_collects_crafts_mines_and_places_without_loss() {
     );
     assert_eq!(
         authority.state().loaded_chunk_revision(&fixture_chunk()),
-        Some(ChunkRevision::new(8))
+        Some(ChunkRevision::new(7))
     );
     assert_eq!(
         authority.state().observed_world_revision(),
-        WorldRevision::new(8)
+        WorldRevision::new(7)
     );
+}
+
+#[test]
+fn mining_release_cancels_progress_and_low_rate_batches_preserve_work() {
+    let catalog = catalog();
+    let mut state = state_with_inventory(2);
+    seed_stack(
+        &mut state,
+        PLAYER,
+        0,
+        tool_stack("example:item/pickaxe", 10),
+    );
+    let dimension = fixture_dimension();
+    let position = BlockPosition { x: 1, y: 8, z: 0 };
+    let target = block_key(&dimension, position);
+    state
+        .seed_block(target.clone(), parsed("example:block/copper-ore"))
+        .unwrap_or_else(|error| panic!("mining cancellation block seed failed: {error}"));
+    let mut authority = applier(state, &catalog);
+    let initial_world_revision = authority.state().observed_world_revision();
+
+    let progress = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Mine(MineCommandV1 {
+            player: PLAYER,
+            target: target.clone(),
+            expected_chunk_revision: ChunkRevision::ZERO,
+            tool_slot: Some(SlotIndex::new(0)),
+            reserved_drop: reserved_drop(),
+            steps: MiningStepCountV1::ONE,
+        }),
+    );
+    assert!(matches!(
+        progress.outcome,
+        CommandOutcomeV1::MiningProgress {
+            accumulated: 3,
+            required: 6
+        }
+    ));
+    assert_eq!(authority.state().break_progress().len(), 1);
+    assert_eq!(
+        authority.state().observed_world_revision(),
+        initial_world_revision,
+        "transient mining progress must not publish a storage transaction"
+    );
+
+    let cancelled = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::CancelMining(CancelMiningCommandV1 { player: PLAYER }),
+    );
+    assert_eq!(
+        cancelled.outcome,
+        CommandOutcomeV1::MiningCancelled { had_progress: true }
+    );
+    assert!(authority.state().break_progress().is_empty());
+    assert_eq!(
+        authority.state().observed_world_revision(),
+        initial_world_revision,
+        "mining cancellation must remain runtime-only"
+    );
+
+    let revision = authority
+        .state()
+        .loaded_chunk_revision(&target.chunk())
+        .unwrap_or_else(|| panic!("cancelled mining chunk remains loaded"));
+    let two_steps = MiningStepCountV1::new(2)
+        .unwrap_or_else(|| panic!("two canonical mining steps are bounded"));
+    let broken = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Mine(MineCommandV1 {
+            player: PLAYER,
+            target,
+            expected_chunk_revision: revision,
+            tool_slot: Some(SlotIndex::new(0)),
+            reserved_drop: reserved_drop(),
+            steps: two_steps,
+        }),
+    );
+    assert!(matches!(
+        broken.outcome,
+        CommandOutcomeV1::BlockBroken { .. }
+    ));
 }
 
 #[test]
@@ -1096,6 +1201,7 @@ fn voxel_and_drop_plan_fault_rolls_back_without_touching_loaded_revision() {
             target,
             expected_chunk_revision: ChunkRevision::ZERO,
             tool_slot: None,
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     assert!(matches!(
@@ -1428,6 +1534,7 @@ fn dimension_qualified_block_keys_do_not_alias() {
             target: fixture_key.clone(),
             expected_chunk_revision: ChunkRevision::ZERO,
             tool_slot: None,
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     assert!(matches!(
@@ -2418,6 +2525,7 @@ fn wrong_tool_and_exhausted_tool_are_atomic() {
             target: block_key(&dimension, ore),
             expected_chunk_revision: ChunkRevision::ZERO,
             tool_slot: None,
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     assert!(matches!(
@@ -2435,6 +2543,7 @@ fn wrong_tool_and_exhausted_tool_are_atomic() {
             target: block_key(&dimension, log),
             expected_chunk_revision: ChunkRevision::ZERO,
             tool_slot: Some(SlotIndex::new(0)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     let Some(inventory) = authority.state().inventory(PLAYER) else {
@@ -2453,6 +2562,7 @@ fn wrong_tool_and_exhausted_tool_are_atomic() {
                 .loaded_chunk_revision(&fixture_chunk())
                 .unwrap_or_else(|| panic!("exhausted-tool chunk missing")),
             tool_slot: Some(SlotIndex::new(0)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     assert!(matches!(
@@ -2564,6 +2674,7 @@ fn fixture_dimension_reuses_gather_craft_mine_place_without_terrenia_ids() {
             target: block_key(&dimension, log_position),
             expected_chunk_revision: log_revision,
             tool_slot: None,
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     ));
     execute(
@@ -2607,6 +2718,7 @@ fn fixture_dimension_reuses_gather_craft_mine_place_without_terrenia_ids() {
             target: block_key(&dimension, ore_position),
             expected_chunk_revision: ore_revision,
             tool_slot: Some(SlotIndex::new(1)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     let ore_revision = authority
@@ -2622,6 +2734,7 @@ fn fixture_dimension_reuses_gather_craft_mine_place_without_terrenia_ids() {
             target: block_key(&dimension, ore_position),
             expected_chunk_revision: ore_revision,
             tool_slot: Some(SlotIndex::new(1)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     ));
     execute(

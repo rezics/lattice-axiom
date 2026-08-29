@@ -53,11 +53,12 @@ pub use latticeaxiom_storage::{
     PersistentEntityId, TransactionId, WorldRevision,
 };
 pub use model::{
-    AuthorityTick, BlockPosition, BreakProgressKey, BreakProgressV1, CommandEnvelopeV1,
-    CommandOutcomeV1, ContainerOwnerComponentV1, ContainerStateV1, CreativePickCommandV1,
-    DEFAULT_HOTBAR_SLOTS, DropItemCommandV1, DroppedItemV1, FaultInjection, FurnaceContinuationV1,
-    GameplayCommandV1, GameplayLimits, GameplayModeV1, GameplayMutationIntentV1, GameplayPlanV1,
-    GameplayReject, GameplayRulesV1, InventoryStateV1, ItemStackV1, ItemStateV1, MineCommandV1,
+    AuthorityTick, BlockPosition, BreakProgressKey, BreakProgressV1, CancelMiningCommandV1,
+    CommandEnvelopeV1, CommandOutcomeV1, ContainerOwnerComponentV1, ContainerStateV1,
+    CreativePickCommandV1, DEFAULT_HOTBAR_SLOTS, DropItemCommandV1, DroppedItemV1, FaultInjection,
+    FurnaceContinuationV1, GameplayCommandV1, GameplayLimits, GameplayModeV1,
+    GameplayMutationIntentV1, GameplayPlanV1, GameplayReject, GameplayRulesV1, InventoryStateV1,
+    ItemStackV1, ItemStateV1, MAX_MINING_STEPS_PER_COMMAND, MineCommandV1, MiningStepCountV1,
     MoveStackCommandV1, PickupCommandV1, PlaceCommandV1, RecipeCraftCommandV1,
     ReferenceGameplayState, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SelectHotbarCommandV1,
     SlotIndex, StartProcessCommandV1, TransferCommandV1, TransferDirectionV1,

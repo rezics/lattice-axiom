@@ -19,7 +19,7 @@ use bevy::{
 use latticeaxiom_gameplay::PlayerId;
 use thiserror::Error;
 
-use crate::{ActionFrameInbox, PlayerActionFrameV1, PlayerActionV1, SuccessfulEditCooldownV1};
+use crate::{ActionFrameInbox, BlockEditInputStateV1, PlayerActionFrameV1, PlayerActionV1};
 
 const REFERENCE_FIXED_HZ: f32 = 60.0;
 const GRAVITY_MPS2: f32 = 19.62;
@@ -331,7 +331,7 @@ pub struct D2PlayerBundle {
     controller: PlayerControllerState,
     view: PlayerViewV1,
     action_frame: CurrentPlayerActionFrame,
-    edit_cooldown: SuccessfulEditCooldownV1,
+    edit_input: BlockEditInputStateV1,
     rigid_body: RigidBody,
     custom_position_integration: CustomPositionIntegration,
     speculative_margin: SpeculativeMargin,
@@ -378,7 +378,7 @@ impl D2PlayerBundle {
             controller: PlayerControllerState::default(),
             view: PlayerViewV1::default(),
             action_frame: CurrentPlayerActionFrame::default(),
-            edit_cooldown: SuccessfulEditCooldownV1::default(),
+            edit_input: BlockEditInputStateV1::default(),
             rigid_body: RigidBody::Kinematic,
             custom_position_integration: CustomPositionIntegration,
             speculative_margin: SpeculativeMargin(0.0),

@@ -483,6 +483,7 @@ mod tests {
                 input_generation: generation,
                 placement_content,
                 client_observation: observation,
+                mining_steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
             },
         }
     }

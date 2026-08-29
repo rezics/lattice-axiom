@@ -697,6 +697,7 @@ fn save_record(snapshot: &latticeaxiom_storage::ReferenceWorldSnapshot) -> SaveP
 
 fn compile_generic_catalog(document: &GenericCatalogDocument) -> GameplayCatalog {
     let source = GameplayCatalogSourceV1 {
+        categories: Vec::new(),
         items: document
             .items
             .iter()
@@ -911,6 +912,7 @@ fn run_generic_subset(catalog: &GameplayCatalog, dimension_id: &str) -> GenericJ
             target: BlockKey::new(dimension.clone(), BlockPosition { x: 0, y: 8, z: 0 }),
             expected_chunk_revision: log_revision,
             tool_slot: None,
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     ));
     receipts.push(execute(
@@ -951,6 +953,7 @@ fn run_generic_subset(catalog: &GameplayCatalog, dimension_id: &str) -> GenericJ
             target: BlockKey::new(dimension.clone(), BlockPosition { x: 1, y: 8, z: 0 }),
             expected_chunk_revision: ore_progress_revision,
             tool_slot: Some(SlotIndex::new(1)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     );
     let ore_break_revision = chunk_revision(&authority, &chunk);
@@ -963,6 +966,7 @@ fn run_generic_subset(catalog: &GameplayCatalog, dimension_id: &str) -> GenericJ
             target: BlockKey::new(dimension.clone(), BlockPosition { x: 1, y: 8, z: 0 }),
             expected_chunk_revision: ore_break_revision,
             tool_slot: Some(SlotIndex::new(1)),
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     ));
     receipts.push(execute(
@@ -1063,13 +1067,16 @@ impl GenericAuthority {
     fn commit_plan(&mut self, transaction_id: TransactionId, plan: &GameplayPlanV1) {
         let mut domains = BTreeMap::<DimensionChunkKey, ChangedDomains>::new();
         for edit in plan.edits() {
-            let domain = match edit.target().domain {
+            let Some(target) = edit.storage_capture_target() else {
+                continue;
+            };
+            let domain = match target.domain {
                 GameplayStorageDomain::Voxels => ChangedDomains::VOXELS,
                 GameplayStorageDomain::PersistentEntities => ChangedDomains::PERSISTENT_ENTITIES,
                 GameplayStorageDomain::Continuations => ChangedDomains::CONTINUATIONS,
             };
             domains
-                .entry(edit.target().chunk.clone())
+                .entry(target.chunk.clone())
                 .and_modify(|captured| *captured = captured.union(domain))
                 .or_insert(domain);
         }

@@ -10,11 +10,11 @@ use bevy::{
 };
 
 use crate::{
-    ActionFrameInbox, AuthoritativeBlockEditRequestV1, BlockEditActionV1,
-    BlockEditAuthorityResource, BlockEditIntentV1, BlockEditReceiptV1, BlockEditRejectV1,
-    CurrentPlayerActionFrame, D2Player, DetachedSpectator, LocalPlayerInput,
-    PlayerMovementProfileV1, PlayerViewV1, SimulationClock, SimulationTickRateChanged,
-    SimulationTickRateRequest, SuccessfulEditCooldownV1, TargetEyePoseV1,
+    ActionFrameInbox, AuthoritativeBlockEditRequestV1, AuthoritativeMiningCancelRequestV1,
+    BlockEditActionV1, BlockEditAuthorityResource, BlockEditInputStateV1, BlockEditIntentV1,
+    BlockEditReceiptV1, BlockEditRejectV1, CurrentPlayerActionFrame, D2Player, DetachedSpectator,
+    LocalPlayerInput, MiningCancelReceiptV1, PlayerMovementProfileV1, PlayerViewV1,
+    SimulationClock, SimulationTickRateChanged, SimulationTickRateRequest, TargetEyePoseV1,
     movement::{
         install_fixed_action_frame, move_players, prepare_velocity, update_grounded,
         update_player_view, update_spectator,
@@ -69,6 +69,7 @@ impl Plugin for PlayerPlugin {
             .init_resource::<ActionFrameInbox>()
             .init_resource::<PlayerFixedTick>()
             .add_message::<BlockEditReceiptV1>()
+            .add_message::<MiningCancelReceiptV1>()
             .add_message::<SimulationTickRateRequest>()
             .add_message::<SimulationTickRateChanged>()
             .configure_sets(FixedFirst, PlayerSystemSet::SampleInput)
@@ -124,8 +125,10 @@ impl Plugin for PlayerPlugin {
 #[allow(clippy::type_complexity)] // The tuple is the single bounded local-player command origin.
 fn evaluate_block_edits(
     tick: Res<'_, PlayerFixedTick>,
+    clock: Res<'_, SimulationClock>,
     mut authority: Option<ResMut<'_, BlockEditAuthorityResource>>,
     mut receipts: MessageWriter<'_, BlockEditReceiptV1>,
+    mut cancel_receipts: MessageWriter<'_, MiningCancelReceiptV1>,
     mut players: Query<
         '_,
         '_,
@@ -135,7 +138,7 @@ fn evaluate_block_edits(
             &PlayerMovementProfileV1,
             &PlayerViewV1,
             &Transform,
-            &mut SuccessfulEditCooldownV1,
+            &mut BlockEditInputStateV1,
             Option<&DetachedSpectator>,
         ),
         With<LocalPlayerInput>,
@@ -144,7 +147,7 @@ fn evaluate_block_edits(
     // D2 has exactly one local command origin. Treat zero or multiple local
     // players as an invalid host composition and emit no order-dependent work.
     let mut local_players = players.iter_mut();
-    let Some((player, frame, profile, view, transform, mut cooldown, spectator)) =
+    let Some((player, frame, profile, view, transform, mut edit_input, spectator)) =
         local_players.next()
     else {
         return;
@@ -153,47 +156,68 @@ fn evaluate_block_edits(
         return;
     }
 
-    for (action, source_action) in [
-        (BlockEditActionV1::Break, crate::PlayerActionV1::BreakBlock),
-        (BlockEditActionV1::Place, crate::PlayerActionV1::PlaceBlock),
+    let break_active = frame.0.held.contains(crate::PlayerActionV1::BreakBlock)
+        || frame.0.started.contains(crate::PlayerActionV1::BreakBlock);
+    let break_sample = edit_input.sample_break(break_active, clock.active_rate().hertz());
+    if break_sample.released {
+        let result = if spectator.is_some() {
+            Err(BlockEditRejectV1::PermissionDenied)
+        } else if let Some(authority) = authority.as_mut() {
+            authority.cancel_mining(AuthoritativeMiningCancelRequestV1 {
+                player: player.player_id,
+                fixed_tick: tick.get(),
+                input_generation: frame.0.generation,
+            })
+        } else {
+            Err(BlockEditRejectV1::ContentUnavailable)
+        };
+        cancel_receipts.write(MiningCancelReceiptV1 {
+            player: player.player_id,
+            fixed_tick: tick.get(),
+            input_generation: frame.0.generation,
+            result,
+        });
+    }
+
+    let place_steps = frame
+        .0
+        .started
+        .contains(crate::PlayerActionV1::PlaceBlock)
+        .then_some(latticeaxiom_gameplay::MiningStepCountV1::ONE);
+    for (action, mining_steps) in [
+        (BlockEditActionV1::Break, break_sample.steps),
+        (BlockEditActionV1::Place, place_steps),
     ] {
-        if !frame.0.started.contains(source_action) {
+        let Some(mining_steps) = mining_steps else {
             continue;
-        }
+        };
 
         let result = if spectator.is_some() {
             Err(BlockEditRejectV1::PermissionDenied)
+        } else if let Some(authority) = authority.as_mut() {
+            let origin = transform.translation
+                + bevy::prelude::Vec3::Y
+                    * (profile.eye_height_m() - profile.capsule_total_height_m() * 0.5);
+            let forward = view.forward();
+            authority.apply(AuthoritativeBlockEditRequestV1 {
+                player: player.player_id,
+                fixed_tick: tick.get(),
+                eye_pose: TargetEyePoseV1 {
+                    origin_m: origin.to_array(),
+                    forward: forward.to_array(),
+                },
+                intent: BlockEditIntentV1 {
+                    action,
+                    input_generation: frame.0.generation,
+                    placement_content: frame.0.placement_content.clone(),
+                    client_observation: frame.0.client_observation.clone(),
+                    mining_steps,
+                },
+            })
         } else {
-            let remaining_ticks = cooldown.remaining_ticks(tick.get());
-            if remaining_ticks > 0 {
-                Err(BlockEditRejectV1::Cooldown { remaining_ticks })
-            } else if let Some(authority) = authority.as_mut() {
-                let origin = transform.translation
-                    + bevy::prelude::Vec3::Y
-                        * (profile.eye_height_m() - profile.capsule_total_height_m() * 0.5);
-                let forward = view.forward();
-                authority.apply(AuthoritativeBlockEditRequestV1 {
-                    player: player.player_id,
-                    fixed_tick: tick.get(),
-                    eye_pose: TargetEyePoseV1 {
-                        origin_m: origin.to_array(),
-                        forward: forward.to_array(),
-                    },
-                    intent: BlockEditIntentV1 {
-                        action,
-                        input_generation: frame.0.generation,
-                        placement_content: frame.0.placement_content.clone(),
-                        client_observation: frame.0.client_observation.clone(),
-                    },
-                })
-            } else {
-                Err(BlockEditRejectV1::ContentUnavailable)
-            }
+            Err(BlockEditRejectV1::ContentUnavailable)
         };
 
-        if result.is_ok() {
-            cooldown.record_success(tick.get());
-        }
         receipts.write(BlockEditReceiptV1 {
             player: player.player_id,
             fixed_tick: tick.get(),

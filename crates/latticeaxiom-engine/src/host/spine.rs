@@ -23,14 +23,15 @@ use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_gameplay::{
     AuthorityTick, BlockId, BlockPosition, CommandOutcomeV1, ContainerId, ContainerStateV1,
     DimensionChunkKey, DropEntityId, GameplayCatalog, GameplayModeV1, GameplayReject,
-    InventoryInspectV1, ItemId, ItemStackV1, PlayerId, ProcessId, RecipeId, RecipeInspectV1,
-    SlotIndex, TransferCommandV1, WorkstationId,
+    InventoryInspectV1, ItemId, ItemStackV1, MiningStepCountV1, PlayerId, ProcessId, RecipeId,
+    RecipeInspectV1, SlotIndex, TransferCommandV1, WorkstationId,
 };
 use latticeaxiom_player::{
-    AuthoritativeBlockEditRequestV1, AuthoritativeTargetInspectRequestV1, BlockEditActionV1,
-    BlockEditAuthority, BlockEditRejectV1, BlockEditSuccessV1, BlockFaceV1,
-    ClientTargetObservationV1, HeadlessTargetInspectV1, MAX_BLOCK_EDIT_REACH_M,
-    PlayerMovementProfileV1, TargetEyePoseV1, TargetInspectRejectV1, occupancy_line,
+    AuthoritativeBlockEditRequestV1, AuthoritativeMiningCancelRequestV1,
+    AuthoritativeTargetInspectRequestV1, BlockEditActionV1, BlockEditAuthority, BlockEditRejectV1,
+    BlockEditSuccessV1, BlockFaceV1, ClientTargetObservationV1, HeadlessTargetInspectV1,
+    MAX_BLOCK_EDIT_REACH_M, MiningCancelSuccessV1, PlayerMovementProfileV1, TargetEyePoseV1,
+    TargetInspectRejectV1, occupancy_line,
 };
 use latticeaxiom_runtime_contracts::{
     EngineEpoch, WorldEpoch as InspectWorldEpoch, WorldgenInspectReportV1,
@@ -1943,7 +1944,8 @@ impl ProductionSpine {
                 .inner
                 .lock()
                 .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-            let result = inner.mine_cell(self.storage.kernel(), position, 0);
+            let result =
+                inner.mine_cell(self.storage.kernel(), position, 0, MiningStepCountV1::ONE);
             record_edit_result(&mut inner, &result);
             result
         }
@@ -2604,6 +2606,20 @@ impl BlockEditAuthority for ProductionSpine {
             result
         }
     }
+
+    fn cancel_mining(
+        &mut self,
+        request: AuthoritativeMiningCancelRequestV1,
+    ) -> Result<MiningCancelSuccessV1, BlockEditRejectV1> {
+        if request.player != local_player_id() {
+            return Err(BlockEditRejectV1::PermissionDenied);
+        }
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        inner.cancel_mining(self.storage.kernel(), request.fixed_tick)
+    }
 }
 
 struct SelectableHit {
@@ -2668,7 +2684,12 @@ impl ProductionSpineInner {
             hit.distance,
         )?;
         match request.intent.action {
-            BlockEditActionV1::Break => self.mine_cell(kernel, hit.position, request.fixed_tick),
+            BlockEditActionV1::Break => self.mine_cell(
+                kernel,
+                hit.position,
+                request.fixed_tick,
+                request.intent.mining_steps,
+            ),
             BlockEditActionV1::Place => {
                 let adjacent = hit
                     .face
@@ -2690,6 +2711,7 @@ impl ProductionSpineInner {
         kernel: &MemoryTransactionKernel,
         position: BlockPosition,
         fixed_tick: u64,
+        steps: MiningStepCountV1,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
         let voxel = *self
             .runtime
@@ -2732,7 +2754,7 @@ impl ProductionSpineInner {
             .gameplay
             .as_mut()
             .ok_or(BlockEditRejectV1::ContentUnavailable)?
-            .prepare_mine(position, block.clone(), revision)
+            .prepare_mine(position, block.clone(), revision, steps)
             .map_err(|error| block_edit_reject(&error, required_tool.as_ref()))?;
         let transaction = next_transaction_id(self);
         let receipt = self
@@ -2773,6 +2795,35 @@ impl ProductionSpineInner {
             }
             _ => Err(BlockEditRejectV1::StorageUnavailable),
         }
+    }
+
+    fn cancel_mining(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        fixed_tick: u64,
+    ) -> Result<MiningCancelSuccessV1, BlockEditRejectV1> {
+        if self.gameplay.is_none() {
+            return Ok(MiningCancelSuccessV1::default());
+        }
+        self.sync_gameplay_world(kernel)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let command = self
+            .gameplay
+            .as_ref()
+            .ok_or(BlockEditRejectV1::ContentUnavailable)?
+            .cancel_mining_command();
+        let transaction = next_transaction_id(self);
+        let receipt = self
+            .gameplay
+            .as_mut()
+            .ok_or(BlockEditRejectV1::ContentUnavailable)?
+            .execute(transaction, command)
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        let CommandOutcomeV1::MiningCancelled { had_progress } = receipt.outcome else {
+            return Err(BlockEditRejectV1::StorageUnavailable);
+        };
+        commit_gameplay_storage(self, kernel, transaction, None, fixed_tick)?;
+        Ok(MiningCancelSuccessV1 { had_progress })
     }
 
     fn place_cell(
@@ -3462,8 +3513,7 @@ fn map_inspect_reject(reject: &BlockEditRejectV1) -> TargetInspectRejectV1 {
         | BlockEditRejectV1::ToolBroken
         | BlockEditRejectV1::RequiresProgress { .. }
         | BlockEditRejectV1::NoPlacementContent
-        | BlockEditRejectV1::PermissionDenied
-        | BlockEditRejectV1::Cooldown { .. } => TargetInspectRejectV1::StorageUnavailable,
+        | BlockEditRejectV1::PermissionDenied => TargetInspectRejectV1::StorageUnavailable,
     }
 }
 

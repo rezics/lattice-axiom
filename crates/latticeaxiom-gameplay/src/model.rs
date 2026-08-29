@@ -23,6 +23,8 @@ pub const ABSOLUTE_MAX_CONTAINER_SLOTS: usize = 256;
 pub const ABSOLUTE_MAX_MUTATIONS_PER_COMMAND: usize = 256;
 /// Absolute implementation ceiling for scheduled completions in one command.
 pub const ABSOLUTE_MAX_SCHEDULED_COMPLETIONS: usize = 64;
+/// Maximum canonical 60 Hz mining steps accepted by one batched command.
+pub const MAX_MINING_STEPS_PER_COMMAND: u16 = 60;
 
 macro_rules! scalar_id {
     ($(#[$meta:meta])* $name:ident, $inner:ty) => {
@@ -51,6 +53,37 @@ scalar_id!(
     AuthorityTick,
     u64
 );
+
+/// Non-zero number of canonical 60 Hz mining steps batched into one command.
+///
+/// A low simulation rate may need to catch up more than one mining step at a
+/// fixed boundary. Keeping the batch bounded makes that cost explicit while
+/// preserving mining duration when the simulation rate changes.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MiningStepCountV1(NonZeroU16);
+
+impl MiningStepCountV1 {
+    /// One canonical mining step.
+    pub const ONE: Self = Self(NonZeroU16::MIN);
+
+    /// Creates a bounded mining-step batch.
+    #[must_use]
+    pub const fn new(value: u16) -> Option<Self> {
+        if value == 0 || value > MAX_MINING_STEPS_PER_COMMAND {
+            return None;
+        }
+        match NonZeroU16::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// Returns the number of canonical mining steps.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0.get()
+    }
+}
 
 /// Slot index in an inventory or container.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1129,11 +1162,17 @@ impl ReferenceGameplayState {
                 catalog.validate_stack(stack)?;
             }
         }
+        let mut mining_players = BTreeSet::new();
         for (key, progress) in &self.break_progress {
             self.require_loaded_chunk(&self.block_chunk(&key.block))?;
             if !self.inventories.contains_key(&key.player) {
                 return Err(GameplayReject::UnknownPlayer {
                     player: key.player.as_bytes(),
+                });
+            }
+            if !mining_players.insert(key.player) {
+                return Err(GameplayReject::MutationPreconditionFailed {
+                    resource: "multiple_mining_targets_per_player",
                 });
             }
             if self.blocks.get(&key.block) != Some(&progress.block) {
@@ -1412,6 +1451,8 @@ pub struct GameplayRulesV1 {
 pub enum GameplayCommandV1 {
     /// Advance deterministic mining progress and possibly break a block.
     Mine(MineCommandV1),
+    /// Cancel the player's transient mining target and accumulated progress.
+    CancelMining(CancelMiningCommandV1),
     /// Drop part of an inventory stack into the world.
     DropItem(DropItemCommandV1),
     /// Pick up a complete dropped stack atomically.
@@ -1447,6 +1488,15 @@ pub struct MineCommandV1 {
     pub tool_slot: Option<SlotIndex>,
     /// World-scoped persistent entity identity reserved by the authoritative host.
     pub reserved_drop: DropEntityId,
+    /// Canonical 60 Hz work steps represented by this simulation boundary.
+    pub steps: MiningStepCountV1,
+}
+
+/// Mining cancellation payload emitted on button release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CancelMiningCommandV1 {
+    /// Player whose one active mining target is cancelled.
+    pub player: PlayerId,
 }
 
 /// Explicit player-drop command payload.
@@ -1689,7 +1739,11 @@ pub enum GameplayMutationIntentV1 {
         /// Replacement value.
         after: Option<DroppedItemV1>,
     },
-    /// Update deterministic mining progress.
+    /// Update deterministic runtime-only mining progress.
+    ///
+    /// The explicit target scopes validation and hashing, but this transient
+    /// input-session state is excluded from storage capture. A completed break
+    /// persists the resulting voxel, inventory, and drop mutations atomically.
     BreakProgress {
         /// Explicit persistent-entity capture target.
         target: GameplayEditTarget,
@@ -1732,6 +1786,25 @@ impl GameplayMutationIntentV1 {
             | Self::Continuation { target, .. } => target,
         }
     }
+
+    /// Returns the target that must cross the storage capture boundary.
+    ///
+    /// Runtime-only mining progress remains validated and hashed through
+    /// [`Self::target`] but deliberately returns `None` here.
+    #[must_use]
+    pub const fn storage_capture_target(&self) -> Option<&GameplayEditTarget> {
+        match self {
+            Self::BreakProgress { .. } => None,
+            Self::InventorySlot { target, .. }
+            | Self::InventoryRevision { target, .. }
+            | Self::InventoryHotbar { target, .. }
+            | Self::ContainerSlot { target, .. }
+            | Self::ContainerRevision { target, .. }
+            | Self::Block { target, .. }
+            | Self::DropEntity { target, .. }
+            | Self::Continuation { target, .. } => Some(target),
+        }
+    }
 }
 /// Typed successful command result.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1742,6 +1815,11 @@ pub enum CommandOutcomeV1 {
         accumulated: u32,
         /// Required work.
         required: u32,
+    },
+    /// The player's active mining target was cleared, if one existed.
+    MiningCancelled {
+        /// Whether an accumulated target was removed.
+        had_progress: bool,
     },
     /// The block was staged for removal and a drop entity was staged.
     BlockBroken {

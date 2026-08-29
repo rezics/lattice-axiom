@@ -6,17 +6,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use latticeaxiom_gameplay::{
-    AuthorityTick, BlockId, BlockKey, BlockPosition, ChunkRevision, CommandEnvelopeV1,
-    CommandOutcomeV1, ContainerId, ContainerOwnerComponentV1, ContainerStateV1, ContinuationId,
-    CreativePickCommandV1, DimensionChunkKey, DimensionId, DropEntityId, DroppedItemV1,
-    FaultInjection, FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1, GameplayEditTarget,
-    GameplayKernel, GameplayLimits, GameplayModeV1, GameplayReject, GameplayRulesV1,
-    GameplayStorageDomain, IngredientV1, InventoryInspectV1, InventoryStateV1, ItemId, ItemStackV1,
-    ItemStateV1, MineCommandV1, MoveStackCommandV1, PickupCommandV1, PlaceCommandV1, PlayerId,
-    ProcessId, RecipeCraftCommandV1, RecipeId, RecipeInspectV1, RecipePatternV1,
-    ReferenceGameplayState, ReferencePlanApplier, RuntimePlanReceiptV1, ScheduledAdvanceCommandV1,
-    SlotIndex, StartProcessCommandV1, ToolClassId, TransactionId, TransferCommandV1, WorkstationId,
-    WorldId, WorldRevision,
+    AuthorityTick, BlockId, BlockKey, BlockPosition, CancelMiningCommandV1, ChunkRevision,
+    CommandEnvelopeV1, CommandOutcomeV1, ContainerId, ContainerOwnerComponentV1, ContainerStateV1,
+    ContinuationId, CreativePickCommandV1, DimensionChunkKey, DimensionId, DropEntityId,
+    DroppedItemV1, FaultInjection, FurnaceContinuationV1, GameplayCatalog, GameplayCommandV1,
+    GameplayEditTarget, GameplayKernel, GameplayLimits, GameplayModeV1, GameplayReject,
+    GameplayRulesV1, GameplayStorageDomain, IngredientV1, InventoryInspectV1, InventoryStateV1,
+    ItemId, ItemStackV1, ItemStateV1, MineCommandV1, MiningStepCountV1, MoveStackCommandV1,
+    PickupCommandV1, PlaceCommandV1, PlayerId, ProcessId, RecipeCraftCommandV1, RecipeId,
+    RecipeInspectV1, RecipePatternV1, ReferenceGameplayState, ReferencePlanApplier,
+    RuntimePlanReceiptV1, ScheduledAdvanceCommandV1, SlotIndex, StartProcessCommandV1, ToolClassId,
+    TransactionId, TransferCommandV1, WorkstationId, WorldId, WorldRevision,
 };
 use latticeaxiom_player::BlockEditRejectV1;
 use latticeaxiom_storage::{ChangedDomains, PublicationReceipt};
@@ -324,6 +324,7 @@ impl ProductionGameplay {
         target: BlockPosition,
         block: BlockId,
         expected_chunk_revision: ChunkRevision,
+        steps: MiningStepCountV1,
     ) -> Result<GameplayCommandV1, GameplayReject> {
         let key = BlockKey::new(self.dimension.clone(), target);
         self.applier
@@ -337,7 +338,14 @@ impl ProductionGameplay {
             expected_chunk_revision,
             tool_slot: self.selected_tool_slot(),
             reserved_drop,
+            steps,
         }))
+    }
+
+    pub(super) const fn cancel_mining_command(&self) -> GameplayCommandV1 {
+        GameplayCommandV1::CancelMining(CancelMiningCommandV1 {
+            player: self.player,
+        })
     }
 
     pub(super) fn prepare_place(

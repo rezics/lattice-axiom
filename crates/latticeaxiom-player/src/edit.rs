@@ -1,13 +1,15 @@
 use std::fmt;
 
 use bevy::prelude::{Component, Message, Resource};
-use latticeaxiom_gameplay::{BlockId, BlockPosition, ChunkRevision, PlayerId, ToolClassId};
+use latticeaxiom_gameplay::{
+    BlockId, BlockPosition, ChunkRevision, MiningStepCountV1, PlayerId, ToolClassId,
+};
 use thiserror::Error;
 
 /// Maximum authoritative break/place reach in meters.
 pub const MAX_BLOCK_EDIT_REACH_M: f32 = 5.0;
-/// Shared successful break/place cooldown at 60 Hz.
-pub const SUCCESSFUL_EDIT_COOLDOWN_TICKS: u64 = 12;
+/// Canonical mining cadence, independent from the configurable simulation rate.
+pub const CANONICAL_MINING_STEPS_PER_SECOND: u16 = 60;
 
 /// Version-one authoritative block edit action.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -78,6 +80,8 @@ pub struct BlockEditIntentV1 {
     pub placement_content: Option<BlockId>,
     /// Optional presentation observation, used only for diagnostics/prediction.
     pub client_observation: Option<ClientTargetObservationV1>,
+    /// Canonical 60 Hz work steps represented by this request.
+    pub mining_steps: MiningStepCountV1,
 }
 
 /// Fixed-tick player eye pose passed to the authoritative target capability.
@@ -106,6 +110,17 @@ pub struct AuthoritativeBlockEditRequestV1 {
     pub intent: BlockEditIntentV1,
 }
 
+/// Request to clear one player's transient mining target on button release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthoritativeMiningCancelRequestV1 {
+    /// Stable player releasing the mining action.
+    pub player: PlayerId,
+    /// Authoritative fixed tick of the release observation.
+    pub fixed_tick: u64,
+    /// Input generation that observed the release.
+    pub input_generation: u64,
+}
+
 impl AuthoritativeBlockEditRequestV1 {
     /// Returns the immutable V1 reach limit.
     #[must_use]
@@ -129,12 +144,6 @@ pub enum BlockEditRejectV1 {
     /// A nearer cell occludes the observed target.
     #[error("block target is occluded")]
     Occluded,
-    /// A prior successful break/place still owns the shared cooldown.
-    #[error("block edit cooldown has {remaining_ticks} ticks remaining")]
-    Cooldown {
-        /// Number of fixed ticks until another success is eligible.
-        remaining_ticks: u64,
-    },
     /// The client observed an older chunk revision.
     #[error("stale chunk revision: expected {expected}, actual {actual}")]
     StaleRevision {
@@ -209,6 +218,26 @@ pub struct BlockEditReceiptV1 {
     pub result: Result<BlockEditSuccessV1, BlockEditRejectV1>,
 }
 
+/// Stable result of cancelling one transient mining target.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MiningCancelSuccessV1 {
+    /// Whether accumulated progress existed and was cleared.
+    pub had_progress: bool,
+}
+
+/// Receipt emitted when a held mining action is released.
+#[derive(Clone, Debug, Message, PartialEq)]
+pub struct MiningCancelReceiptV1 {
+    /// Stable player that released mining.
+    pub player: PlayerId,
+    /// Fixed tick on which authority evaluated cancellation.
+    pub fixed_tick: u64,
+    /// Input generation that observed the release.
+    pub input_generation: u64,
+    /// Typed authoritative result.
+    pub result: Result<MiningCancelSuccessV1, BlockEditRejectV1>,
+}
+
 /// Lattice-owned capability implemented by the authoritative voxel host.
 pub trait BlockEditAuthority: Send + Sync + 'static {
     /// Reruns targeting, validates, and atomically commits one intent.
@@ -220,6 +249,19 @@ pub trait BlockEditAuthority: Send + Sync + 'static {
         &mut self,
         request: AuthoritativeBlockEditRequestV1,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1>;
+
+    /// Clears transient mining progress after the break action is released.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable rejection when authoritative cancellation cannot be
+    /// completed. Stateless authorities may keep the default no-op behavior.
+    fn cancel_mining(
+        &mut self,
+        _request: AuthoritativeMiningCancelRequestV1,
+    ) -> Result<MiningCancelSuccessV1, BlockEditRejectV1> {
+        Ok(MiningCancelSuccessV1::default())
+    }
 }
 
 /// Bevy resource containing the active authoritative block-edit capability.
@@ -239,6 +281,13 @@ impl BlockEditAuthorityResource {
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
         self.0.apply(request)
     }
+
+    pub(crate) fn cancel_mining(
+        &mut self,
+        request: AuthoritativeMiningCancelRequestV1,
+    ) -> Result<MiningCancelSuccessV1, BlockEditRejectV1> {
+        self.0.cancel_mining(request)
+    }
 }
 
 impl fmt::Debug for BlockEditAuthorityResource {
@@ -249,45 +298,104 @@ impl fmt::Debug for BlockEditAuthorityResource {
     }
 }
 
-/// Per-player shared successful break/place cooldown.
+/// Per-player held-mining cadence state.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
-pub struct SuccessfulEditCooldownV1 {
-    next_success_tick: u64,
+pub struct BlockEditInputStateV1 {
+    break_was_active: bool,
+    mining_phase: u32,
+    cadence_rate_hz: u16,
 }
 
-impl SuccessfulEditCooldownV1 {
-    /// Returns the remaining ticks, or zero when an attempt is eligible.
-    #[must_use]
-    pub const fn remaining_ticks(self, fixed_tick: u64) -> u64 {
-        self.next_success_tick.saturating_sub(fixed_tick)
-    }
-
-    /// Records a successful mutation. Rejections must never call this method.
-    pub fn record_success(&mut self, fixed_tick: u64) {
-        self.next_success_tick = fixed_tick.saturating_add(SUCCESSFUL_EDIT_COOLDOWN_TICKS);
-    }
-
-    /// Returns the next tick on which a successful mutation is eligible.
-    #[must_use]
-    pub const fn next_success_tick(self) -> u64 {
-        self.next_success_tick
+impl BlockEditInputStateV1 {
+    pub(crate) fn sample_break(
+        &mut self,
+        active: bool,
+        simulation_rate_hz: u16,
+    ) -> BreakCadenceSample {
+        let simulation_rate_hz = simulation_rate_hz.max(1);
+        if !active {
+            let released = self.break_was_active;
+            self.break_was_active = false;
+            self.mining_phase = 0;
+            self.cadence_rate_hz = simulation_rate_hz;
+            return BreakCadenceSample {
+                steps: None,
+                released,
+            };
+        }
+        if !self.break_was_active {
+            self.break_was_active = true;
+            let canonical_rate = u32::from(CANONICAL_MINING_STEPS_PER_SECOND);
+            let simulation_rate = u32::from(simulation_rate_hz);
+            let steps = (canonical_rate / simulation_rate).max(1);
+            self.mining_phase = if canonical_rate >= simulation_rate {
+                canonical_rate % simulation_rate
+            } else {
+                0
+            };
+            self.cadence_rate_hz = simulation_rate_hz;
+            return BreakCadenceSample {
+                steps: u16::try_from(steps).ok().and_then(MiningStepCountV1::new),
+                released: false,
+            };
+        }
+        if self.cadence_rate_hz != simulation_rate_hz {
+            self.mining_phase = self
+                .mining_phase
+                .saturating_mul(u32::from(simulation_rate_hz))
+                / u32::from(self.cadence_rate_hz.max(1));
+            self.cadence_rate_hz = simulation_rate_hz;
+        }
+        self.mining_phase = self
+            .mining_phase
+            .saturating_add(u32::from(CANONICAL_MINING_STEPS_PER_SECOND));
+        let steps = self.mining_phase / u32::from(simulation_rate_hz);
+        self.mining_phase %= u32::from(simulation_rate_hz);
+        BreakCadenceSample {
+            steps: u16::try_from(steps).ok().and_then(MiningStepCountV1::new),
+            released: false,
+        }
     }
 }
 
-/// Descriptive alias for the shared break/place limiter component.
-pub type PlayerEditLimiter = SuccessfulEditCooldownV1;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BreakCadenceSample {
+    pub(crate) steps: Option<MiningStepCountV1>,
+    pub(crate) released: bool,
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn break_and_place_share_the_twelve_tick_success_window() {
-        let mut limiter = SuccessfulEditCooldownV1::default();
-        limiter.record_success(20);
+    fn mining_cadence_is_sixty_steps_per_second_at_any_tick_rate() {
+        for rate in [30, 60, 240, 10_000] {
+            let mut cadence = BlockEditInputStateV1::default();
+            let mut steps = 0_u32;
+            for _ in 0..rate {
+                steps += cadence
+                    .sample_break(true, rate)
+                    .steps
+                    .map_or(0, |batch| u32::from(batch.get()));
+            }
+            assert_eq!(steps, 60, "unexpected mining work at {rate} Hz");
+        }
+    }
 
-        assert_eq!(limiter.remaining_ticks(31), 1);
-        assert_eq!(limiter.remaining_ticks(32), 0);
+    #[test]
+    fn mining_release_is_reported_once_and_resets_phase() {
+        let mut cadence = BlockEditInputStateV1::default();
+        assert_eq!(
+            cadence.sample_break(true, 240).steps,
+            Some(MiningStepCountV1::ONE)
+        );
+        assert!(cadence.sample_break(false, 240).released);
+        assert!(!cadence.sample_break(false, 240).released);
+        assert_eq!(
+            cadence.sample_break(true, 240).steps,
+            Some(MiningStepCountV1::ONE)
+        );
     }
 
     #[test]

@@ -94,6 +94,7 @@ fn planning_benchmark(criterion: &mut Criterion) {
             target,
             expected_chunk_revision: ChunkRevision::ZERO,
             tool_slot: None,
+            steps: latticeaxiom_gameplay::MiningStepCountV1::ONE,
         }),
     };
     let kernel = GameplayKernel::new(&catalog);

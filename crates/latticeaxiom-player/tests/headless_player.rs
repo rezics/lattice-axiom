@@ -22,11 +22,12 @@ use bevy::{
 };
 use latticeaxiom_gameplay::{BlockPosition, ChunkRevision, PlayerId};
 use latticeaxiom_player::{
-    ActionAxis2V1, ActionFrameInbox, AuthoritativeBlockEditRequestV1, BlockEditAuthority,
-    BlockEditAuthorityResource, BlockEditRejectV1, BlockEditSuccessV1, D2PlayerBundle,
-    DetachedSpectator, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
+    ActionAxis2V1, ActionFrameInbox, AuthoritativeBlockEditRequestV1,
+    AuthoritativeMiningCancelRequestV1, BlockEditAuthority, BlockEditAuthorityResource,
+    BlockEditRejectV1, BlockEditSuccessV1, D2PlayerBundle, DetachedSpectator,
+    MiningCancelSuccessV1, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
     PlayerControllerState, PlayerFixedTick, PlayerPlugin, SimulationClock, SimulationTickRate,
-    SimulationTickRateRequest, SuccessfulEditCooldownV1,
+    SimulationTickRateRequest,
 };
 
 const FIXED_HZ: f32 = 60.0;
@@ -820,6 +821,30 @@ struct CountingAuthority {
     calls: Arc<AtomicUsize>,
 }
 
+#[derive(Debug)]
+struct ProgressAuthority {
+    applies: Arc<AtomicUsize>,
+    cancellations: Arc<AtomicUsize>,
+}
+
+impl BlockEditAuthority for ProgressAuthority {
+    fn apply(
+        &mut self,
+        _request: AuthoritativeBlockEditRequestV1,
+    ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
+        self.applies.fetch_add(1, Ordering::Relaxed);
+        Err(BlockEditRejectV1::RequiresProgress { remaining_work: 5 })
+    }
+
+    fn cancel_mining(
+        &mut self,
+        _request: AuthoritativeMiningCancelRequestV1,
+    ) -> Result<MiningCancelSuccessV1, BlockEditRejectV1> {
+        self.cancellations.fetch_add(1, Ordering::Relaxed);
+        Ok(MiningCancelSuccessV1 { had_progress: true })
+    }
+}
+
 impl BlockEditAuthority for CountingAuthority {
     fn apply(
         &mut self,
@@ -846,35 +871,59 @@ fn edit_frame(generation: u64, action: PlayerActionV1) -> PlayerActionFrameV1 {
 }
 
 #[test]
-fn successful_break_and_place_share_the_twelve_tick_limiter() {
+fn held_break_repeats_and_place_has_no_shared_success_cooldown() {
     let mut app = test_app();
-    let player = spawn_player(&mut app);
+    let _player = spawn_player(&mut app);
     let calls = Arc::new(AtomicUsize::new(0));
     app.insert_resource(BlockEditAuthorityResource::new(CountingAuthority {
         calls: Arc::clone(&calls),
     }));
 
-    let frames = std::iter::once(edit_frame(1, PlayerActionV1::BreakBlock))
-        .chain((2..=11).map(|generation| PlayerActionFrameV1 {
-            generation,
-            ..PlayerActionFrameV1::default()
-        }))
-        .chain(std::iter::once(edit_frame(12, PlayerActionV1::PlaceBlock)))
-        .chain(std::iter::once(edit_frame(13, PlayerActionV1::PlaceBlock)));
-    push_frames(&mut app, frames);
+    let mut first = edit_frame(1, PlayerActionV1::BreakBlock);
+    first.held.insert(PlayerActionV1::BreakBlock);
+    let mut second = edit_frame(2, PlayerActionV1::PlaceBlock);
+    second.held.insert(PlayerActionV1::BreakBlock);
+    push_frames(&mut app, [first, second]);
 
-    run_update_for_ticks(&mut app, 12);
-    assert_eq!(calls.load(Ordering::Relaxed), 1);
-    run_update_for_ticks(&mut app, 1);
-    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    run_update_for_ticks(&mut app, 2);
     assert_eq!(
-        app.world()
-            .entity(player)
-            .get::<SuccessfulEditCooldownV1>()
-            .expect("player bundle has edit limiter")
-            .next_success_tick(),
-        24
+        calls.load(Ordering::Relaxed),
+        3,
+        "break must run on both held ticks and place must run immediately"
     );
+}
+
+#[test]
+fn releasing_held_break_cancels_authoritative_progress_once() {
+    let mut app = test_app();
+    let _player = spawn_player(&mut app);
+    let applies = Arc::new(AtomicUsize::new(0));
+    let cancellations = Arc::new(AtomicUsize::new(0));
+    app.insert_resource(BlockEditAuthorityResource::new(ProgressAuthority {
+        applies: Arc::clone(&applies),
+        cancellations: Arc::clone(&cancellations),
+    }));
+
+    let mut held = edit_frame(1, PlayerActionV1::BreakBlock);
+    held.held.insert(PlayerActionV1::BreakBlock);
+    push_frames(
+        &mut app,
+        [
+            held,
+            PlayerActionFrameV1 {
+                generation: 2,
+                ..PlayerActionFrameV1::default()
+            },
+            PlayerActionFrameV1 {
+                generation: 3,
+                ..PlayerActionFrameV1::default()
+            },
+        ],
+    );
+    run_update_for_ticks(&mut app, 3);
+
+    assert_eq!(applies.load(Ordering::Relaxed), 1);
+    assert_eq!(cancellations.load(Ordering::Relaxed), 1);
 }
 
 #[test]

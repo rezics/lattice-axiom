@@ -92,6 +92,9 @@ fn sample_keyboard_and_mouse(
     if keyboard.just_pressed(KeyCode::ShiftLeft) || keyboard.just_pressed(KeyCode::ShiftRight) {
         started.insert(PlayerActionV1::Sneak);
     }
+    if mouse.pressed(MouseButton::Left) {
+        held.insert(PlayerActionV1::BreakBlock);
+    }
     if mouse.just_pressed(MouseButton::Left) {
         started.insert(PlayerActionV1::BreakBlock);
     }
