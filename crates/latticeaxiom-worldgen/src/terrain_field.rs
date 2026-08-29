@@ -442,6 +442,9 @@ impl TerrainFieldV2 {
         preserved: i64,
         regional_ruggedness: i64,
     ) -> (i64, i64, i64) {
+        if regional_ruggedness == 0 {
+            return (0, 0, 0);
+        }
         let relief = self.config.relief;
         let hill = fractal_noise(
             self.hill_seed,
