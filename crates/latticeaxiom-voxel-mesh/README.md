@@ -15,7 +15,8 @@ asynchronous result.
 `GreedyMesher::mesh_into` and `visible_faces_into` retain scratch/output
 allocations for benchmark and worker-loop use. Output order never depends on
 a hash map.
-The reproducible 32³ solid/layered/checker throughput corpus runs with:
+The reproducible 32³ solid/layered/checker throughput corpus compares the
+production mesher with `block-mesh` on the common opaque/full-occlusion subset:
 
 ```text
 cargo bench -p latticeaxiom-voxel-mesh --bench meshing

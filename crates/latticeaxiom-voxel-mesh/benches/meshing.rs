@@ -14,6 +14,7 @@ use latticeaxiom_voxel_mesh::{
 };
 
 const EDGE: usize = 32;
+type BlockMeshShape = block_mesh::ndshape::ConstShape3u32<34, 34, 34>;
 
 #[derive(Clone, Copy, Debug)]
 enum Corpus {
@@ -54,6 +55,24 @@ impl Voxel for BenchVoxel {
     }
 }
 
+impl block_mesh::Voxel for BenchVoxel {
+    fn get_visibility(&self) -> block_mesh::VoxelVisibility {
+        if self.material.is_some() {
+            block_mesh::VoxelVisibility::Opaque
+        } else {
+            block_mesh::VoxelVisibility::Empty
+        }
+    }
+}
+
+impl block_mesh::MergeVoxel for BenchVoxel {
+    type MergeValue = (Option<u8>, MeshGroup);
+
+    fn merge_value(&self) -> Self::MergeValue {
+        (self.material, self.group)
+    }
+}
+
 fn benchmark_meshing(criterion: &mut Criterion) {
     let dimensions = PaddedChunk::new([EDGE; 3]).expect("benchmark dimensions are valid");
     let source = MeshSource::new(
@@ -82,7 +101,7 @@ fn benchmark_meshing(criterion: &mut Criterion) {
         assert_eq!(output.quad_count(), expected_quads, "{name} guard");
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(name),
+            BenchmarkId::new("latticeaxiom", name),
             &voxels,
             |bencher, input| {
                 bencher.iter(|| {
@@ -95,6 +114,44 @@ fn benchmark_meshing(criterion: &mut Criterion) {
             },
         );
         assert_eq!(output.quad_count(), expected_quads, "{name} guard");
+
+        let shape = BlockMeshShape {};
+        let mut upstream = block_mesh::GreedyQuadsBuffer::new(voxels.len());
+        block_mesh::greedy_quads(
+            &voxels,
+            &shape,
+            [0; 3],
+            [33; 3],
+            &block_mesh::RIGHT_HANDED_Y_UP_CONFIG.faces,
+            &mut upstream,
+        );
+        assert_eq!(
+            upstream.quads.num_quads(),
+            expected_quads,
+            "upstream {name} guard"
+        );
+        group.bench_with_input(
+            BenchmarkId::new("block-mesh", name),
+            &voxels,
+            |bencher, input| {
+                bencher.iter(|| {
+                    block_mesh::greedy_quads(
+                        black_box(input.as_slice()),
+                        &shape,
+                        [0; 3],
+                        [33; 3],
+                        &block_mesh::RIGHT_HANDED_Y_UP_CONFIG.faces,
+                        &mut upstream,
+                    );
+                    black_box(upstream.quads.num_quads());
+                });
+            },
+        );
+        assert_eq!(
+            upstream.quads.num_quads(),
+            expected_quads,
+            "upstream {name} guard"
+        );
     }
 
     group.finish();
