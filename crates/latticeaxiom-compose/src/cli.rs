@@ -14,6 +14,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use clap::Parser as _;
 use latticeaxiom_core::{
     CanonicalHash, CanonicalJsonError, CanonicalLogicalPath, CapabilityId, PackageName, SchemaId,
     SourceId, StableId, TargetTriple, canonical_json_bytes, canonical_json_hash,
@@ -199,143 +200,145 @@ impl From<CanonicalJsonError> for CliError {
 /// Returns [`CliError`] for a missing command, unknown flag, or incomplete
 /// evaluate / lock / verify invocation.
 pub fn parse_cli(arguments: impl IntoIterator<Item = OsString>) -> Result<CliCommand, CliError> {
-    let mut arguments = arguments.into_iter();
-    let command = arguments.next().ok_or_else(CliError::usage)?;
-    if command == "evaluate" {
-        return parse_evaluate(arguments);
-    }
-    if command == "lock" || command == "resolve" {
-        return parse_lock(arguments);
-    }
-    if command == "verify" {
-        return parse_verify(arguments, false);
-    }
-    if command == "run-frozen" {
-        return parse_verify(arguments, true);
-    }
-    Err(CliError::usage())
-}
-
-fn parse_evaluate(mut arguments: impl Iterator<Item = OsString>) -> Result<CliCommand, CliError> {
-    let mut worker = None;
-    let mut request = None;
-    while let Some(flag) = arguments.next() {
-        let value = arguments.next().ok_or_else(CliError::evaluate_usage)?;
-        if flag == "--worker" && worker.is_none() {
-            worker = Some(PathBuf::from(value));
-        } else if flag == "--request" && request.is_none() {
-            request = Some(PathBuf::from(value));
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    let evaluate = arguments
+        .first()
+        .is_some_and(|command| command == "evaluate");
+    let parsed = ParsedCli::try_parse_from(
+        std::iter::once(OsString::from("latticeaxiom-compose")).chain(arguments),
+    )
+    .map_err(|_| {
+        if evaluate {
+            CliError::evaluate_usage()
         } else {
-            return Err(CliError::evaluate_usage());
+            CliError::usage()
         }
+    })?;
+
+    match parsed.command {
+        ParsedCommand::Evaluate(arguments) => Ok(CliCommand::Evaluate {
+            worker: arguments.worker,
+            request: arguments.request,
+        }),
+        ParsedCommand::Lock(arguments) => parse_lock(arguments),
+        ParsedCommand::Verify(arguments) => parse_verify(arguments, false),
+        ParsedCommand::RunFrozen(arguments) => parse_verify(arguments, true),
     }
-    Ok(CliCommand::Evaluate {
-        worker: worker.ok_or_else(CliError::evaluate_usage)?,
-        request: request.ok_or_else(CliError::evaluate_usage)?,
-    })
 }
 
-fn parse_lock(arguments: impl Iterator<Item = OsString>) -> Result<CliCommand, CliError> {
-    let mut workspace = None;
-    let mut bootstrap = None;
-    let mut catalog = None;
-    let mut lock = None;
-    let mut target = None;
-    let mut toolchain = None;
-    let mut flags = FlagParser::new(arguments);
-    while let Some(flag) = flags.next_flag() {
-        if flag == "--workspace" && workspace.is_none() {
-            workspace = Some(PathBuf::from(flags.value()?));
-        } else if flag == "--bootstrap" && bootstrap.is_none() {
-            bootstrap = Some(PathBuf::from(flags.value()?));
-        } else if flag == "--catalog" && catalog.is_none() {
-            catalog = Some(PathBuf::from(flags.value()?));
-        } else if flag == "--lock" && lock.is_none() {
-            lock = Some(PathBuf::from(flags.value()?));
-        } else if flag == "--target" && target.is_none() {
-            let value = flags.value()?;
+#[derive(Debug, clap::Parser)]
+#[command(
+    name = "latticeaxiom-compose",
+    disable_help_flag = true,
+    disable_version_flag = true,
+    disable_help_subcommand = true
+)]
+struct ParsedCli {
+    #[command(subcommand)]
+    command: ParsedCommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ParsedCommand {
+    Evaluate(EvaluateArguments),
+    #[command(alias = "resolve")]
+    Lock(LockArguments),
+    Verify(VerifyArguments),
+    #[command(name = "run-frozen")]
+    RunFrozen(VerifyArguments),
+}
+
+#[derive(Debug, clap::Args)]
+struct EvaluateArguments {
+    #[arg(long, allow_hyphen_values = true)]
+    worker: PathBuf,
+    #[arg(long, allow_hyphen_values = true)]
+    request: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+struct LockArguments {
+    #[arg(long, allow_hyphen_values = true)]
+    workspace: Option<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    bootstrap: Option<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    catalog: Option<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    lock: Option<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    target: Option<OsString>,
+    #[arg(long, allow_hyphen_values = true)]
+    toolchain: Option<OsString>,
+    #[arg(long, action = clap::ArgAction::Count)]
+    offline: u8,
+}
+
+#[derive(Debug, clap::Args)]
+struct VerifyArguments {
+    #[arg(long, allow_hyphen_values = true)]
+    workspace: Option<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    catalog: Option<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    lock: Option<PathBuf>,
+    #[arg(long, action = clap::ArgAction::Count)]
+    offline: u8,
+    #[arg(long, action = clap::ArgAction::Count)]
+    frozen: u8,
+}
+
+fn parse_lock(arguments: LockArguments) -> Result<CliCommand, CliError> {
+    let target = match arguments.target {
+        Some(value) => {
             let text = value.to_string_lossy();
-            target =
-                Some(text.parse::<TargetTriple>().map_err(|error| {
-                    CliError::lock(format!("invalid target `{text}`: {error}"))
-                })?);
-        } else if flag == "--toolchain" && toolchain.is_none() {
-            let value = flags.value()?;
-            let text = value.to_string_lossy();
-            toolchain =
-                Some(text.parse::<CanonicalHash>().map_err(|error| {
-                    CliError::lock(format!("invalid toolchain `{text}`: {error}"))
-                })?);
-        } else if flag != "--offline" {
-            return Err(CliError::usage());
+            text.parse::<TargetTriple>()
+                .map_err(|error| CliError::lock(format!("invalid target `{text}`: {error}")))?
         }
-    }
+        None => controller_host_target().map_err(|error| CliError::lock(error.to_string()))?,
+    };
+    let toolchain = match arguments.toolchain {
+        Some(value) => {
+            let text = value.to_string_lossy();
+            text.parse::<CanonicalHash>()
+                .map_err(|error| CliError::lock(format!("invalid toolchain `{text}`: {error}")))?
+        }
+        None => default_toolchain(),
+    };
+    let _ = arguments.offline;
     Ok(CliCommand::Lock(LockRequest {
-        workspace_root: workspace.unwrap_or_else(default_workspace),
-        bootstrap_path: bootstrap.unwrap_or_else(|| PathBuf::from(COMPOSITION_BOOTSTRAP_FILE_NAME)),
-        catalog_root: catalog.unwrap_or_else(|| PathBuf::from(CLI_CATALOG_DIRECTORY)),
-        lock_path: lock.unwrap_or_else(|| PathBuf::from(PRODUCT_LOCK_FILE_NAME)),
-        target: match target {
-            Some(target) => target,
-            None => controller_host_target().map_err(|error| CliError::lock(error.to_string()))?,
-        },
-        toolchain: toolchain.unwrap_or_else(default_toolchain),
+        workspace_root: arguments.workspace.unwrap_or_else(default_workspace),
+        bootstrap_path: arguments
+            .bootstrap
+            .unwrap_or_else(|| PathBuf::from(COMPOSITION_BOOTSTRAP_FILE_NAME)),
+        catalog_root: arguments
+            .catalog
+            .unwrap_or_else(|| PathBuf::from(CLI_CATALOG_DIRECTORY)),
+        lock_path: arguments
+            .lock
+            .unwrap_or_else(|| PathBuf::from(PRODUCT_LOCK_FILE_NAME)),
+        target,
+        toolchain,
     }))
 }
 
-fn parse_verify(
-    arguments: impl Iterator<Item = OsString>,
-    implied_frozen: bool,
-) -> Result<CliCommand, CliError> {
-    let mut workspace = None;
-    let mut catalog = None;
-    let mut lock = None;
-    let mut offline = implied_frozen;
-    let mut frozen = implied_frozen;
-    let mut flags = FlagParser::new(arguments);
-    while let Some(flag) = flags.next_flag() {
-        if flag == "--workspace" && workspace.is_none() {
-            workspace = Some(PathBuf::from(flags.value()?));
-        } else if flag == "--catalog" && catalog.is_none() {
-            catalog = Some(PathBuf::from(flags.value()?));
-        } else if flag == "--lock" && lock.is_none() {
-            lock = Some(PathBuf::from(flags.value()?));
-        } else if flag == "--offline" {
-            offline = true;
-        } else if flag == "--frozen" {
-            frozen = true;
-        } else {
-            return Err(CliError::usage());
-        }
-    }
+fn parse_verify(arguments: VerifyArguments, implied_frozen: bool) -> Result<CliCommand, CliError> {
+    let offline = implied_frozen || arguments.offline > 0;
+    let frozen = implied_frozen || arguments.frozen > 0;
     if !offline || !frozen {
         return Err(CliError::lock(
             "verify requires --offline --frozen so missing or tampered receipts fail closed",
         ));
     }
     Ok(CliCommand::Verify(VerifyRequest {
-        workspace_root: workspace.unwrap_or_else(default_workspace),
-        lock_path: lock.unwrap_or_else(|| PathBuf::from(PRODUCT_LOCK_FILE_NAME)),
-        catalog_root: catalog.unwrap_or_else(|| PathBuf::from(CLI_CATALOG_DIRECTORY)),
+        workspace_root: arguments.workspace.unwrap_or_else(default_workspace),
+        lock_path: arguments
+            .lock
+            .unwrap_or_else(|| PathBuf::from(PRODUCT_LOCK_FILE_NAME)),
+        catalog_root: arguments
+            .catalog
+            .unwrap_or_else(|| PathBuf::from(CLI_CATALOG_DIRECTORY)),
     }))
-}
-
-struct FlagParser<I> {
-    arguments: I,
-}
-
-impl<I: Iterator<Item = OsString>> FlagParser<I> {
-    fn new(arguments: I) -> Self {
-        Self { arguments }
-    }
-
-    fn next_flag(&mut self) -> Option<OsString> {
-        self.arguments.next()
-    }
-
-    fn value(&mut self) -> Result<OsString, CliError> {
-        self.arguments.next().ok_or_else(CliError::usage)
-    }
 }
 
 fn default_workspace() -> PathBuf {
@@ -1996,6 +1999,69 @@ mod tests {
             parse_cli(os(&["run-frozen"])),
             Ok(CliCommand::Verify(_))
         ));
+    }
+
+    #[test]
+    fn clap_parser_preserves_flag_multiplicity_and_error_domains() {
+        assert!(matches!(
+            parse_cli(os(&[
+                "verify",
+                "--offline",
+                "--offline",
+                "--frozen",
+                "--frozen"
+            ])),
+            Ok(CliCommand::Verify(_))
+        ));
+        assert!(matches!(
+            parse_cli(os(&["lock", "--offline", "--offline"])),
+            Ok(CliCommand::Lock(_))
+        ));
+
+        let duplicate_evaluate = parse_cli(os(&[
+            "evaluate",
+            "--worker",
+            "first",
+            "--worker",
+            "second",
+            "--request",
+            "request.json",
+        ]))
+        .expect_err("duplicate evaluate value flags must be rejected");
+        assert_eq!(duplicate_evaluate.code, "compose.worker_protocol");
+        assert_eq!(
+            duplicate_evaluate.details,
+            CliError::evaluate_usage().details
+        );
+
+        let duplicate_lock = parse_cli(os(&[
+            "lock",
+            "--workspace",
+            "first",
+            "--workspace",
+            "second",
+        ]))
+        .expect_err("duplicate lock value flags must be rejected");
+        assert_eq!(duplicate_lock.code, "compose.lock");
+        assert_eq!(duplicate_lock.details, CliError::usage().details);
+
+        let invalid_target = parse_cli(os(&["lock", "--target", "invalid"]))
+            .expect_err("invalid target must retain its domain diagnostic");
+        assert_eq!(invalid_target.code, "compose.lock");
+        assert!(
+            invalid_target
+                .details
+                .starts_with("invalid target `invalid`:")
+        );
+
+        let invalid_toolchain = parse_cli(os(&["lock", "--toolchain", "invalid"]))
+            .expect_err("invalid toolchain must retain its domain diagnostic");
+        assert_eq!(invalid_toolchain.code, "compose.lock");
+        assert!(
+            invalid_toolchain
+                .details
+                .starts_with("invalid toolchain `invalid`:")
+        );
     }
 
     fn write_fixture_workspace(root: &Path) {
