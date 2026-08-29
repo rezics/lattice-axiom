@@ -54,8 +54,9 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
                 ..Window::default()
             }),
             ..WindowPlugin::default()
-        }))
-        .add_plugins(VideoRuntimePlugin)
+        }));
+    crate::observability::install_client_observability(&mut app);
+    app.add_plugins(VideoRuntimePlugin)
         .insert_resource(pause::PlayablePause::default())
         .init_resource::<cursor_capture::ConfirmedPrimaryWindowFocus>()
         .init_resource::<cursor_capture::CursorCaptureState>()

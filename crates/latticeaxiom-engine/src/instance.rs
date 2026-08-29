@@ -160,8 +160,9 @@ impl EngineInstance {
                     ..Window::default()
                 }),
                 ..WindowPlugin::default()
-            }))
-            .add_plugins(crate::video::VideoRuntimePlugin)
+            }));
+        crate::observability::install_client_observability(&mut app);
+        app.add_plugins(crate::video::VideoRuntimePlugin)
             .add_plugins(TabNavigationPlugin)
             .add_systems(Update, limit_client_fixed_catch_up)
             .add_systems(FixedLast, count_fixed_tick);

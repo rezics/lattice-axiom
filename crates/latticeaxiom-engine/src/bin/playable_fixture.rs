@@ -12,7 +12,10 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let mut stderr = io::stderr().lock();
-            let _ = writeln!(stderr, "{error}");
+            let _ = writeln!(
+                stderr,
+                "event=playable_fixture_failed component=engine error={error}"
+            );
             ExitCode::FAILURE
         }
     }

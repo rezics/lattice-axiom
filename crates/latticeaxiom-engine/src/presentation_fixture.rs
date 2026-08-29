@@ -17,16 +17,17 @@ use crate::{EngineInstanceError, instance::reserve_client_event_loop};
 /// process-global client event-loop slot has been reserved.
 pub fn run_temporary_client_presentation_fixture() -> Result<(), EngineInstanceError> {
     reserve_client_event_loop()?;
-    App::new()
-        .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.055)))
+    let mut app = App::new();
+    app.insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.055)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Lattice Axiom - temporary D0 presentation fixture".into(),
                 ..default()
             }),
             ..default()
-        }))
-        .add_plugins(VideoRuntimePlugin)
+        }));
+    crate::observability::install_client_observability(&mut app);
+    app.add_plugins(VideoRuntimePlugin)
         .add_systems(Startup, setup_temporary_scene)
         .run();
     Ok(())

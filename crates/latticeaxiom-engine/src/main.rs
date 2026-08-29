@@ -13,9 +13,15 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let mut stderr = io::stderr().lock();
-            let _ = writeln!(stderr, "{error}");
+            let _ = writeln!(
+                stderr,
+                "event=client_boot_failed component=engine error={error}"
+            );
             if let Some(hint) = error.recovery_hint() {
-                let _ = writeln!(stderr, "{hint}");
+                let _ = writeln!(
+                    stderr,
+                    "event=client_recovery_hint component=engine hint={hint}"
+                );
             }
             if matches!(
                 error,
@@ -23,7 +29,7 @@ fn main() -> ExitCode {
             ) {
                 let _ = writeln!(
                     stderr,
-                    "the lock-free development slice is latticeaxiom-playable-fixture"
+                    "event=client_recovery_hint component=engine hint=the lock-free development slice is latticeaxiom-playable-fixture"
                 );
             }
             ExitCode::FAILURE

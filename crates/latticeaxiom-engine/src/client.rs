@@ -180,7 +180,26 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
         instance.install_user_settings(settings_root, settings, catalog, active_lock)?;
         (instance, proof)
     };
-    instance.run();
+    let role = if selects_shell { "shell" } else { "world" };
+    bevy::log::info!(
+        target: "latticeaxiom::lifecycle",
+        event = "client_host_ready",
+        component = "engine",
+        process_epoch = epoch.get(),
+        role,
+        product_lock = %active_lock,
+        "lock-verified client host is ready"
+    );
+    let exit = instance.run();
+    bevy::log::info!(
+        target: "latticeaxiom::lifecycle",
+        event = "client_host_stopped",
+        component = "engine",
+        process_epoch = epoch.get(),
+        role,
+        ?exit,
+        "client event loop stopped"
+    );
     Ok(())
 }
 

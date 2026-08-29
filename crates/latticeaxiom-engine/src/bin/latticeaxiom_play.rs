@@ -9,7 +9,7 @@ fn main() -> ExitCode {
         Err(error) => {
             let _ = writeln!(
                 io::stderr().lock(),
-                "workspace directory is unavailable: {error}"
+                "event=supervisor_boot_failed component=supervisor error=workspace directory is unavailable: {error}"
             );
             return ExitCode::FAILURE;
         }
@@ -18,13 +18,16 @@ fn main() -> ExitCode {
         Ok(report) => {
             let _ = writeln!(
                 io::stderr().lock(),
-                "supervisor outcome: {:?}",
+                "event=supervisor_stopped component=supervisor outcome={:?}",
                 report.outcome()
             );
             ExitCode::SUCCESS
         }
         Err(error) => {
-            let _ = writeln!(io::stderr().lock(), "{error}");
+            let _ = writeln!(
+                io::stderr().lock(),
+                "event=supervisor_failed component=supervisor error={error}"
+            );
             ExitCode::FAILURE
         }
     }

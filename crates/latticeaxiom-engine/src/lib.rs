@@ -27,6 +27,8 @@ mod host;
 mod input;
 mod instance;
 #[cfg(feature = "client")]
+mod observability;
+#[cfg(feature = "client")]
 mod playable;
 mod prepared;
 #[cfg(feature = "client")]
