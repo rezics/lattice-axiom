@@ -102,10 +102,6 @@ const COLLIDER_SEMANTICS: ColliderSemanticFingerprint =
 const VOXEL_SCHEMA: &str = "latticeaxiom:schema/chunk-voxels@1";
 const VOXEL_SCHEMA_VERSION: u32 = 2;
 const CELL_OCCUPANCY_BYTES: usize = 4;
-/// One generated chunk is published per fixed slice so commits and projection stay bounded.
-const WORLDGEN_APPLY_JOB_CAP: usize = 1;
-/// Halo capture stays bounded even when many Bevy worker slots become free together.
-const DERIVED_DISPATCH_JOB_CAP: usize = 1;
 /// One 32-cubic checkerboard mesh or collider fits below 10 MiB; retain
 /// 12 MiB per stage so accounting also covers receipts and container overhead.
 const DERIVED_JOB_BYTE_BUDGET: u64 = 12 * 1024 * 1024;
@@ -590,6 +586,24 @@ struct ComputedWorldgen {
 struct GeneratedChunkPayload {
     cells: Vec<HostVoxel>,
     data: ChunkData,
+}
+
+impl RetainedBytes for GeneratedChunkPayload {
+    fn retained_bytes(&self) -> u64 {
+        let cell_bytes = self
+            .cells
+            .capacity()
+            .saturating_mul(mem::size_of::<HostVoxel>());
+        let payload_bytes = self
+            .data
+            .persistent_entities()
+            .values()
+            .chain(self.data.continuations().values())
+            .fold(self.data.voxels().bytes().len(), |total, payload| {
+                total.saturating_add(payload.bytes().len())
+            });
+        u64::try_from(cell_bytes.saturating_add(payload_bytes)).unwrap_or(u64::MAX)
+    }
 }
 
 struct WorldgenMaterialization {
@@ -1605,6 +1619,23 @@ impl ProductionSpine {
         result
     }
 
+    /// Advances world-generation and derived-work queues independently of the
+    /// configurable fixed simulation clock.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError`] when task polling, budgeted publication,
+    /// projection, or task dispatch fails.
+    pub(super) fn pump_background_work(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
+        let result = self.pump_background_work_inner(fixed_tick);
+        if result.is_err()
+            && let Ok(mut inner) = self.lock_inner()
+        {
+            inner.last_stream_error = result.as_ref().err().map(ToString::to_string);
+        }
+        result
+    }
+
     /// Ensures colliders for the current player capsule without reconciling interest.
     ///
     /// This is the movement-time safety gate: it polls completed collider jobs,
@@ -1674,7 +1705,6 @@ impl ProductionSpine {
     }
 
     fn sync_interest_inner(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
-        poll_worldgen_tasks(self)?;
         let mut inner = self.lock_inner()?;
         if inner.last_reconciled_tick == Some(fixed_tick) {
             return Ok(());
@@ -1699,7 +1729,6 @@ impl ProductionSpine {
         inner.stream_anchor_xz = [translation.x, translation.z];
         let admit_limit = inner.clamps.max_in_flight();
         let tick = FixedTick::new(fixed_tick);
-        apply_ready_worldgen(&mut inner, self.storage.kernel(), tick, chunk, look_ahead)?;
         sync_working_set(
             &mut inner,
             self.storage.kernel(),
@@ -1711,9 +1740,22 @@ impl ProductionSpine {
                 execution: WorldgenExecution::Deferred,
             },
         )?;
-        drop(inner);
-        // Presentation work for a newly published chunk is latency-sensitive.
-        // Admit it first, then let worldgen consume the shared slots that remain.
+        Ok(())
+    }
+
+    fn pump_background_work_inner(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
+        poll_worldgen_tasks(self)?;
+        let tick = FixedTick::new(fixed_tick);
+        {
+            let mut inner = self.lock_inner()?;
+            let translation = inner.player_pose.translation;
+            let origin = translation_chunk(translation, inner.chunk_edge)
+                .ok_or(ProductionHostError::InvalidPlayerPose)?;
+            let look_ahead = inner.look_ahead_axis;
+            apply_ready_worldgen(&mut inner, self.storage.kernel(), tick, origin, look_ahead)?;
+        }
+        // Newly published chunks request presentation work first. The fair
+        // lane split then lets both derived work and worldgen occupy the pool.
         drain_derived(self, tick)?;
         spawn_worldgen_jobs(self)
     }
@@ -4049,11 +4091,17 @@ fn spawn_worldgen_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostErro
     let inputs = {
         let mut inner = spine.lock_inner()?;
         let admission = inner.runtime.admission_snapshot();
-        let capacity = shared_cpu_slots_remaining(
+        let shared_capacity = shared_cpu_slots_remaining(
             admission.cpu_heavy_concurrency(),
             admission.in_flight_jobs(),
             inner.in_flight_worldgen_tasks.len(),
         );
+        let worldgen_lane = shared_lane_limit(
+            admission.cpu_heavy_concurrency(),
+            inner.runtime.pending_jobs() > 0,
+        );
+        let capacity =
+            shared_capacity.min(worldgen_lane.saturating_sub(inner.in_flight_worldgen_tasks.len()));
         let count = worldgen_dispatch_count(capacity, inner.pending_worldgen.len());
         inner.pending_worldgen.drain(..count).collect::<Vec<_>>()
     };
@@ -4104,9 +4152,22 @@ fn apply_ready_worldgen(
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
 ) -> Result<(), ProductionHostError> {
-    let mut published = 0_usize;
-    while published < WORLDGEN_APPLY_JOB_CAP {
+    let started = Instant::now();
+    let budget = RuntimeLimits::main_world_apply_budget();
+    let mut slice = DerivedApplySlice::new();
+    loop {
         let ticket = WorldgenTicket(inner.next_worldgen_apply_sequence);
+        let Some(bytes) = inner
+            .waiting_worldgen
+            .get(&ticket)
+            .map(worldgen_retained_bytes)
+        else {
+            break;
+        };
+        slice.set_elapsed(elapsed_nanos(started));
+        if !slice.admission(bytes, budget).is_admit() {
+            break;
+        }
         let Some(job) = inner.waiting_worldgen.remove(&ticket) else {
             break;
         };
@@ -4135,9 +4196,13 @@ fn apply_ready_worldgen(
             inner.desired_admission_cursor = 0;
             return Err(error);
         }
-        published = published.saturating_add(1);
+        slice.commit_applied(bytes, elapsed_nanos(started));
     }
     Ok(())
+}
+
+fn worldgen_retained_bytes(job: &ComputedWorldgen) -> u64 {
+    job.result.as_ref().map_or(0, RetainedBytes::retained_bytes)
 }
 
 fn publish_hydrated(
@@ -4525,12 +4590,16 @@ fn dispatch_derived_batch(
         }
     }
     let admission = inner.runtime.admission_snapshot();
-    let capacity = shared_cpu_slots_remaining(
+    let shared_capacity = shared_cpu_slots_remaining(
         admission.cpu_heavy_concurrency(),
         admission.in_flight_jobs(),
         inner.in_flight_worldgen_tasks.len(),
-    )
-    .min(DERIVED_DISPATCH_JOB_CAP);
+    );
+    let derived_lane = shared_lane_limit(
+        admission.cpu_heavy_concurrency(),
+        !inner.pending_worldgen.is_empty(),
+    );
+    let capacity = shared_capacity.min(derived_lane.saturating_sub(admission.in_flight_jobs()));
     let mut inputs = Vec::with_capacity(capacity);
     while inputs.len() < capacity {
         let outcome = match (mesh, collider) {
@@ -4558,6 +4627,14 @@ const fn shared_cpu_slots_remaining(
     concurrency
         .saturating_sub(derived_in_flight)
         .saturating_sub(worldgen_in_flight)
+}
+
+const fn shared_lane_limit(concurrency: usize, peer_has_pending_work: bool) -> usize {
+    if peer_has_pending_work && concurrency > 1 {
+        concurrency.div_ceil(2)
+    } else {
+        concurrency
+    }
 }
 
 fn spawn_derived_jobs(
@@ -6216,8 +6293,8 @@ mod tests {
         CollisionSemantics, HostVoxel, InterestClass, MAIN_WORLD_APPLY_JOB_CAP, MeshPresentation,
         OccupiedBox, OccupiedCell, apply_waiting_derived, collider_interest_contains,
         compound_collider, merge_occupied_boxes, player_collider_safety_chunks,
-        player_occupied_chunks, shared_cpu_slots_remaining, stream_derived_priority,
-        worldgen_dispatch_count,
+        player_occupied_chunks, shared_cpu_slots_remaining, shared_lane_limit,
+        stream_derived_priority, worldgen_dispatch_count,
     };
     use bevy::prelude::Vec3;
     use latticeaxiom_storage::ChunkCoordinate;
@@ -6252,6 +6329,10 @@ mod tests {
         assert_eq!(shared_cpu_slots_remaining(6, 2, 8), 0);
         assert_eq!(worldgen_dispatch_count(4, 8), 4);
         assert_eq!(worldgen_dispatch_count(8, 3), 3);
+        assert_eq!(shared_lane_limit(8, true), 4);
+        assert_eq!(shared_lane_limit(7, true), 4);
+        assert_eq!(shared_lane_limit(8, false), 8);
+        assert_eq!(shared_lane_limit(1, true), 1);
     }
 
     #[test]

@@ -49,13 +49,13 @@ use bevy::{
     ecs::schedule::IntoScheduleConfigs,
     prelude::{
         Commands, Component, Entity, FixedPostUpdate, FixedUpdate, MessageWriter, Query, Res,
-        ResMut, Resource, Transform, With, Without,
+        ResMut, Resource, Transform, Update, With, Without,
     },
     transform::TransformPlugin,
 };
 #[cfg(feature = "client")]
 use bevy::{
-    app::{FixedFirst, Startup, Update},
+    app::{FixedFirst, Startup},
     asset::Assets,
     prelude::{ClearColor, Color, Mesh},
 };
@@ -365,6 +365,7 @@ pub struct ProductionHostPlugin;
 impl Plugin for ProductionHostPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<TargetInspectReceiptV1>()
+            .add_systems(Update, pump_chunk_background)
             .add_systems(
                 FixedUpdate,
                 (
@@ -771,6 +772,18 @@ fn sync_chunk_stream(
         return;
     }
     let _ = spine.sync_interest(tick.get());
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn pump_chunk_background(
+    tick: Res<'_, PlayerFixedTick>,
+    spine: Res<'_, ProductionSpine>,
+    pause: Option<Res<'_, ProductionSessionPause>>,
+) {
+    if pause.is_some_and(|pause| pause.is_paused()) {
+        return;
+    }
+    let _ = spine.pump_background_work(tick.get());
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
