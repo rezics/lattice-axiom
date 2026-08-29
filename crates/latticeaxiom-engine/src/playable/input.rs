@@ -8,11 +8,12 @@ use bevy::{
         keyboard::KeyCode,
         mouse::{AccumulatedMouseMotion, MouseButton},
     },
-    prelude::{Res, ResMut, Resource},
+    prelude::{Res, ResMut, Resource, SystemSet},
 };
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_player::{
-    ActionAxis2V1, ActionFrameInbox, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
+    ActionAxis2V1, ActionFrameInbox, ClientInputOwnership, PlayerActionButtonsV1,
+    PlayerActionFrameV1, PlayerActionV1,
 };
 
 const MOUSE_LOOK_RADIANS_PER_PIXEL: f32 = 0.002;
@@ -37,8 +38,18 @@ impl Plugin for PlayableInputPlugin {
                 generation: 0,
                 placement_content: self.placement_content.clone(),
             })
-            .add_systems(PreUpdate, sample_keyboard_and_mouse.after(InputSystems));
+            .add_systems(
+                PreUpdate,
+                sample_keyboard_and_mouse
+                    .in_set(PlayableInputSystemSet::Sample)
+                    .after(InputSystems),
+            );
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, SystemSet)]
+pub(super) enum PlayableInputSystemSet {
+    Sample,
 }
 
 #[derive(Debug, Resource)]
@@ -52,10 +63,18 @@ fn sample_keyboard_and_mouse(
     keyboard: Res<'_, ButtonInput<KeyCode>>,
     mouse: Res<'_, ButtonInput<MouseButton>>,
     mouse_motion: Res<'_, AccumulatedMouseMotion>,
+    ownership: Res<'_, ClientInputOwnership>,
     mut state: ResMut<'_, PlayableInputState>,
     mut inbox: ResMut<'_, ActionFrameInbox>,
 ) {
     state.generation = state.generation.saturating_add(1);
+    if !ownership.owns_gameplay_input() {
+        inbox.publish_live(PlayerActionFrameV1 {
+            generation: state.generation,
+            ..PlayerActionFrameV1::default()
+        });
+        return;
+    }
 
     let movement = ActionAxis2V1::finite_or_zero(
         axis(

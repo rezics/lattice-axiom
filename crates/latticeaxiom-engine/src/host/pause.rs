@@ -10,7 +10,7 @@ use bevy::{
     ecs::change_detection::{DetectChanges, Ref},
     ecs::observer::On,
     ecs::query::{Has, Or},
-    input::{ButtonInput, keyboard::KeyCode},
+    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     input_focus::tab_navigation::{NavAction, TabGroup, TabIndex, TabNavigation},
     input_focus::{FocusCause, InputFocus, InputFocusVisible},
     picking::hover::Hovered,
@@ -25,13 +25,13 @@ use bevy::{
         Activate, Button, SetSliderValue, Slider, SliderPrecision, SliderRange, SliderStep,
         SliderThumb, SliderValue, SliderValueChange, TrackClick, ValueChange,
     },
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
+    window::{CursorOptions, PrimaryWindow, Window},
 };
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_input::ClientSurfaceActionV1;
 use latticeaxiom_player::{
-    ActionFrameInbox, ActionState, D2Player, LeafwingPlayerAction, LocalPlayerInput,
-    SimulationTickRate, SimulationTickRateRequest, SurfaceActionFrame,
+    ActionFrameInbox, ActionState, ClientInputOwnership, D2Player, LeafwingPlayerAction,
+    LocalPlayerInput, SimulationTickRate, SimulationTickRateRequest, SurfaceActionFrame,
 };
 use latticeaxiom_runtime_contracts::{
     EffectiveSettingsSnapshot, simulation_tick_rate_setting_id,
@@ -50,7 +50,10 @@ use super::{
 };
 use crate::{
     EngineProfile,
-    cursor_capture::ConfirmedPrimaryWindowFocus,
+    cursor_capture::{
+        ConfirmedPrimaryWindowFocus, CursorCaptureGesture, CursorCaptureState,
+        apply_cursor_capture, screenshot_release_requested,
+    },
     settings::{HostSettingsCatalog, HostSettingsError, HostUserSettings},
     ui_font::ui_text_font,
     video::{FrameRateLimit, VideoRuntimeSettings},
@@ -1071,9 +1074,13 @@ fn accessibility_node(role: AccessKitRole, label: &'static str) -> Accessibility
 pub(super) fn toggle_pause(
     action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
     surface: Option<Res<'_, SurfaceActionFrame>>,
+    ownership: Res<'_, ClientInputOwnership>,
     mut pause: ResMut<'_, ProductionSessionPause>,
     mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
 ) {
+    if *ownership == ClientInputOwnership::Released {
+        return;
+    }
     if surface.is_some_and(|frame| frame.just_started(ClientSurfaceActionV1::Pause)) {
         return;
     }
@@ -1141,6 +1148,7 @@ pub(super) fn view_distance_slider_changed(
 pub(super) fn apply_settings_surface_actions(
     pause: Res<'_, ProductionSessionPause>,
     router: Option<Res<'_, super::ProductionSurfaceRouter>>,
+    ownership: Res<'_, ClientInputOwnership>,
     mut frame: ResMut<'_, SurfaceActionFrame>,
     keyboard: Option<Res<'_, ButtonInput<KeyCode>>>,
     mut focus: Option<ResMut<'_, InputFocus>>,
@@ -1167,6 +1175,10 @@ pub(super) fn apply_settings_surface_actions(
     buttons: Query<'_, '_, (&PauseMenuAction, &Node), With<Button>>,
     mut commands: Commands<'_, '_>,
 ) {
+    if *ownership == ClientInputOwnership::Released {
+        frame.clear();
+        return;
+    }
     let showing_settings = pause.is_paused()
         && router.as_ref().is_some_and(|router| {
             router.inner().route().modal() == latticeaxiom_client_ui::GameModalV1::Settings
@@ -1349,31 +1361,72 @@ pub(super) fn sync_pause_overlay(
     }
 }
 
-/// Locks the cursor exactly while the focused game route owns mouse look.
+/// Advances gesture-owned cursor capture before Leafwing samples local input.
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-pub(super) fn sync_cursor_capture(
+pub(super) fn update_cursor_capture(
+    mut capture: ResMut<'_, CursorCaptureState>,
     confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
     router: Option<Res<'_, super::ProductionSurfaceRouter>>,
-    mut windows: Query<'_, '_, (Entity, &mut CursorOptions), With<PrimaryWindow>>,
+    windows: Query<'_, '_, Entity, With<PrimaryWindow>>,
+    mut mouse: ResMut<'_, ButtonInput<MouseButton>>,
+    keyboard: Res<'_, ButtonInput<KeyCode>>,
+    mut ownership: ResMut<'_, ClientInputOwnership>,
 ) {
-    let Ok((window, mut cursor)) = windows.single_mut() else {
+    let Ok(window) = windows.single() else {
+        *ownership = ClientInputOwnership::Released;
         return;
     };
-    let should_capture =
-        gameplay_cursor_should_lock(confirmed_focus.is_focused(window), router.as_deref());
-    cursor.grab_mode = if should_capture {
-        CursorGrabMode::Locked
-    } else {
-        CursorGrabMode::None
-    };
-    cursor.visible = !should_capture;
+    let focused = confirmed_focus.is_focused(window);
+    let route_allows_capture = router.as_deref().is_some_and(super::surface::cursor_locked);
+    let release_requested =
+        keyboard.just_pressed(KeyCode::Escape) || screenshot_release_requested(&keyboard);
+    capture.reconcile(
+        focused && route_allows_capture,
+        CursorCaptureGesture::from_primary_button(&mouse),
+        release_requested,
+    );
+    if capture.release_pending() {
+        mouse.reset_all();
+    }
+    *ownership = input_ownership(focused, route_allows_capture, *capture);
 }
 
-fn gameplay_cursor_should_lock(
-    window_focused: bool,
-    router: Option<&super::ProductionSurfaceRouter>,
-) -> bool {
-    window_focused && router.is_some_and(super::surface::cursor_locked)
+/// Centers and locks the cursor only while the gesture-owned state permits it.
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn sync_cursor_capture(
+    mut capture: ResMut<'_, CursorCaptureState>,
+    confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
+    router: Option<Res<'_, super::ProductionSurfaceRouter>>,
+    mut windows: Query<'_, '_, (Entity, &mut Window, &mut CursorOptions), With<PrimaryWindow>>,
+) {
+    let Ok((window_entity, mut window, mut cursor)) = windows.single_mut() else {
+        return;
+    };
+    let capture_allowed = confirmed_focus.is_focused(window_entity)
+        && router.as_deref().is_some_and(super::surface::cursor_locked);
+    if let Err(error) = apply_cursor_capture(
+        &mut capture,
+        capture_allowed,
+        window_entity,
+        &mut window,
+        &mut cursor,
+    ) {
+        bevy::log::warn!(error = %error, "cursor capture transition failed");
+    }
+}
+
+const fn input_ownership(
+    focused: bool,
+    route_allows_capture: bool,
+    capture: CursorCaptureState,
+) -> ClientInputOwnership {
+    if !focused {
+        ClientInputOwnership::Released
+    } else if route_allows_capture && capture.owns_gameplay_input() {
+        ClientInputOwnership::Gameplay
+    } else {
+        ClientInputOwnership::Surface
+    }
 }
 
 /// Drops live walk, look, and edit input while the overlay is open.
@@ -1624,26 +1677,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_is_automatic_only_for_focused_gameplay() {
+    fn cursor_requires_a_focused_viewport_gesture_and_never_auto_recaptures() {
         let mut router = super::super::ProductionSurfaceRouter::playing()
             .expect("route vocabulary is supported");
-        assert!(gameplay_cursor_should_lock(true, Some(&router)));
-        assert!(!gameplay_cursor_should_lock(false, Some(&router)));
-        assert!(!gameplay_cursor_should_lock(true, None));
+        let mut capture = CursorCaptureState::default();
+        assert_eq!(
+            input_ownership(true, true, capture),
+            ClientInputOwnership::Surface
+        );
+        capture.reconcile(true, CursorCaptureGesture::JustPressed, false);
+        assert!(capture.capture_pending());
+        assert_eq!(
+            input_ownership(true, true, capture),
+            ClientInputOwnership::Surface
+        );
+        capture.reconcile(false, CursorCaptureGesture::Released, false);
+        assert!(capture.release_pending());
+        capture.reconcile(true, CursorCaptureGesture::Released, false);
+        assert!(capture.release_pending());
+        capture = CursorCaptureState::ReleasedAwaitingGesture;
+        capture.reconcile(true, CursorCaptureGesture::Released, false);
+        assert!(!capture.capture_pending());
+        assert_eq!(
+            input_ownership(false, true, capture),
+            ClientInputOwnership::Released
+        );
 
         router
             .apply(&latticeaxiom_client_ui::SurfaceCommandV1::ToggleInventory)
             .expect("inventory opens from gameplay");
-        assert!(!gameplay_cursor_should_lock(true, Some(&router)));
+        assert!(!super::super::surface::cursor_locked(&router));
         router
             .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Back)
             .expect("inventory closes back to gameplay");
-        assert!(gameplay_cursor_should_lock(true, Some(&router)));
+        assert!(super::super::surface::cursor_locked(&router));
 
         router
             .apply(&latticeaxiom_client_ui::SurfaceCommandV1::Pause)
             .expect("pause opens from gameplay");
-        assert!(!gameplay_cursor_should_lock(true, Some(&router)));
+        assert!(!super::super::surface::cursor_locked(&router));
     }
 
     #[test]

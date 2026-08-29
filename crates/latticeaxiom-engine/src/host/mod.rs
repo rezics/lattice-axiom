@@ -57,8 +57,9 @@ use bevy::{
 };
 #[cfg(feature = "client")]
 use bevy::{
-    app::{FixedFirst, Startup},
+    app::{FixedFirst, PreUpdate, Startup},
     asset::Assets,
+    input::InputSystems,
     prelude::{ClearColor, Color, Mesh},
 };
 use latticeaxiom_compose::LockedGameGraph;
@@ -72,7 +73,8 @@ use latticeaxiom_player::{
 };
 #[cfg(feature = "client")]
 use latticeaxiom_player::{
-    CompiledClientInputMaps, LeafwingInputAdapterPlugin, LocalPlayerClientInputBundle,
+    ClientInputOwnership, ClientInputSystemSet, CompiledClientInputMaps,
+    LeafwingInputAdapterPlugin, LocalPlayerClientInputBundle,
 };
 use latticeaxiom_registration::CompiledRegistration;
 use latticeaxiom_runtime_contracts::WorldgenInspectError;
@@ -365,6 +367,7 @@ mod inspect_surface_tests {
 pub struct ProductionHostPlugin;
 
 impl Plugin for ProductionHostPlugin {
+    #[allow(clippy::too_many_lines)] // This method declares the host scheduler contract in one place.
     fn build(&self, app: &mut App) {
         app.add_message::<TargetInspectReceiptV1>()
             .add_systems(Update, pump_chunk_background)
@@ -412,6 +415,17 @@ impl Plugin for ProductionHostPlugin {
                     .run_if(is_interactive_client),
             )
             .add_systems(
+                PreUpdate,
+                (
+                    crate::cursor_capture::observe_primary_window_focus,
+                    pause::update_cursor_capture,
+                )
+                    .chain()
+                    .after(InputSystems)
+                    .before(ClientInputSystemSet::Sample)
+                    .run_if(is_interactive_client),
+            )
+            .add_systems(
                 Update,
                 (
                     client::sync_production_camera,
@@ -419,7 +433,6 @@ impl Plugin for ProductionHostPlugin {
                     pause::sync_pause_overlay,
                     surface::apply_surface_actions,
                     pause::apply_settings_surface_actions,
-                    crate::cursor_capture::observe_primary_window_focus,
                     pause::sync_cursor_capture,
                     pause::sync_pause_menu_page,
                     settings_view::sync_settings_page,
@@ -739,7 +752,9 @@ pub(super) fn install_production_host(
     #[cfg(feature = "client")]
     {
         app.insert_resource(hud::ProductionHudSurfaces::default())
-            .init_resource::<crate::cursor_capture::ConfirmedPrimaryWindowFocus>();
+            .init_resource::<crate::cursor_capture::ConfirmedPrimaryWindowFocus>()
+            .init_resource::<crate::cursor_capture::CursorCaptureState>()
+            .init_resource::<ClientInputOwnership>();
     }
     #[cfg(feature = "client")]
     if let Some(terrain_palette) = terrain_palette {

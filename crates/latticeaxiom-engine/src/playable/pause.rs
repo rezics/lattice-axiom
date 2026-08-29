@@ -5,7 +5,7 @@ use bevy::{
     app::AppExit,
     ecs::observer::On,
     ecs::query::Has,
-    input::{ButtonInput, keyboard::KeyCode},
+    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     picking::hover::Hovered,
     prelude::{
         AlignItems, BackgroundColor, Color, Commands, Component, Display, Entity, FlexDirection,
@@ -14,11 +14,17 @@ use bevy::{
     },
     ui::{FocusPolicy, Pressed},
     ui_widgets::{Activate, Button},
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
+    window::{CursorOptions, PrimaryWindow, Window},
 };
-use latticeaxiom_player::{ActionFrameInbox, D2Player};
+use latticeaxiom_player::{ActionFrameInbox, ClientInputOwnership, D2Player};
 
-use crate::{cursor_capture::ConfirmedPrimaryWindowFocus, ui_font::ui_text_font};
+use crate::{
+    cursor_capture::{
+        ConfirmedPrimaryWindowFocus, CursorCaptureGesture, CursorCaptureState,
+        apply_cursor_capture, screenshot_release_requested,
+    },
+    ui_font::ui_text_font,
+};
 
 /// In-session pause latch for the development playable fixture.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
@@ -126,9 +132,10 @@ fn spawn_pause_button(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn toggle_pause(
     keyboard: Res<'_, ButtonInput<KeyCode>>,
+    ownership: Res<'_, ClientInputOwnership>,
     mut pause: ResMut<'_, PlayablePause>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
+    if *ownership != ClientInputOwnership::Released && keyboard.just_pressed(KeyCode::Escape) {
         let paused = !pause.is_paused();
         pause.set(paused);
     }
@@ -151,23 +158,63 @@ pub(super) fn sync_pause_overlay(
     }
 }
 
-/// Locks the cursor exactly while focused gameplay owns mouse look.
+/// Advances gesture-owned cursor capture before direct input sampling.
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn update_cursor_capture(
+    pause: Res<'_, PlayablePause>,
+    mut capture: ResMut<'_, CursorCaptureState>,
+    confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
+    windows: Query<'_, '_, Entity, With<PrimaryWindow>>,
+    mut mouse: ResMut<'_, ButtonInput<MouseButton>>,
+    keyboard: Res<'_, ButtonInput<KeyCode>>,
+    mut ownership: ResMut<'_, ClientInputOwnership>,
+) {
+    let Ok(window) = windows.single() else {
+        *ownership = ClientInputOwnership::Released;
+        return;
+    };
+    let focused = confirmed_focus.is_focused(window);
+    let route_allows_capture = !pause.is_paused();
+    let release_requested =
+        keyboard.just_pressed(KeyCode::Escape) || screenshot_release_requested(&keyboard);
+    capture.reconcile(
+        focused && route_allows_capture,
+        CursorCaptureGesture::from_primary_button(&mouse),
+        release_requested,
+    );
+    if capture.release_pending() {
+        mouse.reset_all();
+    }
+    *ownership = if !focused {
+        ClientInputOwnership::Released
+    } else if route_allows_capture && capture.owns_gameplay_input() {
+        ClientInputOwnership::Gameplay
+    } else {
+        ClientInputOwnership::Surface
+    };
+}
+
+/// Centers and locks the cursor while the gesture-owned state permits it.
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_cursor_capture(
     pause: Res<'_, PlayablePause>,
+    mut capture: ResMut<'_, CursorCaptureState>,
     confirmed_focus: Res<'_, ConfirmedPrimaryWindowFocus>,
-    mut windows: Query<'_, '_, (Entity, &mut CursorOptions), With<PrimaryWindow>>,
+    mut windows: Query<'_, '_, (Entity, &mut Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
-    let Ok((window, mut cursor)) = windows.single_mut() else {
+    let Ok((window_entity, mut window, mut cursor)) = windows.single_mut() else {
         return;
     };
-    let should_capture = confirmed_focus.is_focused(window) && !pause.is_paused();
-    cursor.grab_mode = if should_capture {
-        CursorGrabMode::Locked
-    } else {
-        CursorGrabMode::None
-    };
-    cursor.visible = !should_capture;
+    let capture_allowed = confirmed_focus.is_focused(window_entity) && !pause.is_paused();
+    if let Err(error) = apply_cursor_capture(
+        &mut capture,
+        capture_allowed,
+        window_entity,
+        &mut window,
+        &mut cursor,
+    ) {
+        bevy::log::warn!(error = %error, "cursor capture transition failed");
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.

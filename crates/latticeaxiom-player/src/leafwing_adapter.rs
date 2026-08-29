@@ -4,7 +4,7 @@ use bevy::{
     app::{App, Plugin},
     ecs::schedule::IntoScheduleConfigs,
     input::{gamepad::GamepadButton, keyboard::KeyCode, mouse::MouseButton},
-    prelude::{Bundle, Query, Reflect, Res, ResMut, Resource, With},
+    prelude::{Bundle, Query, Reflect, Res, ResMut, Resource, SystemSet, With},
 };
 use latticeaxiom_input::{
     AuthoritativePlayerActionV1, ClientSurfaceActionV1, CompiledInputCatalogV1,
@@ -225,6 +225,43 @@ impl SurfaceActionFrame {
 /// When true, live gameplay axes and edit buttons are suppressed.
 #[derive(Clone, Copy, Debug, Default, Resource)]
 pub struct GameplaySuppressed(pub bool);
+
+/// Focus- and capture-proved ownership of local client input.
+///
+/// The host advances this state from backend focus messages and explicit
+/// viewport capture gestures. The default is fail-closed so an unconfirmed or
+/// unfocused window cannot consume keyboard, mouse, or gamepad actions.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
+pub enum ClientInputOwnership {
+    /// The client window has no confirmed right to consume local input.
+    #[default]
+    Released,
+    /// The focused window may consume UI/surface input but not gameplay input.
+    Surface,
+    /// The focused gameplay viewport owns relative input.
+    Gameplay,
+}
+
+impl ClientInputOwnership {
+    /// Returns whether focused UI surfaces may consume local input.
+    #[must_use]
+    pub const fn accepts_surface_input(self) -> bool {
+        !matches!(self, Self::Released)
+    }
+
+    /// Returns whether the gameplay viewport owns local input.
+    #[must_use]
+    pub const fn owns_gameplay_input(self) -> bool {
+        matches!(self, Self::Gameplay)
+    }
+}
+
+/// Named client-input stages available to the host for focus gating.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, SystemSet)]
+pub enum ClientInputSystemSet {
+    /// Project Leafwing state into stable Lattice action frames.
+    Sample,
+}
 
 /// Returns the provisional keyboard/mouse and standard-gamepad binding map.
 ///
@@ -613,10 +650,13 @@ impl Plugin for LeafwingInputAdapterPlugin {
             .init_resource::<ActionFrameInbox>()
             .init_resource::<SurfaceActionFrame>()
             .init_resource::<GameplaySuppressed>()
+            .init_resource::<ClientInputOwnership>()
             .init_resource::<LeafwingInputGeneration>()
             .add_systems(
                 bevy::prelude::PreUpdate,
-                sample_leafwing_state.after(InputManagerSystem::Update),
+                sample_leafwing_state
+                    .in_set(ClientInputSystemSet::Sample)
+                    .after(InputManagerSystem::Update),
             );
     }
 }
@@ -628,10 +668,13 @@ fn sample_leafwing_state(
     mut inbox: ResMut<'_, ActionFrameInbox>,
     mut surface: ResMut<'_, SurfaceActionFrame>,
     mut generation: ResMut<'_, LeafwingInputGeneration>,
+    ownership: Res<'_, ClientInputOwnership>,
     suppressed: Option<Res<'_, GameplaySuppressed>>,
 ) {
+    let ownership = ownership.into_inner();
     generation.0 = generation.0.saturating_add(1);
-    let gameplay_suppressed = suppressed.is_some_and(|flag| flag.0);
+    let gameplay_suppressed =
+        suppressed.is_some_and(|flag| flag.0) || !ownership.owns_gameplay_input();
     let Ok(action_state) = action_states.single() else {
         inbox.replace_live_with_neutral(generation.0);
         surface.clear();
@@ -670,10 +713,12 @@ fn sample_leafwing_state(
     if gameplay_suppressed {
         held = PlayerActionButtonsV1::empty();
         started = PlayerActionButtonsV1::empty();
-        if action_state.pressed(&LeafwingPlayerAction::Pause) {
+        if ownership.accepts_surface_input() && action_state.pressed(&LeafwingPlayerAction::Pause) {
             held.insert(PlayerActionV1::Pause);
         }
-        if action_state.just_pressed(&LeafwingPlayerAction::Pause) {
+        if ownership.accepts_surface_input()
+            && action_state.just_pressed(&LeafwingPlayerAction::Pause)
+        {
             started.insert(PlayerActionV1::Pause);
         }
     }
@@ -705,7 +750,9 @@ fn sample_leafwing_state(
 
     let mut started_surface = BTreeSet::new();
     let mut held_surface = BTreeSet::new();
-    if let Ok(surface_state) = surface_states.single() {
+    if ownership.accepts_surface_input()
+        && let Ok(surface_state) = surface_states.single()
+    {
         for runtime in [
             LeafwingSurfaceAction::NavUp,
             LeafwingSurfaceAction::NavDown,
@@ -750,6 +797,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn client_input_ownership_is_fail_closed_and_separates_surfaces() {
+        assert!(!ClientInputOwnership::default().accepts_surface_input());
+        assert!(!ClientInputOwnership::Released.owns_gameplay_input());
+        assert!(ClientInputOwnership::Surface.accepts_surface_input());
+        assert!(!ClientInputOwnership::Surface.owns_gameplay_input());
+        assert!(ClientInputOwnership::Gameplay.accepts_surface_input());
+        assert!(ClientInputOwnership::Gameplay.owns_gameplay_input());
+    }
+
+    #[test]
+    fn released_client_input_publishes_neutral_gameplay_and_surface_frames() {
+        let mut gameplay = ActionState::<LeafwingPlayerAction>::default();
+        gameplay.press(&LeafwingPlayerAction::BreakBlock);
+        gameplay.press(&LeafwingPlayerAction::Pause);
+        let mut surfaces = ActionState::<LeafwingSurfaceAction>::default();
+        surfaces.press(&LeafwingSurfaceAction::ToggleInventory);
+        let mut app = App::new();
+        app.init_resource::<ActionFrameInbox>()
+            .init_resource::<SurfaceActionFrame>()
+            .init_resource::<GameplaySuppressed>()
+            .init_resource::<ClientInputOwnership>()
+            .init_resource::<LeafwingInputGeneration>()
+            .add_systems(bevy::prelude::Update, sample_leafwing_state)
+            .world_mut()
+            .spawn((LocalPlayerInput, gameplay, surfaces));
+
+        app.update();
+
+        let frame = app
+            .world_mut()
+            .resource_mut::<ActionFrameInbox>()
+            .next_fixed_frame_with_step_seconds(1.0);
+        assert_eq!(frame.held, PlayerActionButtonsV1::empty());
+        assert_eq!(frame.started, PlayerActionButtonsV1::empty());
+        assert!(
+            app.world()
+                .resource::<SurfaceActionFrame>()
+                .held()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn runtime_enum_maps_to_stable_action_categories() {
         assert_eq!(
             LeafwingPlayerAction::Move.input_control_kind(),
@@ -782,6 +872,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ActionFrameInbox>()
             .init_resource::<SurfaceActionFrame>()
+            .init_resource::<ClientInputOwnership>()
             .init_resource::<LeafwingInputGeneration>()
             .add_systems(bevy::prelude::Update, sample_leafwing_state)
             .world_mut()

@@ -48,6 +48,7 @@ accesskit = "=0.24.1"
 avian3d = { version = "=0.7.0", default-features = false }
 bevy = { version = "=0.19.1", default-features = false }
 bevy_framepace = { version = "=0.22.0", default-features = false }
+bevy_winit = { version = "=0.19.1", default-features = false }
 bevy_voxel_world = "=0.17.0"
 criterion = "0.8"
 hex = "0.4.3"
@@ -87,6 +88,7 @@ toml = { version = "=1.1.4", default-features = false, features = ["parse", "ser
 unicode-casefold = "0.2.0"
 unicode-normalization = "0.1.25"
 uuid = { version = "1.24.1", features = ["v4"] }
+winit = { version = "=0.30.13", default-features = false }
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
@@ -103,6 +105,14 @@ print_stdout = "deny"
 todo = "warn"
 undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
+
+[patch.crates-io]
+# Windows `CursorGrabMode::Locked` uses a one-pixel `ClipCursor` rectangle.
+# The pinned upstream release does not clear that rectangle synchronously on
+# focus loss, so native screenshot and task-switching surfaces inherit a
+# globally clipped pointer. Keep the minimal audited patch local until it is
+# available in an upstream release compatible with Bevy 0.19.1.
+winit = { path = "third_party/winit" }
 
 # Bevy's official development profile: optimize project code lightly and
 # dependencies heavily so the debug build remains playable.

@@ -3,13 +3,16 @@
 use avian3d::PhysicsPlugins;
 use bevy::{
     ecs::schedule::IntoScheduleConfigs,
+    input::InputSystems,
     prelude::{
-        App, ClearColor, Color, DefaultPlugins, FixedFirst, FixedUpdate, PluginGroup, Startup,
-        Update, Window, WindowPlugin,
+        App, ClearColor, Color, DefaultPlugins, FixedFirst, FixedUpdate, PluginGroup, PreUpdate,
+        Startup, Update, Window, WindowPlugin,
     },
 };
 use latticeaxiom_gameplay::GameplayIdError;
-use latticeaxiom_player::{BlockEditAuthorityResource, PlayerPlugin, PlayerSystemSet};
+use latticeaxiom_player::{
+    BlockEditAuthorityResource, ClientInputOwnership, PlayerPlugin, PlayerSystemSet,
+};
 use thiserror::Error;
 
 use super::{authority, hud, input, pause, scene};
@@ -55,6 +58,8 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
         .add_plugins(VideoRuntimePlugin)
         .insert_resource(pause::PlayablePause::default())
         .init_resource::<cursor_capture::ConfirmedPrimaryWindowFocus>()
+        .init_resource::<cursor_capture::CursorCaptureState>()
+        .init_resource::<ClientInputOwnership>()
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(input::PlayableInputPlugin::new(placement_content))
@@ -68,13 +73,22 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
             ),
         )
         .add_systems(
+            PreUpdate,
+            (
+                cursor_capture::observe_primary_window_focus,
+                pause::update_cursor_capture,
+            )
+                .chain()
+                .after(InputSystems)
+                .before(input::PlayableInputSystemSet::Sample),
+        )
+        .add_systems(
             Update,
             (
                 scene::apply_playable_block_receipts,
                 scene::sync_playable_camera,
                 pause::toggle_pause,
                 pause::sync_pause_overlay,
-                cursor_capture::observe_primary_window_focus,
                 pause::sync_cursor_capture,
                 pause::sync_pause_button_visuals,
             ),

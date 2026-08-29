@@ -14,6 +14,8 @@ default-run = "latticeaxiom-engine"
 default = ["client", "development"]
 client = [
   "dep:bevy_framepace",
+  "dep:bevy_winit",
+  "dep:winit",
   "bevy/3d",
   "bevy/audio",
   "bevy/bevy_picking",
@@ -49,6 +51,7 @@ accesskit.workspace = true
 avian3d = { workspace = true, default-features = false, features = ["3d", "default-collider", "f32", "parallel", "parry-f32"] }
 bevy.workspace = true
 bevy_framepace = { workspace = true, optional = true }
+bevy_winit = { workspace = true, optional = true }
 latticeaxiom-client-ui = { path = "../latticeaxiom-client-ui" }
 latticeaxiom-compose = { path = "../latticeaxiom-compose" }
 latticeaxiom-content = { path = "../latticeaxiom-content" }
@@ -74,6 +77,7 @@ latticeaxiom-worldgen = { path = "../latticeaxiom-worldgen" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+winit = { workspace = true, optional = true }
 
 [dev-dependencies]
 latticeaxiom-abi = { path = "../latticeaxiom-abi" }
