@@ -54,7 +54,7 @@ use latticeaxiom_launcher::{
     ChildExitKindV1, HostBuildReceipts, ProductLockBootError, ReopenedFinalLockV1,
     SettingTransactionRevision,
 };
-use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1, TargetEyePoseV1};
+use latticeaxiom_player::{BlockEditRejectV1, BlockFaceV1, PlayerControllerState, TargetEyePoseV1};
 use latticeaxiom_registration::{
     CallbackDeclaration, CompiledRegistration, PackageRegistrationInput, ReceiptValidationError,
     RegistrationCompileInput, RegistrationCompiler, SystemDeclaration,
@@ -2779,7 +2779,10 @@ fn enqueue_look_then_walk_axes(
     ];
     frames.extend((0..walk_ticks).map(|offset| {
         let mut started = PlayerActionButtonsV1::empty();
-        if offset.is_multiple_of(18) {
+        // One edge per bounded walk batch keeps automatic obstacle traversal
+        // outside the 350 ms double-jump flight window. Repeating the edge
+        // inside that window made cave-entry results depend on toggle parity.
+        if offset == 0 {
             started.insert(PlayerActionV1::Jump);
         }
         PlayerActionFrameV1 {
@@ -3839,11 +3842,16 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
     );
     generation = idle_at_hole(&mut instance, &spine, generation, 240);
     let pose = spine.player_pose();
+    let controller = instance
+        .app()
+        .world()
+        .iter_entities()
+        .find_map(|entity| entity.get::<PlayerControllerState>().copied());
     let underground = player_in_cave(&spine, pose.translation, aperture[1]);
     assert!(
         underground,
-        "player must enter underground cave space through the required entrance (pose {:?}, aperture {aperture:?}, dest {destination:?})",
-        pose.translation
+        "player must enter underground cave space through the required entrance (pose {:?}, controller {controller:?}, aperture {aperture:?}, dest {destination:?})",
+        pose.translation,
     );
     assert!(
         !spine.occupies_unready_cave_void(),

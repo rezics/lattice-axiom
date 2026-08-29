@@ -1,4 +1,7 @@
-use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
+use std::{
+    f32::consts::{FRAC_PI_2, FRAC_PI_4},
+    time::Duration,
+};
 
 use avian3d::{
     math::{AdjustPrecision as _, AsF32 as _},
@@ -21,6 +24,7 @@ use thiserror::Error;
 
 use crate::{ActionFrameInbox, BlockEditInputStateV1, PlayerActionFrameV1, PlayerActionV1};
 
+#[cfg(test)]
 const REFERENCE_FIXED_HZ: f32 = 60.0;
 const GRAVITY_MPS2: f32 = 19.62;
 const GROUND_SNAP_M: f32 = 0.10;
@@ -31,7 +35,13 @@ const SPECTATOR_SPEED_MPS: f32 = 12.0;
 const SPRINT_MULTIPLIER: f32 = 1.3;
 const FLY_SPEED_MPS: f32 = 10.80;
 const FLY_SPRINT_MULTIPLIER: f32 = 2.0;
-const FLY_TOGGLE_WINDOW_SECONDS: f32 = 21.0 / REFERENCE_FIXED_HZ;
+const JUMP_BUFFER_DURATION: Duration = Duration::from_millis(100);
+const COYOTE_DURATION: Duration = Duration::from_millis(100);
+const FLY_TOGGLE_DURATION: Duration = Duration::from_millis(350);
+// `Duration::from_secs_f64(1 / hz)` rounds each fixed step to nanoseconds.
+// This covers the maximum aggregate rounding across a 350 ms window at the
+// supported 10 kHz ceiling without extending the window by one full tick.
+const TIMER_ROUNDING_TOLERANCE: Duration = Duration::from_micros(2);
 
 /// Frozen D2 movement profile from ADR 0025.
 #[derive(Clone, Copy, Component, Debug, PartialEq)]
@@ -43,8 +53,8 @@ pub struct PlayerMovementProfileV1 {
     maximum_walkable_slope_radians: f32,
     maximum_step_height_m: f32,
     jump_apex_m: f32,
-    jump_buffer_seconds: f32,
-    coyote_seconds: f32,
+    jump_buffer_duration: Duration,
+    coyote_duration: Duration,
 }
 
 impl PlayerMovementProfileV1 {
@@ -92,14 +102,14 @@ impl PlayerMovementProfileV1 {
 
     /// Returns the jump input-buffer duration in simulation seconds.
     #[must_use]
-    pub const fn jump_buffer_seconds(self) -> f32 {
-        self.jump_buffer_seconds
+    pub fn jump_buffer_seconds(self) -> f32 {
+        self.jump_buffer_duration.as_secs_f32()
     }
 
     /// Returns the coyote-time duration in simulation seconds.
     #[must_use]
-    pub const fn coyote_seconds(self) -> f32 {
-        self.coyote_seconds
+    pub fn coyote_seconds(self) -> f32 {
+        self.coyote_duration.as_secs_f32()
     }
 
     /// Returns whether a slope angle satisfies the inclusive V1 boundary.
@@ -145,11 +155,7 @@ impl PlayerMovementProfileV1 {
         if !(0.0..FRAC_PI_2).contains(&self.maximum_walkable_slope_radians) {
             return Err(PlayerMovementProfileError::InvalidSlope);
         }
-        if !self.jump_buffer_seconds.is_finite()
-            || !self.coyote_seconds.is_finite()
-            || self.jump_buffer_seconds <= 0.0
-            || self.coyote_seconds <= 0.0
-        {
+        if self.jump_buffer_duration.is_zero() || self.coyote_duration.is_zero() {
             return Err(PlayerMovementProfileError::InvalidTimeWindow);
         }
         Ok(self)
@@ -166,8 +172,8 @@ impl Default for PlayerMovementProfileV1 {
             maximum_walkable_slope_radians: FRAC_PI_4,
             maximum_step_height_m: 0.60,
             jump_apex_m: 1.25,
-            jump_buffer_seconds: 6.0 / REFERENCE_FIXED_HZ,
-            coyote_seconds: 6.0 / REFERENCE_FIXED_HZ,
+            jump_buffer_duration: JUMP_BUFFER_DURATION,
+            coyote_duration: COYOTE_DURATION,
         }
     }
 }
@@ -247,10 +253,10 @@ impl PlayerViewV1 {
 #[derive(Clone, Copy, Component, Debug, PartialEq)]
 pub struct PlayerControllerState {
     grounded: bool,
-    seconds_since_grounded: f32,
-    jump_buffer_remaining_seconds: f32,
+    time_since_grounded: Duration,
+    jump_buffer_remaining: Duration,
     flying: bool,
-    seconds_since_jump_started: f32,
+    time_since_jump_started: Duration,
 }
 
 impl PlayerControllerState {
@@ -262,14 +268,14 @@ impl PlayerControllerState {
 
     /// Returns simulation seconds elapsed since walkable ground was observed.
     #[must_use]
-    pub const fn seconds_since_grounded(self) -> f32 {
-        self.seconds_since_grounded
+    pub fn seconds_since_grounded(self) -> f32 {
+        self.time_since_grounded.as_secs_f32()
     }
 
     /// Returns buffered jump duration remaining in simulation seconds.
     #[must_use]
-    pub const fn jump_buffer_remaining_seconds(self) -> f32 {
-        self.jump_buffer_remaining_seconds
+    pub fn jump_buffer_remaining_seconds(self) -> f32 {
+        self.jump_buffer_remaining.as_secs_f32()
     }
 
     /// Returns whether creative flight is currently active.
@@ -283,10 +289,10 @@ impl Default for PlayerControllerState {
     fn default() -> Self {
         Self {
             grounded: false,
-            seconds_since_grounded: f32::MAX,
-            jump_buffer_remaining_seconds: 0.0,
+            time_since_grounded: Duration::MAX,
+            jump_buffer_remaining: Duration::ZERO,
             flying: false,
-            seconds_since_jump_started: f32::MAX,
+            time_since_jump_started: Duration::MAX,
         }
     }
 }
@@ -480,12 +486,11 @@ pub(crate) fn update_grounded(
         (With<D2Player>, Without<DetachedSpectator>),
     >,
 ) {
-    let delta_seconds = time.delta_secs();
+    let delta = time.delta();
     for (entity, collider, mut transform, profile, mut state) in &mut players {
         if state.flying {
             state.grounded = false;
-            state.seconds_since_grounded =
-                saturating_seconds_add(state.seconds_since_grounded, delta_seconds);
+            state.time_since_grounded = state.time_since_grounded.saturating_add(delta);
             continue;
         }
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
@@ -502,11 +507,10 @@ pub(crate) fn update_grounded(
         if let Some(support) = nearest_walkable_distance {
             transform.translation.y -= (support.distance - CONTROLLER_SKIN_M).max(0.0);
             state.grounded = true;
-            state.seconds_since_grounded = 0.0;
+            state.time_since_grounded = Duration::ZERO;
         } else {
             state.grounded = false;
-            state.seconds_since_grounded =
-                saturating_seconds_add(state.seconds_since_grounded, delta_seconds);
+            state.time_since_grounded = state.time_since_grounded.saturating_add(delta);
         }
     }
 }
@@ -528,14 +532,14 @@ pub(crate) fn prepare_velocity(
         (With<D2Player>, Without<DetachedSpectator>),
     >,
 ) {
-    let delta_seconds = time.delta_secs();
+    let delta = time.delta();
     for (profile, frame, view, mut state, mut velocity) in &mut players {
         let input = frame.0.movement.clamp_unit();
         let jump_started = frame.0.started.contains(PlayerActionV1::Jump);
         let jump_held = frame.0.held.contains(PlayerActionV1::Jump);
         let sprint_held = frame.0.held.contains(PlayerActionV1::Sprint);
         let sneak_held = frame.0.held.contains(PlayerActionV1::Sneak);
-        apply_jump_and_fly_toggle(*profile, jump_started, &mut state, delta_seconds);
+        apply_jump_and_fly_toggle(*profile, jump_started, &mut state, delta);
         let speed = horizontal_speed_mps(
             profile.maximum_walk_speed_mps,
             state.flying,
@@ -554,7 +558,7 @@ pub(crate) fn prepare_velocity(
             sneak_held,
             &mut state,
             velocity.y,
-            delta_seconds,
+            delta,
         );
     }
 }
@@ -583,23 +587,23 @@ fn apply_jump_and_fly_toggle(
     profile: PlayerMovementProfileV1,
     jump_started: bool,
     state: &mut PlayerControllerState,
-    delta_seconds: f32,
+    delta: Duration,
 ) {
     if jump_started {
-        let within_toggle_window = state.seconds_since_jump_started <= FLY_TOGGLE_WINDOW_SECONDS;
+        let within_toggle_window =
+            duration_within_window(state.time_since_jump_started, FLY_TOGGLE_DURATION);
         if state.flying && within_toggle_window {
             state.flying = false;
-            state.jump_buffer_remaining_seconds = 0.0;
+            state.jump_buffer_remaining = Duration::ZERO;
         } else if !state.flying && !state.grounded && within_toggle_window {
             state.flying = true;
-            state.jump_buffer_remaining_seconds = 0.0;
+            state.jump_buffer_remaining = Duration::ZERO;
         } else if !state.flying {
-            state.jump_buffer_remaining_seconds = profile.jump_buffer_seconds;
+            state.jump_buffer_remaining = profile.jump_buffer_duration;
         }
-        state.seconds_since_jump_started = 0.0;
+        state.time_since_jump_started = Duration::ZERO;
     }
-    state.seconds_since_jump_started =
-        saturating_seconds_add(state.seconds_since_jump_started, delta_seconds);
+    state.time_since_jump_started = state.time_since_jump_started.saturating_add(delta);
 }
 
 fn prepared_vertical_velocity(
@@ -609,10 +613,11 @@ fn prepared_vertical_velocity(
     sneak_held: bool,
     state: &mut PlayerControllerState,
     current_velocity_y: f32,
-    delta_seconds: f32,
+    delta: Duration,
 ) -> f32 {
+    let delta_seconds = delta.as_secs_f32();
     if state.flying {
-        state.jump_buffer_remaining_seconds = 0.0;
+        state.jump_buffer_remaining = Duration::ZERO;
         let speed = if sprint_held {
             FLY_SPEED_MPS * FLY_SPRINT_MULTIPLIER
         } else {
@@ -624,15 +629,15 @@ fn prepared_vertical_velocity(
             (true, true) | (false, false) => 0.0,
         };
     }
-    let within_coyote = state.grounded || state.seconds_since_grounded <= profile.coyote_seconds;
-    if state.jump_buffer_remaining_seconds > 0.0 && within_coyote {
-        state.jump_buffer_remaining_seconds = 0.0;
+    let within_coyote = state.grounded
+        || duration_within_window(state.time_since_grounded, profile.coyote_duration);
+    if !state.jump_buffer_remaining.is_zero() && within_coyote {
+        state.jump_buffer_remaining = Duration::ZERO;
         state.grounded = false;
-        state.seconds_since_grounded = profile.coyote_seconds + delta_seconds;
+        state.time_since_grounded = profile.coyote_duration.saturating_add(delta);
         jump_launch_speed_mps(profile.jump_apex_m, delta_seconds)
     } else {
-        state.jump_buffer_remaining_seconds =
-            saturating_seconds_sub(state.jump_buffer_remaining_seconds, delta_seconds);
+        state.jump_buffer_remaining = subtract_timer(state.jump_buffer_remaining, delta);
         if state.grounded && current_velocity_y <= 0.0 {
             0.0
         } else {
@@ -706,7 +711,7 @@ pub(crate) fn move_players(
             transform.translation = step_position;
             velocity.y = 0.0;
             state.grounded = true;
-            state.seconds_since_grounded = 0.0;
+            state.time_since_grounded = Duration::ZERO;
         } else {
             transform.translation = direct.position.f32();
             velocity.0 = direct.projected_velocity;
@@ -714,36 +719,34 @@ pub(crate) fn move_players(
                 velocity.y = 0.0;
                 state.flying = false;
                 state.grounded = true;
-                state.seconds_since_grounded = 0.0;
+                state.time_since_grounded = Duration::ZERO;
             }
         }
     }
 }
 
 fn jump_launch_speed_mps(apex_m: f32, delta_seconds: f32) -> f32 {
-    // Compensate semi-implicit Euler's half-step error so the authored apex
-    // remains stable when the fixed frequency changes.
-    ((2.0 * GRAVITY_MPS2 * apex_m).sqrt() - GRAVITY_MPS2 * delta_seconds * 0.5).max(0.0)
+    // Solve the discrete semi-implicit trajectory rather than approximating
+    // its integration error. The selected integral step count is the unique
+    // one whose positive-velocity samples bracket the authored apex.
+    let normalized_height = apex_m / (GRAVITY_MPS2 * delta_seconds * delta_seconds);
+    let rising_steps = (((1.0 + 8.0 * normalized_height).sqrt() - 1.0) * 0.5)
+        .ceil()
+        .max(1.0);
+    apex_m / (rising_steps * delta_seconds)
+        + GRAVITY_MPS2 * delta_seconds * (rising_steps - 1.0) * 0.5
 }
 
-fn saturating_seconds_add(current: f32, delta: f32) -> f32 {
-    if current >= f32::MAX - delta {
-        f32::MAX
-    } else {
-        current + delta
-    }
+fn duration_within_window(elapsed: Duration, window: Duration) -> bool {
+    elapsed <= window.saturating_add(TIMER_ROUNDING_TOLERANCE)
 }
 
-fn saturating_seconds_sub(current: f32, delta: f32) -> f32 {
-    if current <= delta {
-        0.0
+fn subtract_timer(current: Duration, delta: Duration) -> Duration {
+    let remaining = current.saturating_sub(delta);
+    if remaining <= TIMER_ROUNDING_TOLERANCE {
+        Duration::ZERO
     } else {
-        let remaining = current - delta;
-        if remaining <= delta * 0.000_01 {
-            0.0
-        } else {
-            remaining
-        }
+        remaining
     }
 }
 
@@ -1020,6 +1023,26 @@ mod tests {
     }
 
     #[test]
+    fn discrete_jump_apex_is_stable_across_fixed_rates() {
+        for hertz in [60.0_f32, 240.0, 1_000.0] {
+            let delta_seconds = hertz.recip();
+            let mut velocity = jump_launch_speed_mps(1.25, delta_seconds);
+            let mut height = 0.0_f32;
+            while velocity > 0.0 {
+                height += velocity * delta_seconds;
+                velocity -= GRAVITY_MPS2 * delta_seconds;
+            }
+            assert!(
+                (height - 1.25).abs() < 0.000_1,
+                "{hertz} Hz discrete apex was {height}"
+            );
+        }
+        assert!(
+            (jump_launch_speed_mps(1.25, REFERENCE_FIXED_HZ.recip()) - 6.841_429).abs() < 0.000_01
+        );
+    }
+
+    #[test]
     fn steep_climb_rejection_preserves_vertical_collision_response() {
         let normal = Vec3::new(0.0, 0.5, 0.866_025_4);
 
@@ -1045,62 +1068,62 @@ mod tests {
     #[test]
     fn coyote_window_accepts_six_ticks_and_rejects_seven() {
         let profile = PlayerMovementProfileV1::default();
-        let delta_seconds = REFERENCE_FIXED_HZ.recip();
+        let delta = Duration::from_nanos(1_000_000_000 / 60);
         let mut accepted = PlayerControllerState {
             grounded: false,
-            seconds_since_grounded: 6.0 / REFERENCE_FIXED_HZ,
-            jump_buffer_remaining_seconds: 0.0,
+            time_since_grounded: delta.saturating_mul(6),
+            jump_buffer_remaining: Duration::ZERO,
             flying: false,
-            seconds_since_jump_started: f32::MAX,
+            time_since_jump_started: Duration::MAX,
         };
-        let accepted_velocity = tick_vertical(profile, true, &mut accepted, -1.0, delta_seconds);
+        let accepted_velocity = tick_vertical(profile, true, &mut accepted, -1.0, delta);
         assert_eq!(
             accepted_velocity,
-            jump_launch_speed_mps(profile.jump_apex_m(), delta_seconds)
+            jump_launch_speed_mps(profile.jump_apex_m(), delta.as_secs_f32())
         );
 
         let mut rejected = PlayerControllerState {
             grounded: false,
-            seconds_since_grounded: 7.0 / REFERENCE_FIXED_HZ,
-            jump_buffer_remaining_seconds: 0.0,
+            time_since_grounded: delta.saturating_mul(7),
+            jump_buffer_remaining: Duration::ZERO,
             flying: false,
-            seconds_since_jump_started: f32::MAX,
+            time_since_jump_started: Duration::MAX,
         };
-        let rejected_velocity = tick_vertical(profile, true, &mut rejected, -1.0, delta_seconds);
+        let rejected_velocity = tick_vertical(profile, true, &mut rejected, -1.0, delta);
         assert!(rejected_velocity < 0.0);
     }
 
     #[test]
     fn jump_buffer_accepts_landing_on_sixth_tick_and_rejects_seventh() {
         let profile = PlayerMovementProfileV1::default();
-        let delta_seconds = REFERENCE_FIXED_HZ.recip();
+        let delta = Duration::from_nanos(1_000_000_000 / 60);
         let airborne = PlayerControllerState {
             grounded: false,
-            seconds_since_grounded: f32::MAX,
-            jump_buffer_remaining_seconds: 0.0,
+            time_since_grounded: Duration::MAX,
+            jump_buffer_remaining: Duration::ZERO,
             flying: false,
-            seconds_since_jump_started: f32::MAX,
+            time_since_jump_started: Duration::MAX,
         };
 
         let mut sixth_tick = airborne;
-        let mut velocity = tick_vertical(profile, true, &mut sixth_tick, -1.0, delta_seconds);
+        let mut velocity = tick_vertical(profile, true, &mut sixth_tick, -1.0, delta);
         for _ in 0..4 {
-            velocity = tick_vertical(profile, false, &mut sixth_tick, velocity, delta_seconds);
+            velocity = tick_vertical(profile, false, &mut sixth_tick, velocity, delta);
         }
         sixth_tick.grounded = true;
-        velocity = tick_vertical(profile, false, &mut sixth_tick, velocity, delta_seconds);
+        velocity = tick_vertical(profile, false, &mut sixth_tick, velocity, delta);
         assert_eq!(
             velocity,
-            jump_launch_speed_mps(profile.jump_apex_m(), delta_seconds)
+            jump_launch_speed_mps(profile.jump_apex_m(), delta.as_secs_f32())
         );
 
         let mut seventh_tick = airborne;
-        let mut velocity = tick_vertical(profile, true, &mut seventh_tick, -1.0, delta_seconds);
+        let mut velocity = tick_vertical(profile, true, &mut seventh_tick, -1.0, delta);
         for _ in 0..5 {
-            velocity = tick_vertical(profile, false, &mut seventh_tick, velocity, delta_seconds);
+            velocity = tick_vertical(profile, false, &mut seventh_tick, velocity, delta);
         }
         seventh_tick.grounded = true;
-        velocity = tick_vertical(profile, false, &mut seventh_tick, velocity, delta_seconds);
+        velocity = tick_vertical(profile, false, &mut seventh_tick, velocity, delta);
         assert_eq!(velocity, 0.0);
     }
 
@@ -1124,36 +1147,61 @@ mod tests {
     }
 
     #[test]
+    fn flight_toggle_window_has_stable_inclusive_tick_boundaries() {
+        let profile = PlayerMovementProfileV1::default();
+        for (hertz, boundary_ticks) in [(60_u32, 21_u32), (240, 84), (10_000, 3_500)] {
+            let delta = Duration::from_secs_f64(1.0 / f64::from(hertz));
+            let base = PlayerControllerState {
+                grounded: false,
+                time_since_grounded: delta,
+                jump_buffer_remaining: Duration::ZERO,
+                flying: false,
+                time_since_jump_started: delta.saturating_mul(boundary_ticks),
+            };
+
+            let mut inclusive = base;
+            apply_jump_and_fly_toggle(profile, true, &mut inclusive, delta);
+            assert!(inclusive.flying, "{hertz} Hz boundary must be inclusive");
+
+            let mut outside = PlayerControllerState {
+                time_since_jump_started: delta.saturating_mul(boundary_ticks + 1),
+                ..base
+            };
+            apply_jump_and_fly_toggle(profile, true, &mut outside, delta);
+            assert!(!outside.flying, "{hertz} Hz next tick must be outside");
+        }
+    }
+
+    #[test]
     fn airborne_double_jump_toggles_flight_and_cancels_gravity() {
         let profile = PlayerMovementProfileV1::default();
-        let delta_seconds = REFERENCE_FIXED_HZ.recip();
+        let delta = Duration::from_nanos(1_000_000_000 / 60);
         let mut state = PlayerControllerState {
             grounded: false,
-            seconds_since_grounded: 1.0 / REFERENCE_FIXED_HZ,
-            jump_buffer_remaining_seconds: 0.0,
+            time_since_grounded: delta,
+            jump_buffer_remaining: Duration::ZERO,
             flying: false,
-            seconds_since_jump_started: 1.0 / REFERENCE_FIXED_HZ,
+            time_since_jump_started: delta,
         };
         let velocity = tick_vertical(
             profile,
             true,
             &mut state,
-            jump_launch_speed_mps(profile.jump_apex_m(), delta_seconds),
-            delta_seconds,
+            jump_launch_speed_mps(profile.jump_apex_m(), delta.as_secs_f32()),
+            delta,
         );
         assert!(state.flying);
         assert_eq!(velocity, FLY_SPEED_MPS);
 
-        let hover = tick_vertical(profile, false, &mut state, 0.0, delta_seconds);
+        let hover = tick_vertical(profile, false, &mut state, 0.0, delta);
         assert_eq!(hover, 0.0);
 
-        apply_jump_and_fly_toggle(profile, false, &mut state, delta_seconds);
-        let climb =
-            prepared_vertical_velocity(profile, true, false, false, &mut state, 0.0, delta_seconds);
+        apply_jump_and_fly_toggle(profile, false, &mut state, delta);
+        let climb = prepared_vertical_velocity(profile, true, false, false, &mut state, 0.0, delta);
         assert_eq!(climb, FLY_SPEED_MPS);
-        apply_jump_and_fly_toggle(profile, false, &mut state, delta_seconds);
+        apply_jump_and_fly_toggle(profile, false, &mut state, delta);
         let descend =
-            prepared_vertical_velocity(profile, false, false, true, &mut state, 0.0, delta_seconds);
+            prepared_vertical_velocity(profile, false, false, true, &mut state, 0.0, delta);
         assert_eq!(descend, -FLY_SPEED_MPS);
     }
 
@@ -1162,9 +1210,9 @@ mod tests {
         jump_started: bool,
         state: &mut PlayerControllerState,
         current_velocity_y: f32,
-        delta_seconds: f32,
+        delta: Duration,
     ) -> f32 {
-        apply_jump_and_fly_toggle(profile, jump_started, state, delta_seconds);
+        apply_jump_and_fly_toggle(profile, jump_started, state, delta);
         prepared_vertical_velocity(
             profile,
             jump_started,
@@ -1172,7 +1220,7 @@ mod tests {
             false,
             state,
             current_velocity_y,
-            delta_seconds,
+            delta,
         )
     }
 }
