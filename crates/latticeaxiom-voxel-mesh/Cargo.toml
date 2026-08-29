@@ -15,6 +15,7 @@ thiserror.workspace = true
 workspace = true
 
 [dev-dependencies]
+block-mesh.workspace = true
 criterion.workspace = true
 
 [[bench]]

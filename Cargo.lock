@@ -4360,6 +4360,7 @@ dependencies = [
 name = "latticeaxiom-voxel-mesh"
 version = "0.1.0"
 dependencies = [
+ "block-mesh",
  "criterion 0.8.2",
  "thiserror 2.0.20",
 ]
