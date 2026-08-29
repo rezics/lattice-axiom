@@ -67,12 +67,19 @@ root is:
 task dev
 ```
 
-That always relocks the `client-world` bootstrap (`profiles/dev.toml`) and then
-launches the interactive client with development features, including Bevy
-dynamic linking. `task lock` only writes the lock and CAS.
-`task verify` freeze-verifies an existing lock. `task --list` prints the
-available tasks. On Windows, `winget install Task.Task` provides the `task`
-binary.
+That always relocks the `client-world` bootstrap (`profiles/dev.toml`), starts a
+local Logdy Web log viewer at <http://127.0.0.1:8080>, and launches the
+interactive client with development features, including Bevy dynamic linking.
+The first observed launch downloads and verifies a pinned Logdy release under
+ignored `run/tools/`; it never executes an unverified artifact. `task
+logs:open` opens the viewer, while `task dev:plain` keeps the direct no-viewer
+loop. See [`docs/development/observability.md`](docs/development/observability.md)
+for ports, persistence, and the upstream decision record.
+
+`task lock` only writes the lock and CAS. `task verify` freeze-verifies an
+existing lock. `task --list` prints the available tasks. On Windows, `winget
+install Task.Task` provides the `task` binary. The development tasks also
+require Python 3.12 or newer for the checked-in cross-platform Logdy launcher.
 
 Without Task, the same loop is:
 

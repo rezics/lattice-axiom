@@ -40,12 +40,49 @@ tasks:
     cmds:
       - cargo run -p latticeaxiom-engine --bin latticeaxiom-play
 
-  dev:
-    desc: Relock the client-world bootstrap, then launch the interactive client
+  dev:client:
+    internal: true
+    cmds:
+      - cargo run -p latticeaxiom-engine
+
+  logs:install:
+    desc: Install and verify the pinned local Logdy Web viewer
+    cmds:
+      - python scripts/development/logdy_dev.py install
+
+  logs:open:
+    desc: Open the local Logdy Web viewer in the default browser
+    cmds:
+      - python scripts/development/logdy_dev.py open
+
+  logs:test:
+    desc: Test the pinned Logdy launcher and manifest contracts
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    cmds:
+      - python -m unittest discover -s scripts/development -p "test_logdy_dev.py" -v
+
+  logs:web:
+    desc: Launch the client with a localhost Logdy Web viewer
+    cmds:
+      - python scripts/development/logdy_dev.py run -- cargo run -p latticeaxiom-engine
+
+  dev:plain:
+    desc: Relock and launch the client without the Web log viewer
     deps:
       - task: lock
         vars:
           BOOTSTRAP: profiles/dev.toml
           LOCK: latticeaxiom.lock
     cmds:
-      - cargo run -p latticeaxiom-engine
+      - task: dev:client
+
+  dev:
+    desc: Relock and launch the client with a localhost Web log viewer
+    deps:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/dev.toml
+          LOCK: latticeaxiom.lock
+    cmds:
+      - task: logs:web
