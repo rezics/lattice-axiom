@@ -24,6 +24,31 @@ repository. Accepted ADRs there override older implementation assumptions.
 - Implement roadmap work as coherent, independently verifiable slices. Run the
   checks appropriate to each slice and create a separate Conventional Commit
   before starting the next behavior change.
+- Before implementing reusable infrastructure or a general-purpose algorithm,
+  actively study the problem domain and survey current Bevy facilities,
+  maintained Rust crates, relevant standards, and upstream or reference
+  implementations. This applies especially to math, collections, parsing,
+  serialization, filesystem safety, concurrency, logging and telemetry,
+  networking, storage, compression, procedural generation, and meshing.
+- Library adoption is evidence-based, not mandatory. Prefer a mature,
+  maintained, license-compatible upstream library when it satisfies the
+  project's semantics, determinism, performance, memory, safety, supported
+  platforms, headless CI, and dependency-budget requirements. Keep
+  project-owned code when the behavior is itself a Lattice contract or
+  candidates fail those gates.
+- For each material build-versus-buy decision, record the candidates and exact
+  versions or revisions considered, authoritative documentation or source
+  studied, maintenance and security status, license, transitive dependency and
+  feature impact, semantic gaps, and benchmark or conformance evidence. Do not
+  rely only on remembered APIs or old comparisons.
+- Preserve project contracts through adapters rather than by forking or copying
+  upstream code. Before replacing an existing implementation, add
+  characterization or conformance tests and representative benchmarks, compare
+  old and new paths, and remove the old path only after parity and applicable
+  budgets are proven.
+- Do not add a dependency merely because one exists. A small, auditable
+  operation or a project-specific stable boundary can be safer and cheaper than
+  an additional dependency.
 - For terrain generation, chunk streaming, view distance, and related
   performance work, study the current Minecraft Java Edition behavior and
   data formats before choosing project semantics. The
