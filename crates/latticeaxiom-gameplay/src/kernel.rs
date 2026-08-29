@@ -132,45 +132,55 @@ impl<'catalog> GameplayKernel<'catalog> {
         }
 
         let mut inventory_after = inventory.slots.to_vec();
-        let work_per_step = if let Some(slot) = command.tool_slot {
-            let stack = slot_ref(&inventory_after, slot)?
-                .as_ref()
-                .ok_or(GameplayReject::EmptySlot)?;
-            let tool = self
-                .catalog
-                .tool(stack.item())
-                .ok_or_else(|| GameplayReject::NotATool {
-                    item: stack.item().clone(),
-                })?;
-            if let Some(requirement) = &block_definition.mining.tool {
-                if tool.class != requirement.class {
-                    return Err(GameplayReject::ToolClassMismatch {
-                        required: Box::new(requirement.class.clone()),
-                        actual: Box::new(tool.class.clone()),
-                    });
-                }
-                if tool.tier < requirement.minimum_tier {
-                    return Err(GameplayReject::ToolTierTooLow {
-                        required: requirement.minimum_tier,
-                        actual: tool.tier,
-                    });
-                }
+        let required = block_definition.mining.hardness.get();
+        let work = match self.rules.player_mode {
+            // Creative mode is an authority rule, not an input-side shortcut.
+            // One bounded mine command satisfies authored hardness atomically so
+            // every caller observes the same tool-free, progress-free break.
+            GameplayModeV1::Creative => required,
+            GameplayModeV1::Survival => {
+                let work_per_step = {
+                    if let Some(slot) = command.tool_slot {
+                        let stack = slot_ref(&inventory_after, slot)?
+                            .as_ref()
+                            .ok_or(GameplayReject::EmptySlot)?;
+                        let tool = self.catalog.tool(stack.item()).ok_or_else(|| {
+                            GameplayReject::NotATool {
+                                item: stack.item().clone(),
+                            }
+                        })?;
+                        if let Some(requirement) = &block_definition.mining.tool {
+                            if tool.class != requirement.class {
+                                return Err(GameplayReject::ToolClassMismatch {
+                                    required: Box::new(requirement.class.clone()),
+                                    actual: Box::new(tool.class.clone()),
+                                });
+                            }
+                            if tool.tier < requirement.minimum_tier {
+                                return Err(GameplayReject::ToolTierTooLow {
+                                    required: requirement.minimum_tier,
+                                    actual: tool.tier,
+                                });
+                            }
+                        }
+                        if !matches!(stack.state(), ItemStateV1::ToolDurability { .. }) {
+                            return Err(GameplayReject::ToolStateMissing {
+                                item: stack.item().clone(),
+                            });
+                        }
+                        tool.work_per_step.get()
+                    } else {
+                        if block_definition.mining.tool.is_some() {
+                            return Err(GameplayReject::ToolRequired);
+                        }
+                        1
+                    }
+                };
+                work_per_step
+                    .checked_mul(u32::from(command.steps.get()))
+                    .ok_or(GameplayReject::QuantityOverflow)?
             }
-            if !matches!(stack.state(), ItemStateV1::ToolDurability { .. }) {
-                return Err(GameplayReject::ToolStateMissing {
-                    item: stack.item().clone(),
-                });
-            }
-            tool.work_per_step.get()
-        } else {
-            if block_definition.mining.tool.is_some() {
-                return Err(GameplayReject::ToolRequired);
-            }
-            1
         };
-        let work = work_per_step
-            .checked_mul(u32::from(command.steps.get()))
-            .ok_or(GameplayReject::QuantityOverflow)?;
 
         let key = BreakProgressKey {
             player: command.player,
@@ -181,10 +191,12 @@ impl<'catalog> GameplayKernel<'catalog> {
             .as_ref()
             .filter(|progress| progress.block == block)
             .map_or(0, |progress| progress.accumulated_work);
-        let accumulated = previous_work
-            .checked_add(work)
-            .ok_or(GameplayReject::QuantityOverflow)?;
-        let required = block_definition.mining.hardness.get();
+        let accumulated = match self.rules.player_mode {
+            GameplayModeV1::Creative => required,
+            GameplayModeV1::Survival => previous_work
+                .checked_add(work)
+                .ok_or(GameplayReject::QuantityOverflow)?,
+        };
         if accumulated < required {
             if before_progress.is_none()
                 && state.break_progress.len() >= state.limits.break_progress
@@ -236,7 +248,9 @@ impl<'catalog> GameplayKernel<'catalog> {
         let drop_id = command.reserved_drop;
         require_available_drop_id(state, drop_id)?;
 
-        if let Some(tool_slot) = command.tool_slot {
+        if self.rules.player_mode == GameplayModeV1::Survival
+            && let Some(tool_slot) = command.tool_slot
+        {
             let tool = slot_ref(&inventory_after, tool_slot)?
                 .as_ref()
                 .ok_or(GameplayReject::EmptySlot)?

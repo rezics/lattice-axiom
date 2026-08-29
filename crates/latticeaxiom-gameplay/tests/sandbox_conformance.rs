@@ -2573,6 +2573,60 @@ fn wrong_tool_and_exhausted_tool_are_atomic() {
 }
 
 #[test]
+fn creative_mining_bypasses_tool_requirements_without_consuming_durability() {
+    let catalog = catalog();
+    let dimension = fixture_dimension();
+    let ore = BlockPosition { x: 4, y: 8, z: 0 };
+    let mut state = state_with_inventory(4);
+    seed_stack(
+        &mut state,
+        PLAYER,
+        0,
+        tool_stack("example:item/pickaxe", 10),
+    );
+    state
+        .seed_block(
+            block_key(&dimension, ore),
+            parsed("example:block/copper-ore"),
+        )
+        .unwrap_or_else(|error| panic!("creative ore seed failed: {error}"));
+    let mut authority = applier_with_rules(
+        state,
+        &catalog,
+        GameplayRulesV1 {
+            player_mode: GameplayModeV1::Creative,
+        },
+    );
+
+    let receipt = execute(
+        &mut authority,
+        &catalog,
+        GameplayCommandV1::Mine(MineCommandV1 {
+            reserved_drop: reserved_drop(),
+            player: PLAYER,
+            target: block_key(&dimension, ore),
+            expected_chunk_revision: ChunkRevision::ZERO,
+            tool_slot: None,
+            steps: MiningStepCountV1::ONE,
+        }),
+    );
+
+    assert!(matches!(
+        receipt.outcome,
+        CommandOutcomeV1::BlockBroken { .. }
+    ));
+    let inventory = authority
+        .state()
+        .inventory(PLAYER)
+        .unwrap_or_else(|| panic!("creative inventory remains available"));
+    assert!(matches!(
+        inventory.slot(SlotIndex::new(0)),
+        Ok(Some(stack))
+            if matches!(stack.state(), ItemStateV1::ToolDurability { remaining } if remaining.get() == 10)
+    ));
+}
+
+#[test]
 #[allow(
     clippy::too_many_lines,
     reason = "the fixture-dimension journey is kept as one auditable command sequence"

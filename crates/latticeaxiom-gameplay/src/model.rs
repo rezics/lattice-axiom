@@ -1435,7 +1435,10 @@ pub enum GameplayModeV1 {
     /// Ordinary inventory costs and no authority-only item creation.
     #[default]
     Survival,
-    /// Placement retains inventory and pick-block may create a catalog item stack.
+    /// Placement retains inventory, one mining command atomically satisfies
+    /// authored hardness without tool qualification or durability cost, and
+    /// pick-block may create a catalog item stack. Authored drops remain
+    /// authoritative.
     Creative,
 }
 

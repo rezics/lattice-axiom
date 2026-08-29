@@ -4671,7 +4671,9 @@ fn production_host_creative_pick_block_selects_and_creates_catalog_stacks() {
     assert_eq!(spine.gameplay_mode(), Some(GameplayModeV1::Creative));
 
     let (_, target, _) = first_resident_soil(&spine);
-    mine_until_broken(&spine, target);
+    spine
+        .mine_cell(target)
+        .expect("creative mode breaks the foundation in one authority command");
     let (forward, expected_block) = [
         ([1.0, 0.0, 0.0], (1, 0, 0)),
         ([-1.0, 0.0, 0.0], (-1, 0, 0)),
@@ -4813,6 +4815,58 @@ fn production_host_creative_pick_block_selects_and_creates_catalog_stacks() {
             .map(|stack| (stack.item(), stack.quantity())),
         Some((&placement_item, placement_limit))
     );
+}
+
+#[test]
+fn production_host_creative_mode_breaks_glass_without_a_tool() {
+    let _production_host_guard = production_host_test_guard();
+    let catalog = authored_gameplay_catalog().expect("package gameplay catalog must compile");
+    let glass_block = parse_block("terrenia:block/glass");
+    let glass_item = catalog
+        .items()
+        .values()
+        .find(|item| item.placement_block.as_ref() == Some(&glass_block))
+        .map(|item| item.id.clone())
+        .expect("glass has a placement item");
+    let boot = creative_lock_boot_fixture();
+    let instance = EngineInstance::new_headless_host_from_lock_with_catalog(
+        boot.prepared(),
+        SPINE_TIMESTEP,
+        catalog,
+    )
+    .expect("production spine starts with package gameplay catalog");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    assert_eq!(spine.gameplay_mode(), Some(GameplayModeV1::Creative));
+
+    clear_inventory(&spine);
+    let (_, target, _) = first_resident_soil(&spine);
+    spine
+        .mine_cell(target)
+        .expect("creative mode breaks the foundation in one authority command");
+    spine
+        .creative_pick_item(glass_item)
+        .expect("creative authority creates the glass placement stack");
+    let anchor = latticeaxiom_gameplay::BlockPosition {
+        x: target.x,
+        y: target.y.saturating_add(1),
+        z: target.z,
+    };
+    let placed = spine
+        .place_from_hotbar(anchor, BlockFaceV1::NegativeY)
+        .expect("creative glass placement succeeds");
+    assert_eq!(placed.position, target);
+    assert_eq!(placed.new_content.as_ref(), Some(&glass_block));
+
+    let broken = spine
+        .mine_cell(target)
+        .expect("creative mode breaks glass in one authority command");
+    assert_eq!(broken.old_content.as_ref(), Some(&glass_block));
+    assert_eq!(broken.new_content, None);
 }
 
 #[test]
