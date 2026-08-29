@@ -21,11 +21,28 @@ pub const UI_SCALE_SETTING_ID: &str = "latticeaxiom:setting/ui-scale";
 /// Stable ID for the user view-distance setting.
 pub const VIEW_DISTANCE_SETTING_ID: &str = "latticeaxiom:setting/view-distance";
 
+/// Stable ID for vertical synchronization.
+pub const VIDEO_VSYNC_SETTING_ID: &str = "latticeaxiom:setting/video/vsync";
+
+/// Stable ID for the focused-window frame cap.
+pub const VIDEO_FRAME_RATE_LIMIT_SETTING_ID: &str = "latticeaxiom:setting/video/frame-rate-limit";
+
+/// Stable ID for the unfocused-window frame cap.
+pub const VIDEO_BACKGROUND_FRAME_RATE_LIMIT_SETTING_ID: &str =
+    "latticeaxiom:setting/video/background-frame-rate-limit";
+
+/// Stable ID for the authoritative simulation frequency request.
+pub const SIMULATION_TICK_RATE_SETTING_ID: &str =
+    "latticeaxiom:setting/gameplay/simulation-tick-rate";
+
 /// Accessibility category for UI scale.
 pub const ACCESSIBILITY_SETTING_CATEGORY_ID: &str = "latticeaxiom:setting-category/accessibility";
 
 /// Video category for view distance.
 pub const VIDEO_SETTING_CATEGORY_ID: &str = "latticeaxiom:setting-category/video";
+
+/// Gameplay category for simulation timing.
+pub const GAMEPLAY_SETTING_CATEGORY_ID: &str = "latticeaxiom:setting-category/gameplay";
 
 /// Authored default UI scale.
 pub const DEFAULT_UI_SCALE: &str = "1.0";
@@ -40,6 +57,9 @@ pub const DEFAULT_VIEW_DISTANCE_CHUNKS: u32 = 8;
 
 /// Authored maximum view-distance request before host clamping, in chunks.
 pub const AUTHORED_MAX_VIEW_DISTANCE_CHUNKS: u32 = 32;
+
+/// Default authoritative simulation frequency in hertz.
+pub const DEFAULT_SIMULATION_TICK_RATE_HZ: u16 = 60;
 
 /// User-facing projection of the first-consumer settings.
 #[derive(Clone, Debug, PartialEq)]
@@ -123,10 +143,41 @@ pub fn view_distance_setting_id() -> StableId {
     parse_id(VIEW_DISTANCE_SETTING_ID)
 }
 
-/// Returns the two first-consumer declarations owned by the settings package.
+/// Returns the vertical-synchronization setting ID.
+#[must_use]
+pub fn video_vsync_setting_id() -> StableId {
+    parse_id(VIDEO_VSYNC_SETTING_ID)
+}
+
+/// Returns the focused-window frame-limit setting ID.
+#[must_use]
+pub fn video_frame_rate_limit_setting_id() -> StableId {
+    parse_id(VIDEO_FRAME_RATE_LIMIT_SETTING_ID)
+}
+
+/// Returns the unfocused-window frame-limit setting ID.
+#[must_use]
+pub fn video_background_frame_rate_limit_setting_id() -> StableId {
+    parse_id(VIDEO_BACKGROUND_FRAME_RATE_LIMIT_SETTING_ID)
+}
+
+/// Returns the simulation-frequency setting ID.
+#[must_use]
+pub fn simulation_tick_rate_setting_id() -> StableId {
+    parse_id(SIMULATION_TICK_RATE_SETTING_ID)
+}
+
+/// Returns the first-consumer declarations owned by the settings package.
 #[must_use]
 pub fn foundation_setting_specs() -> Vec<SettingSpec> {
-    vec![ui_scale_spec(), view_distance_spec()]
+    vec![
+        ui_scale_spec(),
+        view_distance_spec(),
+        video_vsync_spec(),
+        video_frame_rate_limit_spec(),
+        video_background_frame_rate_limit_spec(),
+        simulation_tick_rate_spec(),
+    ]
 }
 
 /// Projects first-consumer values from an effective snapshot and user profile.
@@ -246,6 +297,100 @@ fn view_distance_spec() -> SettingSpec {
         order: 20,
         label_key: "latticeaxiom.settings.view-distance.label".to_owned(),
         description_key: "latticeaxiom.settings.view-distance.description".to_owned(),
+        visibility: None,
+        enabled_when: None,
+        sensitivity: SettingSensitivity::Ordinary,
+        replacement: None,
+    }
+}
+
+fn video_vsync_spec() -> SettingSpec {
+    local_user_spec(
+        video_vsync_setting_id(),
+        ValueType::Bool,
+        Value::Bool(false),
+        VIDEO_SETTING_CATEGORY_ID,
+        60,
+    )
+}
+
+fn video_frame_rate_limit_spec() -> SettingSpec {
+    local_user_spec(
+        video_frame_rate_limit_setting_id(),
+        ValueType::Enum {
+            values: [
+                "30",
+                "60",
+                "90",
+                "120",
+                "144",
+                "165",
+                "240",
+                "300",
+                "360",
+                "unlimited",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        },
+        Value::String("unlimited".to_owned()),
+        VIDEO_SETTING_CATEGORY_ID,
+        70,
+    )
+}
+
+fn video_background_frame_rate_limit_spec() -> SettingSpec {
+    local_user_spec(
+        video_background_frame_rate_limit_setting_id(),
+        ValueType::Integer {
+            min: Some(5),
+            max: Some(60),
+            step: Some(5),
+        },
+        Value::from(30),
+        VIDEO_SETTING_CATEGORY_ID,
+        80,
+    )
+}
+
+fn simulation_tick_rate_spec() -> SettingSpec {
+    local_user_spec(
+        simulation_tick_rate_setting_id(),
+        ValueType::Integer {
+            min: Some(1),
+            max: Some(10_000),
+            step: Some(1),
+        },
+        Value::from(DEFAULT_SIMULATION_TICK_RATE_HZ),
+        GAMEPLAY_SETTING_CATEGORY_ID,
+        10,
+    )
+}
+
+fn local_user_spec(
+    id: StableId,
+    value_type: ValueType,
+    default: Value,
+    category: &'static str,
+    order: i32,
+) -> SettingSpec {
+    let label_key = format!("{id}.label");
+    let description_key = format!("{id}.description");
+    SettingSpec {
+        id,
+        declared_by: settings_package_name(),
+        schema_version: 1,
+        value_type,
+        default,
+        allowed_scopes: BTreeSet::from([SettingScope::User, SettingScope::Session]),
+        default_scope: SettingScope::User,
+        authority: SettingAuthority::LocalUser,
+        apply_impact: RuntimeApplyImpact::Immediate,
+        category: parse_id(category),
+        order,
+        label_key,
+        description_key,
         visibility: None,
         enabled_when: None,
         sensitivity: SettingSensitivity::Ordinary,

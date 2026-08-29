@@ -25,10 +25,11 @@ use latticeaxiom_player::{
     ActionAxis2V1, ActionFrameInbox, AuthoritativeBlockEditRequestV1, BlockEditAuthority,
     BlockEditAuthorityResource, BlockEditRejectV1, BlockEditSuccessV1, D2PlayerBundle,
     DetachedSpectator, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
-    PlayerControllerState, PlayerFixedTick, PlayerPlugin, SuccessfulEditCooldownV1,
+    PlayerControllerState, PlayerFixedTick, PlayerPlugin, SimulationClock, SimulationTickRate,
+    SimulationTickRateRequest, SuccessfulEditCooldownV1,
 };
 
-const FIXED_HZ: f64 = 60.0;
+const FIXED_HZ: f32 = 60.0;
 
 fn headless_app() -> App {
     let mut app = App::new();
@@ -119,6 +120,69 @@ fn fixed_action_stream_is_independent_of_update_batching() {
     assert_eq!(single_tick.get(), 120);
     assert_eq!(single_transform.translation, quad_transform.translation);
     assert!((single_transform.translation.z + 9.0).abs() < 0.15);
+}
+
+#[test]
+fn validated_tick_rate_request_applies_at_the_fixed_boundary() {
+    let mut app = headless_app();
+    prime_spatial_queries(&mut app);
+    let rate = SimulationTickRate::new(240).expect("240 Hz is in the supported domain");
+    assert!(
+        app.world_mut()
+            .write_message(SimulationTickRateRequest {
+                request_id: 7,
+                rate,
+            })
+            .is_some()
+    );
+
+    run_update_for_ticks(&mut app, 1);
+
+    assert_eq!(
+        app.world().resource::<SimulationClock>().active_rate(),
+        rate
+    );
+    assert_eq!(
+        app.world().resource::<Time<Fixed>>().timestep(),
+        rate.timestep()
+    );
+}
+
+fn walk_for_one_second_at(hertz: u16) -> f32 {
+    let mut app = test_app();
+    let rate = SimulationTickRate::new(hertz).expect("fixture tick rate is supported");
+    assert!(
+        app.world_mut()
+            .write_message(SimulationTickRateRequest {
+                request_id: 1,
+                rate,
+            })
+            .is_some()
+    );
+    run_update_for_ticks(&mut app, 1);
+    let player = spawn_player(&mut app);
+    push_frames(&mut app, movement_frames(u64::from(hertz)));
+    run_update_for_ticks(&mut app, u32::from(hertz));
+    app.world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("player Transform remains present")
+        .translation
+        .z
+}
+
+#[test]
+fn real_time_walk_distance_is_stable_across_tick_rates() {
+    let at_sixty = walk_for_one_second_at(60);
+    let at_two_forty = walk_for_one_second_at(240);
+    assert!(
+        (at_sixty + 4.5).abs() < 0.15,
+        "60 Hz distance was {at_sixty}"
+    );
+    assert!(
+        (at_two_forty - at_sixty).abs() < 0.08,
+        "60 Hz {at_sixty} and 240 Hz {at_two_forty} diverged"
+    );
 }
 
 #[test]
@@ -380,7 +444,10 @@ fn coyote_jump_velocity(target_airborne_tick: u8) -> Vec3 {
             .get::<PlayerControllerState>()
             .expect("player bundle has controller state");
         let jump_now = !state.grounded()
-            && state.ticks_since_grounded() == target_airborne_tick.saturating_sub(1);
+            && (state.seconds_since_grounded()
+                - f32::from(target_airborne_tick.saturating_sub(1)) / FIXED_HZ)
+                .abs()
+                < 0.000_1;
         let mut started = PlayerActionButtonsV1::empty();
         if jump_now {
             started.insert(PlayerActionV1::Jump);

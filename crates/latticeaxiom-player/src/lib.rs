@@ -10,6 +10,7 @@
 //! `PhysicsPlugins::default()`, whose physics schedule is `FixedPostUpdate`.
 
 mod action;
+mod clock;
 mod edit;
 mod inspect;
 #[cfg(feature = "client-input")]
@@ -20,6 +21,11 @@ mod plugin;
 pub use action::{
     ActionAxis2V1, ActionFrameInbox, ActionFrameInboxError, PlayerActionButtonsV1,
     PlayerActionFrameV1, PlayerActionV1,
+};
+pub use clock::{
+    DEFAULT_SIMULATION_TICK_RATE_HZ, MAX_SIMULATION_TICK_RATE_HZ, MIN_SIMULATION_TICK_RATE_HZ,
+    SimulationClock, SimulationTickRate, SimulationTickRateChanged, SimulationTickRateError,
+    SimulationTickRateRequest,
 };
 pub use edit::{
     AuthoritativeBlockEditRequestV1, BlockEditActionV1, BlockEditAuthority,

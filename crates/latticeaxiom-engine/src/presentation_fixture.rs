@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::video::VideoRuntimePlugin;
 use crate::{EngineInstanceError, instance::reserve_client_event_loop};
 
 /// Runs the temporary D0 client presentation fixture.
@@ -25,6 +26,7 @@ pub fn run_temporary_client_presentation_fixture() -> Result<(), EngineInstanceE
             }),
             ..default()
         }))
+        .add_plugins(VideoRuntimePlugin)
         .add_systems(Startup, setup_temporary_scene)
         .run();
     Ok(())

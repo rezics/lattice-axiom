@@ -1,6 +1,6 @@
 //! In-session pause overlay and cursor capture for the interactive client.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use accesskit::{Node as AccessKitNode, Role as AccessKitRole};
 use avian3d::prelude::LinearVelocity;
@@ -31,9 +31,13 @@ use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_input::ClientSurfaceActionV1;
 use latticeaxiom_player::{
     ActionFrameInbox, ActionState, D2Player, LeafwingPlayerAction, LocalPlayerInput,
-    SurfaceActionFrame,
+    SimulationTickRate, SimulationTickRateRequest, SurfaceActionFrame,
 };
-use latticeaxiom_runtime_contracts::view_distance_setting_id;
+use latticeaxiom_runtime_contracts::{
+    EffectiveSettingsSnapshot, simulation_tick_rate_setting_id,
+    video_background_frame_rate_limit_setting_id, video_frame_rate_limit_setting_id,
+    video_vsync_setting_id, view_distance_setting_id,
+};
 use latticeaxiom_settings_ui::{
     MemorySettingsHost, SettingsDurabilityDomain, SettingsIntegerSliderState, SettingsPageCommand,
     SettingsPageOpen, SettingsPageSession, SettingsSurfaceApplyResolution,
@@ -49,6 +53,7 @@ use crate::{
     cursor_capture::ConfirmedPrimaryWindowFocus,
     settings::{HostSettingsCatalog, HostSettingsError, HostUserSettings},
     ui_font::ui_text_font,
+    video::{FrameRateLimit, VideoRuntimeSettings},
 };
 
 /// Marker on the pause hint / settings readout.
@@ -69,6 +74,13 @@ enum SettingsApplyFailureDisposition {
     RollbackRuntime,
     KeepRuntimeWithVisiblePublicationAndRestart,
     KeepRuntimeWithUnknownPublicationAndRestart,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AppliedRuntimeSettings {
+    view_distance: u32,
+    video: VideoRuntimeSettings,
+    tick_rate: SimulationTickRate,
 }
 
 fn settings_apply_failure_disposition(
@@ -95,7 +107,8 @@ pub(super) struct ProductionSettingsState {
     page_host: MemorySettingsHost,
     page_generation: u64,
     view_distance: StableId,
-    runtime_request: u32,
+    runtime: AppliedRuntimeSettings,
+    next_clock_request_id: u64,
     publication: SettingsPublicationState,
     diagnostic: Option<String>,
 }
@@ -117,10 +130,11 @@ impl ProductionSettingsState {
         let view_distance = view_distance_setting_id();
         let slider = surface.integer_slider(&view_distance)?;
         validate_view_distance_slider(slider)?;
-        let runtime_request =
+        let view_distance_request =
             u32::try_from(slider.applied).map_err(|_| HostSettingsError::CatalogUnavailable {
                 reason: "applied view distance is outside the chunk-distance domain".to_owned(),
             })?;
+        let runtime = runtime_settings_from_snapshot(&snapshot, view_distance_request)?;
         let mut page_host = MemorySettingsHost::new();
         for effective in snapshot.values().values() {
             page_host.seed(effective.id.clone(), effective.value.clone());
@@ -140,7 +154,8 @@ impl ProductionSettingsState {
             page_host,
             page_generation: 0,
             view_distance,
-            runtime_request,
+            runtime,
+            next_clock_request_id: 1,
             publication: SettingsPublicationState::Confirmed,
             diagnostic: None,
         })
@@ -171,11 +186,31 @@ impl ProductionSettingsState {
             self.diagnostic = Some(SAFE_PROCESS_RESTART_REQUIRED.to_owned());
             return;
         }
-        if let SettingsPageCommand::SetValue { setting, value } = &command
-            && setting == &self.view_distance
-            && let Some(chunks) = integer_to_slider_f32(value)
-        {
-            self.set_draft_from_slider(chunks);
+        if let SettingsPageCommand::SetValue { setting, value } = &command {
+            if setting == &self.view_distance
+                && let Some(chunks) = integer_to_slider_f32(value)
+            {
+                self.set_draft_from_slider(chunks);
+            } else if self.surface.draft_value(setting).is_some() {
+                match self.surface.handle(SettingsSurfaceCommand::SetValue {
+                    setting: setting.clone(),
+                    value: value.clone(),
+                }) {
+                    Ok(
+                        SettingsSurfaceOutcome::DraftChanged { .. }
+                        | SettingsSurfaceOutcome::Unchanged,
+                    ) => {}
+                    Ok(_) => {
+                        self.diagnostic =
+                            Some("Settings surface returned an invalid draft outcome".to_owned());
+                        return;
+                    }
+                    Err(error) => {
+                        self.diagnostic = Some(error.to_string());
+                        return;
+                    }
+                }
+            }
         }
         match self.page.handle(command, &mut self.page_host) {
             Ok(_) => {
@@ -245,7 +280,15 @@ impl ProductionSettingsState {
     }
 
     pub(super) const fn applied_request(&self) -> u32 {
-        self.runtime_request
+        self.runtime.view_distance
+    }
+
+    pub(super) const fn applied_video(&self) -> VideoRuntimeSettings {
+        self.runtime.video
+    }
+
+    pub(super) const fn applied_tick_rate(&self) -> SimulationTickRate {
+        self.runtime.tick_rate
     }
 
     fn dirty(&self) -> bool {
@@ -292,8 +335,8 @@ impl ProductionSettingsState {
         }
     }
 
-    fn lock_for_safe_restart(&mut self, runtime_request: u32, diagnostic: String) {
-        self.runtime_request = runtime_request;
+    fn lock_for_safe_restart(&mut self, runtime: AppliedRuntimeSettings, diagnostic: String) {
+        self.runtime = runtime;
         self.publication = SettingsPublicationState::SafeProcessRestartRequired;
         self.surface.lock_for_safe_restart();
         self.diagnostic = Some(diagnostic);
@@ -312,7 +355,7 @@ impl ProductionSettingsState {
         }
     }
 
-    fn finish_persisted_apply(&mut self, requested: u32) {
+    fn finish_persisted_apply(&mut self, requested: AppliedRuntimeSettings) {
         if let Err(error) = self.finish_surface_apply(SettingsSurfaceApplyResolution::Committed) {
             self.lock_for_safe_restart(
                 requested,
@@ -322,7 +365,7 @@ impl ProductionSettingsState {
             );
             return;
         }
-        self.runtime_request = requested;
+        self.runtime = requested;
         self.publication = SettingsPublicationState::Confirmed;
         self.diagnostic = Some("Settings applied and saved".to_owned());
     }
@@ -330,8 +373,10 @@ impl ProductionSettingsState {
     fn handle_persist_failure(
         &mut self,
         spine: &ProductionSpine,
-        requested: u32,
-        prior_runtime_request: u32,
+        video: &mut VideoRuntimeSettings,
+        tick_requests: &mut MessageWriter<'_, SimulationTickRateRequest>,
+        requested: AppliedRuntimeSettings,
+        prior: AppliedRuntimeSettings,
         error: &HostSettingsError,
     ) {
         match settings_apply_failure_disposition(error) {
@@ -376,9 +421,9 @@ impl ProductionSettingsState {
                 );
             }
             SettingsApplyFailureDisposition::RollbackRuntime => {
-                match spine.set_requested_view_distance(prior_runtime_request) {
-                    Ok(_) => {
-                        self.runtime_request = prior_runtime_request;
+                match self.apply_runtime(spine, video, tick_requests, prior) {
+                    Ok(()) => {
+                        self.runtime = prior;
                         self.diagnostic = match self
                             .finish_surface_apply(SettingsSurfaceApplyResolution::Rejected)
                         {
@@ -387,7 +432,7 @@ impl ProductionSettingsState {
                             )),
                             Err(completion) => {
                                 self.lock_for_safe_restart(
-                                    prior_runtime_request,
+                                    prior,
                                     format!(
                                         "Runtime was restored, but presentation recovery failed: {error}; {completion}"
                                     ),
@@ -421,7 +466,12 @@ impl ProductionSettingsState {
         }
     }
 
-    fn apply(&mut self, spine: &ProductionSpine) {
+    fn apply(
+        &mut self,
+        spine: &ProductionSpine,
+        video: &mut VideoRuntimeSettings,
+        tick_requests: &mut MessageWriter<'_, SimulationTickRateRequest>,
+    ) {
         if self.publication == SettingsPublicationState::SafeProcessRestartRequired {
             self.diagnostic = Some(SAFE_PROCESS_RESTART_REQUIRED.to_owned());
             return;
@@ -431,8 +481,8 @@ impl ProductionSettingsState {
         {
             self.set_draft_from_slider(chunks);
         }
-        if self.surface.is_dirty() {
-            self.apply_lock_catalog(spine);
+        if self.surface.is_dirty() && !self.apply_lock_catalog(spine, video, tick_requests) {
+            return;
         }
         match self
             .page
@@ -453,65 +503,98 @@ impl ProductionSettingsState {
         }
     }
 
-    fn apply_lock_catalog(&mut self, spine: &ProductionSpine) {
+    fn apply_lock_catalog(
+        &mut self,
+        spine: &ProductionSpine,
+        video: &mut VideoRuntimeSettings,
+        tick_requests: &mut MessageWriter<'_, SimulationTickRateRequest>,
+    ) -> bool {
         let request = match self.surface.handle(SettingsSurfaceCommand::Apply) {
             Ok(SettingsSurfaceOutcome::ApplyRequested(request)) => request,
             Ok(_) => {
                 self.diagnostic =
                     Some("Settings surface returned an invalid apply outcome".to_owned());
-                return;
+                return false;
             }
             Err(error) => {
                 self.diagnostic = Some(error.to_string());
-                return;
+                return false;
             }
         };
-        let prior_runtime_request = self.runtime_request;
-        let requested = request
-            .proposed
-            .get(&self.view_distance)
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok());
-        let Some(requested) = requested.filter(|_| {
-            request.domain == SettingsDurabilityDomain::User && request.proposed.len() == 1
-        }) else {
+        let prior = self.runtime;
+        let requested = runtime_settings_from_proposed(prior, &request.proposed);
+        let Ok(requested) = requested else {
+            let _ = self.finish_surface_apply(SettingsSurfaceApplyResolution::Rejected);
+            self.diagnostic = Some("Runtime settings draft has an invalid typed value".to_owned());
+            return false;
+        };
+        if request.domain != SettingsDurabilityDomain::User {
             match self.finish_surface_apply(SettingsSurfaceApplyResolution::Rejected) {
                 Ok(()) => {
                     self.diagnostic =
                         Some("Host cannot execute the package settings request atomically".into());
                 }
                 Err(completion) => self.lock_for_safe_restart(
-                    prior_runtime_request,
+                    prior,
                     format!(
                         "Host rejected the package request and surface recovery failed: {completion}"
                     ),
                 ),
             }
-            return;
-        };
-        if let Err(error) = spine.set_requested_view_distance(requested) {
+            return false;
+        }
+        if let Err(error) = self.apply_runtime(spine, video, tick_requests, requested) {
             let completion = self.finish_surface_apply(SettingsSurfaceApplyResolution::Rejected);
             self.diagnostic = Some(format!("Runtime rejected the draft: {error}"));
             if let Err(completion) = completion {
                 self.lock_for_safe_restart(
-                    prior_runtime_request,
+                    prior,
                     format!("Runtime rejected the draft and surface recovery failed: {completion}"),
                 );
             }
-            return;
+            return false;
         }
 
-        match self.user.persist_view_distance(
+        match self.user.persist_user_values(
             &self.root,
             &self.catalog,
             self.active_lock,
-            requested,
+            &request.proposed,
         ) {
-            Ok(_) => self.finish_persisted_apply(requested),
+            Ok(_) => {
+                self.finish_persisted_apply(requested);
+                true
+            }
             Err(error) => {
-                self.handle_persist_failure(spine, requested, prior_runtime_request, &error);
+                self.handle_persist_failure(spine, video, tick_requests, requested, prior, &error);
+                false
             }
         }
+    }
+
+    fn apply_runtime(
+        &mut self,
+        spine: &ProductionSpine,
+        video: &mut VideoRuntimeSettings,
+        tick_requests: &mut MessageWriter<'_, SimulationTickRateRequest>,
+        requested: AppliedRuntimeSettings,
+    ) -> Result<(), HostSettingsError> {
+        spine
+            .set_requested_view_distance(requested.view_distance)
+            .map_err(|error| HostSettingsError::Runtime {
+                reason: error.to_string(),
+            })?;
+        video.replace(
+            requested.video.vsync(),
+            requested.video.foreground_limit(),
+            requested.video.background_limit(),
+        );
+        tick_requests.write(SimulationTickRateRequest {
+            request_id: self.next_clock_request_id,
+            rate: requested.tick_rate,
+        });
+        self.next_clock_request_id = self.next_clock_request_id.saturating_add(1);
+        Ok(())
     }
 
     fn status_text(&self, spine: &ProductionSpine) -> String {
@@ -547,7 +630,7 @@ impl ProductionSettingsState {
         } else {
             format!(
                 "Requested {} · runtime admission/effective status unavailable",
-                self.runtime_request
+                self.runtime.view_distance
             )
         };
         if self.publication == SettingsPublicationState::SafeProcessRestartRequired {
@@ -579,6 +662,101 @@ impl ProductionSettingsState {
         }
         text
     }
+}
+
+fn runtime_settings_from_snapshot(
+    snapshot: &EffectiveSettingsSnapshot,
+    view_distance: u32,
+) -> Result<AppliedRuntimeSettings, HostSettingsError> {
+    let values = snapshot
+        .values()
+        .iter()
+        .map(|(id, effective)| (id.clone(), effective.value.clone()))
+        .collect();
+    runtime_settings_from_proposed(
+        AppliedRuntimeSettings {
+            view_distance,
+            video: VideoRuntimeSettings::default(),
+            tick_rate: SimulationTickRate::default(),
+        },
+        &values,
+    )
+}
+
+fn runtime_settings_from_proposed(
+    prior: AppliedRuntimeSettings,
+    proposed: &BTreeMap<StableId, serde_json::Value>,
+) -> Result<AppliedRuntimeSettings, HostSettingsError> {
+    let view_distance =
+        proposed
+            .get(&view_distance_setting_id())
+            .map_or(Ok(prior.view_distance), |value| {
+                value
+                    .as_u64()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or_else(|| HostSettingsError::Runtime {
+                        reason: "view distance is outside the unsigned 32-bit domain".to_owned(),
+                    })
+            })?;
+    let vsync = proposed
+        .get(&video_vsync_setting_id())
+        .map_or(Some(prior.video.vsync()), serde_json::Value::as_bool)
+        .ok_or_else(|| HostSettingsError::Runtime {
+            reason: "vertical synchronization setting is not a boolean".to_owned(),
+        })?;
+    let foreground_limit = proposed.get(&video_frame_rate_limit_setting_id()).map_or(
+        Ok(prior.video.foreground_limit()),
+        |value| {
+            value
+                .as_str()
+                .ok_or_else(|| HostSettingsError::Runtime {
+                    reason: "foreground frame limit is not a string".to_owned(),
+                })
+                .and_then(|value| {
+                    FrameRateLimit::parse(value).map_err(|error| HostSettingsError::Runtime {
+                        reason: error.to_string(),
+                    })
+                })
+        },
+    )?;
+    let background_limit = proposed
+        .get(&video_background_frame_rate_limit_setting_id())
+        .map_or(Ok(prior.video.background_limit()), |value| {
+            value
+                .as_u64()
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| HostSettingsError::Runtime {
+                    reason: "background frame limit is outside the unsigned 16-bit domain"
+                        .to_owned(),
+                })
+                .and_then(|value| {
+                    FrameRateLimit::capped(value).map_err(|error| HostSettingsError::Runtime {
+                        reason: error.to_string(),
+                    })
+                })
+        })?;
+    let tick_rate =
+        proposed
+            .get(&simulation_tick_rate_setting_id())
+            .map_or(Ok(prior.tick_rate), |value| {
+                value
+                    .as_u64()
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| HostSettingsError::Runtime {
+                        reason: "simulation tick rate is outside the unsigned 16-bit domain"
+                            .to_owned(),
+                    })
+                    .and_then(|value| {
+                        SimulationTickRate::new(value).map_err(|error| HostSettingsError::Runtime {
+                            reason: error.to_string(),
+                        })
+                    })
+            })?;
+    Ok(AppliedRuntimeSettings {
+        view_distance,
+        video: VideoRuntimeSettings::new(vsync, foreground_limit, background_limit),
+        tick_rate,
+    })
 }
 
 fn integer_to_slider_f32(value: &serde_json::Value) -> Option<f32> {
@@ -1227,12 +1405,15 @@ pub(super) fn freeze_player_while_paused(
 
 /// Applies Resume, Settings, Apply, Undo, Back, and Quit from widget activation.
 #[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
+#[allow(clippy::too_many_arguments)] // One observer owns the atomic settings apply boundary.
 pub(super) fn pause_menu_activated(
     activate: On<'_, '_, Activate>,
     actions: Query<'_, '_, &PauseMenuAction, With<Button>>,
     mut pause: ResMut<'_, ProductionSessionPause>,
     mut settings: Option<ResMut<'_, ProductionSettingsState>>,
     spine: Option<Res<'_, ProductionSpine>>,
+    mut video: Option<ResMut<'_, VideoRuntimeSettings>>,
+    mut tick_requests: MessageWriter<'_, SimulationTickRateRequest>,
     mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
     mut exits: MessageWriter<'_, AppExit>,
 ) {
@@ -1270,8 +1451,10 @@ pub(super) fn pause_menu_activated(
             }
         }
         PauseMenuAction::Apply => {
-            if let (Some(settings), Some(spine)) = (settings.as_mut(), spine.as_ref()) {
-                settings.apply(spine);
+            if let (Some(settings), Some(spine), Some(video)) =
+                (settings.as_mut(), spine.as_ref(), video.as_mut())
+            {
+                settings.apply(spine, video, &mut tick_requests);
             }
         }
         PauseMenuAction::Undo => {

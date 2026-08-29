@@ -617,7 +617,21 @@ impl EngineInstance {
             .map_err(|error| crate::settings::HostSettingsError::Runtime {
                 reason: error.to_string(),
             })?;
-        self.app.world_mut().insert_resource(state);
+        let world = self.app.world_mut();
+        if let Some(mut video) = world.get_resource_mut::<crate::VideoRuntimeSettings>() {
+            let requested = state.applied_video();
+            video.replace(
+                requested.vsync(),
+                requested.foreground_limit(),
+                requested.background_limit(),
+            );
+        }
+        let tick_rate = state.applied_tick_rate();
+        world.insert_resource(latticeaxiom_player::SimulationClock::new(tick_rate));
+        if let Some(mut fixed) = world.get_resource_mut::<bevy::time::Time<bevy::time::Fixed>>() {
+            fixed.set_timestep(tick_rate.timestep());
+        }
+        world.insert_resource(state);
         Ok(())
     }
     /// Enqueues exact headless action frames on the production player inbox.

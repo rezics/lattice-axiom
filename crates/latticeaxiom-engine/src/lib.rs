@@ -36,6 +36,8 @@ mod settings;
 mod supervisor;
 #[cfg(feature = "client")]
 mod ui_font;
+#[cfg(feature = "client")]
+mod video;
 
 #[cfg(feature = "client")]
 pub use client::{
@@ -78,7 +80,8 @@ pub use latticeaxiom_gameplay::{
 pub use latticeaxiom_player::{
     ActionAxis2V1, ActionFrameInbox, ActionFrameInboxError, BlockEditReceiptV1, BlockEditSuccessV1,
     HeadlessTargetInspectV1, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
-    TargetInspectReceiptV1, TargetInspectRejectV1,
+    SimulationClock, SimulationTickRate, SimulationTickRateChanged, SimulationTickRateError,
+    SimulationTickRateRequest, TargetInspectReceiptV1, TargetInspectRejectV1,
 };
 pub use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChunkCoordinate, ChunkRevision, MemoryTransactionKernel,
@@ -101,4 +104,9 @@ pub use settings::{
 #[cfg(feature = "client")]
 pub use supervisor::{
     ProductSupervisorError, publish_child_exit, run_product_supervisor_from_workspace,
+};
+#[cfg(feature = "client")]
+pub use video::{
+    FrameRateLimit, MAX_FRAME_RATE_LIMIT, MIN_FRAME_RATE_LIMIT, VideoRuntimePlugin,
+    VideoRuntimeSettings, VideoSettingsError,
 };

@@ -3,8 +3,8 @@ use bevy::{
     app::{App, Plugin},
     ecs::schedule::{IntoScheduleConfigs, SystemSet},
     prelude::{
-        FixedFirst, FixedLast, FixedPostUpdate, FixedUpdate, MessageWriter, Query, Res, ResMut,
-        Resource, Time, Transform, With,
+        FixedFirst, FixedLast, FixedPostUpdate, FixedUpdate, MessageReader, MessageWriter, Query,
+        Res, ResMut, Resource, Time, Transform, With,
     },
     time::Fixed,
 };
@@ -13,9 +13,10 @@ use crate::{
     ActionFrameInbox, AuthoritativeBlockEditRequestV1, BlockEditActionV1,
     BlockEditAuthorityResource, BlockEditIntentV1, BlockEditReceiptV1, BlockEditRejectV1,
     CurrentPlayerActionFrame, D2Player, DetachedSpectator, LocalPlayerInput,
-    PlayerMovementProfileV1, PlayerViewV1, SuccessfulEditCooldownV1, TargetEyePoseV1,
+    PlayerMovementProfileV1, PlayerViewV1, SimulationClock, SimulationTickRateChanged,
+    SimulationTickRateRequest, SuccessfulEditCooldownV1, TargetEyePoseV1,
     movement::{
-        FIXED_HZ, install_fixed_action_frame, move_players, prepare_velocity, update_grounded,
+        install_fixed_action_frame, move_players, prepare_velocity, update_grounded,
         update_player_view, update_spectator,
     },
 };
@@ -39,7 +40,7 @@ pub enum PlayerSystemSet {
     AdvanceTick,
 }
 
-/// Monotonic authoritative 60 Hz tick owned by the player adapter.
+/// Monotonic authoritative fixed tick owned by the player adapter.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
 pub struct PlayerFixedTick(u64);
 
@@ -62,10 +63,14 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Time::<Fixed>::from_hz(f64::from(FIXED_HZ)))
+        let clock = SimulationClock::default();
+        app.insert_resource(Time::<Fixed>::from_duration(clock.active_rate().timestep()))
+            .insert_resource(clock)
             .init_resource::<ActionFrameInbox>()
             .init_resource::<PlayerFixedTick>()
             .add_message::<BlockEditReceiptV1>()
+            .add_message::<SimulationTickRateRequest>()
+            .add_message::<SimulationTickRateChanged>()
             .configure_sets(FixedFirst, PlayerSystemSet::SampleInput)
             .configure_sets(
                 FixedUpdate,
@@ -108,7 +113,9 @@ impl Plugin for PlayerPlugin {
             )
             .add_systems(
                 FixedLast,
-                advance_fixed_tick.in_set(PlayerSystemSet::AdvanceTick),
+                (advance_fixed_tick, apply_tick_rate_requests)
+                    .chain()
+                    .in_set(PlayerSystemSet::AdvanceTick),
             );
     }
 }
@@ -200,4 +207,26 @@ fn evaluate_block_edits(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 fn advance_fixed_tick(mut tick: ResMut<'_, PlayerFixedTick>) {
     tick.0 = tick.0.saturating_add(1);
+}
+
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn apply_tick_rate_requests(
+    mut requests: MessageReader<'_, '_, SimulationTickRateRequest>,
+    mut receipts: MessageWriter<'_, SimulationTickRateChanged>,
+    mut clock: ResMut<'_, SimulationClock>,
+    mut fixed_time: ResMut<'_, Time<Fixed>>,
+) {
+    let Some(request) = requests.read().copied().last() else {
+        return;
+    };
+    let changed = clock.activate(request.rate);
+    if changed {
+        fixed_time.set_timestep(request.rate.timestep());
+    }
+    receipts.write(SimulationTickRateChanged {
+        request_id: request.request_id,
+        rate: request.rate,
+        revision: clock.revision(),
+        changed,
+    });
 }

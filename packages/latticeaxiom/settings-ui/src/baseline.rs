@@ -65,6 +65,10 @@ pub fn compile_baseline_page_catalog(
 
 /// Returns the frozen section for a compiled setting identity.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the closed stable-ID routing table is intentionally exhaustive"
+)]
 pub fn section_for_setting(id: &StableId) -> SettingsSectionV1 {
     match id.as_str() {
         "latticeaxiom:setting/ui-scale"
@@ -156,7 +160,10 @@ pub fn section_for_setting(id: &StableId) -> SettingsSectionV1 {
         "latticeaxiom:setting/interface/inspect-visible"
         | "latticeaxiom:setting/interface/inspect-detail"
         | "latticeaxiom:setting/interface/inspect-pin-mode" => SettingsSectionV1::InterfaceInspect,
-        "latticeaxiom:setting/gameplay/pause-on-focus-loss" => SettingsSectionV1::GameplayGeneral,
+        "latticeaxiom:setting/gameplay/pause-on-focus-loss"
+        | "latticeaxiom:setting/gameplay/simulation-tick-rate" => {
+            SettingsSectionV1::GameplayGeneral
+        }
         "latticeaxiom:setting/world/default-root"
         | "latticeaxiom:setting/world/backup-before-migration"
         | "latticeaxiom:setting/world/trash-retention-days"
@@ -448,33 +455,6 @@ fn video_general_rows() -> Vec<SettingSpec> {
             50,
             enumeration(&["current"]),
             json!("current"),
-            RuntimeApplyImpact::Immediate,
-        ),
-        device_row(
-            "latticeaxiom:setting/video/vsync",
-            owner,
-            category,
-            60,
-            ValueType::Bool,
-            json!(true),
-            RuntimeApplyImpact::Immediate,
-        ),
-        device_row(
-            "latticeaxiom:setting/video/frame-rate-limit",
-            owner,
-            category,
-            70,
-            enumeration(&["30", "60", "90", "120", "144", "165", "240", "unlimited"]),
-            json!("120"),
-            RuntimeApplyImpact::Immediate,
-        ),
-        device_row(
-            "latticeaxiom:setting/video/background-frame-rate-limit",
-            owner,
-            category,
-            80,
-            integer(5, 60, 5),
-            json!(30),
             RuntimeApplyImpact::Immediate,
         ),
         row(

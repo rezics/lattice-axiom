@@ -286,12 +286,41 @@ impl HostUserSettings {
         self.persist_view_distance_to_store(&store, catalog, active_lock, requested_chunks)
     }
 
+    /// Persists one non-empty, catalog-validated user-domain draft atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostSettingsError`] when validation, preparation, or atomic
+    /// publication fails.
+    pub fn persist_user_values(
+        &mut self,
+        root: impl AsRef<Path>,
+        catalog: &HostSettingsCatalog,
+        active_lock: CanonicalHash,
+        proposed: &BTreeMap<latticeaxiom_core::StableId, Value>,
+    ) -> Result<SettingChangedBatchV1, HostSettingsError> {
+        let store = FilesystemLocalSettingsStore::open(root)?;
+        self.persist_user_values_to_store(&store, catalog, active_lock, proposed)
+    }
+
     fn persist_view_distance_to_store(
         &mut self,
         store: &impl LocalSettingsStore,
         catalog: &HostSettingsCatalog,
         active_lock: CanonicalHash,
         requested_chunks: u32,
+    ) -> Result<SettingChangedBatchV1, HostSettingsError> {
+        let proposed =
+            BTreeMap::from([(view_distance_setting_id(), Value::from(requested_chunks))]);
+        self.persist_user_values_to_store(store, catalog, active_lock, &proposed)
+    }
+
+    fn persist_user_values_to_store(
+        &mut self,
+        store: &impl LocalSettingsStore,
+        catalog: &HostSettingsCatalog,
+        active_lock: CanonicalHash,
+        proposed: &BTreeMap<latticeaxiom_core::StableId, Value>,
     ) -> Result<SettingChangedBatchV1, HostSettingsError> {
         let before = resolve_effective_settings(
             catalog.as_validated(),
@@ -301,13 +330,11 @@ impl HostUserSettings {
         .map_err(|source| HostSettingsError::Overlay {
             reason: source.to_string(),
         })?;
-        let proposed =
-            BTreeMap::from([(view_distance_setting_id(), Value::from(requested_chunks))]);
         let mut transaction = SettingsApplyTransaction::user_draft(
             catalog.as_validated(),
             before.snapshot(),
             &self.envelope,
-            &proposed,
+            proposed,
             self.envelope.binding_profile().clone(),
             PreviewPolicyV1::None,
             active_lock,

@@ -47,6 +47,7 @@ repository = "https://github.com/rezics/lattice-axiom-demo"
 accesskit = "=0.24.1"
 avian3d = { version = "=0.7.0", default-features = false }
 bevy = { version = "=0.19.1", default-features = false }
+bevy_framepace = { version = "=0.22.0", default-features = false }
 bevy_voxel_world = "=0.17.0"
 criterion = "0.8"
 hex = "0.4.3"

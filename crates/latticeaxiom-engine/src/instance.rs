@@ -13,8 +13,9 @@ use bevy::{
 };
 #[cfg(feature = "client")]
 use bevy::{
+    ecs::change_detection::DetectChanges,
     input_focus::tab_navigation::TabNavigationPlugin,
-    prelude::{DefaultPlugins, Window, WindowPlugin},
+    prelude::{DefaultPlugins, Update, Window, WindowPlugin},
 };
 use thiserror::Error;
 
@@ -160,7 +161,9 @@ impl EngineInstance {
                 }),
                 ..WindowPlugin::default()
             }))
+            .add_plugins(crate::video::VideoRuntimePlugin)
             .add_plugins(TabNavigationPlugin)
+            .add_systems(Update, limit_client_fixed_catch_up)
             .add_systems(FixedLast, count_fixed_tick);
         host_setup(&mut app);
         finalize_plugins(&mut app);
@@ -284,6 +287,29 @@ impl EngineInstance {
             .map_or(0, FixedTickCount::get)
     }
 
+    /// Requests a validated fixed frequency at the next fixed boundary.
+    ///
+    /// Render updates remain independently paced by [`crate::VideoRuntimeSettings`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineInstanceError::SimulationTickRate`] when `hertz` is
+    /// outside `1..=10_000`, or
+    /// [`EngineInstanceError::SimulationClockUnavailable`] when the active
+    /// host did not install [`latticeaxiom_player::PlayerPlugin`].
+    pub fn request_simulation_tick_rate(
+        &mut self,
+        request_id: u64,
+        hertz: u16,
+    ) -> Result<(), EngineInstanceError> {
+        let rate = latticeaxiom_player::SimulationTickRate::new(hertz)?;
+        self.app
+            .world_mut()
+            .write_message(latticeaxiom_player::SimulationTickRateRequest { request_id, rate })
+            .ok_or(EngineInstanceError::SimulationClockUnavailable)?;
+        Ok(())
+    }
+
     /// Advances a headless app through exactly `ticks` Bevy fixed iterations.
     ///
     /// This delegates to Bevy's [`TimeUpdateStrategy::FixedTimesteps`] and
@@ -371,12 +397,35 @@ fn count_fixed_tick(mut ticks: ResMut<'_, FixedTickCount>) {
     ticks.0 = ticks.0.saturating_add(1);
 }
 
+#[cfg(feature = "client")]
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+fn limit_client_fixed_catch_up(
+    clock: Option<bevy::prelude::Res<'_, latticeaxiom_player::SimulationClock>>,
+    fixed: Option<bevy::prelude::Res<'_, Time<Fixed>>>,
+    mut virtual_time: ResMut<'_, Time<Virtual>>,
+) {
+    let (Some(clock), Some(fixed)) = (clock, fixed) else {
+        return;
+    };
+    if !clock.is_changed() {
+        return;
+    }
+    let maximum = fixed.timestep().saturating_mul(2);
+    virtual_time.set_max_delta(maximum);
+}
+
 /// Failure to construct or manually advance an engine instance.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum EngineInstanceError {
     /// Bevy requires a nonzero fixed timestep.
     #[error("the fixed timestep must be nonzero")]
     ZeroFixedTimestep,
+    /// A requested interactive simulation frequency was invalid.
+    #[error(transparent)]
+    SimulationTickRate(#[from] latticeaxiom_player::SimulationTickRateError),
+    /// The instance has no player-owned simulation clock message channel.
+    #[error("the active host did not install the simulation clock")]
+    SimulationClockUnavailable,
     /// The process-global client event-loop slot was already reserved.
     #[error("an interactive client event loop has already been reserved in this process")]
     ClientInstanceAlreadyExists,

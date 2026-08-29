@@ -13,6 +13,7 @@ use latticeaxiom_player::{BlockEditAuthorityResource, PlayerPlugin, PlayerSystem
 use thiserror::Error;
 
 use super::{authority, hud, input, pause, scene};
+use crate::video::VideoRuntimePlugin;
 use crate::{EngineInstanceError, cursor_capture, instance::reserve_client_event_loop};
 
 /// Failure to construct the single-session playable client fixture.
@@ -51,6 +52,7 @@ pub fn run_playable_client() -> Result<(), PlayableClientError> {
             }),
             ..WindowPlugin::default()
         }))
+        .add_plugins(VideoRuntimePlugin)
         .insert_resource(pause::PlayablePause::default())
         .init_resource::<cursor_capture::ConfirmedPrimaryWindowFocus>()
         .add_plugins(PhysicsPlugins::default())
