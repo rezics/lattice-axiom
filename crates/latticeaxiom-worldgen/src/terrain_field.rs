@@ -766,6 +766,24 @@ mod tests {
         TerrainFamilyV2, TerrainFieldV2, UNIT, climate_field, gradient_noise, quintic_fade,
     };
     use crate::{TerrainConfigV2, WorldSeedV1, WorldgenSeedRootV2};
+    use latticeaxiom_core::CanonicalHash;
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct LegacyTerrainEvidence {
+        map_hash: String,
+        drainage_hash: String,
+        minimum_height: i32,
+        maximum_height: i32,
+        land_columns: u64,
+        ocean_columns: u64,
+        lake_columns: u64,
+        plateau_steps: u64,
+        axis_energy_x: u128,
+        axis_energy_z: u128,
+        diagonal_energy_northeast: u128,
+        diagonal_energy_southeast: u128,
+        drainage_center_columns: u64,
+    }
 
     #[test]
     fn quintic_fade_has_exact_endpoints() {
@@ -911,5 +929,145 @@ mod tests {
         }
         assert!(minimum <= 1, "minimum drainage distance {minimum}");
         assert!(maximum >= 32, "maximum drainage distance {maximum}");
+    }
+
+    #[test]
+    fn legacy_fixed_seed_map_morphology_and_directional_energy_are_frozen() {
+        let actual = legacy_terrain_evidence();
+        let expected = LegacyTerrainEvidence {
+            map_hash: "4b48cf41fb05290798cc8931c839ae63a29d15b01698f20403cd9f5b681f1236".to_owned(),
+            drainage_hash: "bf28bc2d11783b8e3140a24eba6c86eda83594ec1039c00e8895943e8966760a"
+                .to_owned(),
+            minimum_height: -1,
+            maximum_height: 168,
+            land_columns: 48_579,
+            ocean_columns: 17_470,
+            lake_columns: 319,
+            plateau_steps: 33_704,
+            axis_energy_x: 215_370,
+            axis_energy_z: 210_911,
+            diagonal_energy_northeast: 384_855,
+            diagonal_energy_southeast: 355_511,
+            drainage_center_columns: 34_139,
+        };
+        assert_eq!(actual, expected);
+    }
+
+    fn legacy_terrain_evidence() -> LegacyTerrainEvidence {
+        const EDGE: usize = 257;
+        const ORIGIN: i64 = -8_192;
+        const SPACING: i64 = 64;
+
+        let config = TerrainConfigV2::representative_test_baseline();
+        let field = TerrainFieldV2::new(
+            WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(42)),
+            config,
+        );
+        let mut heights = vec![0_i32; EDGE * EDGE];
+        let mut map_bytes = Vec::with_capacity(EDGE * EDGE * 5);
+        let mut drainage_bytes = Vec::with_capacity(EDGE * EDGE * 4);
+        let mut minimum_height = i32::MAX;
+        let mut maximum_height = i32::MIN;
+        let mut land_columns = 0_u64;
+        let mut ocean_columns = 0_u64;
+        let mut lake_columns = 0_u64;
+        let mut drainage_center_columns = 0_u64;
+
+        for z_index in 0..EDGE {
+            for x_index in 0..EDGE {
+                let x = ORIGIN.saturating_add(
+                    i64::try_from(x_index)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(SPACING),
+                );
+                let z = ORIGIN.saturating_add(
+                    i64::try_from(z_index)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(SPACING),
+                );
+                let sample = field.sample(x, z);
+                heights[z_index * EDGE + x_index] = sample.height;
+                map_bytes.extend_from_slice(&sample.height.to_le_bytes());
+                map_bytes.push(family_tag(sample.family));
+                minimum_height = minimum_height.min(sample.height);
+                maximum_height = maximum_height.max(sample.height);
+                if matches!(
+                    sample.family,
+                    TerrainFamilyV2::DeepOcean | TerrainFamilyV2::ShallowOcean
+                ) {
+                    ocean_columns = ocean_columns.saturating_add(1);
+                } else {
+                    land_columns = land_columns.saturating_add(1);
+                }
+                lake_columns = lake_columns.saturating_add(u64::from(
+                    sample
+                        .surface_water_y
+                        .is_some_and(|level| level > sample.height),
+                ));
+                let drainage = field.drainage.sample(x, z).distance_voxels;
+                drainage_bytes.extend_from_slice(&drainage.to_le_bytes());
+                drainage_center_columns = drainage_center_columns.saturating_add(u64::from(
+                    drainage <= u32::from(config.water.river_width_voxels),
+                ));
+            }
+        }
+
+        let mut plateau_steps = 0_u64;
+        let mut axis_energy_x = 0_u128;
+        let mut axis_energy_z = 0_u128;
+        let mut diagonal_energy_northeast = 0_u128;
+        let mut diagonal_energy_southeast = 0_u128;
+        for z in 0..EDGE - 1 {
+            for x in 0..EDGE - 1 {
+                let center = heights[z * EDGE + x];
+                let east = heights[z * EDGE + x + 1];
+                let south = heights[(z + 1) * EDGE + x];
+                let southeast = heights[(z + 1) * EDGE + x + 1];
+                let dx = i128::from(east) - i128::from(center);
+                let dz = i128::from(south) - i128::from(center);
+                let dne = i128::from(east) - i128::from(south);
+                let dse = i128::from(southeast) - i128::from(center);
+                plateau_steps = plateau_steps
+                    .saturating_add(u64::from(dx == 0))
+                    .saturating_add(u64::from(dz == 0));
+                axis_energy_x = axis_energy_x.saturating_add(dx.unsigned_abs().pow(2));
+                axis_energy_z = axis_energy_z.saturating_add(dz.unsigned_abs().pow(2));
+                diagonal_energy_northeast =
+                    diagonal_energy_northeast.saturating_add(dne.unsigned_abs().pow(2));
+                diagonal_energy_southeast =
+                    diagonal_energy_southeast.saturating_add(dse.unsigned_abs().pow(2));
+            }
+        }
+
+        LegacyTerrainEvidence {
+            map_hash: CanonicalHash::digest(map_bytes).to_string(),
+            drainage_hash: CanonicalHash::digest(drainage_bytes).to_string(),
+            minimum_height,
+            maximum_height,
+            land_columns,
+            ocean_columns,
+            lake_columns,
+            plateau_steps,
+            axis_energy_x,
+            axis_energy_z,
+            diagonal_energy_northeast,
+            diagonal_energy_southeast,
+            drainage_center_columns,
+        }
+    }
+
+    const fn family_tag(family: TerrainFamilyV2) -> u8 {
+        match family {
+            TerrainFamilyV2::DeepOcean => 0,
+            TerrainFamilyV2::ShallowOcean => 1,
+            TerrainFamilyV2::Coast => 2,
+            TerrainFamilyV2::Plains => 3,
+            TerrainFamilyV2::RollingHills => 4,
+            TerrainFamilyV2::Plateau => 5,
+            TerrainFamilyV2::MountainRange => 6,
+            TerrainFamilyV2::Wetland => 7,
+            TerrainFamilyV2::LakeBasin => 8,
+            TerrainFamilyV2::Volcanic => 9,
+        }
     }
 }

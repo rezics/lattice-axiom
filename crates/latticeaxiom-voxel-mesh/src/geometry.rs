@@ -540,6 +540,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "slice 1 adds a distinct two-sided water presentation group"]
+    fn water_must_not_inherit_generic_translucent_back_face_culling() {
+        assert!(!MeshGroup::Translucent.culls_back_faces());
+    }
+
+    #[test]
     fn layer_merge_keys_include_face_specific_slots() {
         let top = LayerMergeKey::for_face(7, Face::PosY);
         let side = LayerMergeKey::for_face(7, Face::PosX);

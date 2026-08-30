@@ -5,21 +5,23 @@
     reason = "benchmark setup states storage and fixture construction invariants"
 )]
 
-use std::{collections::BTreeMap, hint::black_box};
+use std::{collections::BTreeMap, hint::black_box, num::NonZeroU32};
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use latticeaxiom_core::{SchemaId, WorldId};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use latticeaxiom_core::{SchemaId, StableId, WorldId};
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
-    ChunkMutation, ChunkRevisionExpectation, DimensionId, MemoryTransactionKernel,
-    PayloadSchemaVersion, StoredChunk, TransactionId, VersionedPayload, WorldTransaction,
+    ChunkMutation, ChunkRevision, ChunkRevisionExpectation, DimensionId, MemoryTransactionKernel,
+    PayloadSchemaVersion, StoredChunk, TransactionId, VersionedPayload, VoxelRevision,
+    WorldRevision, WorldTransaction,
 };
 use latticeaxiom_voxel_runtime::{
     CellSelection, ColliderSemanticFingerprint, CommittedChunkProjection, DdaOrigin, DdaQuery,
     DerivedApplyBudget, DerivedApplySlice, DerivedKind, DerivedMemoryBudget, DerivedOwner,
-    DerivedPriority, DerivedQueueLimits, DerivedRequest, DerivedRequestSet, FixedTick,
-    MeshSemanticFingerprint, RuntimeGeneration, RuntimeLimits, VoxelRuntime, WallClockNanos,
-    WorkingSetScope, WorldEpoch,
+    DerivedPriority, DerivedQueueLimits, DerivedRequest, DerivedRequestSet, FixedTick, FluidFlow,
+    FluidLayerCell, FluidRevisionStamp, FluidUpdateBudget, MeshSemanticFingerprint,
+    RuntimeGeneration, RuntimeLimits, SolidFluidRuntimeCell, VoxelRuntime, WallClockNanos,
+    WorkingSetScope, WorldEpoch, plan_fluid_tick,
 };
 
 const EDGE: u16 = 32;
@@ -238,6 +240,61 @@ fn runtime_benchmarks(criterion: &mut Criterion) {
             }))
         });
     });
+
+    fluid_planner_benchmark(criterion);
+}
+
+fn fluid_planner_benchmark(criterion: &mut Criterion) {
+    let fluid: StableId = "fixture:fluid/water"
+        .parse()
+        .expect("benchmark fluid identity is canonical");
+    let source = SolidFluidRuntimeCell {
+        solid_occupied: false,
+        fluid: FluidLayerCell::Fluid {
+            id: fluid,
+            level: 0,
+            flow: FluidFlow::Still,
+        },
+    };
+    let mut cells = vec![SolidFluidRuntimeCell::empty(); CELL_COUNT];
+    let mut frontier = Vec::new();
+    for z in (0_u16..EDGE).step_by(4) {
+        for x in (0_u16..EDGE).step_by(4) {
+            let index = usize::from(x)
+                + usize::from(EDGE) * (usize::from(z) + usize::from(EDGE) * usize::from(EDGE / 2));
+            cells[index] = source.clone();
+            frontier.push((x, EDGE / 2, z));
+        }
+    }
+    let captured = FluidRevisionStamp::new(
+        WorldRevision::new(1),
+        ChunkRevision::new(1),
+        VoxelRevision::new(1),
+    );
+    let budget = FluidUpdateBudget::new(
+        NonZeroU32::new(4_096).expect("cell budget is nonzero"),
+        NonZeroU32::new(4_096).expect("queue budget is nonzero"),
+        NonZeroU32::new(4 * 1_024 * 1_024).expect("byte budget is nonzero"),
+    );
+    let mut group = criterion.benchmark_group("fluid_planner_v1");
+    group.throughput(Throughput::Elements(
+        u64::try_from(frontier.len()).expect("frontier count fits u64"),
+    ));
+    group.bench_function("plan_32_cubed_64_frontier", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                plan_fluid_tick(
+                    ChunkCoordinate::new(0, 0, 0),
+                    captured,
+                    black_box(&cells),
+                    black_box(&frontier),
+                    budget,
+                )
+                .expect("benchmark fluid plan remains within bounds"),
+            )
+        });
+    });
+    group.finish();
 }
 
 criterion_group!(benches, runtime_benchmarks);
