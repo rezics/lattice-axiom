@@ -39,9 +39,9 @@ use latticeaxiom_runtime_contracts::{
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
     ChunkMutation, ChunkRevision, ChunkRevisionExpectation, ContinuationId, DimensionId,
-    MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion, PersistentEntityId,
-    PublicationReceipt, StoredChunk, TransactionId, VersionedPayload, WorldRevision,
-    WorldTransaction,
+    FaultPoint, MaterializedChunkStateHash, MemoryTransactionKernel, PayloadSchemaVersion,
+    PersistentEntityId, PublicationReceipt, StorageError, StoredChunk, TransactionId,
+    VersionedPayload, WorldRevision, WorldTransaction,
 };
 use latticeaxiom_terrenia_worldgen::TerrainPresetV2;
 use latticeaxiom_voxel_mesh::{
@@ -349,8 +349,8 @@ pub(super) struct ProductionSpineInner {
     pub(super) fluid_palette: Arc<CompiledFluidPaletteV1>,
     empty: HostVoxel,
     pub(super) chunk_edge: u16,
-    world: WorldId,
-    dimension: DimensionId,
+    pub(super) world: WorldId,
+    pub(super) dimension: DimensionId,
     next_transaction: u128,
     voxel_schema: SchemaId,
     voxel_schema_version: PayloadSchemaVersion,
@@ -2420,10 +2420,12 @@ impl ProductionSpine {
             .and_then(|inner| inner.last_inspect.clone())
     }
 
-    /// Places one water or lava occupancy cell without running fluid simulation.
+    /// Places one water or lava occupancy cell and schedules its persisted frontier.
     ///
     /// The solid layer is preserved. Placement is rejected when the solid's
-    /// authored `fluid_occupancy` policy is `reject`. This path does not open a
+    /// authored `fluid_occupancy` policy is `reject`. The edit and continuation
+    /// activation share one memory-kernel transaction; simulation starts only
+    /// when [`Self::tick_bounded_fluids`] is called. This path does not open a
     /// world writer.
     ///
     /// # Errors
@@ -3210,6 +3212,20 @@ impl ProductionSpineInner {
         old_voxel: HostVoxel,
         new_voxel: HostVoxel,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
+        self.commit_cell_with_fluid_activation(
+            kernel, fixed_tick, position, old_voxel, new_voxel, false,
+        )
+    }
+
+    fn commit_cell_with_fluid_activation(
+        &mut self,
+        kernel: &MemoryTransactionKernel,
+        fixed_tick: u64,
+        position: BlockPosition,
+        old_voxel: HostVoxel,
+        new_voxel: HostVoxel,
+        activate_fluid: bool,
+    ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
         let coordinate = chunk_of(position, self.chunk_edge);
         let key = ChunkKey::new(self.world, self.dimension.clone(), coordinate);
         let snapshot = kernel
@@ -3230,6 +3246,22 @@ impl ProductionSpineInner {
             return Err(BlockEditRejectV1::StorageUnavailable);
         };
         *cell = new_voxel;
+        let mut continuations = stored.data().continuations().clone();
+        if activate_fluid {
+            let fluid_local = (
+                u16::try_from(local[0]).map_err(|_| BlockEditRejectV1::StorageUnavailable)?,
+                u16::try_from(local[1]).map_err(|_| BlockEditRejectV1::StorageUnavailable)?,
+                u16::try_from(local[2]).map_err(|_| BlockEditRejectV1::StorageUnavailable)?,
+            );
+            super::fluid::activate_persisted_frontier(&mut continuations, fluid_local)?;
+        }
+        let replacement = ChunkData::new(
+            voxel_payload(&self.voxel_schema, self.voxel_schema_version, &cells),
+            stored.data().persistent_entities().clone(),
+            continuations,
+            stored.data().provenance().clone(),
+        );
+        let changed_domains = chunk_changed_domains(Some(stored.data()), &replacement);
         let transaction = WorldTransaction::new(
             TransactionId::from_u128(self.next_transaction),
             self.world,
@@ -3237,8 +3269,8 @@ impl ProductionSpineInner {
             vec![ChunkMutation::new(
                 key.clone(),
                 ChunkRevisionExpectation::Exact(stored.revision()),
-                ChangedDomains::VOXELS,
-                chunk_data(&self.voxel_schema, self.voxel_schema_version, &cells),
+                changed_domains,
+                replacement,
             )],
         );
         kernel
@@ -3278,59 +3310,73 @@ impl ProductionSpineInner {
         })
     }
 
-    pub(super) fn commit_chunk_voxels(
+    pub(super) fn commit_fluid_batch(
         &mut self,
         kernel: &MemoryTransactionKernel,
-        coordinate: ChunkCoordinate,
-        cells: &[HostVoxel],
+        base_world_revision: WorldRevision,
+        mut replacements: Vec<(ChunkCoordinate, ChunkRevision, ChangedDomains, ChunkData)>,
     ) -> Result<(), BlockEditRejectV1> {
-        let key = ChunkKey::new(self.world, self.dimension.clone(), coordinate);
-        let snapshot = kernel
-            .reference_snapshot(self.world)
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        let stored = snapshot
-            .chunk(&key)
-            .ok_or(BlockEditRejectV1::PermissionDenied)?;
+        if replacements.is_empty() {
+            return Ok(());
+        }
+        replacements.sort_by_key(|(coordinate, _, _, _)| *coordinate);
+        let transaction_id = TransactionId::from_u128(self.next_transaction);
         let transaction = WorldTransaction::new(
-            TransactionId::from_u128(self.next_transaction),
+            transaction_id,
             self.world,
-            snapshot.revision(),
-            vec![ChunkMutation::new(
-                key.clone(),
-                ChunkRevisionExpectation::Exact(stored.revision()),
-                ChangedDomains::VOXELS,
-                chunk_data(&self.voxel_schema, self.voxel_schema_version, cells),
-            )],
+            base_world_revision,
+            replacements
+                .iter()
+                .map(|(coordinate, revision, changed, data)| {
+                    ChunkMutation::new(
+                        ChunkKey::new(self.world, self.dimension.clone(), *coordinate),
+                        ChunkRevisionExpectation::Exact(*revision),
+                        *changed,
+                        data.clone(),
+                    )
+                })
+                .collect(),
         );
-        kernel
-            .commit(transaction)
-            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+        match kernel.commit(transaction.clone()) {
+            Ok(_) => {}
+            Err(StorageError::InjectedFault {
+                point: FaultPoint::AfterPublishBeforeReceipt,
+            }) => {
+                kernel
+                    .commit(transaction)
+                    .map_err(|error| map_fluid_storage_error(&error, base_world_revision))?;
+            }
+            Err(error) => return Err(map_fluid_storage_error(&error, base_world_revision)),
+        }
         self.next_transaction = self.next_transaction.saturating_add(1);
         let published = kernel
             .reference_snapshot(self.world)
             .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        let stored = published
-            .chunk(&key)
-            .ok_or(BlockEditRejectV1::StorageUnavailable)?;
-        self.insert_edited_chunk(coordinate);
-        project_stored(
-            &mut self.runtime,
-            stored,
-            self.chunk_edge,
-            FixedTick::new(0),
-            &self.presentation,
-            derived_requests(priority_with_distance(DerivedPriority::EDIT_TO_VISIBLE, 0)),
-        )
-        .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
-        seal_unready_cave_voids(self, coordinate);
-        self.lifecycle
-            .entry(coordinate)
-            .and_modify(|state| {
-                if *state == ChunkLifecycle::Active {
-                    *state = ChunkLifecycle::MeshCollider;
-                }
-            })
-            .or_insert(ChunkLifecycle::Resident);
+        for (coordinate, _, _, _) in replacements {
+            let key = ChunkKey::new(self.world, self.dimension.clone(), coordinate);
+            let stored = published
+                .chunk(&key)
+                .ok_or(BlockEditRejectV1::StorageUnavailable)?;
+            self.insert_edited_chunk(coordinate);
+            project_stored(
+                &mut self.runtime,
+                stored,
+                self.chunk_edge,
+                FixedTick::new(0),
+                &self.presentation,
+                derived_requests(priority_with_distance(DerivedPriority::EDIT_TO_VISIBLE, 0)),
+            )
+            .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
+            seal_unready_cave_voids(self, coordinate);
+            self.lifecycle
+                .entry(coordinate)
+                .and_modify(|state| {
+                    if *state == ChunkLifecycle::Active {
+                        *state = ChunkLifecycle::MeshCollider;
+                    }
+                })
+                .or_insert(ChunkLifecycle::Resident);
+        }
         Ok(())
     }
 
@@ -3374,7 +3420,7 @@ impl ProductionSpineInner {
             fluid_palette_index,
             &self.presentation,
         );
-        self.commit_cell(kernel, 0, position, current, placed)?;
+        self.commit_cell_with_fluid_activation(kernel, 0, position, current, placed, true)?;
         self.occupancy_from_voxel(position, placed)
             .map_err(|_| BlockEditRejectV1::ContentUnavailable)
     }
@@ -5495,7 +5541,7 @@ pub(super) fn runtime_chunk_cells(
     cells
 }
 
-fn voxel_payload(
+pub(super) fn voxel_payload(
     schema: &SchemaId,
     schema_version: PayloadSchemaVersion,
     cells: &[HostVoxel],
@@ -5535,7 +5581,7 @@ fn capture_continuation(coordinate: ChunkCoordinate) -> ContinuationId {
     ContinuationId::from_bytes(bytes)
 }
 
-fn decode_cells(
+pub(super) fn decode_cells(
     bytes: &[u8],
     edge: u16,
     presentation: &HostPresentationIndex,
@@ -5703,7 +5749,10 @@ fn derived_request(priority: DerivedPriority) -> DerivedRequest {
         DerivedMemoryBudget::new(DERIVED_JOB_BYTE_BUDGET, DERIVED_JOB_BYTE_BUDGET),
     )
 }
-fn chunk_changed_domains(current: Option<&ChunkData>, replacement: &ChunkData) -> ChangedDomains {
+pub(super) fn chunk_changed_domains(
+    current: Option<&ChunkData>,
+    replacement: &ChunkData,
+) -> ChangedDomains {
     let Some(current) = current else {
         return ChangedDomains::ALL;
     };
@@ -5721,6 +5770,33 @@ fn chunk_changed_domains(current: Option<&ChunkData>, replacement: &ChunkData) -
         changed = changed.union(ChangedDomains::PROVENANCE);
     }
     changed
+}
+
+fn map_fluid_storage_error(
+    error: &StorageError,
+    captured_world: WorldRevision,
+) -> BlockEditRejectV1 {
+    match error {
+        StorageError::WorldRevisionConflict {
+            expected, actual, ..
+        } => BlockEditRejectV1::StaleRevision {
+            expected: expected.get(),
+            actual: actual.get(),
+        },
+        StorageError::ChunkRevisionConflict {
+            expected: ChunkRevisionExpectation::Exact(expected),
+            actual: Some(actual),
+            ..
+        } => BlockEditRejectV1::StaleRevision {
+            expected: expected.get(),
+            actual: actual.get(),
+        },
+        StorageError::ChunkRevisionConflict { actual, .. } => BlockEditRejectV1::StaleRevision {
+            expected: captured_world.get(),
+            actual: actual.map_or(0, ChunkRevision::get),
+        },
+        _ => BlockEditRejectV1::StorageUnavailable,
+    }
 }
 
 fn commit_mutations(

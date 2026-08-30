@@ -63,6 +63,7 @@ use latticeaxiom_start_ui::{
     ClientShellGraph, InputSource, MemoryStartEffect, SemanticActionId, SemanticCommand,
     SemanticNodeId, ShellCapability, ShellEffect, ShellPackageProvider, ShellScreen,
 };
+use latticeaxiom_storage::FaultPoint;
 use latticeaxiom_terrenia_worldgen::TerrainPresetV2;
 use latticeaxiom_world_catalog::WorldOpenAction;
 use latticeaxiom_world_db::{WorldDbError, WorldStorage};
@@ -798,6 +799,182 @@ fn production_spine_headless_water_and_lava_occupancy_round_trip_at_distinct_cel
         spine.working_set_diagnostics().saving(),
         0,
         "fluid occupancy must stay on the memory kernel"
+    );
+}
+
+#[test]
+fn production_fluid_tick_uses_only_the_persisted_active_frontier() {
+    let _production_host_guard = production_host_test_guard();
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock(boot.prepared(), SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    assert!(
+        spine
+            .tick_bounded_fluids()
+            .expect("static generated reservoirs do not require a tick")
+            .is_empty(),
+        "generated oceans, rivers, lakes, and lava must not seed a global frontier"
+    );
+
+    let source = await_downward_fluid_cell(&mut instance, &spine);
+    place_and_inspect_fluid(
+        &spine,
+        source,
+        &stable_id("terrenia:fluid/water"),
+        FluidStateV1 {
+            level: FluidLevelV1::SOURCE,
+            flow: FluidFlowV1::Still,
+        },
+    );
+    let snapshot = spine
+        .kernel()
+        .reference_snapshot(spine.world_id().expect("spine owns a world"))
+        .expect("active continuation is readable");
+    assert!(snapshot.chunks().any(|(_, stored)| {
+        stored
+            .data()
+            .continuations()
+            .values()
+            .any(|payload| payload.schema().as_str() == "latticeaxiom:schema/fluid-continuation@1")
+    }));
+
+    let reports = spine
+        .tick_bounded_fluids()
+        .expect("persisted active fluid tick applies");
+    assert!(!reports.is_empty());
+    assert!(reports.iter().any(|report| report.cells_changed > 0));
+    let below = latticeaxiom_gameplay::BlockPosition {
+        y: source.y.saturating_sub(1),
+        ..source
+    };
+    let occupancy = spine
+        .inspect_occupancy(below)
+        .expect("downstream cell remains resident");
+    assert_eq!(
+        occupancy.fluid.as_ref().map(StableId::as_str),
+        Some("terrenia:fluid/water")
+    );
+    assert_eq!(
+        occupancy.fluid_state.map(|state| state.flow),
+        Some(FluidFlowV1::Down)
+    );
+}
+
+#[test]
+fn production_fluid_boundary_intent_commits_both_chunks_atomically() {
+    let _production_host_guard = production_host_test_guard();
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock(boot.prepared(), SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let (source, destination, expected_flow) =
+        await_horizontal_boundary_fluid_pair(&mut instance, &spine);
+    let source_chunk = spine.chunk_of(source).expect("source maps to a chunk");
+    let destination_chunk = spine
+        .chunk_of(destination)
+        .expect("destination maps to a chunk");
+    place_and_inspect_fluid(
+        &spine,
+        source,
+        &stable_id("terrenia:fluid/water"),
+        FluidStateV1 {
+            level: FluidLevelV1::SOURCE,
+            flow: FluidFlowV1::Still,
+        },
+    );
+    let before_source = spine
+        .fluid_revision_stamp(source_chunk)
+        .expect("source revision exists");
+    let before_destination = spine
+        .fluid_revision_stamp(destination_chunk)
+        .expect("destination revision exists");
+
+    let reports = spine
+        .tick_bounded_fluids()
+        .expect("cross-chunk fluid batch applies");
+    assert!(reports.iter().any(|report| report.boundary_intents > 0));
+    let placed = spine
+        .inspect_occupancy(destination)
+        .expect("boundary destination remains resident");
+    assert_eq!(
+        placed.fluid.as_ref().map(StableId::as_str),
+        Some("terrenia:fluid/water")
+    );
+    assert_eq!(
+        placed.fluid_state,
+        Some(FluidStateV1 {
+            level: FluidLevelV1::new(1).expect("level one is valid"),
+            flow: expected_flow,
+        })
+    );
+    let after_source = spine
+        .fluid_revision_stamp(source_chunk)
+        .expect("source revision remains available");
+    let after_destination = spine
+        .fluid_revision_stamp(destination_chunk)
+        .expect("destination revision remains available");
+    assert!(after_source.chunk() > before_source.chunk());
+    assert!(after_destination.chunk() > before_destination.chunk());
+    assert_eq!(after_source.world(), after_destination.world());
+}
+
+#[test]
+fn production_fluid_storage_fault_has_zero_partial_application() {
+    let _production_host_guard = production_host_test_guard();
+    let boot = lock_boot_fixture();
+    let mut instance = EngineInstance::new_headless_host_from_lock(boot.prepared(), SPINE_TIMESTEP)
+        .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let source = await_downward_fluid_cell(&mut instance, &spine);
+    place_and_inspect_fluid(
+        &spine,
+        source,
+        &stable_id("terrenia:fluid/water"),
+        FluidStateV1 {
+            level: FluidLevelV1::SOURCE,
+            flow: FluidFlowV1::Still,
+        },
+    );
+    let before = spine
+        .materialized_chunk_state_hash()
+        .expect("pre-fault world hash is available");
+    spine
+        .kernel()
+        .inject_fault_once(FaultPoint::AfterFirstStagedMutation)
+        .expect("one-shot storage fault installs");
+    assert!(matches!(
+        spine.tick_bounded_fluids(),
+        Err(BlockEditRejectV1::StorageUnavailable)
+    ));
+    assert_eq!(
+        spine
+            .materialized_chunk_state_hash()
+            .expect("post-fault world hash is available"),
+        before,
+        "a pre-publication fault must preserve every voxel and continuation"
+    );
+    assert!(
+        spine
+            .tick_bounded_fluids()
+            .expect("the persisted frontier retries after the one-shot fault")
+            .iter()
+            .any(|report| report.cells_changed > 0)
     );
 }
 
@@ -2642,6 +2819,158 @@ fn await_direct_fluid_cells(
         "fewer than two direct fluid-occupancy air cells in {:?}",
         spine.resident_chunks()
     );
+}
+
+fn await_downward_fluid_cell(
+    instance: &mut EngineInstance,
+    spine: &ProductionSpine,
+) -> latticeaxiom_gameplay::BlockPosition {
+    for _ in 0..16 {
+        let edge = i32::from(spine.chunk_edge());
+        for coordinate in spine.resident_chunks() {
+            for ly in (1..edge).rev() {
+                for lz in 0..edge {
+                    for lx in 0..edge {
+                        let position = position_in_chunk(coordinate, edge, lx, ly, lz);
+                        let below = position_in_chunk(coordinate, edge, lx, ly - 1, lz);
+                        if is_direct_empty_fluid_cell(spine, position)
+                            && is_direct_empty_fluid_cell(spine, below)
+                        {
+                            return position;
+                        }
+                    }
+                }
+            }
+        }
+        instance
+            .advance_fixed_ticks(8)
+            .expect("fluid search advances bounded streaming");
+        std::thread::park_timeout(Duration::from_millis(1));
+    }
+    panic!(
+        "no vertically adjacent direct fluid cells in {:?}",
+        spine.resident_chunks()
+    );
+}
+
+fn await_horizontal_boundary_fluid_pair(
+    instance: &mut EngineInstance,
+    spine: &ProductionSpine,
+) -> (
+    latticeaxiom_gameplay::BlockPosition,
+    latticeaxiom_gameplay::BlockPosition,
+    FluidFlowV1,
+) {
+    for _ in 0..16 {
+        if let Some(pair) = horizontal_boundary_fluid_pair(spine) {
+            return pair;
+        }
+        instance
+            .advance_fixed_ticks(8)
+            .expect("boundary-fluid search advances bounded streaming");
+        std::thread::park_timeout(Duration::from_millis(1));
+    }
+    panic!(
+        "no horizontal boundary fluid fixture in {:?}",
+        spine.resident_chunks()
+    );
+}
+
+fn horizontal_boundary_fluid_pair(
+    spine: &ProductionSpine,
+) -> Option<(
+    latticeaxiom_gameplay::BlockPosition,
+    latticeaxiom_gameplay::BlockPosition,
+    FluidFlowV1,
+)> {
+    let edge = i32::from(spine.chunk_edge());
+    let resident = spine.resident_chunks().into_iter().collect::<BTreeSet<_>>();
+    for coordinate in resident.iter().copied() {
+        let boundaries = [
+            (
+                ChunkCoordinate::new(coordinate.x.saturating_add(1), coordinate.y, coordinate.z),
+                (edge - 1, 0),
+                FluidFlowV1::East,
+                true,
+            ),
+            (
+                ChunkCoordinate::new(coordinate.x.saturating_sub(1), coordinate.y, coordinate.z),
+                (0, edge - 1),
+                FluidFlowV1::West,
+                true,
+            ),
+            (
+                ChunkCoordinate::new(coordinate.x, coordinate.y, coordinate.z.saturating_add(1)),
+                (edge - 1, 0),
+                FluidFlowV1::South,
+                false,
+            ),
+            (
+                ChunkCoordinate::new(coordinate.x, coordinate.y, coordinate.z.saturating_sub(1)),
+                (0, edge - 1),
+                FluidFlowV1::North,
+                false,
+            ),
+        ];
+        for (neighbor, (source_axis, destination_axis), flow, x_axis) in boundaries {
+            if !resident.contains(&neighbor) {
+                continue;
+            }
+            for ly in (1..edge).rev() {
+                for transverse in 0..edge {
+                    let (source_x, source_z, destination_x, destination_z) = if x_axis {
+                        (source_axis, transverse, destination_axis, transverse)
+                    } else {
+                        (transverse, source_axis, transverse, destination_axis)
+                    };
+                    let source = position_in_chunk(coordinate, edge, source_x, ly, source_z);
+                    let destination =
+                        position_in_chunk(neighbor, edge, destination_x, ly, destination_z);
+                    let below = position_in_chunk(coordinate, edge, source_x, ly - 1, source_z);
+                    if is_direct_empty_fluid_cell(spine, source)
+                        && is_direct_empty_fluid_cell(spine, destination)
+                        && is_solid_fluid_barrier(spine, below)
+                    {
+                        return Some((source, destination, flow));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn position_in_chunk(
+    coordinate: ChunkCoordinate,
+    edge: i32,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> latticeaxiom_gameplay::BlockPosition {
+    latticeaxiom_gameplay::BlockPosition {
+        x: coordinate.x.saturating_mul(edge).saturating_add(x),
+        y: coordinate.y.saturating_mul(edge).saturating_add(y),
+        z: coordinate.z.saturating_mul(edge).saturating_add(z),
+    }
+}
+
+fn is_direct_empty_fluid_cell(
+    spine: &ProductionSpine,
+    position: latticeaxiom_gameplay::BlockPosition,
+) -> bool {
+    spine.inspect_occupancy(position).is_ok_and(|occupancy| {
+        occupancy.fluid.is_none()
+            && occupancy.fluid_occupancy.as_str() == "terrenia:fluid-occupancy/direct@1"
+    })
+}
+
+fn is_solid_fluid_barrier(
+    spine: &ProductionSpine,
+    position: latticeaxiom_gameplay::BlockPosition,
+) -> bool {
+    spine.inspect_occupancy(position).is_ok_and(|occupancy| {
+        occupancy.solid_occupancy.as_str() != "terrenia:solid-occupancy/empty@1"
+    })
 }
 
 fn place_and_inspect_fluid(

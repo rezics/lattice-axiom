@@ -1045,6 +1045,61 @@ mod tests {
     }
 
     #[test]
+    fn every_supported_chunk_face_maps_to_the_opposite_local_face() {
+        let origin = ChunkCoordinate::new(7, -1, 4);
+        let cases = [
+            (
+                (31, 3, 5),
+                FluidFlow::East,
+                ChunkCoordinate::new(8, -1, 4),
+                (0, 3, 5),
+            ),
+            (
+                (0, 3, 5),
+                FluidFlow::West,
+                ChunkCoordinate::new(6, -1, 4),
+                (31, 3, 5),
+            ),
+            (
+                (5, 3, 31),
+                FluidFlow::South,
+                ChunkCoordinate::new(7, -1, 5),
+                (5, 3, 0),
+            ),
+            (
+                (5, 3, 0),
+                FluidFlow::North,
+                ChunkCoordinate::new(7, -1, 3),
+                (5, 3, 31),
+            ),
+            (
+                (5, 0, 3),
+                FluidFlow::Down,
+                ChunkCoordinate::new(7, -2, 4),
+                (5, 31, 3),
+            ),
+        ];
+        for (source, flow, expected_chunk, expected_local) in cases {
+            match neighbor_cell(
+                origin,
+                FLUID_CHUNK_EDGE_V1,
+                source.0,
+                source.1,
+                source.2,
+                flow,
+            ) {
+                Neighbor::Boundary { neighbor, x, y, z } => {
+                    assert_eq!(neighbor, expected_chunk);
+                    assert_eq!((x, y, z), expected_local);
+                }
+                Neighbor::Inside { .. } | Neighbor::OutOfWorld => {
+                    panic!("{flow:?} from {source:?} must cross a chunk face")
+                }
+            }
+        }
+    }
+
+    #[test]
     fn mixing_and_cell_bounds_fail_closed() {
         let mut cells = empty_volume();
         place(&mut cells, 0, 1, 0, source_cell());

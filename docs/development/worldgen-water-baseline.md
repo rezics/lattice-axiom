@@ -116,3 +116,32 @@ default sampling. Their 95% intervals were 699.53-706.55 us (solid),
 698.43-709.99 us (layered), and 957.92-996.80 us (checker). All remain below
 the Slice 0 upper intervals, so the optional fluid capability does not consume
 the established dry-mesh budget in this corpus.
+
+## Slice 3 fluid-execution measurement
+
+The frozen planner corpus was rerun after the host moved to persisted active
+continuations and atomic multi-chunk publication. The planner's executable
+rules are unchanged; the host now adds stable intent merge, snapshot decode,
+continuation serialization, and memory-kernel publication outside this timed
+closure. The reproduction command was:
+
+```text
+cargo bench -p latticeaxiom-voxel-runtime --bench runtime -- fluid_planner_v1 --sample-size 10 --warm-up-time 1 --measurement-time 2
+```
+
+The 32-cubic, 64-frontier planner interval was 537.68-787.72 us, or
+81.247-119.03 thousand frontier cells/s. That remains inside the Slice 0
+0.54150-0.84806 ms interval apart from a 3.82 us improvement at the lower
+bound. Two high-severe outliers were retained by Criterion. Earlier same-day
+runs while other desktop work was active varied up to 1.2311 ms; because the
+planner instructions did not change, this is recorded as machine-load
+variance rather than attributed to the host transaction repair.
+
+Headless execution evidence covers: no generated-reservoir frontier, a real
+horizontal boundary intent updating both chunk revisions under one world
+revision, persisted unloaded-neighbor deferral/reopen, randomized stable merge,
+stale completion rejection, queue/cell/byte bounds, and zero authoritative
+change after `AfterFirstStagedMutation` fault injection. The validated suites
+were 38 voxel-runtime unit tests, two public runtime-contract tests, 102 engine
+unit tests, and 53 complete headless-host integration tests. Strict all-target,
+all-feature Clippy also completed with warnings denied.
