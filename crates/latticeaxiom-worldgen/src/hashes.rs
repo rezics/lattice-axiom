@@ -112,6 +112,30 @@ typed_hash!(
     CaveTopologyLayerHashV1,
     "Canonical hash of the optional V6 cave-topology realization layer."
 );
+typed_hash!(
+    HydrologicDomainIdV1,
+    "Stable identity of one finite hydrologic planning domain."
+);
+typed_hash!(
+    HydrologicPortIdV1,
+    "Direction-independent identity of one hydrologic domain boundary port."
+);
+typed_hash!(
+    HydrologicDomainInputHashV1,
+    "Canonical hash of every output-affecting hydrologic domain input."
+);
+typed_hash!(
+    HydrologicDomainConfigHashV1,
+    "Canonical hash of a bounded hydrologic domain configuration."
+);
+typed_hash!(
+    HydrologicDomainPlanHashV1,
+    "Canonical hash of one complete hydrologic domain plan."
+);
+typed_hash!(
+    HydrologicBoundarySignatureV1,
+    "Direction-independent signature of one hydrologic boundary result."
+);
 
 pub(crate) fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> CanonicalHash {
     let mut hasher = Sha256::new();

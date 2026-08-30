@@ -34,6 +34,7 @@ mod error;
 mod fixed_field;
 mod generation;
 mod hashes;
+mod hydrologic_domain;
 mod hydrology;
 mod natural;
 mod provider;
@@ -76,9 +77,21 @@ pub use generation::{
 pub use hashes::{
     AquiferBasinIdV1, BoundaryIdV1, CaveTopologyLayerHashV1, DrainageLinkIdV1, GenerationEpochIdV1,
     GenerationInputHashV1, GenerationProvenanceHashV1, GeneratorFingerprintV1,
+    HydrologicBoundarySignatureV1, HydrologicDomainConfigHashV1, HydrologicDomainIdV1,
+    HydrologicDomainInputHashV1, HydrologicDomainPlanHashV1, HydrologicPortIdV1,
     HydrologyOccupancyHashV1, LockedClosureFingerprintV1, NaturalLayerHashV1, PlanActivationIdV1,
     PlanningCellIdV1, RiverBasinIdV1, SharedFaceHashV1, SnapshotChecksumV1, TerrainConfigHashV2,
     WorldgenConfigHashV1,
+};
+pub use hydrologic_domain::{
+    DepressionClassV1, DepressionHierarchyV1, DepressionRecordV1, DevelopmentRoutingComparisonV1,
+    HYDROLOGIC_WEIGHT_SCALE_V1, HydrologicBoundaryEdgeV1, HydrologicBoundaryPortV1,
+    HydrologicDomainAccountingV1, HydrologicDomainAlgorithmV1, HydrologicDomainCacheKeyV1,
+    HydrologicDomainCacheV1, HydrologicDomainConfigV1, HydrologicDomainGridV1,
+    HydrologicDomainInputV1, HydrologicDomainPlanV1, HydrologicGridCoordinateV1,
+    HydrologicPortKindV1, MfdReceiverV1, MfdRoutingCellV1, d_infinity_development_comparison_v1,
+    plan_hydrologic_domain_v1, plan_hydrologic_domain_with_cancellation_v1,
+    plan_hydrologic_domains_parallel_v1,
 };
 pub use hydrology::{
     AquiferSampleV1, DrainageSampleV1, HydrologyAccountingV1, HydrologyFaceContinuityV1,

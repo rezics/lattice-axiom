@@ -418,4 +418,18 @@ pub enum WorldgenError {
         /// Required registration kind.
         expected: &'static str,
     },
+    /// A finite hydrologic-domain input or result failed closed validation.
+    #[error("invalid hydrologic domain field `{field}`: {reason}")]
+    InvalidHydrologicDomain {
+        /// Stable field name.
+        field: &'static str,
+        /// Actionable validation diagnostic.
+        reason: String,
+    },
+    /// Hydrologic planning observed a caller-owned cancellation request.
+    #[error("hydrologic domain planning was cancelled after {completed_work_units} work units")]
+    HydrologicPlanningCancelled {
+        /// Deterministic work completed before cancellation was observed.
+        completed_work_units: u64,
+    },
 }

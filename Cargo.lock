@@ -4438,6 +4438,7 @@ dependencies = [
 name = "latticeaxiom-worldgen"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "criterion 0.8.2",
  "latticeaxiom-core",
  "latticeaxiom-storage",

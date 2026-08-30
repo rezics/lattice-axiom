@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bevy = { workspace = true, features = ["multi_threaded", "std"] }
 latticeaxiom-core = { path = "../latticeaxiom-core" }
 latticeaxiom-storage = { path = "../latticeaxiom-storage" }
 serde.workspace = true
@@ -30,4 +31,8 @@ harness = false
 
 [[bench]]
 name = "chunk_generation"
+harness = false
+
+[[bench]]
+name = "hydrologic_domain"
 harness = false
