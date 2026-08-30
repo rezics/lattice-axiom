@@ -108,6 +108,28 @@ pub struct TerrainColumnSampleV2 {
 }
 
 impl TerrainColumnSampleV2 {
+    pub(crate) const fn from_semantic(height: i32, family: TerrainFamilyV2) -> Self {
+        Self {
+            height,
+            family,
+            surface_water_y: None,
+            drainage: None,
+        }
+    }
+
+    pub(crate) const fn from_semantic_with_water(
+        height: i32,
+        family: TerrainFamilyV2,
+        surface_water_y: Option<i32>,
+    ) -> Self {
+        Self {
+            height,
+            family,
+            surface_water_y,
+            drainage: None,
+        }
+    }
+
     /// Returns the river-adjusted solid surface height.
     #[must_use]
     pub const fn height(self) -> i32 {

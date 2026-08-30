@@ -15,14 +15,15 @@ use crate::{
     D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, DrainageSampleV1,
     ExistingSnapshotEvidenceV1, FrozenRoleBindingsV1, GenerationEpochIdV1, GenerationInputHashV1,
     GenerationProvenanceHashV1, GeneratorFingerprintV1, GeologicSampleV1,
-    HydrologyFaceContinuityV1, HydrologyFluidBindingsV1, HydrologyOccupancyCandidateV1,
-    HydrologyOccupancyHashV1, HydrologyOccupancyInputV1, HydrologyOccupancySampleV1,
-    LockedClosureFingerprintV1, NaturalLayerInputV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, ResourceFieldSampleV1,
-    RiverSampleV1, SnapshotChecksumV1, SurfaceBiomeTerrainProgramV1, TerrainColumnSampleV2,
-    TerrainConfigHashV2, TerrainConfigV2, TerrainFamilyV2, TerrainStyleV1, TerritoryQueryV1,
-    WorldSeedV1, WorldgenConfigHashV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
-    WorldgenResult, WorldgenSeedRootV2,
+    HydrologyConstrainedTerrainSamplerV1, HydrologyFaceContinuityV1, HydrologyFluidBindingsV1,
+    HydrologyOccupancyCandidateV1, HydrologyOccupancyHashV1, HydrologyOccupancyInputV1,
+    HydrologyOccupancySampleV1, LockedClosureFingerprintV1, NaturalLayerInputV1,
+    PlanActivationIdV1, PlanningCellCoordinateV1, ProviderGenerationIdentityV1, ProviderOfferV1,
+    ProviderSlotV1, ResourceFieldSampleV1, RiverSampleV1, SemanticHydrologicTerrainPlanV1,
+    SnapshotChecksumV1, SurfaceBiomeTerrainProgramV1, TerrainColumnSampleV2, TerrainConfigHashV2,
+    TerrainConfigV2, TerrainFamilyV2, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1,
+    WorldgenConfigHashV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult,
+    WorldgenSeedRootV2,
     cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
     hashes::{concatenated_hash, domain_hash, hash_u64, sample_hash_3d},
@@ -68,6 +69,7 @@ pub struct GenerationPlanInputV1 {
     natural_layer: Option<NaturalLayerInputV1>,
     cave_topology: Option<CaveTopologyLayerInputV1>,
     hydrology_occupancy: Option<HydrologyOccupancyInputV1>,
+    semantic_terrain: Option<SemanticHydrologicTerrainPlanV1>,
 }
 
 impl GenerationPlanInputV1 {
@@ -111,6 +113,7 @@ impl GenerationPlanInputV1 {
             natural_layer: None,
             cave_topology: None,
             hydrology_occupancy: None,
+            semantic_terrain: None,
         }
     }
 
@@ -153,6 +156,16 @@ impl GenerationPlanInputV1 {
         hydrology_occupancy: HydrologyOccupancyInputV1,
     ) -> Self {
         self.hydrology_occupancy = Some(hydrology_occupancy);
+        self
+    }
+
+    /// Attaches one immutable finite semantic/hydrologic terrain artifact.
+    #[must_use]
+    pub fn with_semantic_hydrologic_terrain_plan(
+        mut self,
+        semantic_terrain: SemanticHydrologicTerrainPlanV1,
+    ) -> Self {
+        self.semantic_terrain = Some(semantic_terrain);
         self
     }
 }
@@ -630,6 +643,7 @@ pub struct GenerationPlanV1 {
     cave: CaveSamplerV1,
     natural: Option<NaturalSamplerV1>,
     hydrology: Option<HydrologySamplerV1>,
+    semantic_terrain: Option<HydrologyConstrainedTerrainSamplerV1>,
 }
 
 impl GenerationPlanV1 {
@@ -671,6 +685,7 @@ impl GenerationPlanV1 {
             seed_root,
             input.terrain_config,
         )?;
+        let semantic_policy = terrain_programs.semantic_policy().cloned();
         let mut role_targets = roles
             .iter()
             .map(|receipt| (receipt.purpose, receipt.block_id.clone()))
@@ -732,6 +747,34 @@ impl GenerationPlanV1 {
             ],
         ));
 
+        let semantic_terrain = if let Some(plan) = input.semantic_terrain {
+            let policy = semantic_policy.ok_or_else(|| WorldgenError::InvalidTerrainProgram {
+                field: "semantic_hydrologic_terrain",
+                reason: "a semantic hydrologic plan requires semantic terrain programs".to_owned(),
+            })?;
+            let plan_hash = plan.canonical_hash()?;
+            generation_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
+                GENERATION_INPUT_DOMAIN,
+                &[generation_input_hash.as_bytes(), plan_hash.as_bytes()],
+            ));
+            generation_provenance_hash = GenerationProvenanceHashV1::from_hash(concatenated_hash(
+                GENERATION_PROVENANCE_DOMAIN,
+                &[generation_input_hash.as_bytes(), locked_bytes.as_slice()],
+            ));
+            generation_epoch = GenerationEpochIdV1::from_hash(concatenated_hash(
+                GENERATION_EPOCH_DOMAIN,
+                &[generation_epoch.as_bytes(), plan_hash.as_bytes()],
+            ));
+            Some(HydrologyConstrainedTerrainSamplerV1::new(
+                seed_root,
+                input.terrain_config,
+                policy,
+                plan,
+            )?)
+        } else {
+            None
+        };
+
         let surface_biome_terrain_programs = terrain_programs.ordered().to_vec();
         let territory = TerritorySamplerV1::new(
             seed_root,
@@ -762,7 +805,10 @@ impl GenerationPlanV1 {
             }
             generation_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
                 GENERATION_INPUT_DOMAIN,
-                &[d4_input_hash.as_bytes(), sampler.layer_hash().as_bytes()],
+                &[
+                    generation_input_hash.as_bytes(),
+                    sampler.layer_hash().as_bytes(),
+                ],
             ));
             generation_provenance_hash = GenerationProvenanceHashV1::from_hash(concatenated_hash(
                 GENERATION_PROVENANCE_DOMAIN,
@@ -839,6 +885,7 @@ impl GenerationPlanV1 {
             cave,
             natural,
             hydrology,
+            semantic_terrain,
         })
     }
 
@@ -876,6 +923,14 @@ impl GenerationPlanV1 {
     #[must_use]
     pub const fn terrain_config(&self) -> &TerrainConfigV2 {
         &self.terrain_config
+    }
+
+    /// Returns the finite semantic/hydrologic artifact when one is compiled.
+    #[must_use]
+    pub fn semantic_hydrologic_terrain_plan(&self) -> Option<&SemanticHydrologicTerrainPlanV1> {
+        self.semantic_terrain
+            .as_ref()
+            .map(HydrologyConstrainedTerrainSamplerV1::plan)
     }
 
     /// Returns the concrete block bound to a compiled D4 material purpose.
@@ -1059,6 +1114,11 @@ impl GenerationPlanV1 {
     /// Samples height, macro family, and standing water with one terrain-field evaluation.
     #[must_use]
     pub fn terrain_column(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
+        if let Some(semantic) = self.semantic_terrain_at(x, z) {
+            return semantic
+                .terrain_column(x, z)
+                .unwrap_or_else(|error| invalid_semantic_plan_query(x, 0, z, &error));
+        }
         let mut sample = self.territory.terrain_column(x, z);
         sample.height = self.natural.as_ref().map_or(sample.height, |natural| {
             natural.adjust_height_with_drainage(x, z, sample.height, sample.drainage)
@@ -1069,7 +1129,7 @@ impl GenerationPlanV1 {
     /// Returns the inclusive standing-water level of an inland lake basin.
     #[must_use]
     pub fn surface_water_level(&self, x: i64, z: i64) -> Option<i32> {
-        self.territory.surface_water_y(x, z)
+        self.terrain_column(x, z).surface_water_y()
     }
 
     /// Returns the macro shape family independently from climate materials.
@@ -1078,9 +1138,37 @@ impl GenerationPlanV1 {
         self.territory.family(x, z)
     }
 
+    /// Returns whether the territory-owned 3D density is solid after hard
+    /// river and standing-water protection.
+    #[must_use]
+    pub fn terrain_density_is_solid(&self, x: i64, y: i64, z: i64) -> bool {
+        let column = self.generation_column(x, z);
+        if let Some(semantic) = self.semantic_terrain_at(x, z) {
+            return semantic
+                .density(x, y, z)
+                .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
+                .final_density_q8()
+                >= 0;
+        }
+        if !self.territory.uses_semantic() {
+            return y <= i64::from(column.height);
+        }
+        self.territory.is_solid(
+            column.material_style,
+            x,
+            y,
+            z,
+            column.height,
+            column.in_river_channel() || column.surface_water_y.is_some(),
+        )
+    }
+
     /// Returns the locally queryable surface river sample at world `(x, z)`.
     #[must_use]
     pub fn river_sample(&self, x: i64, z: i64) -> Option<RiverSampleV1> {
+        if self.semantic_terrain_at(x, z).is_some() {
+            return None;
+        }
         self.natural
             .as_ref()
             .map(|natural| natural.river_sample(x, z))
@@ -1630,6 +1718,18 @@ impl GenerationPlanV1 {
     }
 
     fn generation_column(&self, x: i64, z: i64) -> ColumnSampleV1 {
+        if let Some(semantic) = self.semantic_terrain_at(x, z) {
+            let terrain = semantic
+                .terrain_column(x, z)
+                .unwrap_or_else(|error| invalid_semantic_plan_query(x, 0, z, &error));
+            let territory = self.territory.sample(x, z);
+            return ColumnSampleV1 {
+                height: terrain.height,
+                material_style: self.territory.choose_material_style(x, z, territory),
+                river: None,
+                surface_water_y: terrain.surface_water_y,
+            };
+        }
         let terrain = self.territory.terrain_column(x, z);
         let territory = self.territory.sample(x, z);
         let river = self
@@ -1914,8 +2014,30 @@ impl GenerationPlanV1 {
         if y < i64::from(self.config.world_floor_y) || y > i64::from(self.config.world_ceiling_y) {
             return D4MaterialRoleV1::Empty;
         }
-        if y > i64::from(column.height) {
-            return vegetation.unwrap_or(D4MaterialRoleV1::Empty);
+        let solid = if let Some(semantic) = self.semantic_terrain_at(x, z) {
+            semantic
+                .density(x, y, z)
+                .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
+                .final_density_q8()
+                >= 0
+        } else if self.territory.uses_semantic() {
+            self.territory.is_solid(
+                column.material_style,
+                x,
+                y,
+                z,
+                column.height,
+                column.in_river_channel() || column.surface_water_y.is_some(),
+            )
+        } else {
+            y <= i64::from(column.height)
+        };
+        if !solid {
+            return if y > i64::from(column.height) {
+                vegetation.unwrap_or(D4MaterialRoleV1::Empty)
+            } else {
+                D4MaterialRoleV1::Empty
+            };
         }
         counters.cave_samples = counters.cave_samples.saturating_add(1);
         let occupancy = self.cave.occupancy(x, y, z, column.height);
@@ -1950,6 +2072,12 @@ impl GenerationPlanV1 {
                 self.arid_material(x, y, z, depth, counters)
             }
         }
+    }
+
+    fn semantic_terrain_at(&self, x: i64, z: i64) -> Option<&HydrologyConstrainedTerrainSamplerV1> {
+        self.semantic_terrain
+            .as_ref()
+            .filter(|semantic| semantic.contains_column(x, z))
     }
 
     #[allow(
@@ -2560,6 +2688,13 @@ fn preflight_plan_input_bytes(input: &GenerationPlanInputV1) -> WorldgenResult<(
         add_identity_bytes(&mut total, layer.fluids().water_predicate(), input.limits)?;
         add_identity_bytes(&mut total, layer.fluids().lava_predicate(), input.limits)?;
     }
+    if let Some(plan) = &input.semantic_terrain {
+        add_plan_bytes(
+            &mut total,
+            plan.canonical_bytes()?.len(),
+            "semantic hydrologic terrain plan bytes",
+        )?;
+    }
     for (_, role) in input.role_vocabulary.iter() {
         add_identity_bytes(&mut total, role, input.limits)?;
     }
@@ -2591,6 +2726,12 @@ fn preflight_plan_input_bytes(input: &GenerationPlanInputV1) -> WorldgenResult<(
         });
     }
     Ok(())
+}
+
+fn invalid_semantic_plan_query(x: i64, y: i64, z: i64, error: &WorldgenError) -> ! {
+    panic!(
+        "validated semantic hydrologic terrain plan rejected world coordinate ({x}, {y}, {z}): {error}"
+    )
 }
 
 fn add_identity_bytes(

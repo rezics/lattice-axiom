@@ -310,8 +310,21 @@ impl TerritorySamplerV1 {
         self.terrain_column(x, z).family
     }
 
-    pub(crate) fn surface_water_y(&self, x: i64, z: i64) -> Option<i32> {
-        self.terrain_column(x, z).surface_water_y
+    pub(crate) fn is_solid(
+        &self,
+        style: TerrainStyleV1,
+        x: i64,
+        y: i64,
+        z: i64,
+        approved_surface_y: i32,
+        protected_water: bool,
+    ) -> bool {
+        self.terrain_programs
+            .is_solid(style, x, y, z, approved_surface_y, protected_water)
+    }
+
+    pub(crate) const fn uses_semantic(&self) -> bool {
+        self.terrain_programs.uses_semantic()
     }
 
     pub(crate) fn choose_material_style(

@@ -14,7 +14,12 @@ latticeaxiom-worldgen.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "semantic_terrain"
+harness = false

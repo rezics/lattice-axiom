@@ -160,6 +160,18 @@ typed_hash!(
     StaticReservoirHashV1,
     "Canonical hash of one sparse static-reservoir chunk candidate."
 );
+typed_hash!(
+    SemanticTerrainPolicyHashV1,
+    "Canonical hash of one closed semantic-terrain field and spline policy."
+);
+typed_hash!(
+    SemanticTerrainPlanHashV1,
+    "Canonical hash of one hydrology-constrained semantic terrain plan."
+);
+typed_hash!(
+    TerrainBoundaryAdapterHashV1,
+    "Direction-independent evidence hash for an old/new terrain boundary adapter."
+);
 
 pub(crate) fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> CanonicalHash {
     let mut hasher = Sha256::new();

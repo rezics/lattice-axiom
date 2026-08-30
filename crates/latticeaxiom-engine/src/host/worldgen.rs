@@ -25,7 +25,9 @@ use latticeaxiom_runtime_contracts::{
     WorldgenInspectReportV1, WorldgenInspectSamplesV1, compile_worldgen_inspect_report,
 };
 use latticeaxiom_storage::ChunkCoordinate;
-use latticeaxiom_terrenia_worldgen::{TerrainPresetV2, surface_biome_terrain_programs};
+#[cfg(test)]
+use latticeaxiom_terrenia_worldgen::surface_biome_terrain_programs;
+use latticeaxiom_terrenia_worldgen::{TerrainPresetV2, semantic_surface_biome_terrain_programs};
 use latticeaxiom_worldgen::{
     AuthoredWorldgenBindingsV1, BoundedGeneratedRegionV1, CaveFieldPortalAssertionV1, ChunkDraftV1,
     ChunkFaceV1, D4MaterialRoleV1, GenerationPlanInputV1, GenerationPlanV1,
@@ -42,8 +44,8 @@ use super::{
     catalog::{HostWorldgenCatalog, package_registration_namespace},
 };
 
-/// Worldgen V3 deliberately invalidates earlier terrain and hydrology provenance.
-const WORLDGEN_PLAN_REVISION: u64 = 3;
+/// Worldgen V4 deliberately selects the semantic terrain-provider epoch.
+const WORLDGEN_PLAN_REVISION: u64 = 4;
 
 /// Compiles the V5 plan bound to a reopened product lock and package catalog.
 pub(super) fn compile_plan(
@@ -73,9 +75,10 @@ pub(super) fn compile_plan(
         WorldgenLimitsV1::default(),
     )
     .with_terrain_config(terrain_config)
-    .with_surface_biome_terrain_programs(surface_biome_terrain_programs(
+    .with_surface_biome_terrain_programs(semantic_surface_biome_terrain_programs(
+        terrain_config,
         catalog.worldgen_package.as_ref().map_or_else(
-            || CanonicalHash::digest("terrenia-worldgen-builtin-v1"),
+            || CanonicalHash::digest("terrenia-worldgen-builtin-v2"),
             |package| package.artifact_hash,
         ),
     )?)

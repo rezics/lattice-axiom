@@ -4336,6 +4336,7 @@ dependencies = [
 name = "latticeaxiom-terrenia-worldgen"
 version = "0.1.0"
 dependencies = [
+ "criterion 0.8.2",
  "latticeaxiom-core",
  "latticeaxiom-worldgen",
  "serde",

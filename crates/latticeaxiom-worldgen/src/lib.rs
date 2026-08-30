@@ -42,6 +42,7 @@ mod provider;
 mod region;
 mod roles;
 mod seed;
+mod semantic_terrain;
 mod spawn;
 mod terrain_config;
 mod terrain_field;
@@ -82,7 +83,8 @@ pub use hashes::{
     HydrologicDomainInputHashV1, HydrologicDomainPlanHashV1, HydrologicOutletIdV1,
     HydrologicPortIdV1, HydrologicTopologyHashV1, HydrologyOccupancyHashV1,
     LockedClosureFingerprintV1, NaturalLayerHashV1, PlanActivationIdV1, PlanningCellIdV1,
-    RiverBasinIdV1, RiverSegmentIdV1, SharedFaceHashV1, SnapshotChecksumV1, StaticReservoirHashV1,
+    RiverBasinIdV1, RiverSegmentIdV1, SemanticTerrainPlanHashV1, SemanticTerrainPolicyHashV1,
+    SharedFaceHashV1, SnapshotChecksumV1, StaticReservoirHashV1, TerrainBoundaryAdapterHashV1,
     TerrainConfigHashV2, WaterBodyIdV1, WorldgenConfigHashV1,
 };
 pub use hydrologic_domain::{
@@ -124,6 +126,13 @@ pub use roles::{
     FrozenRoleBindingsV1, NaturalRoleVocabularyV1,
 };
 pub use seed::{WorldSeedV1, WorldgenSeedRootV2};
+pub use semantic_terrain::{
+    ClosedSplinePointV1, ClosedSplineV1, HydrologyConstrainedTerrainSamplerV1,
+    SemanticDensitySampleV1, SemanticFieldSampleV1, SemanticFieldSpecV1,
+    SemanticHydrologicTerrainInputV1, SemanticHydrologicTerrainPlanV1, SemanticTerrainFieldV1,
+    SemanticTerrainPolicyV1, TerrainBoundaryAdapterEvidenceV1,
+    build_semantic_hydrologic_terrain_plan_v1,
+};
 pub use spawn::{
     AuthoredWorldgenBindingsV1, SpawnCellInspectionV1, SpawnCellOverrideV1, SpawnLocationV1,
     SpawnOccupancyViewV1, SpawnRejectV1, SpawnSearchBoundsV1, evaluate_spawn_column,
