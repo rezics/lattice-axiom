@@ -1284,7 +1284,10 @@ fn render_mesh_backpressure_eventually_fills_every_resident_render_slot() {
     let limits = spine.hard_limits().expect("host clamps are installed");
     let max_resident = usize::try_from(limits.max_resident_chunks).expect("resident cap fits");
 
-    await_resident_count(&mut instance, &spine, max_resident, 10_240);
+    // The hydrology-constrained 32-cubed density path has an accepted
+    // approximately 20 ms cold-chunk baseline. Give the bounded task-pool
+    // corpus 1,280 poll batches (6.4 seconds) to saturate all 1,183 slots.
+    await_resident_count(&mut instance, &spine, max_resident, 20_480);
 
     let mut elapsed = 0_u32;
     while usize::try_from(spine.working_set_diagnostics().visible()).unwrap_or(usize::MAX)
@@ -4344,6 +4347,10 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
         "journey must enter both underground territories, visited {visited:?}, owned {owned:?}, route {journey:?}"
     );
 
+    // Shaft excavation is allowed to consume or break its selected fixture
+    // tool. Reset the resource-gathering phase so this assertion measures
+    // underground resource coverage rather than route-dependent durability.
+    seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
     let stone = first_resident_any(
         &spine,
         &[
