@@ -113,7 +113,7 @@ impl HostPresentationIndex {
         let fluids = fluid_palette
             .entries()
             .iter()
-            .map(|entry| entry.fluid().and_then(|id| style_for(&table, id)))
+            .map(|entry| entry.fluid().and_then(|id| fluid_style_for(&table, id)))
             .collect();
         Ok(Self {
             table,
@@ -200,6 +200,20 @@ fn style_for(table: &CompiledTerrainLayerTableV1, content: &StableId) -> Option<
         variants,
         occlusion: face_occlusion(row.policy()),
     })
+}
+
+fn fluid_style_for(table: &CompiledTerrainLayerTableV1, fluid: &StableId) -> Option<HostFaceStyle> {
+    let mut style = style_for(table, fluid)?;
+    style.group = fluid_mesh_group(fluid, style.group);
+    Some(style)
+}
+
+fn fluid_mesh_group(fluid: &StableId, authored_group: MeshGroup) -> MeshGroup {
+    if fluid.kind() == "fluid" && fluid.path() == "water" {
+        MeshGroup::Water
+    } else {
+        authored_group
+    }
 }
 
 const fn mesh_group(policy: TerrainMaterialPolicyV1) -> MeshGroup {
@@ -319,7 +333,7 @@ mod tests {
     use latticeaxiom_render_contracts::TerrainMaterialPolicyV1;
     use latticeaxiom_voxel_mesh::{FaceOcclusion, MeshGroup};
 
-    use super::{face_occlusion, mesh_group, selection_shape_targets_cell};
+    use super::{face_occlusion, fluid_mesh_group, mesh_group, selection_shape_targets_cell};
 
     fn selection(id: &str) -> SelectionShapeV1 {
         SelectionShapeV1::new(
@@ -358,6 +372,32 @@ mod tests {
         assert_eq!(
             face_occlusion(TerrainMaterialPolicyV1::Translucent),
             FaceOcclusion::Matching
+        );
+    }
+
+    #[test]
+    fn only_water_receives_the_dedicated_two_sided_group() {
+        let water = "terrenia:fluid/water"
+            .parse::<StableId>()
+            .expect("fixture water id is canonical");
+        let lava = "terrenia:fluid/lava"
+            .parse::<StableId>()
+            .expect("fixture lava id is canonical");
+        let glass = "terrenia:block/glass"
+            .parse::<StableId>()
+            .expect("fixture glass id is canonical");
+
+        assert_eq!(
+            fluid_mesh_group(&water, MeshGroup::Translucent),
+            MeshGroup::Water
+        );
+        assert_eq!(
+            fluid_mesh_group(&lava, MeshGroup::Emissive),
+            MeshGroup::Emissive
+        );
+        assert_eq!(
+            fluid_mesh_group(&glass, MeshGroup::Translucent),
+            MeshGroup::Translucent
         );
     }
 

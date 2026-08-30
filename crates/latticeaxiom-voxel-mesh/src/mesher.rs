@@ -626,10 +626,11 @@ mod tests {
         let positions = [
             MeshGroup::Emissive,
             MeshGroup::Opaque,
+            MeshGroup::Water,
             MeshGroup::Translucent,
             MeshGroup::Cutout,
         ];
-        let (voxels, dimensions) = volume([7, 1, 1], |position| {
+        let (voxels, dimensions) = volume([9, 1, 1], |position| {
             if position[0] % 2 == 0 {
                 let group = positions[position[0] / 2];
                 TestVoxel::grouped(

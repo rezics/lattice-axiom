@@ -31,15 +31,18 @@ pub enum MeshGroup {
     Translucent,
     /// Surfaces routed through the emissive terrain presentation group.
     Emissive,
+    /// Dedicated blended water surfaces.
+    Water,
 }
 
 impl MeshGroup {
     /// All mesh groups in stable output order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Opaque,
         Self::Cutout,
         Self::Translucent,
         Self::Emissive,
+        Self::Water,
     ];
 
     /// Stable index of this group within [`Self::ALL`].
@@ -50,6 +53,7 @@ impl MeshGroup {
             Self::Cutout => 1,
             Self::Translucent => 2,
             Self::Emissive => 3,
+            Self::Water => 4,
         }
     }
 
@@ -59,26 +63,32 @@ impl MeshGroup {
         match self {
             Self::Opaque | Self::Emissive => MeshAlphaMode::Opaque,
             Self::Cutout => MeshAlphaMode::Mask,
-            Self::Translucent => MeshAlphaMode::Blend,
+            Self::Translucent | Self::Water => MeshAlphaMode::Blend,
         }
     }
 
     /// Whether a later material adapter should write opaque depth.
     #[must_use]
     pub const fn writes_opaque_depth(self) -> bool {
-        !matches!(self, Self::Translucent)
+        !matches!(self, Self::Translucent | Self::Water)
     }
 
     /// Whether a later material adapter should keep back-face culling.
     #[must_use]
     pub const fn culls_back_faces(self) -> bool {
-        true
+        !matches!(self, Self::Water)
     }
 
     /// Whether this group is the emissive terrain pass.
     #[must_use]
     pub const fn is_emissive(self) -> bool {
         matches!(self, Self::Emissive)
+    }
+
+    /// Whether this group is the dedicated water presentation pass.
+    #[must_use]
+    pub const fn is_water(self) -> bool {
+        matches!(self, Self::Water)
     }
 }
 
@@ -384,7 +394,7 @@ pub struct Aabb {
 /// benchmarks to reuse allocations across chunk jobs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeshBuffer<K> {
-    groups: [[Vec<Quad<K>>; 6]; 4],
+    groups: [[Vec<Quad<K>>; 6]; MeshGroup::ALL.len()],
 }
 
 impl<K> Default for MeshBuffer<K> {
@@ -524,25 +534,30 @@ mod tests {
 
     #[test]
     fn mesh_groups_preserve_depth_alpha_and_culling_policies() {
-        assert_eq!(MeshGroup::ALL.map(MeshGroup::index), [0, 1, 2, 3]);
+        assert_eq!(MeshGroup::ALL.map(MeshGroup::index), [0, 1, 2, 3, 4]);
         assert_eq!(MeshGroup::Opaque.alpha_mode(), MeshAlphaMode::Opaque);
         assert_eq!(MeshGroup::Cutout.alpha_mode(), MeshAlphaMode::Mask);
         assert_eq!(MeshGroup::Translucent.alpha_mode(), MeshAlphaMode::Blend);
         assert_eq!(MeshGroup::Emissive.alpha_mode(), MeshAlphaMode::Opaque);
+        assert_eq!(MeshGroup::Water.alpha_mode(), MeshAlphaMode::Blend);
         assert!(MeshGroup::Opaque.writes_opaque_depth());
         assert!(MeshGroup::Cutout.writes_opaque_depth());
         assert!(!MeshGroup::Translucent.writes_opaque_depth());
         assert!(MeshGroup::Emissive.writes_opaque_depth());
+        assert!(!MeshGroup::Water.writes_opaque_depth());
         assert!(MeshGroup::Emissive.is_emissive());
-        for group in MeshGroup::ALL {
-            assert!(group.culls_back_faces());
-        }
+        assert!(MeshGroup::Water.is_water());
+        assert!(MeshGroup::Opaque.culls_back_faces());
+        assert!(MeshGroup::Cutout.culls_back_faces());
+        assert!(MeshGroup::Translucent.culls_back_faces());
+        assert!(MeshGroup::Emissive.culls_back_faces());
+        assert!(!MeshGroup::Water.culls_back_faces());
     }
 
     #[test]
-    #[ignore = "slice 1 adds a distinct two-sided water presentation group"]
     fn water_must_not_inherit_generic_translucent_back_face_culling() {
-        assert!(!MeshGroup::Translucent.culls_back_faces());
+        assert!(!MeshGroup::Water.culls_back_faces());
+        assert!(MeshGroup::Translucent.culls_back_faces());
     }
 
     #[test]

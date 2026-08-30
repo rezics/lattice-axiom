@@ -29,7 +29,7 @@ const FALLBACK_COLOR: [f32; 4] = [0.38, 0.41, 0.43, 1.0];
 /// One Bevy material per [`MeshGroup`], sharing the nearest color-block atlas.
 #[derive(Clone, Debug, Resource)]
 pub(super) struct ProductionTerrainMaterials {
-    handles: [Handle<StandardMaterial>; 4],
+    handles: [Handle<StandardMaterial>; MeshGroup::ALL.len()],
 }
 
 impl ProductionTerrainMaterials {
@@ -62,6 +62,10 @@ fn group_material(atlas: Handle<Image>, group: MeshGroup) -> StandardMaterial {
     };
     if group.is_emissive() {
         material.emissive = bevy::color::LinearRgba::rgb(2.0, 1.6, 0.8);
+    }
+    if !group.culls_back_faces() {
+        material.cull_mode = None;
+        material.double_sided = true;
     }
     material
 }
@@ -303,7 +307,7 @@ pub(super) fn nearest_clamp_sampler() -> ImageSampler {
 /// Marker that a chunk entity currently presents a complete GPU mesh.
 #[derive(Clone, Component, Debug)]
 pub(super) struct ChunkGpuMesh {
-    groups: [Option<Entity>; 4],
+    groups: [Option<Entity>; MeshGroup::ALL.len()],
 }
 
 /// Child entity presenting one [`MeshGroup`] of a chunk.
@@ -331,7 +335,7 @@ pub(super) fn apply_chunk_mesh(
             commands.entity(child).despawn();
         }
     }
-    let mut groups = [None; 4];
+    let mut groups = [None; MeshGroup::ALL.len()];
     let mut spawned = 0_usize;
     for group in MeshGroup::ALL {
         let Some(mesh) = mesh_from_group(geometry, palette, group) else {
@@ -637,6 +641,7 @@ fn blit_tile(atlas: &mut [u8], atlas_width: u32, col: u32, row: u32, tile: &[u8]
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    use bevy::{asset::Handle, image::Image};
     use latticeaxiom_gameplay::BlockId;
     use latticeaxiom_voxel_mesh::{
         Aabb, ChunkCoordinate, Face, FaceDescriptor, FaceOcclusion, MeshBuffer, MeshGroup,
@@ -646,8 +651,21 @@ mod tests {
 
     use super::{
         AdapterCpuMesh, ImageAddressMode, ImageFilterMode, ImageSampler, ProductionTerrainPalette,
-        adapter_cpu_mesh_from_buffer, nearest_clamp_sampler, rgba8_unorm,
+        adapter_cpu_mesh_from_buffer, group_material, nearest_clamp_sampler, rgba8_unorm,
     };
+
+    #[test]
+    fn only_the_water_material_disables_back_face_culling() {
+        let atlas = Handle::<Image>::default();
+        assert!(
+            group_material(atlas.clone(), MeshGroup::Translucent)
+                .cull_mode
+                .is_some()
+        );
+        let water = group_material(atlas, MeshGroup::Water);
+        assert!(water.cull_mode.is_none());
+        assert!(water.double_sided);
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TestVoxel {
