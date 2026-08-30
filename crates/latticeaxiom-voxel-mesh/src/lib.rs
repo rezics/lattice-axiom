@@ -35,6 +35,7 @@ pub use source::{
     ChunkCoordinate, MeshReceipt, MeshSource, SourceEpoch, SourceFingerprint, SourceRevision,
 };
 pub use volume::{
-    FaceDescriptor, FaceOcclusion, MAX_INTERIOR_EDGE, ONE_VOXEL_HALO, PaddedChunk,
+    FaceDescriptor, FaceOcclusion, FluidMeshFlow, FluidMeshIdentity, FluidMeshLevel,
+    FluidMeshLevelError, FluidSurfaceDescriptor, MAX_INTERIOR_EDGE, ONE_VOXEL_HALO, PaddedChunk,
     PaddedChunkError, Voxel,
 };

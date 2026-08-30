@@ -2,6 +2,8 @@
 
 use std::array;
 
+use crate::{FluidMeshFlow, FluidMeshIdentity, FluidMeshLevel};
+
 /// Alpha policy implied by a [`MeshGroup`].
 ///
 /// These values describe depth and coverage intent for a later material
@@ -290,6 +292,18 @@ pub struct Quad<K> {
     height: u32,
     /// Caller-defined identity shared by every unit face in the quad.
     merge_key: K,
+    geometry: QuadGeometry,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuadGeometry {
+    Cube,
+    Fluid {
+        vertex_heights_eighths: [u8; 4],
+        identity: FluidMeshIdentity,
+        level: FluidMeshLevel,
+        flow: FluidMeshFlow,
+    },
 }
 
 impl<K> Quad<K> {
@@ -299,6 +313,29 @@ impl<K> Quad<K> {
             width,
             height,
             merge_key,
+            geometry: QuadGeometry::Cube,
+        }
+    }
+
+    pub(crate) const fn fluid(
+        minimum: [u32; 3],
+        merge_key: K,
+        vertex_heights_eighths: [u8; 4],
+        identity: FluidMeshIdentity,
+        level: FluidMeshLevel,
+        flow: FluidMeshFlow,
+    ) -> Self {
+        Self {
+            minimum,
+            width: 1,
+            height: 1,
+            merge_key,
+            geometry: QuadGeometry::Fluid {
+                vertex_heights_eighths,
+                identity,
+                level,
+                flow,
+            },
         }
     }
 
@@ -324,6 +361,45 @@ impl<K> Quad<K> {
     #[must_use]
     pub const fn merge_key(&self) -> &K {
         &self.merge_key
+    }
+
+    /// Fluid identity carried by this quad, or `None` for ordinary geometry.
+    #[must_use]
+    pub const fn fluid_identity(&self) -> Option<FluidMeshIdentity> {
+        match self.geometry {
+            QuadGeometry::Cube => None,
+            QuadGeometry::Fluid { identity, .. } => Some(identity),
+        }
+    }
+
+    /// Preserved fluid level, or `None` for ordinary geometry.
+    #[must_use]
+    pub const fn fluid_level(&self) -> Option<FluidMeshLevel> {
+        match self.geometry {
+            QuadGeometry::Cube => None,
+            QuadGeometry::Fluid { level, .. } => Some(level),
+        }
+    }
+
+    /// Explicit fluid flow, or `None` for ordinary geometry.
+    #[must_use]
+    pub const fn fluid_flow(&self) -> Option<FluidMeshFlow> {
+        match self.geometry {
+            QuadGeometry::Cube => None,
+            QuadGeometry::Fluid { flow, .. } => Some(flow),
+        }
+    }
+
+    /// Per-vertex fluid heights in eighths above the cell base.
+    #[must_use]
+    pub const fn fluid_vertex_heights_eighths(&self) -> Option<[u8; 4]> {
+        match self.geometry {
+            QuadGeometry::Cube => None,
+            QuadGeometry::Fluid {
+                vertex_heights_eighths,
+                ..
+            } => Some(vertex_heights_eighths),
+        }
     }
 
     /// Number of unit voxel faces covered by this quad.
@@ -354,12 +430,37 @@ impl<K> Quad<K> {
             corner
         };
 
-        [
+        let mut positions = [
             with_offset(0, 0),
             with_offset(self.width, 0),
             with_offset(self.width, self.height),
             with_offset(0, self.height),
-        ]
+        ];
+        if let QuadGeometry::Fluid {
+            vertex_heights_eighths,
+            ..
+        } = self.geometry
+        {
+            let base_y = coordinate_f32(self.minimum[1]);
+            for (position, height) in positions.iter_mut().zip(vertex_heights_eighths) {
+                position[1] = base_y + f32::from(height) / 8.0;
+            }
+        }
+        positions
+    }
+
+    /// Four deterministic normals matching this quad's presentation surface.
+    ///
+    /// Fluid tops intentionally use world-up normals. This keeps normals
+    /// byte-identical at independently meshed chunk seams while flow-normal
+    /// detail remains a material concern. Fluid sides use their face normal.
+    #[must_use]
+    pub const fn normals(&self, face: Face) -> [[f32; 3]; 4] {
+        if matches!(self.geometry, QuadGeometry::Fluid { .. }) && matches!(face, Face::PosY) {
+            [[0.0, 1.0, 0.0]; 4]
+        } else {
+            face.quad_normals()
+        }
     }
 
     /// Quad texture coordinates covering `0..width` / `0..height`.

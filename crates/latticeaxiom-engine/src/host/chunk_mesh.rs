@@ -456,7 +456,7 @@ fn emit_adapter_mesh<K, const N: usize>(
                 for ((position, normal), uv) in quad
                     .positions(face)
                     .into_iter()
-                    .zip(face.quad_normals())
+                    .zip(quad.normals(face))
                     .zip(quad_uvs)
                 {
                     positions.push(position);

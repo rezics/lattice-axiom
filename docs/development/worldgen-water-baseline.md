@@ -88,3 +88,31 @@ publication so later planner changes remain comparable.
 
 These failures are independent: later commits should turn each corresponding
 gate green without rewriting this legacy evidence.
+
+## Slice 2 fluid-mesh measurement
+
+The dedicated level/flow surface corpus was measured on the same machine after
+Slice 1 commit `e9ea9b1`. The command was:
+
+```text
+cargo bench -p latticeaxiom-voxel-mesh --bench meshing -- fluid_meshing_32_cubed_plus_halo --noplot
+```
+
+The optimized Criterion run used its default three-second warm-up, 100 samples,
+and a five-second requested measurement window. The input is one 32 by 32
+water surface in a 32-cubic interior plus one-cell halo, with all eight levels
+and four horizontal flow directions represented. It deterministically emits
+1,152 quads, 4,608 vertices, and 6,912 indices.
+
+| Benchmark | 95% interval | Throughput interval |
+| --- | ---: | ---: |
+| Fluid-aware 32-cubic plus halo | 814.64-849.19 us | 38.587-40.224 million cells/s |
+
+This first measurement establishes evidence rather than a release threshold.
+The timed closure reuses both mesher scratch and output allocations.
+
+The same optimized build reran the dry `latticeaxiom` corpora with Criterion's
+default sampling. Their 95% intervals were 699.53-706.55 us (solid),
+698.43-709.99 us (layered), and 957.92-996.80 us (checker). All remain below
+the Slice 0 upper intervals, so the optional fluid capability does not consume
+the established dry-mesh budget in this corpus.

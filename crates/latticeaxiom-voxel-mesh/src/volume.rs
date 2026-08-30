@@ -143,6 +143,145 @@ pub enum FaceOcclusion {
     Full,
 }
 
+/// Stable caller-owned identity for one fluid kind in a mesh source.
+///
+/// The value commonly identifies a row in a locked fluid or presentation
+/// table. It is deliberately not a string and is interpreted only by the
+/// caller that owns the matching [`crate::MeshSource`] fingerprint.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FluidMeshIdentity(u16);
+
+impl FluidMeshIdentity {
+    /// Creates a fluid identity from a caller-owned stable table index.
+    #[must_use]
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    /// Returns the caller-owned stable table index.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// Invalid v1 fluid level supplied to meshing.
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("fluid mesh level {actual} is outside the supported range 0..=7")]
+pub struct FluidMeshLevelError {
+    actual: u8,
+}
+
+/// Validated v1 fluid level preserved by the mesh source.
+///
+/// Level zero is full and level seven is one eighth of a voxel high. The
+/// mesher never reinterprets this value as fluid volume.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FluidMeshLevel(u8);
+
+impl FluidMeshLevel {
+    /// Full/source fluid level.
+    pub const SOURCE: Self = Self(0);
+    /// Greatest accepted v1 level.
+    pub const MAX: u8 = 7;
+
+    /// Creates a validated fluid level.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FluidMeshLevelError`] when `value` exceeds seven.
+    pub const fn new(value: u8) -> Result<Self, FluidMeshLevelError> {
+        if value <= Self::MAX {
+            Ok(Self(value))
+        } else {
+            Err(FluidMeshLevelError { actual: value })
+        }
+    }
+
+    /// Returns the preserved v1 level.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// Returns the presentation height in exact eighths of one voxel.
+    #[must_use]
+    pub const fn height_eighths(self) -> u8 {
+        8 - self.0
+    }
+}
+
+/// Explicit flow direction preserved on fluid geometry.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FluidMeshFlow {
+    /// No directional flow.
+    #[default]
+    Still,
+    /// Negative Y waterfall flow.
+    Down,
+    /// Positive X flow.
+    East,
+    /// Negative X flow.
+    West,
+    /// Positive Z flow.
+    South,
+    /// Negative Z flow.
+    North,
+}
+
+/// Fluid identity and state exposed by one voxel face.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FluidSurfaceDescriptor<K> {
+    identity: FluidMeshIdentity,
+    level: FluidMeshLevel,
+    flow: FluidMeshFlow,
+    merge_key: K,
+}
+
+impl<K> FluidSurfaceDescriptor<K> {
+    /// Creates a fluid surface descriptor.
+    #[must_use]
+    pub const fn new(
+        identity: FluidMeshIdentity,
+        level: FluidMeshLevel,
+        flow: FluidMeshFlow,
+        merge_key: K,
+    ) -> Self {
+        Self {
+            identity,
+            level,
+            flow,
+            merge_key,
+        }
+    }
+
+    /// Stable identity of the fluid kind.
+    #[must_use]
+    pub const fn identity(&self) -> FluidMeshIdentity {
+        self.identity
+    }
+
+    /// Preserved v1 fluid level.
+    #[must_use]
+    pub const fn level(&self) -> FluidMeshLevel {
+        self.level
+    }
+
+    /// Explicit flow direction.
+    #[must_use]
+    pub const fn flow(&self) -> FluidMeshFlow {
+        self.flow
+    }
+
+    /// Caller-defined face presentation identity.
+    #[must_use]
+    pub const fn merge_key(&self) -> &K {
+        &self.merge_key
+    }
+}
+
 /// Caller-defined presentation description of one voxel face.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FaceDescriptor<K> {
@@ -205,6 +344,14 @@ pub trait Voxel {
 
     /// Presentation and occlusion semantics for one face direction.
     fn face(&self, face: Face) -> Option<FaceDescriptor<Self::MergeKey>>;
+
+    /// Fluid identity, state, and presentation for one face direction.
+    ///
+    /// Returning a descriptor routes that voxel through the dedicated fluid
+    /// geometry path and suppresses its ordinary cube face for `face`.
+    fn fluid_surface(&self, _face: Face) -> Option<FluidSurfaceDescriptor<Self::MergeKey>> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -244,6 +391,21 @@ mod tests {
                 value: MAX_INTERIOR_EDGE + 1,
                 maximum: MAX_INTERIOR_EDGE,
             })
+        );
+    }
+
+    #[test]
+    fn fluid_levels_validate_and_map_to_exact_eighths() {
+        assert_eq!(FluidMeshLevel::SOURCE.height_eighths(), 8);
+        assert_eq!(
+            FluidMeshLevel::new(7)
+                .expect("seven is the accepted maximum")
+                .height_eighths(),
+            1
+        );
+        assert_eq!(
+            FluidMeshLevel::new(8),
+            Err(FluidMeshLevelError { actual: 8 })
         );
     }
 }

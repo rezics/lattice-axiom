@@ -9,8 +9,9 @@ use std::{hint::black_box, sync::Arc};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use latticeaxiom_voxel_mesh::{
-    ChunkCoordinate, Face, FaceDescriptor, FaceOcclusion, GreedyMesher, MeshBuffer, MeshGroup,
-    MeshSource, PaddedChunk, SourceEpoch, SourceFingerprint, SourceRevision, Voxel,
+    ChunkCoordinate, Face, FaceDescriptor, FaceOcclusion, FluidMeshFlow, FluidMeshIdentity,
+    FluidMeshLevel, FluidSurfaceDescriptor, GreedyMesher, MeshBuffer, MeshGroup, MeshSource,
+    PaddedChunk, SourceEpoch, SourceFingerprint, SourceRevision, Voxel,
 };
 
 const EDGE: usize = 32;
@@ -52,6 +53,40 @@ impl Voxel for BenchVoxel {
     fn face(&self, _face: Face) -> Option<FaceDescriptor<Self::MergeKey>> {
         self.material
             .map(|material| FaceDescriptor::new(self.group, material, self.occlusion))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct BenchFluidVoxel {
+    level: Option<FluidMeshLevel>,
+    flow: FluidMeshFlow,
+}
+
+impl BenchFluidVoxel {
+    fn water(level: u8, flow: FluidMeshFlow) -> Self {
+        Self {
+            level: Some(FluidMeshLevel::new(level).expect("benchmark fluid level is valid")),
+            flow,
+        }
+    }
+}
+
+impl Voxel for BenchFluidVoxel {
+    type MergeKey = u8;
+
+    fn face(&self, _face: Face) -> Option<FaceDescriptor<Self::MergeKey>> {
+        None
+    }
+
+    fn fluid_surface(&self, face: Face) -> Option<FluidSurfaceDescriptor<Self::MergeKey>> {
+        self.level.map(|level| {
+            FluidSurfaceDescriptor::new(
+                FluidMeshIdentity::new(1),
+                level,
+                self.flow,
+                u8::try_from(face.index()).expect("six face indices fit u8"),
+            )
+        })
     }
 }
 
@@ -187,6 +222,60 @@ fn benchmark_geometry_handoff(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_fluid_meshing(criterion: &mut Criterion) {
+    let dimensions = PaddedChunk::new([EDGE; 3]).expect("benchmark dimensions are valid");
+    let source = MeshSource::new(
+        ChunkCoordinate::new(-5, 2, -7),
+        SourceEpoch::new(3),
+        SourceRevision::new(11),
+        SourceFingerprint::new([19; 32]),
+    );
+    let mut voxels = vec![BenchFluidVoxel::default(); dimensions.volume_len()];
+    for z in 0..EDGE {
+        for x in 0..EDGE {
+            let index = dimensions
+                .linearize([x + 1, 1, z + 1])
+                .expect("benchmark surface coordinate is padded in bounds");
+            let level = u8::try_from((x + 3 * z) % 8).expect("modulo eight fits u8");
+            let flow = match (x + z) % 4 {
+                0 => FluidMeshFlow::East,
+                1 => FluidMeshFlow::South,
+                2 => FluidMeshFlow::West,
+                _ => FluidMeshFlow::North,
+            };
+            voxels[index] = BenchFluidVoxel::water(level, flow);
+        }
+    }
+
+    let mut mesher = GreedyMesher::new();
+    let mut output = MeshBuffer::default();
+    mesher
+        .mesh_into(&voxels, dimensions, source, &mut output)
+        .expect("benchmark corpus length matches dimensions");
+    assert_eq!(output.quad_count(), 1_152, "water surface guard");
+    assert_eq!(output.vertex_count(), 4_608, "water vertex guard");
+    assert_eq!(output.index_count(), 6_912, "water index guard");
+
+    let cells = u64::try_from(EDGE * EDGE * EDGE).expect("benchmark cell count fits u64");
+    let mut group = criterion.benchmark_group("fluid_meshing_32_cubed_plus_halo");
+    group.throughput(Throughput::Elements(cells));
+    group.bench_function("level_and_flow_surface", |bencher| {
+        bencher.iter(|| {
+            let receipt = mesher
+                .mesh_into(
+                    black_box(voxels.as_slice()),
+                    dimensions,
+                    source,
+                    &mut output,
+                )
+                .expect("prevalidated benchmark input remains valid");
+            black_box(receipt);
+            black_box(output.quad_count());
+        });
+    });
+    group.finish();
+}
+
 fn build_corpus(dimensions: PaddedChunk, corpus: Corpus) -> Vec<BenchVoxel> {
     let mut voxels = vec![BenchVoxel::AIR; dimensions.volume_len()];
     for z in 0..EDGE {
@@ -216,5 +305,10 @@ fn build_corpus(dimensions: PaddedChunk, corpus: Corpus) -> Vec<BenchVoxel> {
     voxels
 }
 
-criterion_group!(benches, benchmark_meshing, benchmark_geometry_handoff);
+criterion_group!(
+    benches,
+    benchmark_meshing,
+    benchmark_geometry_handoff,
+    benchmark_fluid_meshing
+);
 criterion_main!(benches);

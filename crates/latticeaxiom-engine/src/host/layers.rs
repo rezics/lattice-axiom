@@ -7,8 +7,8 @@
 use std::collections::BTreeSet;
 
 use latticeaxiom_content::{
-    CompiledFluidPaletteV1, ContentCatalogV1, ContentPresentationBindingV1, SelectionShapeV1,
-    SolidOccupancyKindV1,
+    CompiledFluidPaletteV1, ContentCatalogV1, ContentPresentationBindingV1, FluidFlowV1,
+    SelectionShapeV1, SolidOccupancyKindV1,
 };
 use latticeaxiom_core::StableId;
 use latticeaxiom_gameplay::BlockId;
@@ -18,7 +18,10 @@ use latticeaxiom_render_contracts::{
     TerrainLayerCompileInputV1, TerrainLayerLimitsV1, TerrainMaterialPolicyV1,
     VoxelSamplerPolicyV1, compile_terrain_layer_table,
 };
-use latticeaxiom_voxel_mesh::{Face, FaceDescriptor, FaceOcclusion, LayerMergeKey, MeshGroup};
+use latticeaxiom_voxel_mesh::{
+    Face, FaceDescriptor, FaceOcclusion, FluidMeshFlow, FluidMeshIdentity, FluidMeshLevel,
+    FluidSurfaceDescriptor, LayerMergeKey, MeshGroup,
+};
 use serde::Deserialize;
 
 use super::{
@@ -52,6 +55,29 @@ impl HostFaceStyle {
     }
 }
 
+/// Compact authoritative state retained only for dedicated water meshing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct HostFluidMeshState {
+    identity: FluidMeshIdentity,
+    level: FluidMeshLevel,
+    flow: FluidMeshFlow,
+}
+
+impl HostFluidMeshState {
+    pub(super) fn descriptor(
+        self,
+        style: HostFaceStyle,
+        face: Face,
+    ) -> FluidSurfaceDescriptor<LayerMergeKey> {
+        FluidSurfaceDescriptor::new(
+            self.identity,
+            self.level,
+            self.flow,
+            *style.descriptor(face).merge_key(),
+        )
+    }
+}
+
 /// Palette-index lookup of compiled layers and authoritative cell semantics.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct HostPresentationIndex {
@@ -60,6 +86,7 @@ pub(super) struct HostPresentationIndex {
     solid_collision: Vec<bool>,
     solid_selection: Vec<bool>,
     fluids: Vec<Option<HostFaceStyle>>,
+    fluid_mesh: Vec<Option<HostFluidMeshState>>,
 }
 
 impl HostPresentationIndex {
@@ -110,17 +137,32 @@ impl HostPresentationIndex {
             solid_collision.push(occupied);
             solid_selection.push(selection_shape_targets_cell(&state.selection)?);
         }
-        let fluids = fluid_palette
-            .entries()
-            .iter()
-            .map(|entry| entry.fluid().and_then(|id| fluid_style_for(&table, id)))
-            .collect();
+        let mut fluids = Vec::with_capacity(fluid_palette.len());
+        let mut fluid_mesh = Vec::with_capacity(fluid_palette.len());
+        for entry in fluid_palette.entries() {
+            let style = entry.fluid().and_then(|id| fluid_style_for(&table, id));
+            let mesh_state = style.and_then(|style| {
+                if !style.group.is_water() {
+                    return None;
+                }
+                let state = entry.state()?;
+                let level = FluidMeshLevel::new(state.level.get()).ok()?;
+                Some(HostFluidMeshState {
+                    identity: FluidMeshIdentity::new(style.layer_index),
+                    level,
+                    flow: fluid_mesh_flow(state.flow),
+                })
+            });
+            fluids.push(style);
+            fluid_mesh.push(mesh_state);
+        }
         Ok(Self {
             table,
             solids,
             solid_collision,
             solid_selection,
             fluids,
+            fluid_mesh,
         })
     }
 
@@ -162,6 +204,15 @@ impl HostPresentationIndex {
     #[must_use]
     pub(super) fn fluid(&self, palette_index: u16) -> Option<HostFaceStyle> {
         self.fluids
+            .get(usize::from(palette_index))
+            .copied()
+            .flatten()
+    }
+
+    /// Dedicated water mesh state for a host fluid palette index.
+    #[must_use]
+    pub(super) fn fluid_mesh(&self, palette_index: u16) -> Option<HostFluidMeshState> {
+        self.fluid_mesh
             .get(usize::from(palette_index))
             .copied()
             .flatten()
@@ -213,6 +264,17 @@ fn fluid_mesh_group(fluid: &StableId, authored_group: MeshGroup) -> MeshGroup {
         MeshGroup::Water
     } else {
         authored_group
+    }
+}
+
+const fn fluid_mesh_flow(flow: FluidFlowV1) -> FluidMeshFlow {
+    match flow {
+        FluidFlowV1::Still => FluidMeshFlow::Still,
+        FluidFlowV1::Down => FluidMeshFlow::Down,
+        FluidFlowV1::East => FluidMeshFlow::East,
+        FluidFlowV1::West => FluidMeshFlow::West,
+        FluidFlowV1::South => FluidMeshFlow::South,
+        FluidFlowV1::North => FluidMeshFlow::North,
     }
 }
 
@@ -328,12 +390,14 @@ struct AuthoredAssetRow {
 
 #[cfg(test)]
 mod tests {
-    use latticeaxiom_content::SelectionShapeV1;
+    use latticeaxiom_content::{FluidFlowV1, SelectionShapeV1};
     use latticeaxiom_core::StableId;
     use latticeaxiom_render_contracts::TerrainMaterialPolicyV1;
-    use latticeaxiom_voxel_mesh::{FaceOcclusion, MeshGroup};
+    use latticeaxiom_voxel_mesh::{FaceOcclusion, FluidMeshFlow, MeshGroup};
 
-    use super::{face_occlusion, fluid_mesh_group, mesh_group, selection_shape_targets_cell};
+    use super::{
+        face_occlusion, fluid_mesh_flow, fluid_mesh_group, mesh_group, selection_shape_targets_cell,
+    };
 
     fn selection(id: &str) -> SelectionShapeV1 {
         SelectionShapeV1::new(
@@ -398,6 +462,21 @@ mod tests {
         assert_eq!(
             fluid_mesh_group(&glass, MeshGroup::Translucent),
             MeshGroup::Translucent
+        );
+    }
+
+    #[test]
+    fn every_authoritative_flow_has_an_explicit_mesh_direction() {
+        assert_eq!(
+            FluidFlowV1::ALL.map(fluid_mesh_flow),
+            [
+                FluidMeshFlow::Still,
+                FluidMeshFlow::Down,
+                FluidMeshFlow::East,
+                FluidMeshFlow::West,
+                FluidMeshFlow::South,
+                FluidMeshFlow::North,
+            ]
         );
     }
 

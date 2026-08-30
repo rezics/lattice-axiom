@@ -45,8 +45,8 @@ use latticeaxiom_storage::{
 };
 use latticeaxiom_terrenia_worldgen::TerrainPresetV2;
 use latticeaxiom_voxel_mesh::{
-    Aabb, Face, FaceDescriptor, GreedyMesher, LayerMergeKey, MeshBuffer, MeshReceipt, MeshSource,
-    PaddedChunk, Voxel,
+    Aabb, Face, FaceDescriptor, FluidSurfaceDescriptor, GreedyMesher, LayerMergeKey, MeshBuffer,
+    MeshReceipt, MeshSource, PaddedChunk, Quad, Voxel,
 };
 use latticeaxiom_voxel_runtime::{
     ApplyAdmission, ApplyByteDeclaration, CellSelection, ColliderSafetyState,
@@ -80,7 +80,7 @@ use super::{
     },
     fluid::{HostFluidTickV1, tick_simulated as tick_simulated_fluids},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject},
-    layers::{HostFaceStyle, HostPresentationIndex},
+    layers::{HostFaceStyle, HostFluidMeshState, HostPresentationIndex},
     profile::StreamingProfileEvidenceV1,
     session::{DurablePlayerSessionV1, PLAYER_SESSION_ENTITY},
     stream::{
@@ -505,6 +505,7 @@ pub(super) struct HostVoxel {
     selection_occupied: bool,
     solid_style: Option<HostFaceStyle>,
     fluid_style: Option<HostFaceStyle>,
+    fluid_mesh: Option<HostFluidMeshState>,
 }
 
 impl HostVoxel {
@@ -523,6 +524,9 @@ impl HostVoxel {
                 .flatten(),
             fluid_style: (fluid_palette_index != 0)
                 .then(|| presentation.fluid(fluid_palette_index))
+                .flatten(),
+            fluid_mesh: (fluid_palette_index != 0)
+                .then(|| presentation.fluid_mesh(fluid_palette_index))
                 .flatten(),
         }
     }
@@ -3602,12 +3606,22 @@ impl Voxel for HostVoxel {
         }
         self.fluid_style.map(|style| style.descriptor(face))
     }
+
+    fn fluid_surface(&self, face: Face) -> Option<FluidSurfaceDescriptor<LayerMergeKey>> {
+        let style = self.fluid_style?;
+        self.fluid_mesh.map(|state| state.descriptor(style, face))
+    }
 }
 
 impl RetainedBytes for HostDerivedMesh {
     fn retained_bytes(&self) -> u64 {
         4_096_u64.saturating_add(
-            u64::try_from(self.geometry.quad_count().saturating_mul(48)).unwrap_or(u64::MAX),
+            u64::try_from(
+                self.geometry
+                    .quad_count()
+                    .saturating_mul(mem::size_of::<Quad<LayerMergeKey>>()),
+            )
+            .unwrap_or(u64::MAX),
         )
     }
 }
@@ -6481,6 +6495,7 @@ mod tests {
             selection_occupied: false,
             solid_style: None,
             fluid_style: None,
+            fluid_mesh: None,
         };
         let solid = HostVoxel {
             collision_occupied: true,
