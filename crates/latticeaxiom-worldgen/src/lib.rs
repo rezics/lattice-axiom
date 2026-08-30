@@ -31,6 +31,7 @@ mod cave_topology;
 mod config;
 mod epoch;
 mod error;
+mod fixed_field;
 mod generation;
 mod hashes;
 mod hydrology;
@@ -62,6 +63,11 @@ pub use epoch::{
     PlanningCellCoordinateV1,
 };
 pub use error::{WorldgenError, WorldgenResult};
+pub use fixed_field::{
+    AuthoritativeFieldAlgorithmV1, FIXED_FIELD_FRACTION_BITS_V1, FIXED_FIELD_OUTPUT_BITS_V1,
+    FixedCoordinateV1, FixedFieldSampleV1, MAX_FIXED_FIELD_INTEGER_COORDINATE_V1,
+    open_simplex_2f_3d_v1, open_simplex_2s_2d_v1,
+};
 pub use generation::{
     ChunkDraftV1, ChunkGenerationOutcomeV1, ChunkGenerationRequestV1, D4SnapshotCandidateV1,
     GenerationDiagnosticsV1, GenerationPlanInputV1, GenerationPlanV1, GenerationReceiptV1,
