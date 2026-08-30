@@ -62,7 +62,7 @@ hard one-past bounds, cancellation, bounded cache behavior, and aggregate
 MFD `p = 1`, development MFD `p = 1.1`, and D-infinity orientation metrics.
 
 The 5 by 5 canonical plan fixture hashes to
-`1d254ead7d586bfad7cec2cf9f0b3a82a22b4f972a023449731f203c74b8bff8`.
+`063b37417cb15e0f0e6f71718ffdb33f6f17f9273c57d80e99e9f0287f707068`.
 
 ## Optimized benchmark baseline
 

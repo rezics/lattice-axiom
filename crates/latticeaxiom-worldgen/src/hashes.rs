@@ -136,6 +136,30 @@ typed_hash!(
     HydrologicBoundarySignatureV1,
     "Direction-independent signature of one hydrologic boundary result."
 );
+typed_hash!(
+    HydrologicBasinIdV1,
+    "Stable identity of one basin in a finite hydrologic-domain topology."
+);
+typed_hash!(
+    HydrologicOutletIdV1,
+    "Stable identity of a retained, ocean, or cross-domain hydrologic outlet."
+);
+typed_hash!(
+    RiverSegmentIdV1,
+    "Stable identity of one canonical single-receiver river segment."
+);
+typed_hash!(
+    WaterBodyIdV1,
+    "Stable identity of one ocean, lake, river, or wetland water body."
+);
+typed_hash!(
+    HydrologicTopologyHashV1,
+    "Canonical hash of a topology-first river and water-body plan."
+);
+typed_hash!(
+    StaticReservoirHashV1,
+    "Canonical hash of one sparse static-reservoir chunk candidate."
+);
 
 pub(crate) fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> CanonicalHash {
     let mut hasher = Sha256::new();

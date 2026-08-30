@@ -9,10 +9,12 @@ use std::{num::NonZeroU16, num::NonZeroU32, str::FromStr, sync::Arc};
 
 use bevy::tasks::TaskPoolBuilder;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use latticeaxiom_core::CanonicalHash;
+use latticeaxiom_core::{CanonicalHash, StableId};
+use latticeaxiom_storage::ChunkCoordinate;
 use latticeaxiom_worldgen::{
     DimensionId, GenerationEpochIdV1, HydrologicDomainCacheV1, HydrologicDomainConfigV1,
-    HydrologicDomainGridV1, HydrologicDomainInputV1, plan_hydrologic_domain_v1,
+    HydrologicDomainGridV1, HydrologicDomainInputV1, HydrologicTopologyConfigV1,
+    StaticReservoirSamplerV1, build_hydrologic_topology_v1, plan_hydrologic_domain_v1,
     plan_hydrologic_domains_parallel_v1,
 };
 
@@ -114,5 +116,45 @@ fn task_pool_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, cold_and_cached, task_pool_scaling);
+fn topology_and_materialization(c: &mut Criterion) {
+    let domain =
+        plan_hydrologic_domain_v1(&fixture(64, 8, 8, 0)).expect("benchmark domain plan is valid");
+    let config = HydrologicTopologyConfigV1::default();
+    let topology =
+        build_hydrologic_topology_v1(&domain, &config).expect("benchmark topology is valid");
+    let water =
+        StableId::from_str("latticeaxiom:fluid/water").expect("benchmark water identity is valid");
+    let sampler = StaticReservoirSamplerV1::new(&domain, &topology, &config)
+        .expect("benchmark sampler binds");
+    let mut group = c.benchmark_group("hydrologic_topology_v1");
+    group.throughput(Throughput::Elements(64 * 64));
+    group.bench_function("extract_64", |bencher| {
+        bencher.iter(|| {
+            build_hydrologic_topology_v1(&domain, &config)
+                .expect("benchmark topology remains valid")
+        });
+    });
+    group.throughput(Throughput::Elements(16 * 16));
+    group.bench_function("materialize_16_cube", |bencher| {
+        bencher.iter(|| {
+            sampler
+                .materialize(
+                    ChunkCoordinate::new(0, 9, 0),
+                    NonZeroU16::new(16).expect("benchmark chunk edge is nonzero"),
+                    0,
+                    255,
+                    &water,
+                )
+                .expect("benchmark reservoir remains valid")
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    cold_and_cached,
+    task_pool_scaling,
+    topology_and_materialization
+);
 criterion_main!(benches);

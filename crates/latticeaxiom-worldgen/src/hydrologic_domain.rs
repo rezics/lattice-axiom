@@ -157,6 +157,68 @@ impl HydrologicDomainGridV1 {
         self.width.get() as usize * self.height.get() as usize
     }
 
+    /// Returns the row-major index of an in-bounds coordinate.
+    #[must_use]
+    pub fn index_of(&self, coordinate: HydrologicGridCoordinateV1) -> Option<usize> {
+        self.index(coordinate)
+    }
+
+    /// Returns the coordinate for an in-bounds row-major index.
+    #[must_use]
+    pub fn coordinate_of(&self, index: usize) -> Option<HydrologicGridCoordinateV1> {
+        (index < self.sample_count()).then(|| self.coordinate(index))
+    }
+
+    /// Converts a sample coordinate to exact world `(x, z)` coordinates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-domain or arithmetic-overflow error when the sample
+    /// lies outside this grid or its world coordinate is not representable.
+    pub fn world_coordinate(
+        &self,
+        coordinate: HydrologicGridCoordinateV1,
+    ) -> WorldgenResult<(i64, i64)> {
+        if self.index(coordinate).is_none() {
+            return invalid(
+                "grid.coordinate",
+                "sample coordinate lies outside the domain grid",
+            );
+        }
+        let spacing = i64::from(self.spacing_voxels.get());
+        let x = i64::from(coordinate.x)
+            .checked_mul(spacing)
+            .and_then(|offset| self.origin_x.checked_add(offset))
+            .ok_or(WorldgenError::ArithmeticOverflow {
+                operation: "hydrologic sample world X",
+            })?;
+        let z = i64::from(coordinate.z)
+            .checked_mul(spacing)
+            .and_then(|offset| self.origin_z.checked_add(offset))
+            .ok_or(WorldgenError::ArithmeticOverflow {
+                operation: "hydrologic sample world Z",
+            })?;
+        Ok((x, z))
+    }
+
+    /// Returns the nearest in-domain sample for a world `(x, z)` coordinate.
+    #[must_use]
+    pub fn nearest_coordinate(
+        &self,
+        world_x: i64,
+        world_z: i64,
+    ) -> Option<HydrologicGridCoordinateV1> {
+        let spacing = i64::from(self.spacing_voxels.get());
+        let relative_x = world_x.checked_sub(self.origin_x)?;
+        let relative_z = world_z.checked_sub(self.origin_z)?;
+        let rounded_x = relative_x.checked_add(spacing / 2)?.div_euclid(spacing);
+        let rounded_z = relative_z.checked_add(spacing / 2)?.div_euclid(spacing);
+        let x = u16::try_from(rounded_x).ok()?;
+        let z = u16::try_from(rounded_z).ok()?;
+        let coordinate = HydrologicGridCoordinateV1::new(x, z);
+        self.index(coordinate).map(|_| coordinate)
+    }
+
     fn index(&self, coordinate: HydrologicGridCoordinateV1) -> Option<usize> {
         if coordinate.x >= self.width.get() || coordinate.z >= self.height.get() {
             return None;
@@ -733,6 +795,24 @@ impl DepressionRecordV1 {
         self.spill
     }
 
+    /// Returns the ultimate boundary outlet reached through flood predecessors.
+    #[must_use]
+    pub const fn outlet(&self) -> HydrologicGridCoordinateV1 {
+        self.outlet
+    }
+
+    /// Returns the original pit elevation in Q24.8 voxels.
+    #[must_use]
+    pub const fn pit_elevation_q8(&self) -> i32 {
+        self.pit_elevation_q8
+    }
+
+    /// Returns the spill elevation in Q24.8 voxels.
+    #[must_use]
+    pub const fn spill_elevation_q8(&self) -> i32 {
+        self.spill_elevation_q8
+    }
+
     /// Returns sorted row-major member indices.
     #[must_use]
     pub fn cell_indices(&self) -> &[u32] {
@@ -900,6 +980,8 @@ pub struct HydrologicDomainPlanV1 {
     grid: HydrologicDomainGridV1,
     base_level_q8: i32,
     initial_elevation_q8: Vec<i32>,
+    effective_runoff_q16: Vec<u32>,
+    routed_source_runoff_q16: Vec<u64>,
     routing_elevation_q8: Vec<i32>,
     flood_predecessor: Vec<Option<u32>>,
     flood_rank: Vec<u32>,
@@ -921,6 +1003,12 @@ impl HydrologicDomainPlanV1 {
     #[must_use]
     pub const fn domain_id(&self) -> HydrologicDomainIdV1 {
         self.domain_id
+    }
+
+    /// Returns the frozen generation epoch.
+    #[must_use]
+    pub const fn generation_epoch(&self) -> GenerationEpochIdV1 {
+        self.generation_epoch
     }
 
     /// Returns the canonical input hash.
@@ -947,6 +1035,18 @@ impl HydrologicDomainPlanV1 {
         &self.initial_elevation_q8
     }
 
+    /// Returns local Q16 effective-runoff samples before boundary inflows.
+    #[must_use]
+    pub fn effective_runoff_q16(&self) -> &[u32] {
+        &self.effective_runoff_q16
+    }
+
+    /// Returns Q16 source runoff including declared boundary inflows.
+    #[must_use]
+    pub fn routed_source_runoff_q16(&self) -> &[u64] {
+        &self.routed_source_runoff_q16
+    }
+
     /// Returns the depression-corrected routing surface.
     #[must_use]
     pub fn routing_elevation_q8(&self) -> &[i32] {
@@ -969,6 +1069,18 @@ impl HydrologicDomainPlanV1 {
     #[must_use]
     pub fn boundary_outlets(&self) -> &[HydrologicGridCoordinateV1] {
         &self.boundary_outlets
+    }
+
+    /// Returns the dimension base level in Q24.8 voxels.
+    #[must_use]
+    pub const fn base_level_q8(&self) -> i32 {
+        self.base_level_q8
+    }
+
+    /// Returns canonically ordered boundary ports.
+    #[must_use]
+    pub fn ports(&self) -> &[HydrologicBoundaryPortV1] {
+        &self.ports
     }
 
     /// Returns deterministic work and conservation accounting.
@@ -1154,7 +1266,8 @@ pub fn plan_hydrologic_domain_with_cancellation_v1(
     let mut flood = priority_flood(input, &mut state)?;
     let mut hierarchy = depression_hierarchy(input, &flood, &mut state)?;
     apply_depression_policy(input, &mut flood, &mut hierarchy, &mut state)?;
-    let (mut routing, terminal_runoff) = route_mfd(input, &flood, &hierarchy, &mut state)?;
+    let (mut routing, source_runoff, terminal_runoff) =
+        route_mfd(input, &flood, &hierarchy, &mut state)?;
     state.accounting.terminal_runoff_q16 = terminal_runoff;
     state.accounting.depression_count =
         u32::try_from(hierarchy.records.len()).map_err(|_| WorldgenError::ArithmeticOverflow {
@@ -1174,6 +1287,8 @@ pub fn plan_hydrologic_domain_with_cancellation_v1(
         grid: input.grid.clone(),
         base_level_q8: input.base_level_q8,
         initial_elevation_q8: input.initial_elevation_q8.clone(),
+        effective_runoff_q16: input.effective_runoff_q16.clone(),
+        routed_source_runoff_q16: source_runoff,
         routing_elevation_q8: flood.elevation_q8,
         flood_predecessor: flood.predecessor,
         flood_rank: flood.rank,
@@ -1452,7 +1567,7 @@ fn route_mfd(
     flood: &FloodResult,
     hierarchy: &DepressionHierarchyV1,
     state: &mut PlanningState<'_>,
-) -> WorldgenResult<(Vec<MfdRoutingCellV1>, u64)> {
+) -> WorldgenResult<(Vec<MfdRoutingCellV1>, Vec<u64>, u64)> {
     let count = input.grid.sample_count();
     let mut retained_pits = vec![false; count];
     let mut retained_owner = vec![None; count];
@@ -1549,6 +1664,10 @@ fn route_mfd(
                 operation: "domain input runoff sum",
             })
     })?;
+    let source_runoff = routing
+        .iter()
+        .map(|cell| cell.accumulated_runoff_q16)
+        .collect::<Vec<_>>();
     state.accounting.input_runoff_q16 = input_runoff;
 
     let order = routing_topological_order(&routing)?;
@@ -1583,7 +1702,7 @@ fn route_mfd(
             format!("input {input_runoff} differs from terminal {terminal}"),
         );
     }
-    Ok((routing, terminal))
+    Ok((routing, source_runoff, terminal))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2759,7 +2878,7 @@ mod tests {
             plan.canonical_hash()
                 .expect("golden plan canonicalizes")
                 .to_string(),
-            "1d254ead7d586bfad7cec2cf9f0b3a82a22b4f972a023449731f203c74b8bff8"
+            "063b37417cb15e0f0e6f71718ffdb33f6f17f9273c57d80e99e9f0287f707068"
         );
     }
 

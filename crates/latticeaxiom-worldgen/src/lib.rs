@@ -35,6 +35,7 @@ mod fixed_field;
 mod generation;
 mod hashes;
 mod hydrologic_domain;
+mod hydrologic_topology;
 mod hydrology;
 mod natural;
 mod provider;
@@ -76,12 +77,13 @@ pub use generation::{
 };
 pub use hashes::{
     AquiferBasinIdV1, BoundaryIdV1, CaveTopologyLayerHashV1, DrainageLinkIdV1, GenerationEpochIdV1,
-    GenerationInputHashV1, GenerationProvenanceHashV1, GeneratorFingerprintV1,
+    GenerationInputHashV1, GenerationProvenanceHashV1, GeneratorFingerprintV1, HydrologicBasinIdV1,
     HydrologicBoundarySignatureV1, HydrologicDomainConfigHashV1, HydrologicDomainIdV1,
-    HydrologicDomainInputHashV1, HydrologicDomainPlanHashV1, HydrologicPortIdV1,
-    HydrologyOccupancyHashV1, LockedClosureFingerprintV1, NaturalLayerHashV1, PlanActivationIdV1,
-    PlanningCellIdV1, RiverBasinIdV1, SharedFaceHashV1, SnapshotChecksumV1, TerrainConfigHashV2,
-    WorldgenConfigHashV1,
+    HydrologicDomainInputHashV1, HydrologicDomainPlanHashV1, HydrologicOutletIdV1,
+    HydrologicPortIdV1, HydrologicTopologyHashV1, HydrologyOccupancyHashV1,
+    LockedClosureFingerprintV1, NaturalLayerHashV1, PlanActivationIdV1, PlanningCellIdV1,
+    RiverBasinIdV1, RiverSegmentIdV1, SharedFaceHashV1, SnapshotChecksumV1, StaticReservoirHashV1,
+    TerrainConfigHashV2, WaterBodyIdV1, WorldgenConfigHashV1,
 };
 pub use hydrologic_domain::{
     DepressionClassV1, DepressionHierarchyV1, DepressionRecordV1, DevelopmentRoutingComparisonV1,
@@ -92,6 +94,14 @@ pub use hydrologic_domain::{
     HydrologicPortKindV1, MfdReceiverV1, MfdRoutingCellV1, d_infinity_development_comparison_v1,
     plan_hydrologic_domain_v1, plan_hydrologic_domain_with_cancellation_v1,
     plan_hydrologic_domains_parallel_v1,
+};
+pub use hydrologic_topology::{
+    BasinRecordV1, HydrologicTopologyAccountingV1, HydrologicTopologyConfigV1,
+    HydrologicTopologyPlanV1, OutletKindV1, OutletRecordV1, QuantizedRiverPointV1, RiverEndpointV1,
+    RiverSdfSampleV1, RiverSegmentV1, StaticReservoirChunkV1, StaticReservoirFlowV1,
+    StaticReservoirSamplerV1, StaticReservoirVoxelV1, StaticWaterColumnV1, WaterBodyKindV1,
+    WaterBodyV1, WaterSurfaceModelV1, build_hydrologic_topology_v1,
+    materialize_static_reservoir_chunk_v1,
 };
 pub use hydrology::{
     AquiferSampleV1, DrainageSampleV1, HydrologyAccountingV1, HydrologyFaceContinuityV1,
