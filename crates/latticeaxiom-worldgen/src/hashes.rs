@@ -172,6 +172,14 @@ typed_hash!(
     TerrainBoundaryAdapterHashV1,
     "Direction-independent evidence hash for an old/new terrain boundary adapter."
 );
+typed_hash!(
+    LandscapeEvolutionConfigHashV1,
+    "Canonical hash of one bounded landscape-evolution configuration."
+);
+typed_hash!(
+    LandscapeEvolutionPlanHashV1,
+    "Canonical hash of one evolved hydrologic-domain and topology artifact."
+);
 
 pub(crate) fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> CanonicalHash {
     let mut hasher = Sha256::new();

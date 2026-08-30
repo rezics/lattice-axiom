@@ -151,7 +151,7 @@ impl HydrologicTopologyConfigV1 {
         Ok(())
     }
 
-    fn canonical_hash(&self) -> WorldgenResult<CanonicalHash> {
+    pub(crate) fn canonical_hash(&self) -> WorldgenResult<CanonicalHash> {
         let bytes =
             canonical_json_bytes(self).map_err(|error| WorldgenError::CanonicalEncoding {
                 kind: "HydrologicTopologyConfigV1",
@@ -584,6 +584,10 @@ impl HydrologicTopologyPlanV1 {
     #[must_use]
     pub const fn accounting(&self) -> HydrologicTopologyAccountingV1 {
         self.accounting
+    }
+
+    pub(crate) fn channel_segment_positions_by_cell(&self) -> &[Option<u32>] {
+        &self.channel_segment_by_cell
     }
 
     /// Returns canonical persisted bytes.

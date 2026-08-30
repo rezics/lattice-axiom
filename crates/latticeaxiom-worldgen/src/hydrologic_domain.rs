@@ -621,6 +621,28 @@ impl HydrologicDomainInputV1 {
         &self.config
     }
 
+    /// Clones this closed input while replacing only its DEM and provenance.
+    ///
+    /// This preserves domain identity, epoch, runoff, ports, grid, and routing
+    /// policy while allowing a versioned landscape-evolution stage to reroute
+    /// a bounded updated surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns a domain validation error when the replacement DEM length or
+    /// any preserved input invariant is invalid.
+    pub fn with_revised_elevation(
+        &self,
+        initial_elevation_q8: Vec<i32>,
+        provenance: CanonicalHash,
+    ) -> WorldgenResult<Self> {
+        let mut revised = self.clone();
+        revised.initial_elevation_q8 = initial_elevation_q8;
+        revised.provenance = provenance;
+        revised.validate()?;
+        Ok(revised)
+    }
+
     /// Returns canonical input bytes.
     ///
     /// # Errors

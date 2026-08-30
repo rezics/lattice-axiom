@@ -37,6 +37,7 @@ mod hashes;
 mod hydrologic_domain;
 mod hydrologic_topology;
 mod hydrology;
+mod landscape_evolution;
 mod natural;
 mod provider;
 mod region;
@@ -82,10 +83,11 @@ pub use hashes::{
     HydrologicBoundarySignatureV1, HydrologicDomainConfigHashV1, HydrologicDomainIdV1,
     HydrologicDomainInputHashV1, HydrologicDomainPlanHashV1, HydrologicOutletIdV1,
     HydrologicPortIdV1, HydrologicTopologyHashV1, HydrologyOccupancyHashV1,
-    LockedClosureFingerprintV1, NaturalLayerHashV1, PlanActivationIdV1, PlanningCellIdV1,
-    RiverBasinIdV1, RiverSegmentIdV1, SemanticTerrainPlanHashV1, SemanticTerrainPolicyHashV1,
-    SharedFaceHashV1, SnapshotChecksumV1, StaticReservoirHashV1, TerrainBoundaryAdapterHashV1,
-    TerrainConfigHashV2, WaterBodyIdV1, WorldgenConfigHashV1,
+    LandscapeEvolutionConfigHashV1, LandscapeEvolutionPlanHashV1, LockedClosureFingerprintV1,
+    NaturalLayerHashV1, PlanActivationIdV1, PlanningCellIdV1, RiverBasinIdV1, RiverSegmentIdV1,
+    SemanticTerrainPlanHashV1, SemanticTerrainPolicyHashV1, SharedFaceHashV1, SnapshotChecksumV1,
+    StaticReservoirHashV1, TerrainBoundaryAdapterHashV1, TerrainConfigHashV2, WaterBodyIdV1,
+    WorldgenConfigHashV1,
 };
 pub use hydrologic_domain::{
     DepressionClassV1, DepressionHierarchyV1, DepressionRecordV1, DevelopmentRoutingComparisonV1,
@@ -110,6 +112,11 @@ pub use hydrology::{
     HydrologyFlowV1, HydrologyFluidBindingsV1, HydrologyOccupancyCandidateV1,
     HydrologyOccupancyCellV1, HydrologyOccupancyConfigV1, HydrologyOccupancyInputV1,
     HydrologyOccupancyKindV1, HydrologyOccupancySampleV1,
+};
+pub use landscape_evolution::{
+    LandscapeEvolutionAccountingV1, LandscapeEvolutionConfigV1, LandscapeEvolutionEvidenceV1,
+    LandscapeEvolutionInputV1, LandscapeEvolutionPlanV1, evolve_hydrologic_landscape_v1,
+    evolve_hydrologic_landscape_with_cancellation_v1, evolve_hydrologic_landscapes_parallel_v1,
 };
 pub(crate) use natural::NaturalSamplerV1;
 pub use natural::{

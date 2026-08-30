@@ -10,10 +10,12 @@ use crate::{
     BoundaryAdapterDeclarationV1, GenerationEpochIdV1, HydrologicBoundaryEdgeV1,
     HydrologicBoundaryPortV1, HydrologicDomainConfigV1, HydrologicDomainGridV1,
     HydrologicDomainInputV1, HydrologicDomainPlanV1, HydrologicTopologyConfigV1,
-    HydrologicTopologyPlanV1, SemanticTerrainPlanHashV1, SemanticTerrainPolicyHashV1,
+    HydrologicTopologyPlanV1, LandscapeEvolutionConfigV1, LandscapeEvolutionEvidenceV1,
+    LandscapeEvolutionInputV1, SemanticTerrainPlanHashV1, SemanticTerrainPolicyHashV1,
     TerrainBoundaryAdapterHashV1, TerrainColumnSampleV2, TerrainConfigV2, TerrainFamilyV2,
     WorldgenError, WorldgenResult, WorldgenSeedRootV2, build_hydrologic_topology_v1,
-    hashes::domain_hash, open_simplex_2f_3d_v1, open_simplex_2s_2d_v1, plan_hydrologic_domain_v1,
+    evolve_hydrologic_landscape_v1, hashes::domain_hash, open_simplex_2f_3d_v1,
+    open_simplex_2s_2d_v1, plan_hydrologic_domain_v1,
 };
 use crate::{FixedCoordinateV1, FixedFieldSampleV1};
 
@@ -734,6 +736,7 @@ pub struct SemanticHydrologicTerrainInputV1 {
     policy: SemanticTerrainPolicyV1,
     domain_config: HydrologicDomainConfigV1,
     topology_config: HydrologicTopologyConfigV1,
+    landscape_evolution: Option<LandscapeEvolutionConfigV1>,
 }
 
 impl SemanticHydrologicTerrainInputV1 {
@@ -774,7 +777,18 @@ impl SemanticHydrologicTerrainInputV1 {
             policy,
             domain_config,
             topology_config,
+            landscape_evolution: None,
         }
+    }
+
+    /// Enables bounded deterministic erosion before the final topology is published.
+    #[must_use]
+    pub fn with_landscape_evolution(
+        mut self,
+        landscape_evolution: LandscapeEvolutionConfigV1,
+    ) -> Self {
+        self.landscape_evolution = Some(landscape_evolution);
+        self
     }
 }
 
@@ -785,6 +799,7 @@ pub struct SemanticHydrologicTerrainPlanV1 {
     policy_hash: SemanticTerrainPolicyHashV1,
     domain: HydrologicDomainPlanV1,
     topology: HydrologicTopologyPlanV1,
+    evolution: Option<LandscapeEvolutionEvidenceV1>,
 }
 
 impl SemanticHydrologicTerrainPlanV1 {
@@ -806,6 +821,12 @@ impl SemanticHydrologicTerrainPlanV1 {
         &self.topology
     }
 
+    /// Returns bounded landscape-evolution evidence when erosion was enabled.
+    #[must_use]
+    pub const fn evolution(&self) -> Option<&LandscapeEvolutionEvidenceV1> {
+        self.evolution.as_ref()
+    }
+
     /// Returns stable bytes for the persisted semantic-plan boundary.
     ///
     /// # Errors
@@ -818,12 +839,15 @@ impl SemanticHydrologicTerrainPlanV1 {
             policy_hash: SemanticTerrainPolicyHashV1,
             domain: &'a HydrologicDomainPlanV1,
             topology: &'a HydrologicTopologyPlanV1,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            evolution: Option<&'a LandscapeEvolutionEvidenceV1>,
         }
         canonical_json_bytes(&CanonicalPlan {
             algorithm: self.algorithm,
             policy_hash: self.policy_hash,
             domain: &self.domain,
             topology: &self.topology,
+            evolution: self.evolution.as_ref(),
         })
         .map_err(|error| WorldgenError::CanonicalEncoding {
             kind: "SemanticHydrologicTerrainPlanV1",
@@ -882,13 +906,25 @@ pub fn build_semantic_hydrologic_terrain_plan_v1(
         input.ports,
         input.domain_config,
     )?;
-    let domain = plan_hydrologic_domain_v1(&domain_input)?;
-    let topology = build_hydrologic_topology_v1(&domain, &input.topology_config)?;
+    let (domain, topology, evolution) = if let Some(config) = input.landscape_evolution {
+        let evolved = evolve_hydrologic_landscape_v1(&LandscapeEvolutionInputV1::new(
+            domain_input,
+            input.topology_config,
+            config,
+        ))?;
+        let (domain, topology, evidence) = evolved.into_parts();
+        (domain, topology, Some(evidence))
+    } else {
+        let domain = plan_hydrologic_domain_v1(&domain_input)?;
+        let topology = build_hydrologic_topology_v1(&domain, &input.topology_config)?;
+        (domain, topology, None)
+    };
     Ok(SemanticHydrologicTerrainPlanV1 {
         algorithm: SEMANTIC_TERRAIN_ALGORITHM,
         policy_hash,
         domain,
         topology,
+        evolution,
     })
 }
 
@@ -1401,6 +1437,61 @@ mod tests {
             plan.topology.accounting().terminal_runoff_q16()
         );
         assert!(plan.canonical_hash().is_ok());
+    }
+
+    #[test]
+    fn semantic_plan_can_publish_the_final_rerouted_evolved_dem() {
+        let seed_root = WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(73));
+        let terrain = TerrainConfigV2::representative_test_baseline();
+        let input = SemanticHydrologicTerrainInputV1::new(
+            DimensionId::from_str("latticeaxiom:dimension/terrenia")
+                .expect("fixture dimension is valid"),
+            seed_root,
+            GenerationEpochIdV1::from_hash(CanonicalHash::digest("evolved-semantic-epoch")),
+            0,
+            0,
+            None,
+            CanonicalHash::digest("evolved-semantic-provenance"),
+            HydrologicDomainGridV1::new(
+                -64,
+                -64,
+                NonZeroU32::new(8).expect("spacing is nonzero"),
+                NonZeroU16::new(17).expect("width is nonzero"),
+                NonZeroU16::new(17).expect("height is nonzero"),
+                2,
+            ),
+            terrain.world.sea_level_y * 256,
+            Vec::new(),
+            terrain,
+            policy(),
+            HydrologicDomainConfigV1::default(),
+            HydrologicTopologyConfigV1::default(),
+        )
+        .with_landscape_evolution(LandscapeEvolutionConfigV1::new(
+            1,
+            1,
+            1,
+            65_536,
+            0,
+            1 << 26,
+            4_096,
+            0,
+            10_000_000,
+            16 * 1024 * 1024,
+            64 * 1024 * 1024,
+        ));
+        let plan = build_semantic_hydrologic_terrain_plan_v1(input)
+            .expect("evolved semantic hydrologic plan builds");
+        let evidence = plan.evolution().expect("evolution evidence is retained");
+        assert_eq!(evidence.accounting().iterations_completed(), 1);
+        assert_ne!(
+            evidence.initial_elevation_q8(),
+            plan.domain().initial_elevation_q8()
+        );
+        assert_eq!(
+            plan.topology().accounting().source_runoff_q16(),
+            plan.topology().accounting().terminal_runoff_q16()
+        );
     }
 
     #[test]

@@ -14,7 +14,8 @@ use latticeaxiom_storage::ChunkCoordinate;
 use latticeaxiom_worldgen::{
     DimensionId, GenerationEpochIdV1, HydrologicDomainCacheV1, HydrologicDomainConfigV1,
     HydrologicDomainGridV1, HydrologicDomainInputV1, HydrologicTopologyConfigV1,
-    StaticReservoirSamplerV1, build_hydrologic_topology_v1, plan_hydrologic_domain_v1,
+    LandscapeEvolutionConfigV1, LandscapeEvolutionInputV1, StaticReservoirSamplerV1,
+    build_hydrologic_topology_v1, evolve_hydrologic_landscape_v1, plan_hydrologic_domain_v1,
     plan_hydrologic_domains_parallel_v1,
 };
 
@@ -151,10 +152,40 @@ fn topology_and_materialization(c: &mut Criterion) {
     group.finish();
 }
 
+fn landscape_evolution(c: &mut Criterion) {
+    let input = LandscapeEvolutionInputV1::new(
+        fixture(64, 8, 8, 0),
+        HydrologicTopologyConfigV1::default(),
+        LandscapeEvolutionConfigV1::new(
+            2,
+            1,
+            2,
+            65_536,
+            0,
+            1 << 22,
+            4_096,
+            0,
+            100_000_000,
+            512 * 1024 * 1024,
+            1_024 * 1024 * 1024,
+        ),
+    );
+    let mut group = c.benchmark_group("landscape_evolution_v1");
+    group.throughput(Throughput::Elements(64 * 64));
+    group.bench_function("two_iterations_64", |bencher| {
+        bencher.iter(|| {
+            evolve_hydrologic_landscape_v1(&input)
+                .expect("benchmark landscape evolution remains valid")
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     cold_and_cached,
     task_pool_scaling,
-    topology_and_materialization
+    topology_and_materialization,
+    landscape_evolution
 );
 criterion_main!(benches);
