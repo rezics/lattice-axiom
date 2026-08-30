@@ -17,8 +17,10 @@ use latticeaxiom_core::StableId;
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_render_contracts::{CompiledTerrainLayerTableV1, TerrainFaceV1};
 use latticeaxiom_voxel_mesh::{
-    Aabb, Face, LayerMergeKey, MeshAlphaMode, MeshBuffer, MeshGroup, Quad,
+    Aabb, Face, FluidMeshFlow, LayerMergeKey, MeshAlphaMode, MeshBuffer, MeshGroup, Quad,
 };
+
+use super::water_material::{WaterMaterial, production_water_material};
 
 /// Pixel edge length of one color-block atlas tile.
 const TILE_PX: u32 = 16;
@@ -26,28 +28,47 @@ const TILE_PX: u32 = 16;
 /// Linear fallback used for an empty palette or an out-of-range index.
 const FALLBACK_COLOR: [f32; 4] = [0.38, 0.41, 0.43, 1.0];
 
-/// One Bevy material per [`MeshGroup`], sharing the nearest color-block atlas.
+/// Typed Bevy materials for every [`MeshGroup`], sharing the color-block atlas.
 #[derive(Clone, Debug, Resource)]
 pub(super) struct ProductionTerrainMaterials {
-    handles: [Handle<StandardMaterial>; MeshGroup::ALL.len()],
+    standard_handles: [Option<Handle<StandardMaterial>>; MeshGroup::ALL.len()],
+    water_handle: Handle<WaterMaterial>,
 }
 
 impl ProductionTerrainMaterials {
     pub(super) fn from_atlas(
-        materials: &mut Assets<StandardMaterial>,
+        standard_materials: &mut Assets<StandardMaterial>,
+        water_materials: &mut Assets<WaterMaterial>,
         atlas: &Handle<Image>,
+        water_normal_map: &Handle<Image>,
     ) -> Self {
-        let handles =
-            MeshGroup::ALL.map(|group| materials.add(group_material(atlas.clone(), group)));
-        Self { handles }
+        let standard_handles = MeshGroup::ALL.map(|group| {
+            standard_group_material(atlas.clone(), group)
+                .map(|material| standard_materials.add(material))
+        });
+        let water_handle = water_materials.add(production_water_material(
+            atlas.clone(),
+            water_normal_map.clone(),
+        ));
+        Self {
+            standard_handles,
+            water_handle,
+        }
     }
 
-    fn handle(&self, group: MeshGroup) -> Handle<StandardMaterial> {
-        self.handles[group.index()].clone()
+    fn standard_handle(&self, group: MeshGroup) -> Option<Handle<StandardMaterial>> {
+        self.standard_handles[group.index()].clone()
+    }
+
+    pub(super) fn water_handle(&self) -> &Handle<WaterMaterial> {
+        &self.water_handle
     }
 }
 
-fn group_material(atlas: Handle<Image>, group: MeshGroup) -> StandardMaterial {
+fn standard_group_material(atlas: Handle<Image>, group: MeshGroup) -> Option<StandardMaterial> {
+    if matches!(group, MeshGroup::Water) {
+        return None;
+    }
     let mut material = StandardMaterial {
         base_color: bevy::prelude::Color::WHITE,
         base_color_texture: Some(atlas),
@@ -67,7 +88,7 @@ fn group_material(atlas: Handle<Image>, group: MeshGroup) -> StandardMaterial {
         material.cull_mode = None;
         material.double_sided = true;
     }
-    material
+    Some(material)
 }
 
 /// Palette-index to linear RGBA table and a deterministic color-block atlas.
@@ -342,16 +363,31 @@ pub(super) fn apply_chunk_mesh(
             continue;
         };
         let handle = meshes.add(mesh);
-        let mut child = commands.spawn((
-            Transform::IDENTITY,
-            Mesh3d(handle),
-            MeshMaterial3d(materials.handle(group)),
-            ChunkGroupMesh(group),
-        ));
+        let child_entity = if matches!(group, MeshGroup::Water) {
+            commands
+                .spawn((
+                    Transform::IDENTITY,
+                    Mesh3d(handle),
+                    MeshMaterial3d(materials.water_handle().clone()),
+                    ChunkGroupMesh(group),
+                ))
+                .id()
+        } else {
+            let Some(material) = materials.standard_handle(group) else {
+                continue;
+            };
+            commands
+                .spawn((
+                    Transform::IDENTITY,
+                    Mesh3d(handle),
+                    MeshMaterial3d(material),
+                    ChunkGroupMesh(group),
+                ))
+                .id()
+        };
         if let Some(bounds) = bounds.or_else(|| geometry.bounds()) {
-            child.insert(gpu_aabb(bounds));
+            commands.entity(child_entity).insert(gpu_aabb(bounds));
         }
-        let child_entity = child.id();
         commands.entity(entity).add_child(child_entity);
         groups[group.index()] = Some(child_entity);
         spawned = spawned.saturating_add(1);
@@ -388,6 +424,9 @@ fn mesh_from_group(
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, cpu.normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, cpu.colors);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, cpu.uvs);
+    if matches!(group, MeshGroup::Water) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, cpu.flow_uvs);
+    }
     mesh.insert_indices(Indices::U32(cpu.indices));
     Some(mesh)
 }
@@ -403,6 +442,7 @@ struct AdapterCpuMesh {
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
     uvs: Vec<[f32; 2]>,
+    flow_uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
     group_count: usize,
 }
@@ -438,6 +478,7 @@ fn emit_adapter_mesh<K, const N: usize>(
     let mut normals = Vec::with_capacity(geometry.vertex_count());
     let mut colors = Vec::with_capacity(geometry.vertex_count());
     let mut uvs = Vec::with_capacity(geometry.vertex_count());
+    let mut flow_uvs = Vec::with_capacity(geometry.vertex_count());
     let mut indices = Vec::with_capacity(geometry.index_count());
     let mut group_count = 0_usize;
 
@@ -453,6 +494,7 @@ fn emit_adapter_mesh<K, const N: usize>(
                 };
                 let color = color_of(quad.merge_key());
                 let quad_uvs = uv_of(quad.merge_key(), face, quad);
+                let flow_uv = encode_fluid_flow(quad.fluid_flow());
                 for ((position, normal), uv) in quad
                     .positions(face)
                     .into_iter()
@@ -463,6 +505,7 @@ fn emit_adapter_mesh<K, const N: usize>(
                     normals.push(normal);
                     colors.push(color);
                     uvs.push(uv);
+                    flow_uvs.push(flow_uv);
                 }
                 indices.extend(quad_indices);
                 group_has_quads = true;
@@ -481,9 +524,21 @@ fn emit_adapter_mesh<K, const N: usize>(
         normals,
         colors,
         uvs,
+        flow_uvs,
         indices,
         group_count,
     })
+}
+
+fn encode_fluid_flow(flow: Option<FluidMeshFlow>) -> [f32; 2] {
+    match flow.unwrap_or_default() {
+        FluidMeshFlow::Still => [0.5, 0.5],
+        FluidMeshFlow::Down => [-1.0, -1.0],
+        FluidMeshFlow::East => [1.0, 0.5],
+        FluidMeshFlow::West => [0.0, 0.5],
+        FluidMeshFlow::South => [0.5, 1.0],
+        FluidMeshFlow::North => [0.5, 0.0],
+    }
 }
 
 pub(super) fn block_color(block_id: &str) -> [f32; 4] {
@@ -641,30 +696,72 @@ fn blit_tile(atlas: &mut [u8], atlas_width: u32, col: u32, row: u32, tile: &[u8]
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use bevy::{asset::Handle, image::Image};
+    use bevy::{
+        asset::{Assets, Handle},
+        image::Image,
+        prelude::StandardMaterial,
+    };
     use latticeaxiom_gameplay::BlockId;
     use latticeaxiom_voxel_mesh::{
-        Aabb, ChunkCoordinate, Face, FaceDescriptor, FaceOcclusion, MeshBuffer, MeshGroup,
-        MeshSource, PaddedChunk, SourceEpoch, SourceFingerprint, SourceRevision, Voxel,
+        Aabb, ChunkCoordinate, Face, FaceDescriptor, FaceOcclusion, FluidMeshFlow, MeshBuffer,
+        MeshGroup, MeshSource, PaddedChunk, SourceEpoch, SourceFingerprint, SourceRevision, Voxel,
         greedy_quads, visible_faces,
     };
 
     use super::{
-        AdapterCpuMesh, ImageAddressMode, ImageFilterMode, ImageSampler, ProductionTerrainPalette,
-        adapter_cpu_mesh_from_buffer, group_material, nearest_clamp_sampler, rgba8_unorm,
+        AdapterCpuMesh, ImageAddressMode, ImageFilterMode, ImageSampler,
+        ProductionTerrainMaterials, ProductionTerrainPalette, WaterMaterial,
+        adapter_cpu_mesh_from_buffer, encode_fluid_flow, nearest_clamp_sampler, rgba8_unorm,
+        standard_group_material,
     };
 
     #[test]
-    fn only_the_water_material_disables_back_face_culling() {
+    fn water_group_cannot_fall_back_to_a_standard_material() {
         let atlas = Handle::<Image>::default();
         assert!(
-            group_material(atlas.clone(), MeshGroup::Translucent)
+            standard_group_material(atlas.clone(), MeshGroup::Translucent)
+                .expect("translucent blocks retain a standard material")
                 .cull_mode
                 .is_some()
         );
-        let water = group_material(atlas, MeshGroup::Water);
-        assert!(water.cull_mode.is_none());
-        assert!(water.double_sided);
+        assert!(standard_group_material(atlas, MeshGroup::Water).is_none());
+    }
+
+    #[test]
+    fn terrain_material_set_preserves_typed_water_identity_headlessly() {
+        let mut standard_assets = Assets::<StandardMaterial>::default();
+        let mut water_assets = Assets::<WaterMaterial>::default();
+        let atlas = Handle::<Image>::default();
+        let normal_map = Handle::<Image>::default();
+        let materials = ProductionTerrainMaterials::from_atlas(
+            &mut standard_assets,
+            &mut water_assets,
+            &atlas,
+            &normal_map,
+        );
+
+        assert!(materials.standard_handle(MeshGroup::Water).is_none());
+        assert!(water_assets.get(materials.water_handle()).is_some());
+        for group in MeshGroup::ALL {
+            if !matches!(group, MeshGroup::Water) {
+                assert!(materials.standard_handle(group).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn fluid_flow_has_a_stable_uv1_encoding() {
+        fn assert_encoding(actual: [f32; 2], expected: [f32; 2]) {
+            assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+        }
+
+        assert_encoding(encode_fluid_flow(None), [0.5, 0.5]);
+        assert_encoding(encode_fluid_flow(Some(FluidMeshFlow::Still)), [0.5, 0.5]);
+        assert_encoding(encode_fluid_flow(Some(FluidMeshFlow::Down)), [-1.0, -1.0]);
+        assert_encoding(encode_fluid_flow(Some(FluidMeshFlow::East)), [1.0, 0.5]);
+        assert_encoding(encode_fluid_flow(Some(FluidMeshFlow::West)), [0.0, 0.5]);
+        assert_encoding(encode_fluid_flow(Some(FluidMeshFlow::South)), [0.5, 1.0]);
+        assert_encoding(encode_fluid_flow(Some(FluidMeshFlow::North)), [0.5, 0.0]);
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -865,6 +962,13 @@ mod tests {
             adapter.uvs.len(),
             buffer.vertex_count()
         );
+        assert_eq!(
+            adapter.flow_uvs.len(),
+            buffer.vertex_count(),
+            "adapter flow UVs {} != MeshBuffer vertices {}",
+            adapter.flow_uvs.len(),
+            buffer.vertex_count()
+        );
     }
 
     fn block_id(id: &str) -> BlockId {
@@ -951,6 +1055,7 @@ mod tests {
         let mesh = adapter_mesh(&voxels, dimensions);
         assert_eq!(mesh.uvs.len(), mesh.positions.len());
         assert_eq!(mesh.uvs.len(), mesh.vertex_count());
+        assert_eq!(mesh.flow_uvs.len(), mesh.vertex_count());
         assert_eq!(mesh.colors.len(), mesh.vertex_count());
     }
 

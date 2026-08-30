@@ -2,8 +2,9 @@
 
 use bevy::{
     asset::Assets,
+    core_pipeline::prepass::DepthPrepass,
     prelude::{
-        AmbientLight, Camera, Camera3d, ClearColorConfig, Color, Commands, Component,
+        AmbientLight, Camera, Camera3d, Changed, ClearColorConfig, Color, Commands, Component,
         DirectionalLight, DistanceFog, EulerRot, FogFalloff, Image, Name, Quat, Query, Res, ResMut,
         StandardMaterial, Transform, Vec3, With, Without,
     },
@@ -16,6 +17,7 @@ use latticeaxiom_player::{LocalPlayerInput, PlayerMovementProfileV1, PlayerViewV
 use super::chunk_mesh::{
     ProductionTerrainMaterials, ProductionTerrainPalette, nearest_clamp_sampler,
 };
+use super::water_material::{WaterMaterial, water_normal_image};
 use super::{CellOccupancyV1, ProductionSpine};
 
 use crate::EngineProfile;
@@ -56,7 +58,8 @@ type ProductionCameraQuery<'world, 'state> = Query<
 pub(super) fn spawn_production_client_view(
     mut commands: Commands<'_, '_>,
     profile: Res<'_, EngineProfile>,
-    mut materials: ResMut<'_, Assets<StandardMaterial>>,
+    mut standard_materials: ResMut<'_, Assets<StandardMaterial>>,
+    mut water_materials: ResMut<'_, Assets<WaterMaterial>>,
     mut images: ResMut<'_, Assets<Image>>,
     palette: Res<'_, ProductionTerrainPalette>,
 ) {
@@ -67,15 +70,19 @@ pub(super) fn spawn_production_client_view(
     let mut atlas_image = palette.atlas_image();
     atlas_image.sampler = nearest_clamp_sampler();
     let atlas = images.add(atlas_image);
+    let water_normal_map = images.add(water_normal_image());
     commands.insert_resource(ProductionTerrainMaterials::from_atlas(
-        &mut materials,
+        &mut standard_materials,
+        &mut water_materials,
         &atlas,
+        &water_normal_map,
     ));
     commands.spawn((
         Name::new("Production Camera"),
         ProductionCamera,
         CameraMediumV1::Air,
         Camera3d::default(),
+        DepthPrepass,
         air_fog(),
         ColorGrading::default(),
         AmbientLight {
@@ -94,6 +101,32 @@ pub(super) fn spawn_production_client_view(
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.0, -0.7, 0.0)),
     ));
+}
+
+/// Mirrors the authoritative camera medium into the shared water material.
+///
+/// This selects the below-surface absorption and alpha parameters without
+/// inferring submersion from visibility, face winding, or screen position.
+#[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+pub(super) fn sync_water_material_medium(
+    cameras: Query<
+        '_,
+        '_,
+        &'static CameraMediumV1,
+        (With<ProductionCamera>, Changed<CameraMediumV1>),
+    >,
+    terrain_materials: Res<'_, ProductionTerrainMaterials>,
+    mut water_materials: ResMut<'_, Assets<WaterMaterial>>,
+) {
+    let Some(medium) = cameras.iter().next() else {
+        return;
+    };
+    let Some(mut material) = water_materials.get_mut(terrain_materials.water_handle()) else {
+        return;
+    };
+    material
+        .extension
+        .set_camera_underwater(matches!(medium, CameraMediumV1::Water));
 }
 
 /// Synchronizes the production camera with the local player's eye pose.

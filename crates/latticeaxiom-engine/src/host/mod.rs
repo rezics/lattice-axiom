@@ -36,6 +36,8 @@ mod stream;
 mod surface;
 #[cfg(feature = "client")]
 mod voxel_icon;
+#[cfg(feature = "client")]
+mod water_material;
 mod worldgen;
 mod writer;
 
@@ -431,6 +433,7 @@ impl Plugin for ProductionHostPlugin {
                 Update,
                 (
                     client::sync_production_camera,
+                    client::sync_water_material_medium,
                     pause::toggle_pause,
                     pause::sync_pause_overlay,
                     surface::apply_surface_actions,
@@ -762,6 +765,7 @@ pub(super) fn install_production_host(
     }
     #[cfg(feature = "client")]
     if let Some(terrain_palette) = terrain_palette {
+        water_material::install_water_material(app);
         app.insert_resource(ClearColor(Color::srgb(0.48, 0.70, 0.91)))
             .insert_resource(terrain_palette)
             .add_plugins(LeafwingInputAdapterPlugin);

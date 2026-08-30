@@ -8,11 +8,12 @@ use std::time::Duration;
 #[cfg(feature = "development")]
 use bevy::{
     diagnostic::{
-        EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin,
-        SystemInformationDiagnosticsPlugin,
+        DiagnosticPath, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
+        LogDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
     },
     log::info,
     prelude::{Plugin, Res, Startup},
+    render::diagnostic::RenderDiagnosticsPlugin,
 };
 
 #[cfg(feature = "development")]
@@ -20,6 +21,18 @@ use crate::{EngineProfile, VerifiedProductLockHash};
 
 #[cfg(feature = "development")]
 const DEVELOPMENT_DIAGNOSTIC_INTERVAL: Duration = Duration::from_secs(1);
+
+#[cfg(feature = "development")]
+const TRANSPARENT_PASS_GPU_TIME: DiagnosticPath =
+    DiagnosticPath::const_new("render/main_transparent_pass_3d/elapsed_gpu");
+
+#[cfg(feature = "development")]
+const TRANSPARENT_PASS_FRAGMENT_INVOCATIONS: DiagnosticPath =
+    DiagnosticPath::const_new("render/main_transparent_pass_3d/fragment_shader_invocations");
+
+#[cfg(feature = "development")]
+const EARLY_PREPASS_GPU_TIME: DiagnosticPath =
+    DiagnosticPath::const_new("render/early prepass/elapsed_gpu");
 
 /// Installs bounded client diagnostics for the development feature set.
 pub(crate) fn install_client_observability(app: &mut App) {
@@ -42,6 +55,9 @@ impl Plugin for DevelopmentObservabilityPlugin {
             EntityCountDiagnosticsPlugin::ENTITY_COUNT,
             SystemInformationDiagnosticsPlugin::PROCESS_CPU_USAGE,
             SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE,
+            TRANSPARENT_PASS_GPU_TIME,
+            TRANSPARENT_PASS_FRAGMENT_INVOCATIONS,
+            EARLY_PREPASS_GPU_TIME,
         ]
         .into_iter()
         .collect();
@@ -50,6 +66,7 @@ impl Plugin for DevelopmentObservabilityPlugin {
             FrameTimeDiagnosticsPlugin::default(),
             EntityCountDiagnosticsPlugin::default(),
             SystemInformationDiagnosticsPlugin,
+            RenderDiagnosticsPlugin,
             LogDiagnosticsPlugin {
                 debug: false,
                 wait_duration: DEVELOPMENT_DIAGNOSTIC_INTERVAL,
@@ -94,6 +111,7 @@ mod tests {
             LogDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
         },
         prelude::{App, MinimalPlugins},
+        render::diagnostic::RenderDiagnosticsPlugin,
     };
 
     use super::install_client_observability;
@@ -109,6 +127,7 @@ mod tests {
         assert!(app.is_plugin_added::<FrameTimeDiagnosticsPlugin>());
         assert!(app.is_plugin_added::<EntityCountDiagnosticsPlugin>());
         assert!(app.is_plugin_added::<SystemInformationDiagnosticsPlugin>());
+        assert!(app.is_plugin_added::<RenderDiagnosticsPlugin>());
         assert!(app.is_plugin_added::<LogDiagnosticsPlugin>());
     }
 }
