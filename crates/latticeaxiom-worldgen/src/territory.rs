@@ -302,10 +302,6 @@ impl TerritorySamplerV1 {
         blend_terrain_columns(near_z, far_z, blend_z.current_weight, blend_z.total)
     }
 
-    pub(crate) fn height(&self, x: i64, z: i64) -> i32 {
-        self.terrain_column(x, z).height
-    }
-
     pub(crate) fn family(&self, x: i64, z: i64) -> TerrainFamilyV2 {
         self.terrain_column(x, z).family
     }
@@ -325,6 +321,13 @@ impl TerritorySamplerV1 {
 
     pub(crate) const fn uses_semantic(&self) -> bool {
         self.terrain_programs.uses_semantic()
+    }
+
+    pub(crate) fn maximum_density_displacement_voxels(&self) -> u32 {
+        self.terrain_programs.semantic_policy().map_or(
+            0,
+            crate::SemanticTerrainPolicyV1::maximum_density_displacement_voxels,
+        )
     }
 
     pub(crate) fn choose_material_style(

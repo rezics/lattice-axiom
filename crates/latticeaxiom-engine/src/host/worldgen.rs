@@ -44,8 +44,8 @@ use super::{
     catalog::{HostWorldgenCatalog, package_registration_namespace},
 };
 
-/// Worldgen V4 deliberately selects the semantic terrain-provider epoch.
-const WORLDGEN_PLAN_REVISION: u64 = 4;
+/// Worldgen V5 binds vegetation to final density and cave-arbitrated surfaces.
+const WORLDGEN_PLAN_REVISION: u64 = 5;
 
 /// Compiles the V5 plan bound to a reopened product lock and package catalog.
 pub(super) fn compile_plan(
@@ -520,11 +520,13 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
 
 const fn provider_revision(slot: ProviderSlotV1) -> u32 {
     match slot {
-        ProviderSlotV1::TerrainTransition
+        ProviderSlotV1::GenerationCoordinator
         | ProviderSlotV1::Materializer
-        | ProviderSlotV1::GenerationCoordinator => 8,
-        ProviderSlotV1::CaveTopology | ProviderSlotV1::StyleSelector => 9,
-        ProviderSlotV1::Geology | ProviderSlotV1::Resources | ProviderSlotV1::Vegetation => 2,
+        | ProviderSlotV1::CaveTopology
+        | ProviderSlotV1::StyleSelector => 9,
+        ProviderSlotV1::TerrainTransition => 8,
+        ProviderSlotV1::Geology | ProviderSlotV1::Resources => 2,
+        ProviderSlotV1::Vegetation => 3,
         ProviderSlotV1::Hydrology => 4,
     }
 }
@@ -1422,7 +1424,8 @@ mod tests {
         compile_host_worldgen_inspect, generate_plan_chunks, host_spawn_bounds,
         hydrology_occupancy_config, hydrology_occupancy_config_for, natural_layer_config,
         occupancy_candidate_is_current, production_terrain_config, provider_offers,
-        required_cave_entrance, spawn_center, spine_config, spine_config_for, validated_spawn,
+        provider_revision, required_cave_entrance, spawn_center, spine_config, spine_config_for,
+        validated_spawn,
     };
     use latticeaxiom_core::CanonicalHash;
     use latticeaxiom_runtime_contracts::{
@@ -1467,6 +1470,15 @@ mod tests {
     }
 
     #[test]
+    fn final_surface_contract_has_distinct_provider_revisions() {
+        assert_eq!(provider_revision(ProviderSlotV1::GenerationCoordinator), 9);
+        assert_eq!(provider_revision(ProviderSlotV1::Materializer), 9);
+        assert_eq!(provider_revision(ProviderSlotV1::Vegetation), 3);
+        assert_eq!(provider_revision(ProviderSlotV1::TerrainTransition), 8);
+        assert_eq!(provider_revision(ProviderSlotV1::Hydrology), 4);
+    }
+
+    #[test]
     fn production_natural_layer_keeps_rivers_and_boreal_vegetation_enabled() {
         let spine = spine_config();
         let terrain = production_terrain_config();
@@ -1490,6 +1502,109 @@ mod tests {
         assert!(config.river_incision_voxels > 0);
         assert!(config.pine_threshold_per_1024 > 0);
         assert!(config.moss_threshold_per_1024 > 0);
+    }
+
+    #[test]
+    fn semantic_vegetation_is_supported_by_final_materialized_terrain() {
+        let plan = semantic_vegetation_plan(0, false);
+        let woodland_cover = plan
+            .role_target(D4MaterialRoleV1::WoodlandGroundCover)
+            .clone();
+        let moss = plan.role_target(D4MaterialRoleV1::Moss).clone();
+        let log_blocks = [D4MaterialRoleV1::WoodlandLog, D4MaterialRoleV1::BorealLog]
+            .map(|role| plan.role_target(role).clone())
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let edge = i64::from(plan.config().chunk_edge_voxels);
+        let mut ground_cover_count = 0_u64;
+        let mut corrected_surface_count = 0_u64;
+        let mut lowest_log_by_column = BTreeMap::<(i64, i64), i64>::new();
+
+        for chunk_z in -1_i32..=1 {
+            for chunk_x in -1_i32..=1 {
+                let origin_x = i64::from(chunk_x).saturating_mul(edge);
+                let origin_z = i64::from(chunk_z).saturating_mul(edge);
+                let mut minimum_y = i64::MAX;
+                let mut maximum_y = i64::MIN;
+                for local_z in 0..edge {
+                    for local_x in 0..edge {
+                        let height = i64::from(plan.terrain_height(
+                            origin_x.saturating_add(local_x),
+                            origin_z.saturating_add(local_z),
+                        ));
+                        minimum_y = minimum_y.min(height.saturating_sub(10));
+                        maximum_y = maximum_y.max(height.saturating_add(10));
+                    }
+                }
+                for chunk_y in minimum_y.div_euclid(edge)..=maximum_y.div_euclid(edge) {
+                    let coordinate = ChunkCoordinate::new(
+                        chunk_x,
+                        i32::try_from(chunk_y).expect("fixture chunk Y fits i32"),
+                        chunk_z,
+                    );
+                    let outcome = plan
+                        .generate(plan.vacant_generation_request(coordinate).unwrap())
+                        .expect("semantic vegetation chunk generates");
+                    let ChunkGenerationOutcomeV1::Prepared(candidate) = outcome else {
+                        panic!("semantic vegetation scan requires a new candidate");
+                    };
+                    let origin_y = chunk_y.saturating_mul(edge);
+                    for local_y in 0..edge {
+                        for local_z in 0..edge {
+                            for local_x in 0..edge {
+                                let block = candidate
+                                    .draft()
+                                    .block_at(
+                                        u16::try_from(local_x).expect("local X fits u16"),
+                                        u16::try_from(local_y).expect("local Y fits u16"),
+                                        u16::try_from(local_z).expect("local Z fits u16"),
+                                    )
+                                    .expect("local voxel is inside the draft");
+                                let world_x = origin_x.saturating_add(local_x);
+                                let world_y = origin_y.saturating_add(local_y);
+                                let world_z = origin_z.saturating_add(local_z);
+                                if block == &woodland_cover || block == &moss {
+                                    ground_cover_count = ground_cover_count.saturating_add(1);
+                                    assert_final_vegetation_support(
+                                        &plan, world_x, world_y, world_z,
+                                    );
+                                    corrected_surface_count = corrected_surface_count
+                                        .saturating_add(u64::from(
+                                            world_y.saturating_sub(1)
+                                                != i64::from(plan.terrain_height(world_x, world_z)),
+                                        ));
+                                }
+                                if log_blocks.contains(block) {
+                                    lowest_log_by_column
+                                        .entry((world_x, world_z))
+                                        .and_modify(|minimum| *minimum = (*minimum).min(world_y))
+                                        .or_insert(world_y);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            ground_cover_count > 0,
+            "fixture must emit checked ground cover"
+        );
+        assert!(
+            !lowest_log_by_column.is_empty(),
+            "fixture must emit at least one checked tree root"
+        );
+        for ((x, z), root_y) in lowest_log_by_column {
+            assert_final_vegetation_support(&plan, x, root_y, z);
+            corrected_surface_count = corrected_surface_count.saturating_add(u64::from(
+                root_y.saturating_sub(1) != i64::from(plan.terrain_height(x, z)),
+            ));
+        }
+        assert!(
+            corrected_surface_count > 0,
+            "fixture must exercise a 3D-density surface that differs from height intent"
+        );
     }
 
     #[test]
@@ -2105,6 +2220,87 @@ mod tests {
             )),
         )
         .expect("host occupancy fixture plan compiles")
+    }
+
+    fn semantic_vegetation_plan(seed: i64, reverse: bool) -> GenerationPlanV1 {
+        let bindings = authored_bindings();
+        let terrain = production_terrain_config();
+        let config = spine_config_for(&terrain);
+        let mut d4 = provider_offers(None, ProviderSlotV1::ALL).expect("D4 offers");
+        let mut natural = provider_offers(None, ProviderSlotV1::NATURAL).expect("natural offers");
+        d4.extend(natural.iter().cloned());
+        if reverse {
+            d4.reverse();
+            natural.reverse();
+        }
+        GenerationPlanV1::compile(
+            GenerationPlanInputV1::new(
+                dimension_id(),
+                WorldSeedV1::from_integer(seed),
+                config.clone(),
+                5,
+                PlanActivationIdV1::from_hash(CanonicalHash::digest(b"semantic-vegetation-test")),
+                d4,
+                bindings.d4_vocabulary().expect("authored D4 vocabulary"),
+                bindings.role_bindings().expect("authored role bindings"),
+                bindings
+                    .catalog_closure()
+                    .expect("authored catalog closure"),
+                CanonicalHash::digest(b"authoritative-semantic-image"),
+                vec![CanonicalHash::digest(b"lock-a")],
+                WorldgenLimitsV1::default(),
+            )
+            .with_terrain_config(terrain)
+            .with_surface_biome_terrain_programs(
+                super::semantic_surface_biome_terrain_programs(
+                    terrain,
+                    CanonicalHash::digest("semantic-vegetation-package"),
+                )
+                .expect("Terrenia semantic terrain programs"),
+            )
+            .with_natural_layer(NaturalLayerInputV1::new(
+                natural_layer_config(&config, &terrain).expect("natural config fits spine"),
+                bindings
+                    .natural_vocabulary()
+                    .expect("authored natural vocabulary"),
+                natural,
+            ))
+            .with_hydrology_occupancy(HydrologyOccupancyInputV1::new(
+                hydrology_occupancy_config_for(&terrain),
+                HydrologyFluidBindingsV1::new(
+                    "fixture:fluid/water".parse().expect("fixture water"),
+                    "fixture:fluid/lava".parse().expect("fixture lava"),
+                    bindings
+                        .predicate("place-water")
+                        .expect("place-water")
+                        .clone(),
+                    bindings
+                        .predicate("place-lava")
+                        .expect("place-lava")
+                        .clone(),
+                )
+                .expect("frozen hydrology fluids"),
+            )),
+        )
+        .expect("semantic vegetation fixture plan compiles")
+    }
+
+    fn assert_final_vegetation_support(plan: &GenerationPlanV1, x: i64, y: i64, z: i64) {
+        let support_y = y.saturating_sub(1);
+        assert!(
+            plan.terrain_materializes_as_solid(x, support_y, z),
+            "vegetation at ({x},{y},{z}) lacks final solid support"
+        );
+        assert!(
+            !plan.terrain_materializes_as_solid(x, y, z),
+            "vegetation at ({x},{y},{z}) intersects final terrain"
+        );
+        assert!(
+            !plan
+                .hydrology_occupancy_sample(x, y, z)
+                .is_some_and(|sample| sample.is_occupied()),
+            "vegetation at ({x},{y},{z}) intersects hydrology occupancy"
+        );
     }
 
     fn compile_fixture(

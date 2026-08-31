@@ -47,6 +47,7 @@ const GROUND_COVER_DOMAIN: &[u8] = b"latticeaxiom.d4-ground-cover.v1\0";
 const SNAPSHOT_SCHEMA: &str = "latticeaxiom:d4-snapshot-candidate@1";
 const MAX_TREE_RADIUS: i64 = 2;
 const MAX_TREE_HEIGHT: i64 = 6;
+const MAX_TREE_FOOTPRINT_RELIEF: u64 = 2;
 
 /// All immutable inputs required to compile a D4 generation plan.
 #[derive(Clone, Debug)]
@@ -1163,6 +1164,18 @@ impl GenerationPlanV1 {
         )
     }
 
+    /// Returns whether terrain materializes as solid before vegetation at the
+    /// world coordinate.
+    ///
+    /// Unlike [`Self::terrain_density_is_solid`], this query includes the
+    /// configured world bounds and final cave-occupancy arbitration. Static
+    /// vegetation placement uses this same decision.
+    #[must_use]
+    pub fn terrain_materializes_as_solid(&self, x: i64, y: i64, z: i64) -> bool {
+        self.pre_vegetation_occupancy(x, y, z, self.generation_column(x, z))
+            == PreVegetationOccupancyV1::Solid
+    }
+
     /// Returns the locally queryable surface river sample at world `(x, z)`.
     #[must_use]
     pub fn river_sample(&self, x: i64, z: i64) -> Option<RiverSampleV1> {
@@ -1817,10 +1830,19 @@ impl GenerationPlanV1 {
             resource_accepts: 0,
         };
         let mut natural_counters = NaturalWorkCountersV1::default();
+        let vegetation_surfaces =
+            self.materialize_vegetation_surfaces(origin, edge, &columns, &mut counters);
         let vegetation = if self.natural.is_some() {
-            self.natural_vegetation_overlay(origin, edge, &columns, &mut natural_counters)?
+            self.natural_vegetation_overlay(
+                origin,
+                edge,
+                &columns,
+                &vegetation_surfaces,
+                &mut counters,
+                &mut natural_counters,
+            )?
         } else {
-            self.vegetation_overlay(origin, edge, &columns, &mut counters)?
+            self.vegetation_overlay(origin, edge, &vegetation_surfaces, &mut counters)?
         };
 
         for local_y in 0..edge {
@@ -2011,39 +2033,19 @@ impl GenerationPlanV1 {
         counters: &mut WorkCountersV1,
         natural_counters: &mut NaturalWorkCountersV1,
     ) -> D4MaterialRoleV1 {
-        if y < i64::from(self.config.world_floor_y) || y > i64::from(self.config.world_ceiling_y) {
-            return D4MaterialRoleV1::Empty;
-        }
-        let solid = if let Some(semantic) = self.semantic_terrain_at(x, z) {
-            semantic
-                .density(x, y, z)
-                .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
-                .final_density_q8()
-                >= 0
-        } else if self.territory.uses_semantic() {
-            self.territory.is_solid(
-                column.material_style,
-                x,
-                y,
-                z,
-                column.height,
-                column.in_river_channel() || column.surface_water_y.is_some(),
-            )
-        } else {
-            y <= i64::from(column.height)
-        };
-        if !solid {
-            return if y > i64::from(column.height) {
-                vegetation.unwrap_or(D4MaterialRoleV1::Empty)
-            } else {
-                D4MaterialRoleV1::Empty
-            };
-        }
-        counters.cave_samples = counters.cave_samples.saturating_add(1);
-        let occupancy = self.cave.occupancy(x, y, z, column.height);
-        if occupancy.is_finally_void() {
-            counters.cave_void_accepts = counters.cave_void_accepts.saturating_add(1);
-            return D4MaterialRoleV1::Empty;
+        match self.pre_vegetation_occupancy(x, y, z, column) {
+            PreVegetationOccupancyV1::OutsideWorld => return D4MaterialRoleV1::Empty,
+            PreVegetationOccupancyV1::DensityVoid => {
+                return vegetation.unwrap_or(D4MaterialRoleV1::Empty);
+            }
+            PreVegetationOccupancyV1::CaveVoid => {
+                counters.cave_samples = counters.cave_samples.saturating_add(1);
+                counters.cave_void_accepts = counters.cave_void_accepts.saturating_add(1);
+                return vegetation.unwrap_or(D4MaterialRoleV1::Empty);
+            }
+            PreVegetationOccupancyV1::Solid => {
+                counters.cave_samples = counters.cave_samples.saturating_add(1);
+            }
         }
 
         let depth = i64::from(column.height).saturating_sub(y);
@@ -2080,6 +2082,149 @@ impl GenerationPlanV1 {
             .filter(|semantic| semantic.contains_column(x, z))
     }
 
+    fn pre_vegetation_occupancy(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+        column: ColumnSampleV1,
+    ) -> PreVegetationOccupancyV1 {
+        if y < i64::from(self.config.world_floor_y) || y > i64::from(self.config.world_ceiling_y) {
+            return PreVegetationOccupancyV1::OutsideWorld;
+        }
+        let density_is_solid = if let Some(semantic) = self.semantic_terrain_at(x, z) {
+            semantic
+                .density(x, y, z)
+                .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
+                .final_density_q8()
+                >= 0
+        } else if self.territory.uses_semantic() {
+            self.territory.is_solid(
+                column.material_style,
+                x,
+                y,
+                z,
+                column.height,
+                column.in_river_channel() || column.surface_water_y.is_some(),
+            )
+        } else {
+            y <= i64::from(column.height)
+        };
+        if !density_is_solid {
+            return PreVegetationOccupancyV1::DensityVoid;
+        }
+        if self
+            .cave
+            .occupancy(x, y, z, column.height)
+            .is_finally_void()
+        {
+            PreVegetationOccupancyV1::CaveVoid
+        } else {
+            PreVegetationOccupancyV1::Solid
+        }
+    }
+
+    fn record_pre_vegetation_sample(
+        occupancy: PreVegetationOccupancyV1,
+        counters: &mut WorkCountersV1,
+    ) {
+        if occupancy.sampled_cave() {
+            counters.cave_samples = counters.cave_samples.saturating_add(1);
+        }
+        if occupancy == PreVegetationOccupancyV1::CaveVoid {
+            counters.cave_void_accepts = counters.cave_void_accepts.saturating_add(1);
+        }
+    }
+
+    fn checked_vegetation_surface_for_column(
+        &self,
+        x: i64,
+        z: i64,
+        column: ColumnSampleV1,
+        style: TerrainStyleV1,
+        counters: &mut WorkCountersV1,
+    ) -> Option<VegetationSurfaceV1> {
+        if !column.supports_terrestrial_vegetation(style) {
+            return None;
+        }
+        let displacement = self.semantic_terrain_at(x, z).map_or_else(
+            || self.territory.maximum_density_displacement_voxels(),
+            HydrologyConstrainedTerrainSamplerV1::maximum_density_displacement_voxels,
+        );
+        let displacement = i64::from(displacement);
+        let approved_y = i64::from(column.height);
+        let minimum_y = approved_y
+            .saturating_sub(displacement)
+            .max(i64::from(self.config.world_floor_y));
+        let maximum_y = approved_y
+            .saturating_add(displacement)
+            .min(i64::from(self.config.world_ceiling_y).saturating_sub(1));
+        for support_y in (minimum_y..=maximum_y).rev() {
+            let support = self.pre_vegetation_occupancy(x, support_y, z, column);
+            Self::record_pre_vegetation_sample(support, counters);
+            if support != PreVegetationOccupancyV1::Solid {
+                continue;
+            }
+            let placement_y = support_y.saturating_add(1);
+            let placement = self.pre_vegetation_occupancy(x, placement_y, z, column);
+            Self::record_pre_vegetation_sample(placement, counters);
+            if !placement.is_empty() {
+                continue;
+            }
+            if self
+                .hydrology_occupancy_sample(x, placement_y, z)
+                .is_some_and(|sample| sample.is_occupied())
+            {
+                continue;
+            }
+            return Some(VegetationSurfaceV1::from_checked(x, support_y, z, style));
+        }
+        None
+    }
+
+    fn checked_vegetation_surface(
+        &self,
+        x: i64,
+        z: i64,
+        style: TerrainStyleV1,
+        counters: &mut WorkCountersV1,
+    ) -> Option<VegetationSurfaceV1> {
+        counters.territory_queries = counters.territory_queries.saturating_add(1);
+        counters.height_samples = counters.height_samples.saturating_add(1);
+        self.checked_vegetation_surface_for_column(
+            x,
+            z,
+            self.generation_column(x, z),
+            style,
+            counters,
+        )
+    }
+
+    fn materialize_vegetation_surfaces(
+        &self,
+        origin: (i64, i64, i64),
+        edge: usize,
+        columns: &[ColumnSampleV1],
+        counters: &mut WorkCountersV1,
+    ) -> Vec<Option<VegetationSurfaceV1>> {
+        let mut surfaces = Vec::with_capacity(columns.len());
+        for local_z in 0..edge {
+            for local_x in 0..edge {
+                let column = columns[local_z.saturating_mul(edge).saturating_add(local_x)];
+                let x = local_world_axis(origin.0, local_x);
+                let z = local_world_axis(origin.2, local_z);
+                surfaces.push(self.checked_vegetation_surface_for_column(
+                    x,
+                    z,
+                    column,
+                    column.material_style,
+                    counters,
+                ));
+            }
+        }
+        surfaces
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "bounded ground cover and tree rasterization share one overlay allocation"
@@ -2088,7 +2233,7 @@ impl GenerationPlanV1 {
         &self,
         origin: (i64, i64, i64),
         edge: usize,
-        columns: &[ColumnSampleV1],
+        surfaces: &[Option<VegetationSurfaceV1>],
         counters: &mut WorkCountersV1,
     ) -> WorldgenResult<Vec<Option<D4MaterialRoleV1>>> {
         let voxel_count = edge
@@ -2101,35 +2246,28 @@ impl GenerationPlanV1 {
 
         for local_z in 0..edge {
             for local_x in 0..edge {
-                let column = &columns[local_z * edge + local_x];
-                if column.material_style != TerrainStyleV1::TemperateWoodland {
+                let Some(surface) = surfaces[local_z * edge + local_x] else {
+                    continue;
+                };
+                if surface.style() != TerrainStyleV1::TemperateWoodland {
                     continue;
                 }
-                let world_x = origin
-                    .0
-                    .saturating_add(i64::try_from(local_x).unwrap_or_default());
-                let world_z = origin
-                    .2
-                    .saturating_add(i64::try_from(local_z).unwrap_or_default());
-                let cover_y = i64::from(column.height).saturating_add(1);
                 counters.ground_cover_samples = counters.ground_cover_samples.saturating_add(1);
-                if column.supports_terrestrial_vegetation(TerrainStyleV1::TemperateWoodland)
-                    && Self::sample_threshold(
-                        self.ground_cover_seed,
-                        world_x,
-                        cover_y,
-                        world_z,
-                        self.config.ground_cover_threshold_per_1024,
-                    )
-                {
+                if Self::sample_threshold(
+                    self.ground_cover_seed,
+                    surface.x(),
+                    surface.placement_y(),
+                    surface.z(),
+                    self.config.ground_cover_threshold_per_1024,
+                ) {
                     counters.ground_cover_accepts = counters.ground_cover_accepts.saturating_add(1);
                     set_vegetation_role(
                         &mut overlay,
                         origin,
                         edge,
-                        world_x,
-                        cover_y,
-                        world_z,
+                        surface.x(),
+                        surface.placement_y(),
+                        surface.z(),
                         D4MaterialRoleV1::WoodlandGroundCover,
                     );
                 }
@@ -2162,12 +2300,23 @@ impl GenerationPlanV1 {
                 {
                     continue;
                 }
-                if !self.vegetation_footprint_allows(anchor_x, anchor_z, style, MAX_TREE_RADIUS) {
+                let Some(surface) =
+                    self.checked_vegetation_surface(anchor_x, anchor_z, style, counters)
+                else {
+                    continue;
+                };
+                if !self.vegetation_footprint_allows(surface, MAX_TREE_RADIUS, counters)
+                    || !self.legacy_tree_shape_is_clear(
+                        surface,
+                        MAX_TREE_RADIUS,
+                        MAX_TREE_HEIGHT,
+                        counters,
+                    )
+                {
                     continue;
                 }
                 counters.tree_anchor_accepts = counters.tree_anchor_accepts.saturating_add(1);
-                counters.height_samples = counters.height_samples.saturating_add(1);
-                let anchor_height = i64::from(self.territory.height(anchor_x, anchor_z));
+                let anchor_height = surface.support_y();
                 for relative_y in 4..=MAX_TREE_HEIGHT {
                     for offset_z in -MAX_TREE_RADIUS..=MAX_TREE_RADIUS {
                         for offset_x in -MAX_TREE_RADIUS..=MAX_TREE_RADIUS {
@@ -2213,6 +2362,8 @@ impl GenerationPlanV1 {
         origin: (i64, i64, i64),
         edge: usize,
         columns: &[ColumnSampleV1],
+        surfaces: &[Option<VegetationSurfaceV1>],
+        work_counters: &mut WorkCountersV1,
         counters: &mut NaturalWorkCountersV1,
     ) -> WorldgenResult<Vec<Option<D4MaterialRoleV1>>> {
         let Some(natural) = &self.natural else {
@@ -2243,18 +2394,18 @@ impl GenerationPlanV1 {
                     column.in_river_channel(),
                 ) {
                     counters.habitat_samples = counters.habitat_samples.saturating_add(1);
-                    if !column.supports_terrestrial_vegetation(column.material_style) {
+                    let Some(surface) = surfaces[local_z * edge + local_x] else {
                         counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
                         continue;
-                    }
+                    };
                     counters.ground_cover_accepts = counters.ground_cover_accepts.saturating_add(1);
                     set_vegetation_role(
                         &mut overlay,
                         origin,
                         edge,
-                        world_x,
-                        i64::from(column.height).saturating_add(1),
-                        world_z,
+                        surface.x(),
+                        surface.placement_y(),
+                        surface.z(),
                         role,
                     );
                 }
@@ -2292,17 +2443,27 @@ impl GenerationPlanV1 {
                     continue;
                 }
                 counters.habitat_samples = counters.habitat_samples.saturating_add(1);
+                let Some(surface) =
+                    self.checked_vegetation_surface(anchor_x, anchor_z, style, work_counters)
+                else {
+                    counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
+                    continue;
+                };
                 if !self.vegetation_footprint_allows(
-                    anchor_x,
-                    anchor_z,
-                    style,
+                    surface,
                     NaturalSamplerV1::tree_radius(),
+                    work_counters,
+                ) || !self.legacy_tree_shape_is_clear(
+                    surface,
+                    NaturalSamplerV1::tree_radius(),
+                    NaturalSamplerV1::tree_height(),
+                    work_counters,
                 ) {
                     counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
                     continue;
                 }
                 counters.tree_anchor_accepts = counters.tree_anchor_accepts.saturating_add(1);
-                let anchor_height = i64::from(self.terrain_height(anchor_x, anchor_z));
+                let anchor_height = surface.support_y();
                 for relative_y in 4..=NaturalSamplerV1::tree_height() {
                     for offset_z in
                         -NaturalSamplerV1::tree_radius()..=NaturalSamplerV1::tree_radius()
@@ -2345,20 +2506,72 @@ impl GenerationPlanV1 {
 
     fn vegetation_footprint_allows(
         &self,
-        anchor_x: i64,
-        anchor_z: i64,
-        style: TerrainStyleV1,
+        anchor: VegetationSurfaceV1,
         radius: i64,
+        counters: &mut WorkCountersV1,
     ) -> bool {
         for offset_z in -radius..=radius {
             for offset_x in -radius..=radius {
-                let column = self.generation_column(
-                    anchor_x.saturating_add(offset_x),
-                    anchor_z.saturating_add(offset_z),
-                );
-                if !column.supports_terrestrial_vegetation(style) {
+                let Some(surface) = self.checked_vegetation_surface(
+                    anchor.x().saturating_add(offset_x),
+                    anchor.z().saturating_add(offset_z),
+                    anchor.style(),
+                    counters,
+                ) else {
+                    return false;
+                };
+                if surface.support_y().abs_diff(anchor.support_y()) > MAX_TREE_FOOTPRINT_RELIEF {
                     return false;
                 }
+            }
+        }
+        true
+    }
+
+    fn legacy_tree_shape_is_clear(
+        &self,
+        anchor: VegetationSurfaceV1,
+        radius: i64,
+        height: i64,
+        counters: &mut WorkCountersV1,
+    ) -> bool {
+        for offset_z in -radius..=radius {
+            for offset_x in -radius..=radius {
+                if offset_x.abs().saturating_add(offset_z.abs()) > radius.saturating_add(1) {
+                    continue;
+                }
+                let x = anchor.x().saturating_add(offset_x);
+                let z = anchor.z().saturating_add(offset_z);
+                counters.territory_queries = counters.territory_queries.saturating_add(1);
+                counters.height_samples = counters.height_samples.saturating_add(1);
+                let column = self.generation_column(x, z);
+                for relative_y in 4..=height {
+                    let occupancy = self.pre_vegetation_occupancy(
+                        x,
+                        anchor.support_y().saturating_add(relative_y),
+                        z,
+                        column,
+                    );
+                    Self::record_pre_vegetation_sample(occupancy, counters);
+                    if !occupancy.is_empty() {
+                        return false;
+                    }
+                }
+            }
+        }
+        counters.territory_queries = counters.territory_queries.saturating_add(1);
+        counters.height_samples = counters.height_samples.saturating_add(1);
+        let column = self.generation_column(anchor.x(), anchor.z());
+        for relative_y in 1..=4 {
+            let occupancy = self.pre_vegetation_occupancy(
+                anchor.x(),
+                anchor.support_y().saturating_add(relative_y),
+                anchor.z(),
+                column,
+            );
+            Self::record_pre_vegetation_sample(occupancy, counters);
+            if !occupancy.is_empty() {
+                return false;
             }
         }
         true
@@ -2463,7 +2676,71 @@ impl ColumnSampleV1 {
     }
 
     fn supports_terrestrial_vegetation(self, style: TerrainStyleV1) -> bool {
-        self.material_style == style && self.surface_water_y.is_none() && !self.in_river_channel()
+        matches!(
+            style,
+            TerrainStyleV1::TemperateWoodland | TerrainStyleV1::BorealWetland
+        ) && self.material_style == style
+            && self.surface_water_y.is_none()
+            && !self.in_river_channel()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreVegetationOccupancyV1 {
+    OutsideWorld,
+    DensityVoid,
+    CaveVoid,
+    Solid,
+}
+
+impl PreVegetationOccupancyV1 {
+    const fn sampled_cave(self) -> bool {
+        matches!(self, Self::CaveVoid | Self::Solid)
+    }
+
+    const fn is_empty(self) -> bool {
+        matches!(self, Self::DensityVoid | Self::CaveVoid)
+    }
+}
+
+/// A terrestrial placement coordinate proven against final pre-vegetation
+/// density, cave arbitration, and water occupancy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VegetationSurfaceV1 {
+    x: i64,
+    support_y: i64,
+    z: i64,
+    style: TerrainStyleV1,
+}
+
+impl VegetationSurfaceV1 {
+    const fn from_checked(x: i64, support_y: i64, z: i64, style: TerrainStyleV1) -> Self {
+        Self {
+            x,
+            support_y,
+            z,
+            style,
+        }
+    }
+
+    const fn x(self) -> i64 {
+        self.x
+    }
+
+    const fn support_y(self) -> i64 {
+        self.support_y
+    }
+
+    const fn placement_y(self) -> i64 {
+        self.support_y.saturating_add(1)
+    }
+
+    const fn z(self) -> i64 {
+        self.z
+    }
+
+    const fn style(self) -> TerrainStyleV1 {
+        self.style
     }
 }
 

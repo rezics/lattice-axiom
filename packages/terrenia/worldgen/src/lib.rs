@@ -620,6 +620,11 @@ mod tests {
             .map(|policy| policy.canonical_hash().expect("policy canonicalizes"))
             .collect::<BTreeSet<_>>();
         assert_eq!(hashes.len(), 1);
+        assert!(semantic.iter().all(|program| {
+            program
+                .semantic_policy()
+                .is_some_and(|policy| policy.maximum_density_displacement_voxels() == 8)
+        }));
     }
 
     #[test]

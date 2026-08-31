@@ -417,6 +417,7 @@ RTX 4080 Laptop environment:
 | `v5_production_boreal_chunk_32_cubic_snapshot_candidate` | 11.537-11.647 ms (median estimate 11.592 ms) |
 | semantic terrain column sampling | 426.86-431.22 ns |
 | semantic density, 32 cubed | 15.220-15.340 ms |
+| Slice 1 checked-surface natural chunk | 11.986-12.077 ms (median estimate 12.031 ms, +3.79%) |
 
 Gates:
 
@@ -595,7 +596,13 @@ changes remain. Code fixes discovered here receive their own scoped commit.
   references surveyed; build-versus-buy decision recorded.
 - [x] 2026-08-31: pre-change optimized benchmarks recorded.
 - [x] 2026-08-31: Slice 0 plan approved for its dedicated commit.
-- [ ] Slice 1 final-surface contract implemented and committed.
+- [x] 2026-08-31: Slice 1 final-surface contract implemented, verified, and
+  approved for its dedicated commit. The production semantic fixture found
+  vegetation on columns where final density differed from height intent and
+  proved solid support, empty placement, and no hydrology overlap. Worldgen,
+  Terrenia, and engine-worldgen suites passed; strict affected-crate Clippy and
+  rustfmt passed. The optimized natural-chunk interval was 11.986-12.077 ms
+  (+3.79% median estimate), within both performance gates.
 - [ ] Slice 2 water temporal stability implemented and committed.
 - [ ] Slice 3 tree morphology implemented and committed.
 - [ ] Slice 4 middle-scale terrain/cliffs implemented and committed.

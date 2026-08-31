@@ -305,6 +305,19 @@ impl SemanticTerrainPolicyV1 {
         self.water_protection_radius_q8
     }
 
+    /// Returns the closed vertical displacement envelope of both 3D density
+    /// contributors, rounded up to whole voxels.
+    ///
+    /// A caller may inspect only this many voxels above or below the approved
+    /// surface when looking for the final density boundary. Cave arbitration
+    /// can still reject every candidate inside that bounded envelope.
+    #[must_use]
+    pub const fn maximum_density_displacement_voxels(&self) -> u32 {
+        let displacement_q8 =
+            (self.max_terrain_volume_q8 as u32).saturating_add(self.max_geologic_volume_q8 as u32);
+        displacement_q8.saturating_add(255) / 256
+    }
+
     fn validate(&self) -> WorldgenResult<()> {
         for (field, spec) in [
             ("semantic.continentalness", self.continentalness),
@@ -963,6 +976,13 @@ impl HydrologyConstrainedTerrainSamplerV1 {
     #[must_use]
     pub const fn plan(&self) -> &SemanticHydrologicTerrainPlanV1 {
         &self.plan
+    }
+
+    /// Returns the closed vertical displacement envelope of the bound density
+    /// policy, rounded up to whole voxels.
+    #[must_use]
+    pub const fn maximum_density_displacement_voxels(&self) -> u32 {
+        self.field.policy().maximum_density_displacement_voxels()
     }
 
     /// Returns whether a world column maps to this finite domain artifact.
