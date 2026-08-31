@@ -1,6 +1,6 @@
 # Render, simulation, and far-terrain plan
 
-Status: approved; implementation in progress through Slice 2, 2026-08-31.
+Status: approved; implementation in progress through Slice 3, 2026-08-31.
 
 ## Decision
 
@@ -430,7 +430,33 @@ Commit: `test(streaming): certify far terrain presentation`.
   chunks: 22.21%, 5.55%, and 1.39% of that conservative baseline. A hard
   64-voxel base-edge and LOD3 cap bounds the worst dense build to 513 by 513
   samples.
-- [ ] Slice 3 bounded hierarchical streaming implemented.
+- [x] 2026-08-31: Slice 3 bounded hierarchical streaming committed as
+  `f210cb9`. The production host now selects non-overlapping far tiles over a
+  Euclidean chunk-center circle, recursively splits the near boundary, varies
+  LOD by the independent quality contract, and publishes completed tiles in
+  stable priority/sequence order. The Bevy `AsyncComputeTaskPool` is reused;
+  no thread runtime or dependency was added. Hard capacities are 128 pending,
+  two in flight, and 1,024 ready tiles. Near worldgen and derived work reserve
+  the shared CPU lane before far work. Interest changes cancel queued/task
+  ownership and an atomic generation check stops stale dense sampling; old
+  completions are rejected. Ready tiles shared by the new interest are reused.
+  Procedural tiles intersecting edited chunks or their shared borders are
+  conservatively suppressed until a committed-surface adapter can certify
+  them, so stale terrain cannot cover an authoritative edit.
+
+  The structured host snapshot reports desired, edit-blocked, pending,
+  in-flight, waiting, ready, retained vector bytes, interest generation,
+  cancellation/stale counts, near reservations, and the contiguous presented
+  frontier. Presented distance now advances only when every tile intersecting
+  the next radius is ready and remains clamped between full detail and target.
+  All three quality selections at the authored 32-chunk maximum fit the ready
+  cap; exact signed-coordinate coverage tests prove one owner for every chunk
+  center in the circle and no ownership inside the near square. The engine's
+  170 all-feature unit tests and strict all-target Clippy passed. Focused real
+  host tests proved a 4-chunk target converges from full detail 2 to presented
+  4 without increasing the authoritative resident cap (5.64-second complete
+  test runtime), a 32-to-4 change cancels the old bounded queue, and camera-only
+  rotation does not rebuild far interest.
 - [ ] Slice 4 Bevy presentation and transition implemented.
 - [ ] Slice 5 settings information architecture and diagnostics cleanup
   implemented.
