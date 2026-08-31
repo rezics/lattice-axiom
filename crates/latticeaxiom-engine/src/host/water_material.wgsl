@@ -66,12 +66,18 @@ fn sample_flow_normal(
     speed: f32,
     strength: f32,
 ) -> vec3<f32> {
-    let sampled = textureSample(
+    let encoded = textureSample(
         water_normal_map,
         water_normal_sampler,
         uv * scale + local_flow * time * speed,
-    ).rgb * 2.0 - 1.0;
-    return normalize(vec3<f32>(sampled.xy * strength, max(sampled.z, 0.2)));
+    );
+    let mean_normal = encoded.rgb * 2.0 - 1.0;
+    let mean_direction = normalize(vec3<f32>(mean_normal.xy, max(mean_normal.z, 0.0001)));
+    let normal_coherence = encoded.a;
+    return normalize(vec3<f32>(
+        mean_direction.xy * strength * normal_coherence,
+        max(mean_direction.z, 0.2),
+    ));
 }
 
 fn opaque_water_depth(

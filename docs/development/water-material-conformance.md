@@ -1,6 +1,7 @@
 # Depth-aware water material conformance evidence
 
-Recorded 2026-08-30 for the native-static production water material.
+Recorded 2026-08-30 and extended 2026-08-31 for the native-static production
+water material.
 
 ## Pipeline and optical contract
 
@@ -22,10 +23,17 @@ separate absorption, deep tint, and alpha parameters.
 
 The material uses Schlick Fresnel with the air-to-water normal-incidence value
 `F0 = 0.02037`, a two-octave animated tangent-space normal map, and Bevy's
-two-sided normal orientation. The authoritative `CameraMediumV1` selects the
-below-water parameters. The shared material is dirtied only when that
-component changes; visibility, winding, and screen position never infer the
-camera medium.
+two-sided normal orientation. The 32 by 32 base texture carries a complete
+`32, 16, 8, 4, 2, 1` vector mip chain. Each coarse texel stores the
+unnormalized mean normal in RGB and its coherence in alpha; the shader
+normalizes the direction and attenuates canceled detail by coherence. The
+linear sampler requests 16-times anisotropy for grazing views. Locked
+`wgpu 29.0.4` clamps this to 16 on supported adapters and falls back to one on
+downlevel adapters without rejecting the material.
+
+The authoritative `CameraMediumV1` selects the below-water parameters. The
+shared material is dirtied only when that component changes; visibility,
+winding, and screen position never infer the camera medium.
 
 ## Hydrology presentation boundary
 
@@ -63,7 +71,13 @@ Headless tests prove:
 - Schlick endpoints and monotonicity, Beer-Lambert depth monotonicity and
   channel ordering, and above/below normal orientation;
 - the generated 32 by 32 normal texture is linear RGBA, repeat sampled,
-  forward-facing, approximately unit length, and byte bounded;
+  forward-facing at its exact base level, deterministically mipmapped to one
+  texel, 16-times anisotropic where supported, and byte bounded;
+- vector mip coherence matches mean-normal length within quantization error,
+  horizontal energy never rises with coarser levels, and a coarse CPU sampling
+  oracle materially reduces adjacent-phase normal error;
+- the shared-halo water seam has identical heights and normals on both chunks
+  and neither top quad crosses the seam to create coplanar overlap;
 - the embedded shader retains every required optics stage.
 
 The WGSL was composed against the exact Bevy 0.19.1 shader modules and
@@ -73,12 +87,34 @@ the bounded no-prepass fallback. A production Vulkan client then compiled and
 ran the final embedded shader with no shader, pipeline, or validation errors.
 The temporary validator was not added to the workspace or dependency graph.
 
+## Temporal-stability A/B
+
+A local production Vulkan run used the same persisted world, fixed camera, and
+1296 by 759 window for a temporary exact recreation of the former one-mip
+texture and for the restored production mip chain. Each path captured nine
+frames with eight adjacent pairs. The measured water-view region was
+`x = 8..1287`, `y = 515..709`; unchanged UI pixels were retained in both
+series, so they affect both measurements identically. The temporary baseline
+source change was removed before validation and is not part of the commit.
+
+| Series | Mean capture interval | Mean RGB-channel MAE | Median MAE | Mean changing-pixel fraction |
+| --- | ---: | ---: | ---: | ---: |
+| former one-mip path | 177.991 ms | 0.1368725 | 0.1368576 | 0.3398062 |
+| complete vector mips plus anisotropy | 176.903 ms | 0.0962664 | 0.0942368 | 0.2516767 |
+
+The production path reduced mean MAE by 29.67%, median MAE by 31.14%, and the
+changing-pixel fraction by 25.94%. The base mip is byte-for-byte the former
+near-field signal, while the coarsest horizontal normal energy is below
+`1e-4`; the improvement therefore comes from band-limiting distant samples,
+not flattening the authored base texture. The final native log contained no
+shader, pipeline, validation, or panic error.
+
 ## Resource and optimized runtime baseline
 
-The dedicated material adds one 144-byte uniform payload and one 32 by 32
-RGBA8 normal texture (4,096 texel bytes). UV1 adds eight bytes per water mesh
+The dedicated material adds one 144-byte uniform payload and one complete
+RGBA8 normal mip chain (5,460 texel bytes). UV1 adds eight bytes per water mesh
 vertex. The frozen 4,608-vertex fluid-mesh corpus therefore has 36,864 bytes
-of added flow data and 41,104 bytes of attributable material-plus-flow
+of added flow data and 42,468 bytes of attributable material-plus-flow
 payload. The color atlas is shared with existing terrain materials. GPU
 allocator alignment, pipeline caches, and driver metadata are deliberately
 reported separately rather than hidden inside that payload count.
@@ -97,7 +133,7 @@ release run and a 5,075 MiB peak during it, a coarse whole-adapter increase of
 1,336 MiB. The 25 one-second samples ranged from 3,731 to 5,075 MiB with a
 4,666.4 MiB mean. This includes the complete client, streamed world, driver
 caches, desktop, and other GPU users; it is not attributed to water. The exact
-41,104-byte water payload above is the bounded attributable measurement.
+42,468-byte water payload above is the bounded attributable measurement.
 
 Bevy's per-pass GPU timestamps require the development diagnostics feature.
 With the same final shader, 1280 by 720 viewport, GPU, driver, and Vulkan

@@ -15,6 +15,15 @@ use bevy::{
 /// Edge length of the deterministic, tileable tangent-space normal map.
 const WATER_NORMAL_MAP_EDGE: u32 = 32;
 
+/// Complete mip count for the power-of-two production normal map.
+const WATER_NORMAL_MIP_LEVELS: u32 = 6;
+
+/// Maximum sampler anisotropy for the grazing-angle water plane.
+const WATER_NORMAL_ANISOTROPY: u16 = 16;
+
+/// Tightly packed RGBA8 bytes across the `32, 16, 8, 4, 2, 1` mip chain.
+const WATER_NORMAL_MAP_BYTE_LEN: usize = 5_460;
+
 /// Air-to-water reflectance at normal incidence for an IOR of approximately 1.333.
 const WATER_NORMAL_REFLECTANCE: f32 = 0.020_37;
 
@@ -125,33 +134,13 @@ pub(super) fn production_water_material(
 }
 
 /// Builds a deterministic, tileable linear-RGBA normal map for flow animation.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "normal-map texel coordinates are bounded to 0..32"
-)]
+///
+/// Coarse levels retain the unnormalized mean normal in RGB and its coherence
+/// in alpha. The shader uses that coherence to suppress detail whose child
+/// normals cancel within a distant pixel footprint.
 pub(super) fn water_normal_image() -> Image {
     let edge = WATER_NORMAL_MAP_EDGE;
-    let byte_len = usize::try_from(edge.saturating_mul(edge).saturating_mul(4)).unwrap_or(0);
-    let mut data = Vec::with_capacity(byte_len);
-    let edge_f32 = edge as f32;
-    for y in 0..edge {
-        let phase_y = TAU * y as f32 / edge_f32;
-        for x in 0..edge {
-            let phase_x = TAU * x as f32 / edge_f32;
-            let gradient_x = 0.46 * phase_x.cos()
-                + 0.19 * (phase_x * 2.0 + phase_y).cos()
-                + 0.11 * (phase_x - phase_y * 3.0).cos();
-            let gradient_y = 0.39 * phase_y.cos() + 0.17 * (phase_x * 2.0 + phase_y).cos()
-                - 0.15 * (phase_x - phase_y * 3.0).cos();
-            let normal = Vec3::new(-gradient_x, -gradient_y, 1.0).normalize();
-            data.extend([
-                pack_normal_channel(normal.x),
-                pack_normal_channel(normal.y),
-                pack_normal_channel(normal.z),
-                u8::MAX,
-            ]);
-        }
-    }
+    let data = water_normal_mip_chain();
 
     let mut image = Image::new_uninit(
         Extent3d {
@@ -163,6 +152,7 @@ pub(super) fn water_normal_image() -> Image {
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
+    image.texture_descriptor.mip_level_count = WATER_NORMAL_MIP_LEVELS;
     image.data = Some(data);
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
@@ -171,9 +161,76 @@ pub(super) fn water_normal_image() -> Image {
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: WATER_NORMAL_ANISOTROPY,
         ..ImageSamplerDescriptor::linear()
     });
     image
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "normal-map texel coordinates are bounded to 0..32"
+)]
+fn water_normal_mip_chain() -> Vec<u8> {
+    let edge = WATER_NORMAL_MAP_EDGE;
+    let mut level =
+        Vec::with_capacity(usize::try_from(edge.saturating_mul(edge)).unwrap_or_default());
+    let edge_f32 = edge as f32;
+    for y in 0..edge {
+        let phase_y = TAU * y as f32 / edge_f32;
+        for x in 0..edge {
+            let phase_x = TAU * x as f32 / edge_f32;
+            let gradient_x = 0.46 * phase_x.cos()
+                + 0.19 * (phase_x * 2.0 + phase_y).cos()
+                + 0.11 * (phase_x - phase_y * 3.0).cos();
+            let gradient_y = 0.39 * phase_y.cos() + 0.17 * (phase_x * 2.0 + phase_y).cos()
+                - 0.15 * (phase_x - phase_y * 3.0).cos();
+            let normal = Vec3::new(-gradient_x, -gradient_y, 1.0).normalize();
+            level.push(normal);
+        }
+    }
+
+    let mut data = Vec::with_capacity(WATER_NORMAL_MAP_BYTE_LEN);
+    let mut level_edge = edge;
+    loop {
+        append_water_normal_level(&mut data, &level);
+        if level_edge == 1 {
+            break;
+        }
+        level = downsample_water_normals(&level, level_edge);
+        level_edge /= 2;
+    }
+    data
+}
+
+fn append_water_normal_level(data: &mut Vec<u8>, normals: &[Vec3]) {
+    for normal in normals {
+        data.extend([
+            pack_normal_channel(normal.x),
+            pack_normal_channel(normal.y),
+            pack_normal_channel(normal.z),
+            pack_unit_channel(normal.length()),
+        ]);
+    }
+}
+
+fn downsample_water_normals(source: &[Vec3], source_edge: u32) -> Vec<Vec3> {
+    let source_edge = usize::try_from(source_edge).unwrap_or_default();
+    let target_edge = source_edge / 2;
+    let mut target = Vec::with_capacity(target_edge.saturating_mul(target_edge));
+    for row_pair in source.chunks_exact(source_edge.saturating_mul(2)) {
+        let (top, bottom) = row_pair.split_at(source_edge);
+        for (top_pair, bottom_pair) in top.chunks_exact(2).zip(bottom.chunks_exact(2)) {
+            let [top_left, top_right] = top_pair else {
+                continue;
+            };
+            let [bottom_left, bottom_right] = bottom_pair else {
+                continue;
+            };
+            target.push((*top_left + *top_right + *bottom_left + *bottom_right) * 0.25);
+        }
+    }
+    target
 }
 
 #[expect(
@@ -183,6 +240,15 @@ pub(super) fn water_normal_image() -> Image {
 )]
 fn pack_normal_channel(value: f32) -> u8 {
     ((value * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the clamped and rounded unit channel is in 0..=255"
+)]
+fn pack_unit_channel(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 #[cfg(test)]
@@ -217,13 +283,15 @@ mod tests {
     use bevy::{
         asset::Handle,
         image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler},
-        prelude::{AlphaMode, Vec3},
+        prelude::{AlphaMode, Vec2, Vec3},
         render::render_resource::TextureFormat,
     };
 
     use super::{
-        WATER_NORMAL_MAP_EDGE, WATER_NORMAL_REFLECTANCE, beer_lambert_transmittance,
+        WATER_NORMAL_ANISOTROPY, WATER_NORMAL_MAP_BYTE_LEN, WATER_NORMAL_MAP_EDGE,
+        WATER_NORMAL_MIP_LEVELS, WATER_NORMAL_REFLECTANCE, beer_lambert_transmittance,
         orient_normal_toward_view, production_water_material, schlick_fresnel, water_normal_image,
+        water_normal_mip_chain,
     };
 
     fn close(left: f32, right: f32) -> bool {
@@ -287,6 +355,10 @@ mod tests {
         let image = water_normal_image();
         assert_eq!(image.texture_descriptor.size.width, WATER_NORMAL_MAP_EDGE);
         assert_eq!(image.texture_descriptor.size.height, WATER_NORMAL_MAP_EDGE);
+        assert_eq!(
+            image.texture_descriptor.mip_level_count,
+            WATER_NORMAL_MIP_LEVELS
+        );
         assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba8Unorm);
         match &image.sampler {
             ImageSampler::Descriptor(descriptor) => {
@@ -294,25 +366,73 @@ mod tests {
                 assert_eq!(descriptor.address_mode_v, ImageAddressMode::Repeat);
                 assert_eq!(descriptor.mag_filter, ImageFilterMode::Linear);
                 assert_eq!(descriptor.min_filter, ImageFilterMode::Linear);
+                assert_eq!(descriptor.mipmap_filter, ImageFilterMode::Linear);
+                assert_eq!(descriptor.anisotropy_clamp, WATER_NORMAL_ANISOTROPY);
             }
             ImageSampler::Default => panic!("water normal map must use its explicit sampler"),
         }
         let data = image.data.expect("generated image retains its CPU texels");
-        assert_eq!(
-            data.len(),
-            usize::try_from(WATER_NORMAL_MAP_EDGE * WATER_NORMAL_MAP_EDGE * 4)
-                .expect("normal-map byte count fits usize")
-        );
-        for texel in data.chunks_exact(4) {
-            let normal = Vec3::new(
-                f32::from(texel[0]) / 255.0 * 2.0 - 1.0,
-                f32::from(texel[1]) / 255.0 * 2.0 - 1.0,
-                f32::from(texel[2]) / 255.0 * 2.0 - 1.0,
-            );
+        assert_eq!(data.len(), WATER_NORMAL_MAP_BYTE_LEN);
+        assert_eq!(data, water_normal_mip_chain());
+
+        let base = mip_level(&data, 0);
+        for texel in base.chunks_exact(4) {
+            let (normal, coherence) = decode_normal_texel(texel);
             assert!(normal.z > 0.0);
             assert!((normal.length() - 1.0).abs() < 0.015);
-            assert_eq!(texel[3], u8::MAX);
+            assert!(close(coherence, 1.0));
         }
+    }
+
+    #[test]
+    fn vector_mips_preserve_coherence_and_remove_coarse_horizontal_energy() {
+        let data = water_normal_mip_chain();
+        let mut previous_energy = f32::INFINITY;
+        for level in 0..WATER_NORMAL_MIP_LEVELS {
+            let mip = mip_level(&data, level);
+            let mut horizontal_energy = 0.0;
+            let mut texel_count = 0_u16;
+            for texel in mip.chunks_exact(4) {
+                let (mean, coherence) = decode_normal_texel(texel);
+                assert!(mean.z > 0.0);
+                assert!((mean.length() - coherence).abs() < 0.02);
+                assert!((0.0..=1.0).contains(&coherence));
+                horizontal_energy += mean.x * mean.x + mean.y * mean.y;
+                texel_count = texel_count.saturating_add(1);
+            }
+            horizontal_energy /= f32::from(texel_count.max(1));
+            assert!(
+                horizontal_energy <= previous_energy + 1.0e-4,
+                "mip {level} increased horizontal energy from {previous_energy} to {horizontal_energy}"
+            );
+            previous_energy = horizontal_energy;
+        }
+        assert!(previous_energy < 1.0e-4);
+    }
+
+    #[test]
+    fn coarse_mip_reduces_adjacent_frame_normal_error() {
+        let data = water_normal_mip_chain();
+        let mut base_error = 0.0;
+        let mut coarse_error = 0.0;
+        for y in 0_u8..16 {
+            for x in 0_u8..16 {
+                let uv = Vec2::new(
+                    f32::from(x) * 0.173 + f32::from(y) * 0.031,
+                    f32::from(y) * 0.149,
+                );
+                let next_uv = uv + Vec2::new(0.013, -0.009);
+                base_error += shader_normal(sample_mip(&data, 0, uv))
+                    .distance(shader_normal(sample_mip(&data, 0, next_uv)));
+                coarse_error += shader_normal(sample_mip(&data, 3, uv))
+                    .distance(shader_normal(sample_mip(&data, 3, next_uv)));
+            }
+        }
+        assert!(base_error > 1.0);
+        assert!(
+            coarse_error < base_error * 0.55,
+            "coarse temporal error {coarse_error} must be materially below base error {base_error}"
+        );
     }
 
     #[test]
@@ -323,6 +443,7 @@ mod tests {
             "beer_lambert",
             "flow_direction",
             "sample_flow_normal",
+            "normal_coherence",
             "DEPTH_PREPASS",
             "camera_underwater",
             "main_pass_post_lighting_processing",
@@ -330,5 +451,81 @@ mod tests {
         ] {
             assert!(shader.contains(required), "shader is missing `{required}`");
         }
+    }
+
+    fn decode_normal_texel(texel: &[u8]) -> (Vec3, f32) {
+        (
+            Vec3::new(
+                f32::from(texel[0]) / 255.0 * 2.0 - 1.0,
+                f32::from(texel[1]) / 255.0 * 2.0 - 1.0,
+                f32::from(texel[2]) / 255.0 * 2.0 - 1.0,
+            ),
+            f32::from(texel[3]) / 255.0,
+        )
+    }
+
+    fn mip_level(data: &[u8], level: u32) -> &[u8] {
+        let mut edge = WATER_NORMAL_MAP_EDGE;
+        let mut offset = 0_usize;
+        for _ in 0..level {
+            offset = offset.saturating_add(
+                usize::try_from(edge.saturating_mul(edge).saturating_mul(4))
+                    .expect("test mip byte count fits usize"),
+            );
+            edge /= 2;
+        }
+        let byte_len = usize::try_from(edge.saturating_mul(edge).saturating_mul(4))
+            .expect("test mip byte count fits usize");
+        &data[offset..offset.saturating_add(byte_len)]
+    }
+
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "wrapped test texture coordinates remain inside the 32-texel mip"
+    )]
+    fn sample_mip(data: &[u8], level: u32, uv: Vec2) -> (Vec3, f32) {
+        let edge = WATER_NORMAL_MAP_EDGE >> level;
+        let edge_f32 = f32::from(u16::try_from(edge).expect("test mip edge fits u16"));
+        let signed_edge = edge.cast_signed();
+        let position =
+            Vec2::new(uv.x.rem_euclid(1.0), uv.y.rem_euclid(1.0)) * edge_f32 - Vec2::splat(0.5);
+        let floor = position.floor();
+        let fraction = position - floor;
+        let x0 = (floor.x as i32).rem_euclid(signed_edge) as u32;
+        let y0 = (floor.y as i32).rem_euclid(signed_edge) as u32;
+        let x1 = x0.saturating_add(1).rem_euclid(edge);
+        let y1 = y0.saturating_add(1).rem_euclid(edge);
+        let mip = mip_level(data, level);
+        let sample = |x: u32, y: u32| {
+            let index = usize::try_from(y.saturating_mul(edge).saturating_add(x).saturating_mul(4))
+                .expect("test sample index fits usize");
+            decode_normal_texel(&mip[index..index.saturating_add(4)])
+        };
+        let (top_left, top_left_coherence) = sample(x0, y0);
+        let (top_right, top_right_coherence) = sample(x1, y0);
+        let (bottom_left, bottom_left_coherence) = sample(x0, y1);
+        let (bottom_right, bottom_right_coherence) = sample(x1, y1);
+        let top = top_left.lerp(top_right, fraction.x);
+        let bottom = bottom_left.lerp(bottom_right, fraction.x);
+        let top_coherence =
+            top_left_coherence + (top_right_coherence - top_left_coherence) * fraction.x;
+        let bottom_coherence =
+            bottom_left_coherence + (bottom_right_coherence - bottom_left_coherence) * fraction.x;
+        (
+            top.lerp(bottom, fraction.y),
+            top_coherence + (bottom_coherence - top_coherence) * fraction.y,
+        )
+    }
+
+    fn shader_normal((mean, coherence): (Vec3, f32)) -> Vec3 {
+        let direction = Vec3::new(mean.x, mean.y, mean.z.max(0.0001)).normalize();
+        Vec3::new(
+            direction.x * 0.24 * coherence,
+            direction.y * 0.24 * coherence,
+            direction.z.max(0.2),
+        )
+        .normalize()
     }
 }

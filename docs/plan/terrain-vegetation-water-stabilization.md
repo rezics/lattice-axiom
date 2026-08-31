@@ -98,7 +98,7 @@ pipeline is not the first intervention.
 Relevant code:
 
 - [`water_material.rs`](../../crates/latticeaxiom-engine/src/host/water_material.rs)
-- [`water_material.wgsl`](../../crates/latticeaxiom-engine/assets/shaders/water_material.wgsl)
+- [`water_material.wgsl`](../../crates/latticeaxiom-engine/src/host/water_material.wgsl)
 - [`chunk_mesh.rs`](../../crates/latticeaxiom-engine/src/host/chunk_mesh.rs)
 
 ### Terrain has a scale gap
@@ -318,8 +318,11 @@ encoded in alpha. The shader normalizes the direction used for lighting and
 attenuates that octave's perturbation by coherence. This prevents incoherent
 high-frequency waves from regaining full strength in coarse mips.
 
-The image descriptor declares six mip levels and the sampler remains linear
-for minification, magnification, and mip interpolation. Tests prove byte count,
+The image descriptor declares six mip levels. The sampler is linear for
+minification, magnification, and mip interpolation and requests 16-times
+anisotropy for the grazing-angle water plane. This is the maximum accepted by
+the locked `wgpu 29.0.4`; its downlevel path deterministically falls back to
+one when anisotropic filtering is unsupported. Tests prove byte count,
 descriptor consistency, valid forward-facing normals, deterministic output,
 and non-increasing coarse-level horizontal energy. Roughness or wave strength
 may change only if the fixed camera A/B evidence shows that the mip repair
@@ -603,7 +606,28 @@ changes remain. Code fixes discovered here receive their own scoped commit.
   Terrenia, and engine-worldgen suites passed; strict affected-crate Clippy and
   rustfmt passed. The optimized natural-chunk interval was 11.986-12.077 ms
   (+3.79% median estimate), within both performance gates.
-- [ ] Slice 2 water temporal stability implemented and committed.
+- [x] 2026-08-31: Slice 2 water temporal stability implemented and approved
+  for its dedicated commit. The deterministic normal image now contains the
+  complete 5,460-byte vector mip chain, coarse coherence attenuates canceled
+  detail, and the grazing plane uses a 16-times anisotropic sampler with the
+  locked wgpu fallback. A temporary exact one-mip runtime baseline and the
+  restored production path each captured nine frames over the same fixed
+  water view. Across eight adjacent pairs (mean intervals 177.991 ms and
+  176.903 ms), production reduced ROI mean RGB-channel MAE from 0.1368725 to
+  0.0962664 (-29.67%), median MAE by 31.14%, and changing-pixel fraction by
+  25.94%. The shared-halo mesh fixture also proved matching seam vertices and
+  normals without coplanar overlap; no transparency-pipeline change was
+  justified. The final executable test boundary passed 162 engine unit tests,
+  54 headless-host tests, the remaining engine integration/doc tests (one
+  pre-existing explicitly ignored journey), 32 voxel-mesh unit tests, four
+  upstream-audit tests, and voxel-mesh doc tests. Strict all-target/all-feature
+  Clippy, rustfmt, and diff checks passed. `cargo test --all-targets` is not an
+  executable gate because the repository's parameterized
+  `performance_evidence` bench intentionally rejects invocation without its
+  required `--output`; Clippy still compiled that target. The full gate also
+  exposed a latent cave fixture that loaded only one chunk of a four-chunk
+  shaft; commit `804316c` made that fixture await every touched chunk under a
+  finite contended-run bound before this render commit.
 - [ ] Slice 3 tree morphology implemented and committed.
 - [ ] Slice 4 middle-scale terrain/cliffs implemented and committed.
 - [ ] Slice 5 integrated acceptance completed and evidence committed.

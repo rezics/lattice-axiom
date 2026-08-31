@@ -1093,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_halo_produces_identical_water_seam_vertices_and_normals() {
+    fn shared_halo_produces_identical_water_seam_without_coplanar_overlap() {
         let world = |position: [i32; 3]| match position {
             [0, 0, 0] => FluidVoxel::water(2, FluidMeshFlow::Still),
             [1, 0, 0] => FluidVoxel::water(4, FluidMeshFlow::Still),
@@ -1112,6 +1112,19 @@ mod tests {
         assert_height_eq(left_positions[3][1], right_positions[0][1]);
         assert_height_eq(left_positions[2][1], right_positions[1][1]);
         assert_eq!(left_top.normals(Face::PosY), right_top.normals(Face::PosY));
+        let seam_x = 1.0;
+        assert!(left_positions.iter().all(|position| position[0] <= seam_x));
+        assert!(
+            right_positions
+                .iter()
+                .all(|position| position[0] + 1.0 >= seam_x)
+        );
+        assert!(left_positions.iter().any(|position| position[0] < seam_x));
+        assert!(
+            right_positions
+                .iter()
+                .any(|position| position[0] + 1.0 > seam_x)
+        );
     }
 
     #[test]
