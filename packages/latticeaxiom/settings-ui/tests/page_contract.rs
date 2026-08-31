@@ -14,7 +14,7 @@ use latticeaxiom_runtime_contracts::{
 use latticeaxiom_settings_ui::{
     MemorySettingsHost, SettingsCategoryV1, SettingsPageCatalogKind, SettingsPageCommand,
     SettingsPageHost, SettingsPageOpen, SettingsPageOutcome, SettingsPageSession,
-    SettingsSectionV1, compile_baseline_page_catalog, section_for_setting,
+    SettingsSectionV1, compile_baseline_page_catalog, section_for_setting, setting_display_name,
 };
 use serde_json::json;
 
@@ -47,6 +47,10 @@ fn playable_catalog_compiles_without_developer_or_feature_conditional_rows() {
 
 #[test]
 fn terrain_controls_have_independent_player_facing_sections() {
+    assert_eq!(
+        setting_display_name(&render_distance_setting_id()),
+        "Render Distance"
+    );
     assert_eq!(
         section_for_setting(&render_distance_setting_id()),
         SettingsSectionV1::VideoGeneral

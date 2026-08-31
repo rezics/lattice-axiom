@@ -49,10 +49,7 @@ use latticeaxiom_settings_ui::{
     SettingsSurfaceScope,
 };
 
-use super::{
-    ProductionSessionPause, ProductionSpine,
-    hud::{ProductionHudSurfaces, TerrainDistanceLabelStyle, format_terrain_distance_status},
-};
+use super::{ProductionSessionPause, ProductionSpine, hud::ProductionHudSurfaces};
 use crate::{
     EngineProfile,
     cursor_capture::{
@@ -606,43 +603,33 @@ impl ProductionSettingsState {
         Ok(())
     }
 
-    fn status_text(&self, spine: &ProductionSpine) -> String {
-        let mut text = if let Some(status) = spine.terrain_distance_status() {
-            format_terrain_distance_status(status, TerrainDistanceLabelStyle::Settings)
-        } else {
-            format!(
-                "Render target {} · runtime distance status unavailable",
-                self.runtime.terrain_distances.render().chunks()
-            )
-        };
+    fn status_text(&self) -> String {
+        let mut fragments = Vec::new();
         if self.publication == SettingsPublicationState::SafeProcessRestartRequired {
-            text.push_str(" · ");
-            text.push_str(SAFE_PROCESS_RESTART_REQUIRED);
+            fragments.push(SAFE_PROCESS_RESTART_REQUIRED.to_owned());
         }
         if self.dirty() {
             match self.draft_chunks() {
-                Ok(draft) => {
-                    text.push_str(if self.publication == SettingsPublicationState::Confirmed {
-                        " · draft "
+                Ok(_) => {
+                    fragments.push(if self.publication == SettingsPublicationState::Confirmed {
+                        "Unsaved changes · Apply to save".to_owned()
                     } else {
-                        " · retained unconfirmed draft "
+                        "Unconfirmed changes retained".to_owned()
                     });
-                    text.push_str(&draft.to_string());
-                    if self.publication == SettingsPublicationState::Confirmed {
-                        text.push_str(" (Apply to save)");
-                    }
                 }
                 Err(error) => {
-                    text.push_str(" · invalid package draft: ");
-                    text.push_str(&error.to_string());
+                    fragments.push(format!("Invalid package draft: {error}"));
                 }
             }
         }
         if let Some(diagnostic) = &self.diagnostic {
-            text.push_str(" · ");
-            text.push_str(diagnostic);
+            fragments.push(diagnostic.clone());
         }
-        text
+        if fragments.is_empty() {
+            "Select a setting for details · Apply saves changes".to_owned()
+        } else {
+            fragments.join(" · ")
+        }
     }
 }
 
@@ -907,7 +894,7 @@ const fn surface_focus_input(previous: bool, next: bool) -> SurfaceFocusInput {
     }
 }
 
-const VIEW_DISTANCE_TAB_INDEX: i32 = 580;
+const RENDER_DISTANCE_TAB_INDEX: i32 = 580;
 
 const fn settings_tab_index(action: PauseMenuAction) -> Option<i32> {
     match action {
@@ -1002,7 +989,7 @@ fn spawn_render_distance_slider(
     parent
         .spawn((
             RenderDistanceSlider,
-            Name::new("View distance"),
+            Name::new("Render distance"),
             Node {
                 position_type: PositionType::Relative,
                 width: Val::Px(360.0),
@@ -1021,12 +1008,12 @@ fn spawn_render_distance_slider(
             SliderRange::new(min, max),
             SliderStep(step),
             SliderPrecision(0),
-            accessibility_node(AccessKitRole::Slider, "View distance"),
+            accessibility_node(AccessKitRole::Slider, "Render distance"),
             BorderColor::all(Color::NONE),
         ))
         .with_children(|slider| {
             slider.spawn((
-                Name::new("View distance rail"),
+                Name::new("Render distance rail"),
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Px(8.0),
@@ -1037,7 +1024,7 @@ fn spawn_render_distance_slider(
             ));
             slider
                 .spawn((
-                    Name::new("View distance thumb track"),
+                    Name::new("Render distance thumb track"),
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Px(0.0),
@@ -1051,7 +1038,7 @@ fn spawn_render_distance_slider(
                     track.spawn((
                         RenderDistanceSliderThumb,
                         SliderThumb,
-                        Name::new("View distance thumb"),
+                        Name::new("Render distance thumb"),
                         Node {
                             position_type: PositionType::Absolute,
                             left: Val::Percent(0.0),
@@ -1566,7 +1553,6 @@ pub(super) fn pause_menu_activated(
 pub(super) fn sync_pause_menu_page(
     pause: Res<'_, ProductionSessionPause>,
     router: Option<Res<'_, super::ProductionSurfaceRouter>>,
-    spine: Option<Res<'_, ProductionSpine>>,
     mut settings_state: Option<ResMut<'_, ProductionSettingsState>>,
     mut commands: Commands<'_, '_>,
     mut buttons: Query<
@@ -1654,7 +1640,7 @@ pub(super) fn sync_pause_menu_page(
             (true, false) => {
                 commands
                     .entity(slider_entity)
-                    .insert(TabIndex(VIEW_DISTANCE_TAB_INDEX));
+                    .insert(TabIndex(RENDER_DISTANCE_TAB_INDEX));
             }
             (false, true) => {
                 commands.entity(slider_entity).remove::<TabIndex>();
@@ -1681,12 +1667,12 @@ pub(super) fn sync_pause_menu_page(
 
     if let Ok(mut text) = hint.single_mut() {
         let label = if showing_settings {
-            match (settings_state.as_ref(), spine.as_ref()) {
-                (Some(settings), Some(spine)) => settings.status_text(spine),
-                _ => "Settings registry or runtime limits unavailable".to_owned(),
-            }
+            settings_state.as_ref().map_or_else(
+                || "Settings registry unavailable".to_owned(),
+                |settings| settings.status_text(),
+            )
         } else {
-            "Esc resumes · Settings: render distance".to_owned()
+            "Esc resumes · Settings opens the full catalog".to_owned()
         };
         if text.0 != label {
             *text = Text::new(label);
@@ -1919,7 +1905,7 @@ mod tests {
             SurfaceFocusInput::Cancelled
         );
 
-        assert_eq!(VIEW_DISTANCE_TAB_INDEX, 580);
+        assert_eq!(RENDER_DISTANCE_TAB_INDEX, 580);
         assert_eq!(settings_tab_index(PauseMenuAction::Apply), Some(1000));
         assert_eq!(settings_tab_index(PauseMenuAction::Undo), Some(1001));
         assert_eq!(settings_tab_index(PauseMenuAction::Back), Some(1002));
@@ -1935,9 +1921,9 @@ mod tests {
         let button = accessibility_node(AccessKitRole::Button, "Apply");
         assert_eq!(button.role(), AccessKitRole::Button);
         assert_eq!(button.label(), Some("Apply"));
-        let slider = accessibility_node(AccessKitRole::Slider, "View distance");
+        let slider = accessibility_node(AccessKitRole::Slider, "Render distance");
         assert_eq!(slider.role(), AccessKitRole::Slider);
-        assert_eq!(slider.label(), Some("View distance"));
+        assert_eq!(slider.label(), Some("Render distance"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::widgets::ButtonWidget;
 /// Hotbar prefix of the 36-slot inventory container.
 pub const HUD_HOTBAR_SLOTS: u8 = 9;
 
-/// Presentation-neutral vitality, mining, durability, and render-distance strip.
+/// Presentation-neutral vitality, mining, and durability strip.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HudStatusV1 {
     /// Current vitality points.
@@ -41,11 +41,8 @@ impl HudStatusV1 {
             .tool_durability
             .map_or_else(|| "Tool —".to_owned(), |left| format!("Tool {left}"));
         format!(
-            "Vitality {}/{}  {mine}  {tool}  Render {}/{}",
-            self.vitality_current,
-            self.vitality_max,
-            self.presented_render_distance.chunks(),
-            self.target_render_distance.chunks()
+            "Vitality {}/{}  {mine}  {tool}",
+            self.vitality_current, self.vitality_max
         )
     }
 
@@ -57,10 +54,7 @@ impl HudStatusV1 {
             role: SemanticRole::Status,
             name: "Player status".to_owned(),
             value: Some(self.line()),
-            description: Some(
-                "Vitality, mining progress, tool durability, and presented render distance"
-                    .to_owned(),
-            ),
+            description: Some("Vitality, mining progress, and tool durability".to_owned()),
             state: SemanticState::default(),
             actions: BTreeSet::new(),
             children: Vec::new(),

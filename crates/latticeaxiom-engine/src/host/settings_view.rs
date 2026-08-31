@@ -19,7 +19,10 @@ use bevy::{
     window::PrimaryWindow,
 };
 use latticeaxiom_core::StableId;
-use latticeaxiom_runtime_contracts::{ValueType, render_distance_setting_id};
+use latticeaxiom_runtime_contracts::{
+    ValueType, distant_terrain_quality_setting_id, full_detail_distance_setting_id,
+    render_distance_setting_id, simulation_distance_setting_id,
+};
 use latticeaxiom_settings_ui::{
     SettingsCategoryV1, SettingsControlKind, SettingsPageCommand, SettingsPageOperation,
     SettingsSectionV1, SettingsSurfaceRow, category_display_name, section_display_name,
@@ -27,9 +30,12 @@ use latticeaxiom_settings_ui::{
 };
 use serde_json::Value;
 
-use super::pause::{
-    PauseMenuAction, PauseOverlay, ProductionSettingsState, RenderDistanceSlider,
-    RenderDistanceSliderThumb,
+use super::{
+    ADR_0026_CHUNK_EDGE_VOXELS,
+    pause::{
+        PauseMenuAction, PauseOverlay, ProductionSettingsState, RenderDistanceSlider,
+        RenderDistanceSliderThumb,
+    },
 };
 use crate::ui_font::ui_text_font;
 
@@ -298,23 +304,36 @@ fn spawn_detail(
     let Some(detail) = settings.page().selected_detail(settings.page_host()) else {
         return;
     };
-    let clamp = detail.admission.clamp_reason.as_deref().unwrap_or("none");
-    let text = format!(
-        "{}\n{}\nOwner: {}\nDefault: {}\nApplied: {}\nDraft: {}\nRequested: {}\nAdmitted: {}\nEffective: {}\nClamp: {}\nImpact: {:?}\nScope: {:?}\n{}",
+    let mut lines = vec![
         setting_display_name(&detail.id),
-        detail.description_key,
-        detail.owner,
-        format_value(&detail.default),
-        format_value(&detail.applied),
-        format_value(&detail.draft),
-        format_value(&detail.admission.requested),
-        format_value(&detail.admission.admitted),
-        format_value(&detail.admission.effective),
-        clamp,
-        detail.impact,
-        detail.scope,
-        detail.id
-    );
+        setting_help_text(&detail.id, &detail.draft),
+        String::new(),
+        format!(
+            "Default: {}",
+            setting_value_text(&detail.id, &detail.default)
+        ),
+        format!(
+            "Applied: {}",
+            setting_value_text(&detail.id, &detail.applied)
+        ),
+        format!("Pending: {}", setting_value_text(&detail.id, &detail.draft)),
+    ];
+    if detail.admission.effective != detail.draft {
+        lines.push(format!(
+            "Currently available: {}",
+            setting_value_text(&detail.id, &detail.admission.effective)
+        ));
+    }
+    if let Some(reason) = detail.admission.clamp_reason.as_deref() {
+        lines.push(format!(
+            "Availability limit: {}",
+            player_facing_reason(reason)
+        ));
+    }
+    if !detail.editable {
+        lines.push("Editing is unavailable in the current session.".to_owned());
+    }
+    let text = lines.join("\n");
     parent
         .spawn((
             Name::new("Settings detail"),
@@ -360,11 +379,7 @@ fn spawn_setting_row(
         .page()
         .selected_detail(settings.page_host())
         .is_some_and(|detail| detail.id == row.id);
-    let label = format!(
-        "{}  ·  {}",
-        setting_display_name(&row.id),
-        format_value(&row.value)
-    );
+    let label = setting_value_label(&row.id, &row.value);
     match row.control {
         SettingsControlKind::IntegerSlider => {
             spawn_integer_slider(parent, settings, row, &label, selected, tab);
@@ -470,7 +485,7 @@ fn spawn_integer_slider(
                 SliderStep(step),
                 SliderPrecision(0),
                 TabIndex(tab + 500),
-                accessibility_node(AccessKitRole::Slider, "Setting slider"),
+                setting_accessibility_node(&row.id, &row.value),
                 BorderColor::all(Color::NONE),
             ));
             if render_distance {
@@ -588,7 +603,7 @@ fn spawn_text_button(
             Name::new(label.to_owned()),
             Hovered::default(),
             TabIndex(tab),
-            accessibility_node(AccessKitRole::Button, "Settings control"),
+            accessibility_node(AccessKitRole::Button, label),
             Node {
                 min_height: Val::Px(36.0),
                 width: Val::Percent(100.0),
@@ -612,9 +627,16 @@ fn spawn_text_button(
         });
 }
 
-fn accessibility_node(role: AccessKitRole, label: &'static str) -> AccessibilityNode {
+fn accessibility_node(role: AccessKitRole, label: &str) -> AccessibilityNode {
     let mut node = AccessKitNode::new(role);
     node.set_label(label);
+    node.into()
+}
+
+fn setting_accessibility_node(id: &StableId, value: &Value) -> AccessibilityNode {
+    let mut node = AccessKitNode::new(AccessKitRole::Slider);
+    node.set_label(setting_display_name(id));
+    node.set_description(setting_help_text(id, value));
     node.into()
 }
 
@@ -648,6 +670,67 @@ fn format_value(value: &Value) -> String {
         Value::String(text) => text.clone(),
         other => other.to_string().trim_matches('"').to_owned(),
     }
+}
+
+fn setting_value_label(id: &StableId, value: &Value) -> String {
+    format!(
+        "{}  ·  {}",
+        setting_display_name(id),
+        setting_value_text(id, value)
+    )
+}
+
+fn setting_value_text(id: &StableId, value: &Value) -> String {
+    let chunks = value.as_u64().and_then(|value| u32::try_from(value).ok());
+    if id == &render_distance_setting_id()
+        && let Some(chunks) = chunks
+    {
+        let meters = chunks.saturating_mul(u32::from(ADR_0026_CHUNK_EDGE_VOXELS));
+        return format!("{chunks} chunks radius ({meters} m)");
+    }
+    if (id == &simulation_distance_setting_id() || id == &full_detail_distance_setting_id())
+        && let Some(chunks) = chunks
+    {
+        return format!("{chunks} chunks radius");
+    }
+    if id == &distant_terrain_quality_setting_id()
+        && let Some(value) = value.as_str()
+    {
+        return match value {
+            "performance" => "Performance".to_owned(),
+            "balanced" => "Balanced".to_owned(),
+            "quality" => "Quality".to_owned(),
+            other => other.to_owned(),
+        };
+    }
+    format_value(value)
+}
+
+fn setting_help_text(id: &StableId, value: &Value) -> String {
+    if id == &render_distance_setting_id() {
+        let current = setting_value_text(id, value);
+        return format!(
+            "Total terrain draw radius around the player. One chunk is {ADR_0026_CHUNK_EDGE_VOXELS} m; the current value is {current}. Simulation Distance and Full Detail Distance are configured separately."
+        );
+    }
+    if id == &simulation_distance_setting_id() {
+        return "Radius for authoritative world simulation around the player. It does not change the terrain draw radius.".to_owned();
+    }
+    if id == &full_detail_distance_setting_id() {
+        return "Radius rendered as full voxel geometry. Beyond it, simplified terrain continues until Render Distance.".to_owned();
+    }
+    if id == &distant_terrain_quality_setting_id() {
+        return "Controls the fidelity of simplified terrain beyond Full Detail Distance. It changes distant quality, not the draw radius.".to_owned();
+    }
+    format!("Controls {}.", setting_display_name(id))
+}
+
+fn player_facing_reason(reason: &str) -> String {
+    let readable = reason.replace(['-', '_'], " ");
+    let mut chars = readable.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
 }
 
 fn cycle_enum(current: &Value, value_type: &ValueType) -> Option<Value> {
@@ -770,6 +853,14 @@ pub(super) fn sync_settings_page_visibility(
 
 #[cfg(test)]
 mod tests {
+    use latticeaxiom_runtime_contracts::{
+        distant_terrain_quality_setting_id, full_detail_distance_setting_id,
+        render_distance_setting_id, simulation_distance_setting_id,
+    };
+    use serde_json::json;
+
+    use super::{setting_help_text, setting_value_label, setting_value_text};
+
     #[test]
     fn transaction_buttons_are_a_bottom_right_row_and_content_scrolls() {
         let source = include_str!("settings_view.rs");
@@ -787,5 +878,43 @@ mod tests {
         assert!(source.contains("\"Apply\""));
         assert!(source.contains("\"Back\""));
         assert!(!source.contains(concat!("spawn_transaction_", "icon")));
+    }
+
+    #[test]
+    fn terrain_distance_labels_expose_radius_units_and_independent_meanings() {
+        let render = render_distance_setting_id();
+        assert_eq!(
+            setting_value_label(&render, &json!(21)),
+            "Render Distance  ·  21 chunks radius (672 m)"
+        );
+        let render_help = setting_help_text(&render, &json!(21));
+        assert!(render_help.contains("One chunk is 32 m"), "{render_help}");
+        assert!(
+            render_help
+                .contains("Simulation Distance and Full Detail Distance are configured separately"),
+            "{render_help}"
+        );
+
+        let simulation = simulation_distance_setting_id();
+        assert_eq!(
+            setting_value_text(&simulation, &json!(6)),
+            "6 chunks radius"
+        );
+        assert!(
+            setting_help_text(&simulation, &json!(6))
+                .contains("does not change the terrain draw radius")
+        );
+
+        let full_detail = full_detail_distance_setting_id();
+        assert!(
+            setting_help_text(&full_detail, &json!(6)).contains("simplified terrain continues")
+        );
+
+        let quality = distant_terrain_quality_setting_id();
+        assert_eq!(setting_value_text(&quality, &json!("balanced")), "Balanced");
+        assert!(
+            setting_help_text(&quality, &json!("balanced"))
+                .contains("changes distant quality, not the draw radius")
+        );
     }
 }

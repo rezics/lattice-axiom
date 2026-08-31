@@ -1259,6 +1259,9 @@ fn search_value(page: &SettingsPageSession) -> String {
 /// Returns a player-facing label for a stable setting or action identity.
 #[must_use]
 pub fn setting_display_name(id: &StableId) -> String {
+    if id.as_str() == "latticeaxiom:setting/view-distance" {
+        return "Render Distance".to_owned();
+    }
     let leaf = id.path().rsplit('/').next().unwrap_or(id.path());
     title_case(leaf)
 }
