@@ -392,6 +392,316 @@ revision and affected generation/materializer/vegetation provider revisions
 must increase together. Existing snapshots remain authoritative; there is no
 in-place reinterpretation or migration.
 
+The Slice 4 field contract is frozen before corpus thresholds are measured:
+
+- `@2` retains a `None` morphology extension which is omitted from canonical
+  serialization; its policy hash, samples, and density output must remain byte
+  identical.
+- `@3` adds independent `middle-relief.v1` and `plateau.v1` fixed-field domains.
+  Their wavelength is `max(mountain_scale / 4, 256)` voxels, which is exactly
+  512 voxels for the balanced preset. Both retain amplitude 1024. Middle
+  relief is the bounded spectral sum of base weight 1 and octave weights
+  `3/4, 1/2, 1/4, 1/5` at `1/2, 1/4, 1/8, 1/16` wavelengths. Each octave has
+  an explicit seed subdomain, the sum is normalized by the complete spectral
+  weight, and the final control is clamped to `[-1024, 1024]`.
+- coherent middle-relief and plateau controls use the monotone signed
+  ease-out `sign(x) * abs(x) * (2048 - abs(x)) / 1024`. This retains zero and
+  both endpoints while preventing the central concentration of coherent noise
+  from making package coverage controls much rarer than authored. Plateau
+  and the multi-octave middle control each apply it once before their authored
+  splines, still inside the same closed amplitude bound.
+- middle relief multiplies the field value by `hill_height_voxels`, coast mask,
+  the erosion retention `(2048 - erosion_strength) / 2048`, and the closed
+  uplift-amplitude spline `(-1024,384), (-256,640), (0,960), (384,1440),
+  (768,2048), (1024,2048)`.
+- plateau coverage converts `plateau_amount_per_1024` to threshold
+  `1024 - 2 * amount`. A closed 64-unit half-transition maps the independent
+  plateau field continuously from zero to `plateau_height_voxels`. Lithology
+  blends a smooth profile with a sharpened smoothstep profile; no fixed equal
+  height levels are emitted.
+- the plateau-transition signal is zero in plateau interiors and exteriors and
+  peaks at the edge. The 3D cliff gate combines two parts uplift tendency, one
+  part lithology resistance from spline `(-1024,128), (-256,256), (256,640),
+  (768,1024), (1024,1024)`, and two parts plateau transition. Positive volume
+  remains suppressed by the existing water-protection contract.
+- middle and plateau displacement apply only to semantic land before the
+  existing world-height clamp and are multiplied by the same continuous coast
+  ownership weight as the macro land contribution. All arithmetic remains
+  integer/fixed-point, every new value is canonical policy data, and the
+  density displacement envelope remains the existing eight voxels because
+  only the gate—not the 3D volume maxima—changes.
+
+#### Visual-review correction: coast discontinuity and equal terraces
+
+The first `@3` candidate did not pass visual review and must not ship. A fixed
+seed capture supplied on 2026-08-31 is retained as the ignored artifact
+`.temp/terrain-morphology-evidence/user-shoreline-feedback.png`, SHA-256
+`6e692d1bad5feaee34ee050cde2c83c22c18f3accfeaa8ed2aaaa27b2c00fe2b`.
+It shows that the visually dominant relief is a shoreline wall followed by
+nearly equal two-to-three-voxel terrace bands, rather than independently placed
+inland landforms.
+
+The defect is structural, not a missing wavelength:
+
+- the land branch adds the balanced preset's 22-voxel base height as soon as
+  continentalness changes sign, while the ocean branch approaches sea level;
+- the independent 176-voxel mountain term and 36-voxel plateau term are also
+  admitted only on the land side, so a high uplift or plateau sample can become
+  an accidental coastal wall;
+- the middle-relief field is multiplied by the coast mask and therefore
+  disappears exactly where the discontinuous macro terms dominate;
+- the plateau transition is projected onto 16 equal levels. A 36-voxel plateau
+  therefore requests 2.25-voxel increments by construction; this mistook
+  "occasional unwalkable ledges" for "every plateau edge is a staircase";
+- the original four adjacency windows happen to contain three all-land windows
+  and one all-ocean window. Their land/land metrics contain zero shoreline
+  edges, so the acceptance corpus could not detect this failure.
+
+Six newly frozen 192-square shoreline windows start at `(-15008,-16480)`,
+`(-9248,-12384)`, `(1632,-8288)`, `(-5024,-4192)`, `(9184,-96)`, and
+`(16224,4000)`. They contain 1,553 identical coast crossings in `@2` and the
+rejected `@3` candidate. The legacy branch has a maximum adjacent shoreline
+jump of 136 voxels and a summed jump of 120,969; rejected `@3` regresses those
+to 171 and 138,012. All 13,369 delta-at-least-two land edges in the shoreline
+windows are plateau-transition edges, of which 10,387 are exactly two voxels.
+In the original land corpus, 11,940 of 14,648 such edges (81.5%) also lie in
+the quantized plateau transition. The middle field is exactly saturated at
+`+/-1024` in 4,083 of 147,456 original columns (27,689 per million), confirming
+that division by the base weight rather than the sum of spectral weights also
+turns a large fraction of fBm into clipped mesas.
+
+The corrected `@3` contract is frozen before its output is inspected:
+
+- `@2` remains byte-for-byte unchanged. Only the uncommitted `@3` algorithm may
+  change.
+- The land macro contribution is multiplied by a monotone smoothstep coast
+  weight that is zero at continentalness zero and one at the configured coast
+  width. Base height, continental lift, uplift, middle relief, and plateau
+  displacement therefore join the ocean branch continuously instead of
+  switching at a sign test. Rare coastal cliffs require a future independent
+  authored selector; they are not an accidental side effect of land ownership.
+- Middle-relief octave weights are normalized by their sum, not by the base
+  weight, and use one signed ease rather than two. This preserves the existing
+  independent domains and wavelengths without clipping broad positive and
+  negative regions into mesas.
+- Plateau displacement is continuous. A smooth profile and a
+  lithology-controlled sharpened profile are blended without fixed equal
+  levels. The plateau edge may still become locally unwalkable, but it is one
+  spatially varying scarp rather than 16 concentric ledges.
+- The new shoreline corpus must retain 1,553 crossings, keep p95 adjacent
+  shoreline jump at most two voxels and maximum jump at most 12, and keep fewer
+  than five percent of crossings at delta at least two. Middle-relief saturation
+  must stay below 10,000 columns per million. No more than two thirds of the
+  original land corpus's delta-at-least-two edges may be attributed to plateau
+  transitions. The earlier relief, walkability, flat-component, height-bound,
+  hydrology, and density-displacement gates continue to apply.
+
+This correction matches the current Minecraft 26.2 generated report more
+closely: its `overworld/offset` is a continuous spline over continents with
+nested erosion and folded-ridge splines; `depth` combines that offset with a Y
+gradient, while factor and jaggedness remain separate controls in
+`sloped_cheese`. It does not use a binary land-sign height addition. Minecraft
+26.3 Snapshot 10 is not a compatibility target, but its addition of named
+density debug functions and explicit domain-warp inputs reinforces making
+control-field contributions observable. Tectonic 3.0.25 was inspected at
+commit `34241bdb35acda67b5367d49f354c66c05e098e2` (2026-06-21); it likewise
+separates continental offset, factor, and jaggedness paths, and explicitly
+documents staircasing as a tradeoff of its smoothness modes. It declares no
+repository license, so it remains study-only and no code or data is copied.
+Grenier et al., *Real-time Terrain Enhancement with Controlled Procedural
+Patterns* (Computer Graphics Forum 43(1), 2024, DOI
+`10.1111/cgf.14992`) further supports applying spatially varying detail through
+control maps consistent with the underlying terrain instead of repeating one
+global contour pattern.
+
+#### Visual-review correction: final-surface material depth
+
+The corrected morphology passed the next visual review, but the fixed-seed
+capture supplied on 2026-08-31 exposed an older material-layer defect. The
+ignored evidence artifact is
+`.temp/terrain-morphology-evidence/user-surface-distance-feedback.png`, SHA-256
+`a5bf36e36223a77c66f3dc965c0e7cda53ce61c8c82ce967a1d304cb27f6218f`.
+Large horizontal dirt patches and repeated dirt bands are visible even though
+the intended biome surface is temperate grass.
+
+The existing geology path computes material depth from the preliminary
+two-dimensional `column.height`. The current terrain revision can move the
+actual uppermost solid voxel below that intent through its bounded 3D density
+field. A final top voxel two blocks below the preliminary height is therefore
+misclassified as depth two and receives subsurface dirt rather than the
+surface role. Independently, a fixed three-voxel soil layer exposes all three
+dirt rows on a two-or-more-voxel side drop. Both failures became much more
+visible once middle-scale relief produced more real slopes.
+
+The initial correction proposed a versioned surface rule owned by the new
+geology provider revision:
+
+- determine the uppermost final solid voxel after density and cave arbitration
+  with the same bounded search used by checked vegetation placement;
+- compute surface-material depth from that final solid Y, never from the
+  preliminary height intent;
+- measure the final four-neighbor surface descent once per column, including a
+  deterministic one-column chunk halo;
+- keep the normal three-voxel temperate soil profile on flat and one-step
+  terrain, but use grass directly over temperate base rock when any neighboring
+  final surface is at least two voxels lower;
+- leave old geology revision 2 byte-identical and bind the correction to
+  geology revision 3, its implementation fingerprint, and the new generation
+  identity;
+- add material conformance that counts exposed temperate dirt faces on a fixed
+  morphology corpus and proves that every dry temperate final top receives the
+  surface role.
+
+Minecraft Java 26.2's generated Overworld noise settings provide the current
+reference model: surface composition is a separate rule tree over final stone
+occupancy, includes explicit `stone_depth` conditions, and contains `steep`
+conditions that replace exposed slope materials in applicable terrain. The
+project does not copy Mojang data or special-case its biomes; it adopts only
+the general final-occupancy and slope-aware material separation.
+
+#### Research correction: variable sediment depth
+
+The fixed three-voxel bullet above is rejected after follow-up review. Three
+voxels can be one valid local outcome, but a global constant is not a credible
+soil/bedrock boundary and makes every two- or three-voxel terrace reveal the
+same repeated dirt stripe. The replacement is a bounded, deterministic
+surface-sediment profile; old geology revisions retain the historical constant
+profile byte-for-byte.
+
+The implementation decision is grounded in the following current/reference
+work:
+
+- Minecraft Java 26.2 (data pack version 107.1) is the current compatibility
+  reference inspected on 2026-08-31. Its generated Overworld surface-rule tree
+  repeatedly combines `minecraft:stone_depth` with explicit
+  `minecraft:steep` predicates. The public surface-rule description records a
+  noise-varying surface depth rather than one constant thickness. Sources:
+  <https://www.minecraft.net/en-us/article/minecraft-java-edition-26-2>, the
+  locally generated 26.2 report at
+  `.temp/reference/minecraft-java-26.2/generated-all/generated/data/minecraft/worldgen/noise_settings/overworld.json`,
+  and <https://minecraft.wiki/w/Surface_rule>. Mojang code and data remain
+  reference-only and are not copied.
+- Luanti revision `bd2bda63889fd985d40acbda5750ea8ed83a3a09`
+  (2026-08-31, LGPL-2.1-or-later) computes filler depth as biome top depth plus
+  biome filler depth plus `noise_filler_depth`; Mapgen V7 uses a three-octave
+  field with a 150-node spread. Source:
+  <https://github.com/luanti-org/luanti/blob/bd2bda63889fd985d40acbda5750ea8ed83a3a09/src/mapgen/mapgen.cpp#L697-L698>
+  and `mapgen_v7.cpp`. This is evidence for coherent spatial variation, not a
+  dependency or copied implementation.
+- Veloren revision `483b0822fdb8a75718a13d5b0ff591471ee18098`
+  (2026-08-29, GPL-3.0) explicitly stores terrain altitude and bedrock
+  `basement`, treats their difference as sediment thickness, applies different
+  bedrock/sediment transport, and suppresses tree growth directly on bedrock.
+  Its erosion implementation cites Cordonnier et al. and Dietrich et al.
+  Source: <https://gitlab.com/veloren/veloren/-/tree/483b0822fdb8a75718a13d5b0ff591471ee18098/world/src>.
+  The copyleft implementation is study-only; no code is copied.
+- Heimsath, Dietrich, Nishiizumi, and Finkel, *The soil production function and
+  landscape equilibrium* (Nature 388, 1997, DOI `10.1038/41056`) provides field
+  evidence that soil depth and hillslope curvature are inversely related and
+  that soil production declines exponentially with soil thickness. The more
+  recent state of terrain synthesis includes process-based sediment transport
+  and erosion, including Yang et al., *Unerosion* (Computer Graphics Forum,
+  2024, DOI `10.1111/cgf.15182`) and *Stochastic geomorphological transport for
+  terrain erosion simulation* (ACM TOG, 2026, DOI `10.1145/3811336`). A full
+  evolution solve is inappropriate in this bounded chunk materialization
+  slice, but the explicit sediment/bedrock state is retained as the future
+  seam.
+
+The accepted geology revision 3 contract is therefore:
+
+1. Find the final uppermost solid voxel after semantic density and cave
+   arbitration. Material depth, resource depth, and vegetation support all use
+   this same typed final-surface value.
+2. Sample one independent fixed-point OpenSimplex2S soil field at a 128-voxel
+   scale. Quantize it to a base subsurface depth of one through four voxels;
+   this produces coherent patches without adding a dependency or per-voxel
+   work.
+3. Apply at most one voxel of climate correction: high precipitation plus
+   infiltration deepens the profile, while aridity or high effective runoff
+   thins it. Apply at most one voxel of topographic correction: a four-neighbor
+   concavity deepens the profile and convex exposure thins it. Clamp the flat
+   profile to `0..=5` subsurface voxels.
+4. Apply the final-surface exposure rule after those broad controls. A one-
+   voxel descent caps subsurface soil at one voxel; a two-voxel descent keeps a
+   vegetated surface skin directly over rock; a descent of three or more emits
+   exposed base rock at the final top and has no soil profile.
+5. Resource and intrusion replacement cannot enter the authored sediment
+   profile. Vegetation accepts only a typed vegetated surface profile, so bare
+   rock cannot become a tree or ground-cover anchor.
+6. Compute the four-neighbor profile with a deterministic one-column halo and
+   cache it once per generated column. No surface-rule sampling occurs in the
+   inner per-voxel loop.
+
+This is deliberately a bounded geomorphic approximation, not a claim to
+simulate pedogenesis. It adopts the shared best-practice structure—coherent
+depth variation, an explicit sediment/bedrock boundary, final-topography
+exposure, environmental controls, and vegetation/material agreement—while
+keeping the authoritative algorithm integer-only and generation-order
+independent.
+
+#### Second visual-review correction: excessive generic rock caps
+
+The variable-sediment candidate substantially reduced exposed dirt, but the
+2026-08-31 visual review rejected its remaining generic rock exposure. The
+cause is the last part of item 4 above: one neighboring descent of three or
+more voxels turns the entire column's uppermost temperate or boreal surface
+into bare base rock. Middle-scale cliffs make that predicate common, and a
+single low neighbor is enough even when the column itself is a broad grassy
+cliff top. The rule therefore paints repeated rock caps rather than revealing
+rock only on actual vertical faces.
+
+The current Minecraft Java 26.2 generated Overworld surface rules do not
+support applying `steep => top rock` globally. The inspected report contains
+five `minecraft:steep` conditions, all scoped within frozen peaks, snowy
+slopes, or jagged peaks branches. Temperate terrain retains biome-owned surface
+rules. The local report is
+`.temp/reference/minecraft-java-26.2/generated-all/generated/data/minecraft/worldgen/noise_settings/overworld.json`;
+the corresponding current release is
+<https://www.minecraft.net/en-us/article/minecraft-java-edition-26-2>.
+
+Veloren revision `483b0822fdb8a75718a13d5b0ff591471ee18098`
+(GPL-3.0, study-only) likewise models altitude and basement separately and
+keeps a surface material above the rock boundary. A shallow cap exposes rock
+on a cliff side without requiring every steep column's top voxel to become
+rock. Source:
+<https://gitlab.com/veloren/veloren/-/blob/483b0822fdb8a75718a13d5b0ff591471ee18098/world/src/block.rs>.
+
+The revised, still-uncommitted geology revision 3 candidate is:
+
+1. Preserve the coherent `0..=5` flat subsurface depth and the final-surface
+   ownership established above.
+2. A one-voxel maximum neighbor descent caps subsurface soil at one voxel.
+3. A descent of two or more keeps the biome's vegetated top voxel but sets
+   subsurface soil depth to zero. Rock is then visible immediately below the
+   cap on the vertical face, while the cliff top remains grass-covered.
+4. Remove the generic temperate/boreal `exposed_base_rock` top replacement.
+   Rare rocky summits or outcrops require a future coherent biome, lithology,
+   altitude, and/or erosion-exposure rule. They must not be inferred from one
+   four-neighbor height delta.
+5. Keep vegetation support typed: the severe-footprint-relief rule may still
+   reject trees on unsafe ledges even though the material top remains a
+   vegetated biome role. Material and placement eligibility are related but
+   not the same boolean.
+
+This correction updates the current revision 3 candidate and its provider
+fingerprint before it is committed; it does not introduce revision 4. Any
+development snapshots produced by the rejected candidate must miss the new
+identity and be regenerated rather than silently reused.
+
+Additional acceptance gates:
+
+- every dry temperate and boreal final top in the fixed corpus has its
+  biome-owned vegetated surface role; generic bare-rock top count is zero;
+- columns with neighbor descent two or more have no exposed dirt stripe and
+  place the surface cap directly over base rock;
+- the flat-land corpus still emits at least three distinct sediment depths;
+- diagnostics count horizontal bare-rock tops separately from vertical
+  exposed rock faces, preventing one metric from hiding the other;
+- tree footprint-relief, final support, hydrology, chunk-border, permutation,
+  and optimized natural-chunk performance gates remain unchanged;
+- any future rocky-outcrop feature needs its own coherent field/biome contract,
+  fixed visual threshold, provider identity, and approval.
+
 ## Fixed-corpus quality gates
 
 All metrics use canonical seed/coordinate corpora checked into tests as small
@@ -435,6 +745,32 @@ numeric thresholds are frozen in the slice's first red tests after printing
 the legacy corpus distribution; they must not be chosen after inspecting only
 the new output.
 
+The pre-implementation balanced `@2` corpus contains 220,032 land/land edges:
+zero have adjacent delta at least two, maximum delta is one, walkable-neighbor
+fraction is 1,000,000 per million, and exposed cliff faces are zero. Maximum
+equal-height runs are 192 on X and 136 on Z; p95 runs are 13 and 9. Its
+four-neighbor two-dimensional flat-interior fraction is 609,167 per million,
+with a largest flat component of 19,935 cells spanning 190 voxels. Median
+sampled local relief for 64/256/1,024-voxel windows is 2/7/92 voxels, with land
+heights 93..=224. Before observing `@3`, its acceptance bounds are frozen as:
+
+- the same 220,032 land edges, because continental ownership is unchanged;
+- 2,500..=75,000 delta-at-least-two edges per million, maximum adjacent delta
+  in 2..=12, at least 550 exposed cliff faces, and at least 925,000 walkable
+  neighbors per million;
+- maximum equal-height runs at most 128 on both axes; one-dimensional p95 runs
+  remain diagnostic only because a one-cell-wide contour can be long without
+  representing a flat plain;
+- at most 450,000 four-neighbor flat-interior cells per million land columns,
+  excluding authored plateau interiors, with no connected flat component above
+  8,000 cells and component span below the legacy 190-voxel maximum; component
+  area is authoritative because a long, narrow flat valley is not a broad
+  plain;
+- median local relief at least 3/12/80 voxels for 64/256/1,024 windows and at
+  most 160 voxels for the 1,024 window;
+- every approved height remains within the configured world bounds and the
+  existing 16-voxel ceiling reserve.
+
 ### Water stability
 
 - Unit tests validate the mip contract and coarse normal energy.
@@ -458,6 +794,9 @@ RTX 4080 Laptop environment:
 | semantic density, 32 cubed | 15.220-15.340 ms |
 | Slice 1 checked-surface natural chunk | 11.986-12.077 ms (median estimate 12.031 ms, +3.79%) |
 | Slice 3 checked tree-blueprint natural chunk | 12.438-12.614 ms, 12.729-12.834 ms, and final 12.377-12.513 ms (median estimates 12.510/12.772/12.437 ms; worst median +10.18% from the original baseline and +6.16% from Slice 1) |
+| Slice 4 natural chunk after retained-column controls | 13.191-13.372 ms (median estimate 13.270 ms, +14.48% from the original baseline and below 15 ms) |
+| Slice 4 provider `@2` semantic column / density | 441.12-444.14 ns / 4.107-4.206 ms |
+| Slice 4 provider `@3` semantic column / density | 972.49-1,001.8 ns / 4.504-4.588 ms |
 
 Gates:
 
@@ -476,6 +815,21 @@ Gates:
 Criterion noise is evaluated from intervals and repeated runs, not one point
 estimate. If a gate fails, profile and optimize within the current slice before
 the commit.
+
+The Slice 4 isolated `@3` column interval is 2.29 times the original `@2`
+median and therefore invokes the documented compensating-budget path rather
+than passing the 15% isolated-column gate. The measured cause is the accepted
+five-octave middle-relief spectrum plus the independent plateau control; these
+are the signals that supply the user-approved middle-scale morphology and
+cannot be removed without reverting the feature. The implementation instead
+retains one typed semantic sample per materialized column and reuses its height,
+cliff, climate, and runoff controls. Density controls are prepared once per
+vertical column, not once per voxel. The resulting 32-cubic density interval is
+4.504-4.588 ms, 70% below the original 15.220-15.340 ms measurement, while the
+end-to-end natural chunk remains 13.191-13.372 ms, 14.48% above the original
+baseline, below the 25% gate, and below 15 ms. This is the compensating budget
+decision: retain the visually material field cost only while fused column and
+chunk budgets remain inside their stronger end-to-end limits.
 
 ## Incremental implementation and commit protocol
 
@@ -688,7 +1042,20 @@ changes remain. Code fixes discovered here receive their own scoped commit.
   measured 12.438-12.614 ms, 12.729-12.834 ms, and a final post-connectivity
   12.377-12.513 ms, remaining below 15 ms and within the +25% budget. No
   dependency was added.
-- [ ] Slice 4 middle-scale terrain/cliffs implemented and committed.
+- [ ] Slice 4 middle-scale terrain/cliffs and variable final-surface sediment
+  implemented, automated gates passed, and fixed-seed visual acceptance in
+  progress. The corrected corpus contains 6,769 delta-at-least-two land edges,
+  maximum delta 7, 969,237 walkable neighbors per million, 12,524 exposed cliff
+  faces, and median 64/256/1,024-window relief of 7/32/141 voxels. The shoreline
+  corpus retains 1,553 crossings with p95/max jump one and no saturated middle
+  field samples. Old provider policies and outputs remain frozen. Worldgen has
+  75 passing unit tests; Terrenia has seven unit and four morphology integration
+  tests; the engine has 163 passing unit tests. Strict affected-library Clippy
+  and rustfmt pass. The optimized compensating-budget evidence is recorded in
+  the performance table above. The next visual review accepted the variable
+  dirt improvement but rejected globally slope-triggered rock caps; the
+  evidence and replacement material contract are recorded in the second
+  visual-review correction above and await implementation.
 - [ ] Slice 5 integrated acceptance completed and evidence committed.
 
 ## Authoritative and primary references
