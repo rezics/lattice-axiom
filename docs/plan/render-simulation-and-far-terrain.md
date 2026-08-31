@@ -1,7 +1,6 @@
 # Render, simulation, and far-terrain plan
 
-Status: research complete; proposed for approval before implementation,
-2026-08-31.
+Status: approved; implementation in progress through Slice 2, 2026-08-31.
 
 ## Decision
 
@@ -409,7 +408,28 @@ Commit: `test(streaming): certify far terrain presentation`.
   as Slice 1 evidence, and remains an explicit integrated-acceptance item rather
   than being hidden by weakening its assertion. No external dependency was
   added.
-- [ ] Slice 2 deterministic far-terrain tile contract implemented.
+- [x] 2026-08-31: Slice 2 deterministic far-terrain contract committed as
+  `1a4b812`. The presentation-only worldgen API now has typed procedural and
+  committed provenance, cache identity, bounded LOD and base-edge values,
+  exact final-density/cave/slope-aware surface sampling, separate solid and
+  water lanes, dense min/max and bilinear-error envelopes, representative
+  cliff walls, border skirts, and hierarchical edit invalidation. The same
+  natural material query was characterized against materialized chunk tops.
+  Signed-coordinate seams, provider/order permutations, serialization
+  invariants, edit boundaries, and canonical bytes are covered by unit,
+  integration, property, and golden tests; the version-one tile golden hash is
+  `8a9db7eb39f80ff35ef94f69e67c8252e50a46c37938b41794807046293a0b32`.
+  The all-feature worldgen run passed 82 unit tests and 67 integration tests
+  before the final invariant hardening; the final nine-test far-terrain suite,
+  strict all-target Clippy, rustfmt, and diff checks also passed. No dependency
+  was added. The optimized Criterion run (10 samples, one-second warmup and
+  measurement) recorded LOD0/1/2 build intervals of 129.87-138.84,
+  262.93-273.83, and 705.50-734.93 microseconds. Each 32-edge tile retained
+  101,912 bytes of vectors versus 458,752, 1,835,008, and 7,340,032 bytes for
+  two-byte indices across the same horizontal coverage and seven full vertical
+  chunks: 22.21%, 5.55%, and 1.39% of that conservative baseline. A hard
+  64-voxel base-edge and LOD3 cap bounds the worst dense build to 513 by 513
+  samples.
 - [ ] Slice 3 bounded hierarchical streaming implemented.
 - [ ] Slice 4 Bevy presentation and transition implemented.
 - [ ] Slice 5 settings information architecture and diagnostics cleanup
