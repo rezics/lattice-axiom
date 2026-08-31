@@ -15,6 +15,7 @@ mod chunk_mesh;
 #[cfg(feature = "client")]
 mod client;
 mod display;
+mod far_stream;
 mod fluid;
 mod gameplay;
 #[cfg(feature = "client")]
@@ -102,6 +103,10 @@ pub use display::{
     AuthoredContentDisplayCatalogSourcesV1, AuthoredPresentationCatalogSourcesV1,
     ContentDisplayCatalogV1, ContentDisplayLabelV1, compile_authored_content_display_catalog,
     lock_selected_content_display_catalog,
+};
+pub use far_stream::{
+    FAR_TERRAIN_IN_FLIGHT_CAP, FAR_TERRAIN_PENDING_CAP, FAR_TERRAIN_READY_CAP,
+    FarTerrainQueueSnapshotV1,
 };
 pub use fluid::HostFluidTickV1;
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
@@ -665,7 +670,10 @@ impl EngineInstance {
             })?;
         let state = pause::ProductionSettingsState::new(root, user, catalog, active_lock)?;
         spine
-            .set_terrain_distances(state.applied_terrain_distances())
+            .set_terrain_presentation(
+                state.applied_terrain_distances(),
+                state.applied_far_terrain_quality(),
+            )
             .map_err(|error| crate::settings::HostSettingsError::Runtime {
                 reason: error.to_string(),
             })?;

@@ -288,6 +288,10 @@ impl ProductionSettingsState {
         self.runtime.terrain_distances
     }
 
+    pub(super) const fn applied_far_terrain_quality(&self) -> FarTerrainQualityV1 {
+        self.runtime.far_terrain_quality
+    }
+
     pub(super) const fn applied_video(&self) -> VideoRuntimeSettings {
         self.runtime.video
     }
@@ -585,7 +589,7 @@ impl ProductionSettingsState {
         requested: AppliedRuntimeSettings,
     ) -> Result<(), HostSettingsError> {
         spine
-            .set_terrain_distances(requested.terrain_distances)
+            .set_terrain_presentation(requested.terrain_distances, requested.far_terrain_quality)
             .map_err(|error| HostSettingsError::Runtime {
                 reason: error.to_string(),
             })?;

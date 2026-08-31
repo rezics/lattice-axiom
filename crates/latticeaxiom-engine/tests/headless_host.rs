@@ -36,7 +36,8 @@ use latticeaxiom_engine::{
     ActionAxis2V1, AuthoredGameplayCatalogSourcesV1, AuthoritativeTransactionKernel,
     CellOccupancyV1, ChunkCoordinate, ChunkFaceV1, ChunkLifecycle, ChunkMeshCursor,
     ChunkPresentation, CommandOutcomeV1, ContainerId, DropEntityId, EngineInstance,
-    EngineInstanceError, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayCatalog, GameplayReject,
+    EngineInstanceError, FAR_TERRAIN_IN_FLIGHT_CAP, FAR_TERRAIN_PENDING_CAP, FAR_TERRAIN_READY_CAP,
+    FarTerrainQualityV1, FluidFlowV1, FluidLevelV1, FluidStateV1, GameplayCatalog, GameplayReject,
     HOTBAR_SLOTS, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1,
     LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1,
     PlayerActionV1, PreparationError, ProductionInspectSurface, ProductionMemoryStart,
@@ -1075,8 +1076,15 @@ fn terrain_distance_requests_keep_target_full_detail_and_simulation_distinct() {
     assert_eq!(spine.target_render_distance(), 2);
     assert_eq!(minimum.full_detail_distance().chunks(), 2);
     let cap_status = spine
-        .set_terrain_distances(terrain_distance_requests(i64::from(cap), 4, 6))
+        .set_terrain_presentation(
+            terrain_distance_requests(i64::from(cap), 4, 6),
+            FarTerrainQualityV1::Quality,
+        )
         .expect("hard-cap render target is admitted");
+    assert_eq!(
+        spine.far_terrain_quality(),
+        Some(FarTerrainQualityV1::Quality)
+    );
     assert_eq!(spine.target_render_distance(), cap);
     assert_eq!(cap_status.full_detail_distance().chunks(), 6);
     let status = spine
@@ -1111,6 +1119,84 @@ fn terrain_distance_requests_keep_target_full_detail_and_simulation_distinct() {
         spine.desired_chunk_set_rebuild_count(),
         rebuilds_before.saturating_add(1),
         "an effective interest contract change rebuilds the desired set once"
+    );
+    let far = spine.far_terrain_queue_snapshot();
+    assert!(far.desired > 0);
+    assert!(far.desired <= FAR_TERRAIN_READY_CAP);
+    assert!(far.pending <= FAR_TERRAIN_PENDING_CAP);
+    assert!(far.in_flight <= FAR_TERRAIN_IN_FLIGHT_CAP);
+    assert!(far.ready <= FAR_TERRAIN_READY_CAP);
+    assert_eq!(far.interest_generation, 1);
+    assert_eq!(far.presented_distance_chunks, 6);
+    let queued_before_change = far.pending.saturating_add(far.in_flight);
+    spine
+        .set_terrain_presentation(
+            terrain_distance_requests(4, 2, 2),
+            FarTerrainQualityV1::Performance,
+        )
+        .expect("replacement far-terrain interest is admitted");
+    instance
+        .advance_fixed_ticks(1)
+        .expect("replacement interest cancels stale far work");
+    let replaced = spine.far_terrain_queue_snapshot();
+    assert_eq!(replaced.interest_generation, 2);
+    assert!(replaced.cancel_requests >= u64::try_from(queued_before_change).unwrap_or(u64::MAX));
+    assert_eq!(replaced.presented_distance_chunks, 2);
+}
+
+#[test]
+fn bounded_far_stream_converges_without_expanding_the_near_working_set() {
+    let _production_host_guard = production_host_test_guard();
+    let mut instance =
+        EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
+            .expect("production spine starts from the reopened lock");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    spine
+        .set_terrain_presentation(
+            terrain_distance_requests(4, 2, 2),
+            FarTerrainQualityV1::Performance,
+        )
+        .expect("small far-terrain acceptance profile is admitted");
+
+    let mut converged = None;
+    for _ in 0..2_560 {
+        instance
+            .advance_fixed_ticks(1)
+            .expect("bounded far-terrain queues advance");
+        let snapshot = spine.far_terrain_queue_snapshot();
+        assert!(snapshot.pending <= FAR_TERRAIN_PENDING_CAP);
+        assert!(snapshot.in_flight <= FAR_TERRAIN_IN_FLIGHT_CAP);
+        assert!(snapshot.ready <= FAR_TERRAIN_READY_CAP);
+        if snapshot.presented_distance_chunks == 4 {
+            converged = Some(snapshot);
+            break;
+        }
+        std::thread::park_timeout(ASYNC_TEST_POLL_INTERVAL);
+    }
+    let snapshot =
+        converged.expect("far-terrain frontier must converge within the bounded poll budget");
+    assert!(snapshot.desired > 0);
+    assert_eq!(snapshot.blocked_by_edits, 0);
+    assert_eq!(snapshot.ready, snapshot.desired);
+    assert_eq!(snapshot.pending, 0);
+    assert_eq!(snapshot.waiting_to_apply, 0);
+    assert_eq!(
+        spine
+            .terrain_distance_status()
+            .expect("distance status is available")
+            .presented_render_distance()
+            .chunks(),
+        4
+    );
+    let limits = spine.hard_limits().expect("host clamps are installed");
+    assert!(
+        spine.working_set_diagnostics().resident() <= limits.max_resident_chunks,
+        "far presentation data cannot expand the authoritative resident set"
     );
 }
 
@@ -1185,6 +1271,11 @@ fn camera_yaw_pitch_only_does_not_change_spatial_interest() {
         looking_rebuilds,
         "yaw/pitch-only camera motion must not rebuild spatial interest"
     );
+    let idle_far = idle_spine.far_terrain_queue_snapshot();
+    let looking_far = looking_spine.far_terrain_queue_snapshot();
+    assert_eq!(idle_far.desired, looking_far.desired);
+    assert_eq!(idle_far.interest_generation, 1);
+    assert_eq!(looking_far.interest_generation, 1);
 }
 
 #[test]

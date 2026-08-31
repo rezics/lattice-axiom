@@ -362,6 +362,16 @@ impl StreamClamps {
         self.distances.target_render.chunks()
     }
 
+    pub(super) fn set_presented_render_distance(&mut self, chunks: u32) {
+        let admitted = chunks.clamp(
+            self.distances.full_detail.chunks(),
+            self.distances.target_render.chunks(),
+        );
+        if let Some(distance) = PresentedRenderDistanceChunksV1::new(admitted) {
+            self.distances.presented_render = distance;
+        }
+    }
+
     pub(super) const fn full_detail_distance(self) -> u32 {
         self.distances.full_detail.chunks()
     }
@@ -929,6 +939,31 @@ mod tests {
         assert_eq!(status.prefetch_distance().chunks(), 7);
         assert_eq!(status.full_detail_clamp_reason(), None);
         assert!(status.full_detail_is_below_target());
+
+        clamps.set_presented_render_distance(21);
+        assert_eq!(
+            clamps
+                .terrain_distance_status()
+                .presented_render_distance()
+                .chunks(),
+            21
+        );
+        clamps.set_presented_render_distance(u32::MAX);
+        assert_eq!(
+            clamps
+                .terrain_distance_status()
+                .presented_render_distance()
+                .chunks(),
+            32
+        );
+        clamps.set_presented_render_distance(1);
+        assert_eq!(
+            clamps
+                .terrain_distance_status()
+                .presented_render_distance()
+                .chunks(),
+            6
+        );
 
         let desired = desired_chunks(
             ChunkCoordinate::new(0, 0, 0),

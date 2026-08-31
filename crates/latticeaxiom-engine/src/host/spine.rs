@@ -34,7 +34,7 @@ use latticeaxiom_player::{
     TargetEyePoseV1, TargetInspectRejectV1, occupancy_line,
 };
 use latticeaxiom_runtime_contracts::{
-    EngineEpoch, WorldEpoch as InspectWorldEpoch, WorldgenInspectReportV1,
+    EngineEpoch, FarTerrainQualityV1, WorldEpoch as InspectWorldEpoch, WorldgenInspectReportV1,
 };
 use latticeaxiom_storage::{
     AuthoritativeTransactionKernel, ChangedDomains, ChunkCoordinate, ChunkData, ChunkKey,
@@ -64,9 +64,9 @@ use latticeaxiom_world_db::{
     StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitRequestV1, WorldStorage,
 };
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, GenerationPlanV1, HydrologyFlowV1,
-    HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1, MAX_BOUNDED_REGION_CHUNKS,
-    SpawnLocationV1, TerrainConfigV2, WorldSeedV1,
+    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, FarTerrainTileV1, GenerationPlanV1,
+    HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
+    MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1, TerrainConfigV2, WorldSeedV1,
 };
 
 use super::{
@@ -78,6 +78,7 @@ use super::{
     display::{
         ContentDisplayCatalogV1, ContentDisplayLabelV1, lock_selected_content_display_catalog,
     },
+    far_stream::{FarTerrainQueueSnapshotV1, FarTerrainStream},
     fluid::{HostFluidTickV1, tick_simulated as tick_simulated_fluids},
     gameplay::{ProductionGameplay, ProductionInventoryView, block_edit_reject},
     layers::{HostFaceStyle, HostFluidMeshState, HostPresentationIndex},
@@ -367,6 +368,7 @@ pub(super) struct ProductionSpineInner {
     worldgen_tickets: BTreeMap<ChunkCoordinate, WorldgenTicket>,
     next_worldgen_sequence: u64,
     next_worldgen_apply_sequence: u64,
+    far_terrain: FarTerrainStream,
     pub(super) presentation: Arc<HostPresentationIndex>,
     edited: BTreeSet<ChunkCoordinate>,
     lifecycle: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
@@ -858,6 +860,8 @@ impl ProductionSpine {
             voxel_schema: voxel_schema.clone(),
             voxel_schema_version,
         });
+        let far_terrain =
+            FarTerrainStream::new(Arc::clone(&plan), chunk_edge, FarTerrainQualityV1::Balanced);
 
         let mut inner = ProductionSpineInner {
             runtime,
@@ -891,6 +895,7 @@ impl ProductionSpine {
             worldgen_tickets: BTreeMap::new(),
             next_worldgen_sequence: 0,
             next_worldgen_apply_sequence: 0,
+            far_terrain,
             presentation,
             edited: BTreeSet::new(),
             lifecycle: BTreeMap::new(),
@@ -1503,6 +1508,30 @@ impl ProductionSpine {
         Ok(inner.clamps.terrain_distance_status())
     }
 
+    /// Atomically applies distance and distant-quality presentation requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionHostError::Poisoned`] when the spine lock is poisoned.
+    pub fn set_terrain_presentation(
+        &self,
+        requests: latticeaxiom_runtime_contracts::TerrainDistanceRequestsV1,
+        quality: FarTerrainQualityV1,
+    ) -> Result<TerrainDistanceStatusV1, ProductionHostError> {
+        let mut inner = self.lock_inner()?;
+        inner.clamps.set_terrain_distances(requests)?;
+        inner.far_terrain.set_quality(quality);
+        Ok(inner.clamps.terrain_distance_status())
+    }
+
+    /// Returns the active distant-terrain quality contract.
+    #[must_use]
+    pub fn far_terrain_quality(&self) -> Option<FarTerrainQualityV1> {
+        self.lock_inner()
+            .ok()
+            .map(|inner| inner.far_terrain.quality())
+    }
+
     /// Returns occupancy copied from [`VoxelRuntime`] diagnostics.
     #[must_use]
     pub fn working_set_diagnostics(&self) -> WorkingSetDiagnosticsV1 {
@@ -1617,6 +1646,22 @@ impl ProductionSpine {
                 waiting_to_apply: inner.waiting_worldgen.len(),
             },
         )
+    }
+
+    /// Returns bounded far-terrain queue, cancellation, memory, and frontier evidence.
+    #[must_use]
+    pub fn far_terrain_queue_snapshot(&self) -> FarTerrainQueueSnapshotV1 {
+        self.lock_inner().map_or_else(
+            |_| FarTerrainQueueSnapshotV1::default(),
+            |inner| inner.far_terrain.snapshot(),
+        )
+    }
+
+    /// Returns ready presentation-only far tiles in stable address order.
+    #[must_use]
+    pub fn far_terrain_ready_tiles(&self) -> Vec<Arc<FarTerrainTileV1>> {
+        self.lock_inner()
+            .map_or_else(|_| Vec::new(), |inner| inner.far_terrain.ready_tiles())
     }
 
     /// Streams interest, generation, and eviction from the latest player pose.
@@ -1754,11 +1799,32 @@ impl ProductionSpine {
                 execution: WorldgenExecution::Deferred,
             },
         )?;
+        let full_detail_distance = inner.clamps.full_detail_distance();
+        let target_render_distance = inner.clamps.target_render_distance();
+        let edited_revision = inner.edited_pin_revision.0;
+        {
+            let ProductionSpineInner {
+                far_terrain,
+                edited,
+                ..
+            } = &mut *inner;
+            far_terrain.reconcile(
+                chunk,
+                full_detail_distance,
+                target_render_distance,
+                edited_revision,
+                edited,
+                look_ahead,
+            )?;
+        }
+        let presented = inner.far_terrain.presented_distance_chunks();
+        inner.clamps.set_presented_render_distance(presented);
         Ok(())
     }
 
     fn pump_background_work_inner(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
         poll_worldgen_tasks(self)?;
+        poll_far_terrain_tasks(self)?;
         let tick = FixedTick::new(fixed_tick);
         {
             let mut inner = self.lock_inner()?;
@@ -1771,7 +1837,8 @@ impl ProductionSpine {
         // Newly published chunks request presentation work first. The fair
         // lane split then lets both derived work and worldgen occupy the pool.
         drain_derived(self, tick)?;
-        spawn_worldgen_jobs(self)
+        spawn_worldgen_jobs(self)?;
+        spawn_far_terrain_jobs(self)
     }
 
     fn ensure_collider_safety_inner(
@@ -4211,6 +4278,39 @@ fn poll_worldgen_tasks(spine: &ProductionSpine) -> Result<(), ProductionHostErro
     let mut inner = spine.lock_inner()?;
     inner.in_flight_worldgen_tasks = remaining;
     enqueue_waiting_worldgen(&mut inner, completed);
+    Ok(())
+}
+
+fn poll_far_terrain_tasks(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
+    let mut inner = spine.lock_inner()?;
+    inner.far_terrain.poll_completed()?;
+    let presented = inner.far_terrain.presented_distance_chunks();
+    inner.clamps.set_presented_render_distance(presented);
+    Ok(())
+}
+
+fn spawn_far_terrain_jobs(spine: &ProductionSpine) -> Result<(), ProductionHostError> {
+    let pool = AsyncComputeTaskPool::try_get()
+        .ok_or(ProductionHostError::AsyncComputeTaskPoolUnavailable)?;
+    let mut inner = spine.lock_inner()?;
+    let admission = inner.runtime.admission_snapshot();
+    let near_has_pending_work = !inner.pending_worldgen.is_empty()
+        || !inner.waiting_worldgen.is_empty()
+        || inner.runtime.pending_jobs() > 0;
+    if near_has_pending_work {
+        inner.far_terrain.record_near_work_reservation();
+        return Ok(());
+    }
+    let host_in_flight = inner
+        .in_flight_worldgen_tasks
+        .len()
+        .saturating_add(inner.far_terrain.in_flight_count());
+    let capacity = shared_cpu_slots_remaining(
+        admission.cpu_heavy_concurrency(),
+        admission.in_flight_jobs(),
+        host_in_flight,
+    );
+    inner.far_terrain.spawn(pool, capacity);
     Ok(())
 }
 
