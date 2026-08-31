@@ -30,9 +30,9 @@ use latticeaxiom_player::{
 use crate::ui_font::ui_text_font;
 
 use super::{
-    HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionSessionPause, ProductionSpine,
-    WorkingSetDiagnosticsV1, gameplay::ProductionInventoryView,
-    voxel_icon::ProductionVoxelIconCache,
+    FullDetailClampReasonV1, HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionSessionPause,
+    ProductionSpine, TerrainDistanceStatusV1, WorkingSetDiagnosticsV1,
+    gameplay::ProductionInventoryView, voxel_icon::ProductionVoxelIconCache,
 };
 
 const RECIPE_LIST_CAPACITY: usize = 24;
@@ -422,7 +422,7 @@ fn spawn_status_readout(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<
     parent.spawn((
         ProductionStatusReadout,
         Name::new("Status strip"),
-        Text::new(status_line("Mine —", None, 1, 1)),
+        Text::new(status_line("Mine —", None, None)),
         ui_text_font(16.0),
         TextColor(Color::srgb(0.94, 0.86, 0.72)),
         Node {
@@ -1726,12 +1726,7 @@ pub(super) fn sync_production_status_hud(
             latticeaxiom_gameplay::ItemStateV1::Plain => None,
         }
     });
-    let label = status_line(
-        &mining,
-        durability,
-        spine.admitted_view_distance(),
-        spine.effective_view_distance(),
-    );
+    let label = status_line(&mining, durability, spine.terrain_distance_status());
     if text.0 != label {
         *text = Text::new(label);
     }
@@ -1740,11 +1735,99 @@ pub(super) fn sync_production_status_hud(
 fn status_line(
     mining: &str,
     durability: Option<u32>,
-    admitted_view: u32,
-    effective_view: u32,
+    terrain_distance: Option<TerrainDistanceStatusV1>,
 ) -> String {
     let tool = durability.map_or_else(|| "Tool —".to_owned(), |left| format!("Tool {left}"));
-    format!("{mining}  {tool}  View {effective_view}/{admitted_view}")
+    let view = terrain_distance.map_or_else(
+        || "Render —".to_owned(),
+        |status| format_terrain_distance_status(status, TerrainDistanceLabelStyle::Hud),
+    );
+    format!("{mining}  {tool}  {view}")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TerrainDistanceLabelStyle {
+    Hud,
+    Settings,
+}
+
+pub(super) fn format_terrain_distance_status(
+    status: TerrainDistanceStatusV1,
+    style: TerrainDistanceLabelStyle,
+) -> String {
+    format_terrain_distance_values(
+        status.presented_render_distance().chunks(),
+        status.presented_render_distance_meters().meters(),
+        status.requested_render_distance().chunks(),
+        status.target_render_distance().chunks(),
+        status.full_detail_distance().chunks(),
+        status.simulation_distance().chunks(),
+        status.resident_distance().chunks(),
+        status.prefetch_distance().chunks(),
+        status.requested_cap(),
+        status.full_detail_clamp_reason(),
+        style,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the formatter keeps every typed distance fact visible at one presentation boundary"
+)]
+fn format_terrain_distance_values(
+    presented_chunks: u32,
+    presented_meters: u32,
+    requested_chunks: u32,
+    target_chunks: u32,
+    full_detail_chunks: u32,
+    simulation_chunks: u32,
+    resident_chunks: u32,
+    prefetch_chunks: u32,
+    requested_cap: u32,
+    clamp_reason: Option<FullDetailClampReasonV1>,
+    style: TerrainDistanceLabelStyle,
+) -> String {
+    let limit = match clamp_reason {
+        Some(FullDetailClampReasonV1::GenerationRadius) => Some("generation cap"),
+        Some(FullDetailClampReasonV1::ResidentBudget) => Some("resident-memory cap"),
+        Some(FullDetailClampReasonV1::GenerationRadiusAndResidentBudget) => {
+            Some("generation + resident-memory cap")
+        }
+        None => None,
+    };
+    match style {
+        TerrainDistanceLabelStyle::Hud => {
+            let mut text =
+                format!("Render {presented_chunks} chunks ({presented_meters} m radius)");
+            if target_chunks != presented_chunks {
+                text.push_str(" · target ");
+                text.push_str(&target_chunks.to_string());
+            }
+            if requested_chunks != target_chunks {
+                text.push_str(" · requested ");
+                text.push_str(&requested_chunks.to_string());
+            }
+            if let Some(limit) = limit {
+                text.push_str(" · ");
+                text.push_str(limit);
+            }
+            text
+        }
+        TerrainDistanceLabelStyle::Settings => {
+            let mut text = format!(
+                "Render target {target_chunks} chunks · presented {presented_chunks} chunks ({presented_meters} m) · full detail {full_detail_chunks} · simulation {simulation_chunks} · resident {resident_chunks} · prefetch {prefetch_chunks} chunks"
+            );
+            if target_chunks < requested_chunks {
+                text.push_str(" · host request limit ");
+                text.push_str(&requested_cap.to_string());
+            }
+            if let Some(limit) = limit {
+                text.push_str(" · limited by ");
+                text.push_str(limit);
+            }
+            text
+        }
+    }
 }
 
 fn mining_status_line(reject: Option<&BlockEditRejectV1>) -> String {
@@ -1920,9 +2003,10 @@ fn hotbar_key_slot(code: bevy::input::keyboard::KeyCode) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HOTBAR_SLOTS, ITEM_BROWSER_CAPACITY, ITEM_BROWSER_QUERY_CHARS, ItemBrowserStateV1,
-        ItemBrowserTransitionV1, ProductionHudSurfaces, hotbar_key_slot, mining_status_line,
-        spawn_production_hud, status_line,
+        FullDetailClampReasonV1, HOTBAR_SLOTS, ITEM_BROWSER_CAPACITY, ITEM_BROWSER_QUERY_CHARS,
+        ItemBrowserStateV1, ItemBrowserTransitionV1, ProductionHudSurfaces,
+        TerrainDistanceLabelStyle, format_terrain_distance_values, hotbar_key_slot,
+        mining_status_line, spawn_production_hud, status_line,
     };
     use bevy::{
         app::{App, Startup},
@@ -1974,15 +2058,32 @@ mod tests {
     #[test]
     fn status_line_includes_mining_and_view_distance_without_fake_vitality() {
         let idle_mining = mining_status_line(None);
-        let idle = status_line(&idle_mining, None, 4, 2);
+        let idle = status_line(&idle_mining, None, None);
         assert!(!idle.contains("Vitality"), "{idle}");
-        assert!(idle.contains("View 2/4"), "{idle}");
+        assert!(idle.contains("Render —"), "{idle}");
+        let view = format_terrain_distance_values(
+            2,
+            64,
+            6,
+            4,
+            2,
+            2,
+            2,
+            3,
+            32,
+            Some(FullDetailClampReasonV1::ResidentBudget),
+            TerrainDistanceLabelStyle::Hud,
+        );
+        assert!(view.contains("Render 2 chunks (64 m radius)"), "{view}");
+        assert!(view.contains("target 4"), "{view}");
+        assert!(view.contains("requested 6"), "{view}");
+        assert!(view.contains("resident-memory cap"), "{view}");
         let progress = BlockEditRejectV1::RequiresProgress {
             progress: latticeaxiom_player::MiningProgressV1::new(3, 10)
                 .expect("fixture progress is incomplete"),
         };
         let mining_label = mining_status_line(Some(&progress));
-        let mining = status_line(&mining_label, Some(12), 2, 2);
+        let mining = status_line(&mining_label, Some(12), None);
         assert!(mining.contains("Mine —"), "{mining}");
         assert!(
             !mining.contains("left"),

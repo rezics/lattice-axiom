@@ -5,8 +5,8 @@ use bevy::{
     core_pipeline::prepass::DepthPrepass,
     prelude::{
         AmbientLight, Camera, Camera3d, Changed, ClearColorConfig, Color, Commands, Component,
-        DirectionalLight, DistanceFog, EulerRot, FogFalloff, Image, Name, Quat, Query, Res, ResMut,
-        StandardMaterial, Transform, Vec3, With, Without,
+        DirectionalLight, DistanceFog, EulerRot, FogFalloff, Image, Name, Projection, Quat, Query,
+        Res, ResMut, StandardMaterial, Transform, Vec3, With, Without,
     },
     render::view::ColorGrading,
 };
@@ -18,7 +18,7 @@ use super::chunk_mesh::{
     ProductionTerrainMaterials, ProductionTerrainPalette, nearest_clamp_sampler,
 };
 use super::water_material::{WaterMaterial, water_normal_image};
-use super::{CellOccupancyV1, ProductionSpine};
+use super::{CellOccupancyV1, ProductionSpine, TerrainDistanceStatusV1};
 
 use crate::EngineProfile;
 
@@ -39,6 +39,24 @@ pub(super) enum CameraMediumV1 {
 }
 
 const WATERLINE_HYSTERESIS_M: f32 = 0.04;
+const DEFAULT_AIR_FOG_VISIBILITY_M: f32 = 512.0;
+const DEFAULT_CAMERA_FAR_M: f32 = 1_000.0;
+
+/// Presentation range derived from the effective streamed world radius.
+#[derive(Clone, Copy, Component, Debug, PartialEq)]
+pub(super) struct ProductionCameraViewRangeV1 {
+    air_fog_visibility_m: f32,
+    far_plane_m: f32,
+}
+
+impl Default for ProductionCameraViewRangeV1 {
+    fn default() -> Self {
+        Self {
+            air_fog_visibility_m: DEFAULT_AIR_FOG_VISIBILITY_M,
+            far_plane_m: DEFAULT_CAMERA_FAR_M,
+        }
+    }
+}
 
 type ProductionCameraQuery<'world, 'state> = Query<
     'world,
@@ -49,6 +67,8 @@ type ProductionCameraQuery<'world, 'state> = Query<
         &'static mut CameraMediumV1,
         &'static mut DistanceFog,
         &'static mut ColorGrading,
+        &'static mut Projection,
+        &'static mut ProductionCameraViewRangeV1,
     ),
     (With<ProductionCamera>, Without<LocalPlayerInput>),
 >;
@@ -81,9 +101,10 @@ pub(super) fn spawn_production_client_view(
         Name::new("Production Camera"),
         ProductionCamera,
         CameraMediumV1::Air,
+        ProductionCameraViewRangeV1::default(),
         Camera3d::default(),
         DepthPrepass,
-        air_fog(),
+        air_fog(DEFAULT_AIR_FOG_VISIBILITY_M),
         ColorGrading::default(),
         AmbientLight {
             color: Color::srgb(0.72, 0.78, 0.88),
@@ -144,8 +165,15 @@ pub(super) fn sync_production_camera(
     let Some((player_transform, profile, view)) = players.iter().next() else {
         return;
     };
-    let Some((mut camera_transform, mut camera, mut medium, mut fog, mut grading)) =
-        cameras.iter_mut().next()
+    let Some((
+        mut camera_transform,
+        mut camera,
+        mut medium,
+        mut fog,
+        mut grading,
+        mut projection,
+        mut view_range,
+    )) = cameras.iter_mut().next()
     else {
         return;
     };
@@ -155,10 +183,24 @@ pub(super) fn sync_production_camera(
     camera_transform.rotation =
         Quat::from_rotation_y(view.yaw_radians()) * Quat::from_rotation_x(view.pitch_radians());
 
+    let next_view_range = spine
+        .terrain_distance_status()
+        .map_or_else(ProductionCameraViewRangeV1::default, camera_view_range);
+    if *view_range != next_view_range {
+        *view_range = next_view_range;
+        apply_camera_view_range(*view_range, *medium, &mut projection, &mut fog);
+    }
+
     let next_medium = authoritative_camera_medium(&spine, *medium, camera_transform.translation);
     if *medium != next_medium {
         *medium = next_medium;
-        apply_medium_presentation(next_medium, &mut camera, &mut fog, &mut grading);
+        apply_medium_presentation(
+            next_medium,
+            *view_range,
+            &mut camera,
+            &mut fog,
+            &mut grading,
+        );
     }
 }
 
@@ -263,16 +305,57 @@ fn resolve_camera_medium(
     }
 }
 
-fn air_fog() -> DistanceFog {
+fn camera_view_range(status: TerrainDistanceStatusV1) -> ProductionCameraViewRangeV1 {
+    camera_view_range_from_values(
+        status.presented_render_distance().chunks(),
+        status.presented_render_distance_meters().meters(),
+    )
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "bounded view distances are exactly representable in f32"
+)]
+fn camera_view_range_from_values(
+    effective_chunks: u32,
+    effective_meters: u32,
+) -> ProductionCameraViewRangeV1 {
+    let chunk_edge_meters = effective_meters.checked_div(effective_chunks).unwrap_or(1);
+    let fog_visibility_m = effective_meters.saturating_add(chunk_edge_meters / 2);
+    let far_plane_m = effective_meters
+        .saturating_add(chunk_edge_meters)
+        .saturating_mul(2);
+    ProductionCameraViewRangeV1 {
+        air_fog_visibility_m: fog_visibility_m as f32,
+        far_plane_m: far_plane_m as f32,
+    }
+}
+
+fn apply_camera_view_range(
+    range: ProductionCameraViewRangeV1,
+    medium: CameraMediumV1,
+    projection: &mut Projection,
+    fog: &mut DistanceFog,
+) {
+    if let Projection::Perspective(perspective) = projection {
+        perspective.far = range.far_plane_m;
+    }
+    if medium == CameraMediumV1::Air {
+        *fog = air_fog(range.air_fog_visibility_m);
+    }
+}
+
+fn air_fog(visibility_m: f32) -> DistanceFog {
     DistanceFog {
         color: Color::NONE,
-        falloff: FogFalloff::from_visibility(512.0),
+        falloff: FogFalloff::from_visibility(visibility_m),
         ..DistanceFog::default()
     }
 }
 
 fn apply_medium_presentation(
     medium: CameraMediumV1,
+    view_range: ProductionCameraViewRangeV1,
     camera: &mut Camera,
     fog: &mut DistanceFog,
     grading: &mut ColorGrading,
@@ -281,7 +364,7 @@ fn apply_medium_presentation(
     match medium {
         CameraMediumV1::Air => {
             camera.clear_color = ClearColorConfig::Default;
-            *fog = air_fog();
+            *fog = air_fog(view_range.air_fog_visibility_m);
         }
         CameraMediumV1::Water => {
             let attenuation = Color::srgb(0.015, 0.12, 0.19);
@@ -318,7 +401,10 @@ fn apply_medium_presentation(
 mod tests {
     use latticeaxiom_content::{FluidFlowV1, FluidLevelV1, FluidStateV1};
 
-    use super::{CameraMediumV1, FluidSurfaceSample, fluid_fill_height, resolve_camera_medium};
+    use super::{
+        CameraMediumV1, FluidSurfaceSample, camera_view_range_from_values, fluid_fill_height,
+        resolve_camera_medium,
+    };
 
     fn surface(medium: CameraMediumV1, surface_y_m: f32) -> FluidSurfaceSample {
         FluidSurfaceSample {
@@ -422,5 +508,17 @@ mod tests {
         for level in 0..FluidLevelV1::MAX {
             assert!(height(level) > height(level + 1));
         }
+    }
+
+    #[test]
+    fn camera_range_tracks_presented_chunks_in_world_meters() {
+        let six_chunks = camera_view_range_from_values(6, 192);
+        let four_chunks = camera_view_range_from_values(4, 128);
+        assert!((six_chunks.air_fog_visibility_m - 208.0).abs() < f32::EPSILON);
+        assert!((six_chunks.far_plane_m - 448.0).abs() < f32::EPSILON);
+        assert!((four_chunks.air_fog_visibility_m - 144.0).abs() < f32::EPSILON);
+        assert!((four_chunks.far_plane_m - 320.0).abs() < f32::EPSILON);
+        assert!(four_chunks.air_fog_visibility_m < six_chunks.air_fog_visibility_m);
+        assert!(four_chunks.far_plane_m < six_chunks.far_plane_m);
     }
 }

@@ -15,7 +15,7 @@ use latticeaxiom_compose::{LockedPackage, PlayableWorldHardLimitsV1};
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_player::PlayerMovementProfileV1;
 use latticeaxiom_runtime_contracts::{
-    AUTHORED_MAX_VIEW_DISTANCE_CHUNKS, CaveConnectivityInspectFactsV1, CaveInspectAxisV1,
+    AUTHORED_MAX_RENDER_DISTANCE_CHUNKS, CaveConnectivityInspectFactsV1, CaveInspectAxisV1,
     CaveOwnershipInspectFactsV1, CaveSdfInspectFactsV1, EngineEpoch, EntranceInspectFactsV1,
     FluidDecisionInspectFactsV1, FluidOccupancyInspectV1, GeologyInspectFactsV1,
     PlanningSeamInspectFactsV1, PortalInspectFactsV1, PortalInspectFluidV1, ResourceInspectFactsV1,
@@ -178,8 +178,8 @@ const HOST_DURABLE_SAVE_RADIUS_CHUNKS: u32 = 4;
 /// Returns [`ProductionHostError::InvalidHostLimits`] when a clamp is zero.
 pub(super) fn host_hard_limits() -> Result<PlayableWorldHardLimitsV1, ProductionHostError> {
     PlayableWorldHardLimitsV1::new(
-        AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
-        AUTHORED_MAX_VIEW_DISTANCE_CHUNKS,
+        AUTHORED_MAX_RENDER_DISTANCE_CHUNKS,
+        AUTHORED_MAX_RENDER_DISTANCE_CHUNKS,
         HOST_MAX_ACTIVE_CHUNKS,
         HOST_MAX_RESIDENT_CHUNKS,
         HOST_MAX_IN_FLIGHT_CHUNKS,
@@ -1681,12 +1681,12 @@ mod tests {
                                             exposed_temperate_soil_count.saturating_add(1);
                                     }
                                 }
-                                if dry_temperate && temperate_soils.contains(block) {
-                                    if let Some(depth) =
+                                if dry_temperate
+                                    && temperate_soils.contains(block)
+                                    && let Some(depth) =
                                         flat_temperate_soil_depths.get_mut(&(world_x, world_z))
-                                    {
-                                        *depth = depth.saturating_add(1);
-                                    }
+                                {
+                                    *depth = depth.saturating_add(1);
                                 }
                                 if block == &woodland_cover || block == &moss {
                                     ground_cover_count = ground_cover_count.saturating_add(1);

@@ -11,8 +11,8 @@ use latticeaxiom_runtime_contracts::{
     KnownInputBindingV1, LatticeLocalSettingsV1, LocalSettingsOrigin, LocalSettingsStore,
     MouseButtonV1 as StoredMouseButton, PreviewPolicyV1, SettingChangedBatchV1,
     SettingsApplyTransaction, SettingsCatalogFragment, SettingsCatalogPolicy,
-    ValidatedSettingsCatalog, assert_foundation_catalog, resolve_effective_settings,
-    view_distance_setting_id,
+    ValidatedSettingsCatalog, assert_foundation_catalog, render_distance_setting_id,
+    resolve_effective_settings,
 };
 use latticeaxiom_settings_ui::SettingsSurfaceError;
 use serde_json::Value;
@@ -232,19 +232,19 @@ impl HostUserSettings {
         })
     }
 
-    /// Resolves the stored raw view-distance request from the active catalog.
+    /// Resolves the stored raw render-distance request from the active catalog.
     ///
     /// # Errors
     ///
     /// Returns [`HostSettingsError`] when stored overlays or the required row
     /// violate the active lock-selected catalog.
-    pub fn requested_view_distance(
+    pub fn requested_render_distance(
         &self,
         catalog: &HostSettingsCatalog,
         active_lock: CanonicalHash,
     ) -> Result<u32, HostSettingsError> {
         let snapshot = self.effective_snapshot(catalog, active_lock)?;
-        let id = view_distance_setting_id();
+        let id = render_distance_setting_id();
         let value = snapshot
             .values()
             .get(&id)
@@ -261,7 +261,7 @@ impl HostUserSettings {
         })
     }
 
-    /// Persists one catalog-validated view-distance draft atomically.
+    /// Persists one catalog-validated render-distance draft atomically.
     ///
     /// The raw request is retained even when the active host can admit a lower
     /// distance. Runtime clamping is a separate host decision.
@@ -275,7 +275,7 @@ impl HostUserSettings {
     ///
     /// Returns [`HostSettingsError`] when validation, preparation, or atomic
     /// publication fails.
-    pub fn persist_view_distance(
+    pub fn persist_render_distance(
         &mut self,
         root: impl AsRef<Path>,
         catalog: &HostSettingsCatalog,
@@ -283,7 +283,7 @@ impl HostUserSettings {
         requested_chunks: u32,
     ) -> Result<SettingChangedBatchV1, HostSettingsError> {
         let store = FilesystemLocalSettingsStore::open(root)?;
-        self.persist_view_distance_to_store(&store, catalog, active_lock, requested_chunks)
+        self.persist_render_distance_to_store(&store, catalog, active_lock, requested_chunks)
     }
 
     /// Persists one non-empty, catalog-validated user-domain draft atomically.
@@ -303,7 +303,7 @@ impl HostUserSettings {
         self.persist_user_values_to_store(&store, catalog, active_lock, proposed)
     }
 
-    fn persist_view_distance_to_store(
+    fn persist_render_distance_to_store(
         &mut self,
         store: &impl LocalSettingsStore,
         catalog: &HostSettingsCatalog,
@@ -311,7 +311,7 @@ impl HostUserSettings {
         requested_chunks: u32,
     ) -> Result<SettingChangedBatchV1, HostSettingsError> {
         let proposed =
-            BTreeMap::from([(view_distance_setting_id(), Value::from(requested_chunks))]);
+            BTreeMap::from([(render_distance_setting_id(), Value::from(requested_chunks))]);
         self.persist_user_values_to_store(store, catalog, active_lock, &proposed)
     }
 
@@ -619,12 +619,12 @@ mod tests {
             .expect("directory-sync fault is armed");
 
         let error = user
-            .persist_view_distance_to_store(&store, &catalog, active_lock, 24)
+            .persist_render_distance_to_store(&store, &catalog, active_lock, 24)
             .expect_err("directory-sync uncertainty must not claim a durable save");
         assert!(error.requires_safe_process_restart());
         assert!(error.proposed_value_is_visible_but_durability_uncertain());
         assert_eq!(
-            user.requested_view_distance(&catalog, active_lock)
+            user.requested_render_distance(&catalog, active_lock)
                 .expect("adopted envelope resolves"),
             24
         );
@@ -637,7 +637,7 @@ mod tests {
             visible
                 .envelope()
                 .user()
-                .get(&view_distance_setting_id())
+                .get(&render_distance_setting_id())
                 .map(latticeaxiom_runtime_contracts::StoredSettingEntryV1::value),
             Some(&Value::from(24))
         );
@@ -653,7 +653,7 @@ mod tests {
         };
 
         let error = user
-            .persist_view_distance_to_store(
+            .persist_render_distance_to_store(
                 &ProductionDurabilityUncertainStore,
                 &catalog,
                 active_lock,
@@ -676,7 +676,7 @@ mod tests {
         assert!(error.requires_safe_process_restart());
         assert!(error.proposed_value_is_visible_but_durability_uncertain());
         assert_eq!(
-            user.requested_view_distance(&catalog, active_lock)
+            user.requested_render_distance(&catalog, active_lock)
                 .expect("the proposed visible envelope was adopted"),
             24
         );
@@ -693,7 +693,12 @@ mod tests {
         let confirmed = user.clone();
 
         let error = user
-            .persist_view_distance_to_store(&FailedVisibleRecoveryStore, &catalog, active_lock, 24)
+            .persist_render_distance_to_store(
+                &FailedVisibleRecoveryStore,
+                &catalog,
+                active_lock,
+                24,
+            )
             .expect_err("failed visible recovery must not claim a durable save");
 
         assert!(error.requires_safe_process_restart());

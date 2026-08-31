@@ -4,8 +4,10 @@ use std::collections::BTreeMap;
 
 use latticeaxiom_core::StableId;
 use latticeaxiom_runtime_contracts::{
-    AUTHORED_MAX_VIEW_DISTANCE_CHUNKS, MIN_VIEW_DISTANCE_CHUNKS, clamp_view_distance_chunks,
-    view_distance_setting_id,
+    AUTHORED_MAX_RENDER_DISTANCE_CHUNKS, admit_render_distance_chunks,
+    clamp_full_detail_distance_chunks, clamp_requested_render_distance_chunks,
+    clamp_simulation_distance_chunks, full_detail_distance_setting_id, render_distance_setting_id,
+    simulation_distance_setting_id,
 };
 use serde_json::Value;
 
@@ -38,19 +40,34 @@ pub trait SettingsPageHost {
     /// Returns requested, admitted, and effective values for one setting.
     #[must_use]
     fn admission(&self, setting: &StableId, requested: &Value) -> SettingsValueAdmission {
-        if *setting == view_distance_setting_id() {
-            let requested_chunks = requested
-                .as_i64()
-                .unwrap_or(i64::from(MIN_VIEW_DISTANCE_CHUNKS));
-            let admitted =
-                clamp_view_distance_chunks(requested_chunks, AUTHORED_MAX_VIEW_DISTANCE_CHUNKS);
+        if *setting == render_distance_setting_id() {
+            let requested_chunks = requested.as_i64().unwrap_or_default();
+            let requested_distance = clamp_requested_render_distance_chunks(requested_chunks);
+            let admitted = admit_render_distance_chunks(
+                requested_distance,
+                AUTHORED_MAX_RENDER_DISTANCE_CHUNKS,
+            );
             return SettingsValueAdmission {
                 requested: requested.clone(),
-                admitted: Value::from(admitted),
-                effective: Value::from(admitted),
-                clamp_reason: (u32::try_from(requested_chunks).ok() != Some(admitted))
-                    .then(|| "host view-distance clamp".to_owned()),
+                admitted: Value::from(admitted.chunks()),
+                effective: Value::from(admitted.chunks()),
+                clamp_reason: (u32::try_from(requested_chunks).ok() != Some(admitted.chunks()))
+                    .then(|| "host render-distance clamp".to_owned()),
             };
+        }
+        if *setting == simulation_distance_setting_id() {
+            return integer_distance_admission(
+                requested,
+                clamp_simulation_distance_chunks(requested.as_i64().unwrap_or_default()).chunks(),
+                "host simulation-distance clamp",
+            );
+        }
+        if *setting == full_detail_distance_setting_id() {
+            return integer_distance_admission(
+                requested,
+                clamp_full_detail_distance_chunks(requested.as_i64().unwrap_or_default()).chunks(),
+                "certified full-detail-distance clamp",
+            );
         }
         SettingsValueAdmission {
             requested: requested.clone(),
@@ -58,6 +75,20 @@ pub trait SettingsPageHost {
             effective: requested.clone(),
             clamp_reason: None,
         }
+    }
+}
+
+fn integer_distance_admission(
+    requested: &Value,
+    admitted_chunks: u32,
+    clamp_reason: &'static str,
+) -> SettingsValueAdmission {
+    SettingsValueAdmission {
+        requested: requested.clone(),
+        admitted: Value::from(admitted_chunks),
+        effective: Value::from(admitted_chunks),
+        clamp_reason: (requested.as_u64() != Some(u64::from(admitted_chunks)))
+            .then(|| clamp_reason.to_owned()),
     }
 }
 

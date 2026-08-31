@@ -19,7 +19,7 @@ use bevy::{
     window::PrimaryWindow,
 };
 use latticeaxiom_core::StableId;
-use latticeaxiom_runtime_contracts::{ValueType, view_distance_setting_id};
+use latticeaxiom_runtime_contracts::{ValueType, render_distance_setting_id};
 use latticeaxiom_settings_ui::{
     SettingsCategoryV1, SettingsControlKind, SettingsPageCommand, SettingsPageOperation,
     SettingsSectionV1, SettingsSurfaceRow, category_display_name, section_display_name,
@@ -28,8 +28,8 @@ use latticeaxiom_settings_ui::{
 use serde_json::Value;
 
 use super::pause::{
-    PauseMenuAction, PauseOverlay, ProductionSettingsState, ViewDistanceSlider,
-    ViewDistanceSliderThumb,
+    PauseMenuAction, PauseOverlay, ProductionSettingsState, RenderDistanceSlider,
+    RenderDistanceSliderThumb,
 };
 use crate::ui_font::ui_text_font;
 
@@ -425,7 +425,7 @@ fn spawn_integer_slider(
         );
         return;
     };
-    let view_distance = row.id == view_distance_setting_id();
+    let render_distance = row.id == render_distance_setting_id();
     parent
         .spawn((
             Name::new(label.to_owned()),
@@ -473,8 +473,8 @@ fn spawn_integer_slider(
                 accessibility_node(AccessKitRole::Slider, "Setting slider"),
                 BorderColor::all(Color::NONE),
             ));
-            if view_distance {
-                slider.insert(ViewDistanceSlider);
+            if render_distance {
+                slider.insert(RenderDistanceSlider);
             }
             slider.with_children(|slider| {
                 slider.spawn((
@@ -511,8 +511,8 @@ fn spawn_integer_slider(
                             },
                             BackgroundColor(Color::srgb(0.32, 0.78, 0.63)),
                         ));
-                        if view_distance {
-                            thumb.insert(ViewDistanceSliderThumb);
+                        if render_distance {
+                            thumb.insert(RenderDistanceSliderThumb);
                         }
                     });
             });
@@ -724,7 +724,7 @@ pub(super) fn settings_page_activated(
 #[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
 pub(super) fn settings_integer_slider_changed(
     change: On<'_, '_, ValueChange<f32>>,
-    sliders: Query<'_, '_, &SettingsIntegerRow, Without<ViewDistanceSlider>>,
+    sliders: Query<'_, '_, &SettingsIntegerRow, Without<RenderDistanceSlider>>,
     mut settings: Option<ResMut<'_, ProductionSettingsState>>,
     mut commands: Commands<'_, '_>,
 ) {

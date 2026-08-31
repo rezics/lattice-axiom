@@ -1,7 +1,7 @@
 //! Playable-profile baseline catalog projected by the official settings page.
 //!
 //! Foundation IDs `latticeaxiom:setting/ui-scale` and
-//! `latticeaxiom:setting/view-distance` stay owned by `@latticeaxiom/settings`
+//! `latticeaxiom:setting/view-distance` stays owned by `@latticeaxiom/settings`
 //! so the lock-selected persist path remains valid. Remaining baseline rows
 //! use the shipped catalog identities. Feature-conditional rows without a
 //! runtime consumer are omitted. `RuntimeApplyImpact::Preview` is mapped to
@@ -138,6 +138,7 @@ pub fn section_for_setting(id: &StableId) -> SettingsSectionV1 {
         | "latticeaxiom:setting/video/fov-effects-scale"
         | "latticeaxiom:setting/video/brightness" => SettingsSectionV1::VideoGeneral,
         "latticeaxiom:setting/video/graphics-quality"
+        | "latticeaxiom:setting/video/distant-terrain-quality"
         | "latticeaxiom:setting/video/particles"
         | "latticeaxiom:setting/video/smooth-lighting"
         | "latticeaxiom:setting/video/biome-blend-radius"
@@ -155,12 +156,14 @@ pub fn section_for_setting(id: &StableId) -> SettingsSectionV1 {
         | "latticeaxiom:setting/video/animate-visible-textures-only" => {
             SettingsSectionV1::VideoPerformance
         }
-        "latticeaxiom:setting/video/chunk-build-threads"
+        "latticeaxiom:setting/video/full-detail-distance"
+        | "latticeaxiom:setting/video/chunk-build-threads"
         | "latticeaxiom:setting/video/cpu-render-ahead" => SettingsSectionV1::VideoAdvanced,
         "latticeaxiom:setting/interface/inspect-visible"
         | "latticeaxiom:setting/interface/inspect-detail"
         | "latticeaxiom:setting/interface/inspect-pin-mode" => SettingsSectionV1::InterfaceInspect,
         "latticeaxiom:setting/gameplay/pause-on-focus-loss"
+        | "latticeaxiom:setting/gameplay/simulation-distance"
         | "latticeaxiom:setting/gameplay/simulation-tick-rate" => {
             SettingsSectionV1::GameplayGeneral
         }

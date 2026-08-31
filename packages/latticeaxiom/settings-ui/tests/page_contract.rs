@@ -7,11 +7,14 @@
 
 use latticeaxiom_client_ui::{SemanticKey, check_accesskit_tree};
 use latticeaxiom_core::StableId;
-use latticeaxiom_runtime_contracts::{ui_scale_setting_id, view_distance_setting_id};
+use latticeaxiom_runtime_contracts::{
+    distant_terrain_quality_setting_id, full_detail_distance_setting_id,
+    render_distance_setting_id, simulation_distance_setting_id, ui_scale_setting_id,
+};
 use latticeaxiom_settings_ui::{
     MemorySettingsHost, SettingsCategoryV1, SettingsPageCatalogKind, SettingsPageCommand,
     SettingsPageHost, SettingsPageOpen, SettingsPageOutcome, SettingsPageSession,
-    SettingsSectionV1, compile_baseline_page_catalog,
+    SettingsSectionV1, compile_baseline_page_catalog, section_for_setting,
 };
 use serde_json::json;
 
@@ -31,12 +34,35 @@ fn playable_catalog_compiles_without_developer_or_feature_conditional_rows() {
         compile_baseline_page_catalog(SettingsPageCatalogKind::Playable).expect("playable catalog");
     let runtime = &catalog.as_catalog().runtime;
     assert!(runtime.contains_key(&ui_scale_setting_id()));
-    assert!(runtime.contains_key(&view_distance_setting_id()));
+    assert!(runtime.contains_key(&render_distance_setting_id()));
+    assert!(runtime.contains_key(&simulation_distance_setting_id()));
+    assert!(runtime.contains_key(&full_detail_distance_setting_id()));
+    assert!(runtime.contains_key(&distant_terrain_quality_setting_id()));
     assert!(runtime.contains_key(&setting("latticeaxiom:setting/accessibility/high-contrast")));
     assert!(runtime.contains_key(&setting("latticeaxiom:setting/video/field-of-view")));
     assert!(!runtime.contains_key(&setting("latticeaxiom:setting/developer/overlay-enabled")));
     assert!(!runtime.contains_key(&setting("latticeaxiom:setting/audio/weather-volume")));
     assert!(!runtime.contains_key(&setting("terrenia:setting/world/difficulty")));
+}
+
+#[test]
+fn terrain_controls_have_independent_player_facing_sections() {
+    assert_eq!(
+        section_for_setting(&render_distance_setting_id()),
+        SettingsSectionV1::VideoGeneral
+    );
+    assert_eq!(
+        section_for_setting(&simulation_distance_setting_id()),
+        SettingsSectionV1::GameplayGeneral
+    );
+    assert_eq!(
+        section_for_setting(&distant_terrain_quality_setting_id()),
+        SettingsSectionV1::VideoQuality
+    );
+    assert_eq!(
+        section_for_setting(&full_detail_distance_setting_id()),
+        SettingsSectionV1::VideoAdvanced
+    );
 }
 
 #[test]
@@ -188,7 +214,7 @@ fn subtitle_rows_appear_only_when_subtitles_are_enabled() {
 }
 
 #[test]
-fn mock_host_apply_persists_user_draft_and_clamps_view_distance() {
+fn mock_host_applies_render_distance_and_admits_each_distance_independently() {
     let (mut page, mut host) = open_page(SettingsPageOpen::shell());
     page.handle(
         SettingsPageCommand::SelectCategory(SettingsCategoryV1::Video),
@@ -197,7 +223,7 @@ fn mock_host_apply_persists_user_draft_and_clamps_view_distance() {
     .expect("video");
     page.handle(
         SettingsPageCommand::SetValue {
-            setting: view_distance_setting_id(),
+            setting: render_distance_setting_id(),
             value: json!(24),
         },
         &mut host,
@@ -214,13 +240,17 @@ fn mock_host_apply_persists_user_draft_and_clamps_view_distance() {
         )
     ));
     assert_eq!(
-        host.values().get(&view_distance_setting_id()),
+        host.values().get(&render_distance_setting_id()),
         Some(&json!(24))
     );
     assert!(!page.surface().is_dirty());
-    let admission = host.admission(&view_distance_setting_id(), &json!(64));
+    let admission = host.admission(&render_distance_setting_id(), &json!(64));
     assert_eq!(admission.admitted, json!(32));
     assert!(admission.clamp_reason.is_some());
+    let simulation = host.admission(&simulation_distance_setting_id(), &json!(64));
+    assert_eq!(simulation.admitted, json!(32));
+    let full_detail = host.admission(&full_detail_distance_setting_id(), &json!(21));
+    assert_eq!(full_detail.admitted, json!(6));
 }
 
 #[test]
@@ -330,7 +360,7 @@ fn search_matches_stable_id_and_keeps_section_context() {
     assert!(
         page.visible_rows()
             .iter()
-            .any(|row| row.id == view_distance_setting_id())
+            .any(|row| row.id == render_distance_setting_id())
     );
 }
 

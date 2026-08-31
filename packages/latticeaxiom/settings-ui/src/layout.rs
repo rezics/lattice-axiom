@@ -23,7 +23,7 @@ pub enum SettingsSectionV1 {
     AudioVolumes,
     /// Output device and mix policy.
     AudioDevices,
-    /// Window, frame, FOV, and view distance.
+    /// Window, frame, FOV, and total render distance.
     VideoGeneral,
     /// Visual quality members.
     VideoQuality,

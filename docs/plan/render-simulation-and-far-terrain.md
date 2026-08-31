@@ -382,6 +382,40 @@ Commit: `test(streaming): certify far terrain presentation`.
 | A source-visible mod becomes accidental copied design/code | Exact license record, independent Lattice contracts, no source copying, review diff against project-owned terminology |
 | Tuning hides a broken contract | Distances, quality, and work budgets remain different types; acceptance measures physical boundary in meters |
 
+## Progress and evidence
+
+- [x] 2026-08-31: Slice 0 research and implementation plan committed as
+  `4783789`. The referenced upstream projects remain study-only checkouts under
+  `.temp/reference/`; no code, asset, or runtime dependency was copied.
+- [x] 2026-08-31: Slice 1 typed settings and migration implemented. The legacy
+  stable ID `latticeaxiom:setting/view-distance` now names Render Distance, so
+  an existing stored value migrates without a persistence rewrite. Simulation
+  Distance, Full Detail Distance, and Distant Terrain Quality have independent
+  stable IDs, defaults, value domains, page sections, apply values, and typed
+  runtime projections. Unknown stored settings and orphan bindings remain
+  preserved. Engine streaming now distinguishes requested render, target
+  render, requested/effective full detail, requested/effective simulation, and
+  presented render distance; the incomplete far path is feature-disabled by
+  setting presented distance equal to the ready full-detail frontier.
+  Runtime-contract tests passed 57 unit, 6+7+2 integration, and doc-test gates;
+  settings UI passed 1 unit and 15+13 integration tests; client UI passed 17
+  unit and 6+7+10 integration tests; engine passed 166 all-feature library
+  tests plus the focused GPU-free production-host distance integration test.
+  Strict affected-crate Clippy, rustfmt, and diff checks passed. A full 54-test
+  GPU-free host run was also attempted: the distance integration passes, while
+  the separate physical cave journey still fails to navigate from the opened
+  entrance to topology cell centers after the midscale-terrain change. That
+  failure does not mutate or exercise the new distance requests, is not counted
+  as Slice 1 evidence, and remains an explicit integrated-acceptance item rather
+  than being hidden by weakening its assertion. No external dependency was
+  added.
+- [ ] Slice 2 deterministic far-terrain tile contract implemented.
+- [ ] Slice 3 bounded hierarchical streaming implemented.
+- [ ] Slice 4 Bevy presentation and transition implemented.
+- [ ] Slice 5 settings information architecture and diagnostics cleanup
+  implemented.
+- [ ] Slice 6 integrated acceptance completed.
+
 ## Approval boundary
 
 Approval of this document authorizes the six implementation slices above and

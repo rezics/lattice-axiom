@@ -22,7 +22,11 @@ const SETTINGS_PACKAGE_NAME: &str = "@latticeaxiom/settings";
 fn is_reserved_foundation_setting(id: &StableId) -> bool {
     matches!(
         id.as_str(),
-        "latticeaxiom:setting/ui-scale" | "latticeaxiom:setting/view-distance"
+        "latticeaxiom:setting/ui-scale"
+            | "latticeaxiom:setting/view-distance"
+            | "latticeaxiom:setting/gameplay/simulation-distance"
+            | "latticeaxiom:setting/video/full-detail-distance"
+            | "latticeaxiom:setting/video/distant-terrain-quality"
     )
 }
 

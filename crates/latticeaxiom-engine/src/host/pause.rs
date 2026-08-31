@@ -35,9 +35,12 @@ use latticeaxiom_player::{
     LocalPlayerInput, SimulationTickRate, SimulationTickRateRequest, SurfaceActionFrame,
 };
 use latticeaxiom_runtime_contracts::{
-    EffectiveSettingsSnapshot, simulation_tick_rate_setting_id,
+    EffectiveSettingsSnapshot, FarTerrainQualityV1, RequestedFullDetailDistanceChunksV1,
+    RequestedRenderDistanceChunksV1, RequestedSimulationDistanceChunksV1,
+    TerrainDistanceRequestsV1, distant_terrain_quality_setting_id, full_detail_distance_setting_id,
+    render_distance_setting_id, simulation_distance_setting_id, simulation_tick_rate_setting_id,
     video_background_frame_rate_limit_setting_id, video_frame_rate_limit_setting_id,
-    video_vsync_setting_id, view_distance_setting_id,
+    video_vsync_setting_id,
 };
 use latticeaxiom_settings_ui::{
     MemorySettingsHost, SettingsDurabilityDomain, SettingsIntegerSliderState, SettingsPageCommand,
@@ -47,7 +50,8 @@ use latticeaxiom_settings_ui::{
 };
 
 use super::{
-    ProductionSessionPause, ProductionSpine, ViewDistanceClampReasonV1, hud::ProductionHudSurfaces,
+    ProductionSessionPause, ProductionSpine,
+    hud::{ProductionHudSurfaces, TerrainDistanceLabelStyle, format_terrain_distance_status},
 };
 use crate::{
     EngineProfile,
@@ -82,7 +86,8 @@ enum SettingsApplyFailureDisposition {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AppliedRuntimeSettings {
-    view_distance: u32,
+    terrain_distances: TerrainDistanceRequestsV1,
+    far_terrain_quality: FarTerrainQualityV1,
     video: VideoRuntimeSettings,
     tick_rate: SimulationTickRate,
 }
@@ -110,7 +115,7 @@ pub(super) struct ProductionSettingsState {
     page: SettingsPageSession,
     page_host: MemorySettingsHost,
     page_generation: u64,
-    view_distance: StableId,
+    render_distance: StableId,
     runtime: AppliedRuntimeSettings,
     next_clock_request_id: u64,
     publication: SettingsPublicationState,
@@ -131,14 +136,10 @@ impl ProductionSettingsState {
             SettingsSurfaceAuthority::shell(),
         )?;
         surface.apply_scope_filter(SettingsSurfaceScope::InGame);
-        let view_distance = view_distance_setting_id();
-        let slider = surface.integer_slider(&view_distance)?;
-        validate_view_distance_slider(slider)?;
-        let view_distance_request =
-            u32::try_from(slider.applied).map_err(|_| HostSettingsError::CatalogUnavailable {
-                reason: "applied view distance is outside the chunk-distance domain".to_owned(),
-            })?;
-        let runtime = runtime_settings_from_snapshot(&snapshot, view_distance_request)?;
+        let render_distance = render_distance_setting_id();
+        let slider = surface.integer_slider(&render_distance)?;
+        validate_render_distance_slider(slider)?;
+        let runtime = runtime_settings_from_snapshot(&snapshot)?;
         let mut page_host = MemorySettingsHost::new();
         for effective in snapshot.values().values() {
             page_host.seed(effective.id.clone(), effective.value.clone());
@@ -157,7 +158,7 @@ impl ProductionSettingsState {
             page,
             page_host,
             page_generation: 0,
-            view_distance,
+            render_distance,
             runtime,
             next_clock_request_id: 1,
             publication: SettingsPublicationState::Confirmed,
@@ -191,7 +192,7 @@ impl ProductionSettingsState {
             return;
         }
         if let SettingsPageCommand::SetValue { setting, value } = &command {
-            if setting == &self.view_distance
+            if setting == &self.render_distance
                 && let Some(chunks) = integer_to_slider_f32(value)
             {
                 self.set_draft_from_slider(chunks);
@@ -283,8 +284,8 @@ impl ProductionSettingsState {
         self.page_generation = self.page_generation.saturating_add(1);
     }
 
-    pub(super) const fn applied_request(&self) -> u32 {
-        self.runtime.view_distance
+    pub(super) const fn applied_terrain_distances(&self) -> TerrainDistanceRequestsV1 {
+        self.runtime.terrain_distances
     }
 
     pub(super) const fn applied_video(&self) -> VideoRuntimeSettings {
@@ -301,13 +302,13 @@ impl ProductionSettingsState {
 
     fn slider(&self) -> Result<SettingsIntegerSliderState, HostSettingsError> {
         self.surface
-            .integer_slider(&self.view_distance)
+            .integer_slider(&self.render_distance)
             .map_err(HostSettingsError::from)
     }
 
     fn draft_chunks(&self) -> Result<u32, HostSettingsError> {
         u32::try_from(self.slider()?.draft).map_err(|_| HostSettingsError::CatalogUnavailable {
-            reason: "draft view distance is outside the chunk-distance domain".to_owned(),
+            reason: "draft render distance is outside the chunk-distance domain".to_owned(),
         })
     }
 
@@ -319,7 +320,7 @@ impl ProductionSettingsState {
         match self
             .surface
             .handle(SettingsSurfaceCommand::SetIntegerSliderValue {
-                setting: self.view_distance.clone(),
+                setting: self.render_distance.clone(),
                 value,
             }) {
             Ok(SettingsSurfaceOutcome::DraftChanged { .. }) => {
@@ -480,7 +481,7 @@ impl ProductionSettingsState {
             self.diagnostic = Some(SAFE_PROCESS_RESTART_REQUIRED.to_owned());
             return;
         }
-        if let Some(chunks) = self.page.surface().draft_value(&self.view_distance)
+        if let Some(chunks) = self.page.surface().draft_value(&self.render_distance)
             && let Some(chunks) = integer_to_slider_f32(chunks)
         {
             self.set_draft_from_slider(chunks);
@@ -584,7 +585,7 @@ impl ProductionSettingsState {
         requested: AppliedRuntimeSettings,
     ) -> Result<(), HostSettingsError> {
         spine
-            .set_requested_view_distance(requested.view_distance)
+            .set_terrain_distances(requested.terrain_distances)
             .map_err(|error| HostSettingsError::Runtime {
                 reason: error.to_string(),
             })?;
@@ -602,39 +603,12 @@ impl ProductionSettingsState {
     }
 
     fn status_text(&self, spine: &ProductionSpine) -> String {
-        let mut text = if let Some(status) = spine.view_distance_status() {
-            let mut text = format!(
-                "Requested {} · admitted {} · render {} · simulation {} · resident {} · prefetch {} chunks",
-                status.requested_render_distance().chunks(),
-                status.admitted_render_distance().chunks(),
-                status.effective_render_distance().chunks(),
-                status.simulation_distance().chunks(),
-                status.resident_distance().chunks(),
-                status.prefetch_distance().chunks()
-            );
-            if status.requested_render_distance().chunks()
-                > status.admitted_render_distance().chunks()
-            {
-                text.push_str(" · host request limit ");
-                text.push_str(&status.requested_cap().to_string());
-            }
-            match status.clamp_reason() {
-                Some(ViewDistanceClampReasonV1::GenerationRadius) => {
-                    text.push_str(" · generation-radius limited");
-                }
-                Some(ViewDistanceClampReasonV1::ResidentBudget) => {
-                    text.push_str(" · resident-budget limited");
-                }
-                Some(ViewDistanceClampReasonV1::GenerationRadiusAndResidentBudget) => {
-                    text.push_str(" · generation-radius and resident-budget limited");
-                }
-                None => {}
-            }
-            text
+        let mut text = if let Some(status) = spine.terrain_distance_status() {
+            format_terrain_distance_status(status, TerrainDistanceLabelStyle::Settings)
         } else {
             format!(
-                "Requested {} · runtime admission/effective status unavailable",
-                self.runtime.view_distance
+                "Render target {} · runtime distance status unavailable",
+                self.runtime.terrain_distances.render().chunks()
             )
         };
         if self.publication == SettingsPublicationState::SafeProcessRestartRequired {
@@ -670,7 +644,6 @@ impl ProductionSettingsState {
 
 fn runtime_settings_from_snapshot(
     snapshot: &EffectiveSettingsSnapshot,
-    view_distance: u32,
 ) -> Result<AppliedRuntimeSettings, HostSettingsError> {
     let values = snapshot
         .values()
@@ -679,7 +652,8 @@ fn runtime_settings_from_snapshot(
         .collect();
     runtime_settings_from_proposed(
         AppliedRuntimeSettings {
-            view_distance,
+            terrain_distances: TerrainDistanceRequestsV1::default(),
+            far_terrain_quality: FarTerrainQualityV1::Balanced,
             video: VideoRuntimeSettings::default(),
             tick_rate: SimulationTickRate::default(),
         },
@@ -691,17 +665,19 @@ fn runtime_settings_from_proposed(
     prior: AppliedRuntimeSettings,
     proposed: &BTreeMap<StableId, serde_json::Value>,
 ) -> Result<AppliedRuntimeSettings, HostSettingsError> {
-    let view_distance =
-        proposed
-            .get(&view_distance_setting_id())
-            .map_or(Ok(prior.view_distance), |value| {
-                value
-                    .as_u64()
-                    .and_then(|value| u32::try_from(value).ok())
-                    .ok_or_else(|| HostSettingsError::Runtime {
-                        reason: "view distance is outside the unsigned 32-bit domain".to_owned(),
-                    })
-            })?;
+    let terrain_distances =
+        terrain_distance_requests_from_proposed(prior.terrain_distances, proposed)?;
+    let far_terrain_quality = proposed.get(&distant_terrain_quality_setting_id()).map_or(
+        Ok(prior.far_terrain_quality),
+        |value| {
+            value
+                .as_str()
+                .and_then(FarTerrainQualityV1::parse)
+                .ok_or_else(|| HostSettingsError::Runtime {
+                    reason: "distant terrain quality is not a supported enum value".to_owned(),
+                })
+        },
+    )?;
     let vsync = proposed
         .get(&video_vsync_setting_id())
         .map_or(Some(prior.video.vsync()), serde_json::Value::as_bool)
@@ -757,9 +733,60 @@ fn runtime_settings_from_proposed(
                     })
             })?;
     Ok(AppliedRuntimeSettings {
-        view_distance,
+        terrain_distances,
+        far_terrain_quality,
         video: VideoRuntimeSettings::new(vsync, foreground_limit, background_limit),
         tick_rate,
+    })
+}
+
+fn terrain_distance_requests_from_proposed(
+    prior: TerrainDistanceRequestsV1,
+    proposed: &BTreeMap<StableId, serde_json::Value>,
+) -> Result<TerrainDistanceRequestsV1, HostSettingsError> {
+    let render = requested_chunk_distance(
+        proposed,
+        &render_distance_setting_id(),
+        prior.render(),
+        "render distance",
+        RequestedRenderDistanceChunksV1::new,
+    )?;
+    let simulation = requested_chunk_distance(
+        proposed,
+        &simulation_distance_setting_id(),
+        prior.simulation(),
+        "simulation distance",
+        RequestedSimulationDistanceChunksV1::new,
+    )?;
+    let full_detail = requested_chunk_distance(
+        proposed,
+        &full_detail_distance_setting_id(),
+        prior.full_detail(),
+        "full-detail distance",
+        RequestedFullDetailDistanceChunksV1::new,
+    )?;
+    Ok(TerrainDistanceRequestsV1::new(
+        render,
+        simulation,
+        full_detail,
+    ))
+}
+
+fn requested_chunk_distance<T: Copy>(
+    proposed: &BTreeMap<StableId, serde_json::Value>,
+    setting: &StableId,
+    prior: T,
+    label: &'static str,
+    constructor: fn(u32) -> Option<T>,
+) -> Result<T, HostSettingsError> {
+    proposed.get(setting).map_or(Ok(prior), |value| {
+        value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .and_then(constructor)
+            .ok_or_else(|| HostSettingsError::Runtime {
+                reason: format!("{label} is outside the non-zero unsigned 32-bit domain"),
+            })
     })
 }
 
@@ -780,17 +807,17 @@ fn slider_json_from_widget(value: f32) -> Option<serde_json::Value> {
     Some(serde_json::Value::from(i64::from(as_i16)))
 }
 
-fn validate_view_distance_slider(
+fn validate_render_distance_slider(
     state: SettingsIntegerSliderState,
 ) -> Result<(), HostSettingsError> {
     if slider_widget_values(state).is_none() {
         return Err(HostSettingsError::CatalogUnavailable {
-            reason: "view-distance slider exceeds the exact Bevy f32 integer domain".to_owned(),
+            reason: "render-distance slider exceeds the exact Bevy f32 integer domain".to_owned(),
         });
     }
     for value in [state.applied, state.draft, state.min, state.max] {
         u32::try_from(value).map_err(|_| HostSettingsError::CatalogUnavailable {
-            reason: "view-distance slider is outside the chunk-distance domain".to_owned(),
+            reason: "render-distance slider is outside the chunk-distance domain".to_owned(),
         })?;
     }
     Ok(())
@@ -819,13 +846,13 @@ pub(super) enum PauseMenuAction {
     Quit,
 }
 
-/// Marker on the native Bevy view-distance slider.
+/// Marker on the native Bevy render-distance slider.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
-pub(super) struct ViewDistanceSlider;
+pub(super) struct RenderDistanceSlider;
 
-/// Marker on the view-distance slider thumb.
+/// Marker on the render-distance slider thumb.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
-pub(super) struct ViewDistanceSliderThumb;
+pub(super) struct RenderDistanceSliderThumb;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SurfaceSliderInput {
@@ -958,7 +985,7 @@ fn spawn_pause_overlay(
     dead_code,
     reason = "kept as the catalog-proved Bevy slider widget fixture"
 )]
-fn spawn_view_distance_slider(
+fn spawn_render_distance_slider(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
     settings: &ProductionSettingsState,
 ) {
@@ -970,7 +997,7 @@ fn spawn_view_distance_slider(
     };
     parent
         .spawn((
-            ViewDistanceSlider,
+            RenderDistanceSlider,
             Name::new("View distance"),
             Node {
                 position_type: PositionType::Relative,
@@ -1018,7 +1045,7 @@ fn spawn_view_distance_slider(
                 ))
                 .with_children(|track| {
                     track.spawn((
-                        ViewDistanceSliderThumb,
+                        RenderDistanceSliderThumb,
                         SliderThumb,
                         Name::new("View distance thumb"),
                         Node {
@@ -1110,9 +1137,9 @@ pub(super) fn toggle_pause(
 
 /// Copies native slider changes into the settings draft without publishing them.
 #[allow(clippy::needless_pass_by_value)] // Bevy observers receive SystemParams by value.
-pub(super) fn view_distance_slider_changed(
+pub(super) fn render_distance_slider_changed(
     change: On<'_, '_, ValueChange<f32>>,
-    sliders: Query<'_, '_, (), With<ViewDistanceSlider>>,
+    sliders: Query<'_, '_, (), With<RenderDistanceSlider>>,
     mut settings: Option<ResMut<'_, ProductionSettingsState>>,
     mut commands: Commands<'_, '_>,
 ) {
@@ -1125,7 +1152,7 @@ pub(super) fn view_distance_slider_changed(
     settings.set_draft_from_slider(change.value);
     if let Some(value) = slider_json_from_widget(change.value) {
         settings.handle_page(SettingsPageCommand::SetValue {
-            setting: view_distance_setting_id(),
+            setting: render_distance_setting_id(),
             value,
         });
     }
@@ -1161,18 +1188,18 @@ pub(super) fn apply_settings_surface_actions(
         '_,
         (
             Entity,
-            Has<ViewDistanceSlider>,
+            Has<RenderDistanceSlider>,
             Has<super::settings_view::SettingsPageControl>,
             Option<&PauseMenuAction>,
             &Node,
         ),
         Or<(
-            With<ViewDistanceSlider>,
+            With<RenderDistanceSlider>,
             With<PauseMenuAction>,
             With<super::settings_view::SettingsPageControl>,
         )>,
     >,
-    sliders: Query<'_, '_, (Entity, Ref<'_, SliderValue>, &Node), With<ViewDistanceSlider>>,
+    sliders: Query<'_, '_, (Entity, Ref<'_, SliderValue>, &Node), With<RenderDistanceSlider>>,
     buttons: Query<'_, '_, (&PauseMenuAction, &Node), With<Button>>,
     mut commands: Commands<'_, '_>,
 ) {
@@ -1323,7 +1350,7 @@ pub(super) fn sync_settings_control_focus_visuals(
         (Entity, &Hovered, Has<Pressed>, &mut BackgroundColor),
         With<PauseMenuAction>,
     >,
-    mut sliders: Query<'_, '_, (Entity, &mut BorderColor), With<ViewDistanceSlider>>,
+    mut sliders: Query<'_, '_, (Entity, &mut BorderColor), With<RenderDistanceSlider>>,
 ) {
     let focused = focus.as_ref().and_then(|focus| focus.get());
     for (entity, hovered, pressed, mut background) in &mut buttons {
@@ -1543,8 +1570,8 @@ pub(super) fn sync_pause_menu_page(
         '_,
         (Entity, &PauseMenuAction, &mut Node, Has<TabIndex>),
         (
-            Without<ViewDistanceSlider>,
-            Without<ViewDistanceSliderThumb>,
+            Without<RenderDistanceSlider>,
+            Without<RenderDistanceSliderThumb>,
         ),
     >,
     mut sliders: Query<
@@ -1552,9 +1579,9 @@ pub(super) fn sync_pause_menu_page(
         '_,
         (Entity, &SliderValue, &mut Node, Has<TabIndex>),
         (
-            With<ViewDistanceSlider>,
+            With<RenderDistanceSlider>,
             Without<PauseMenuAction>,
-            Without<ViewDistanceSliderThumb>,
+            Without<RenderDistanceSliderThumb>,
         ),
     >,
     mut thumbs: Query<
@@ -1562,9 +1589,9 @@ pub(super) fn sync_pause_menu_page(
         '_,
         &mut Node,
         (
-            With<ViewDistanceSliderThumb>,
+            With<RenderDistanceSliderThumb>,
             Without<PauseMenuAction>,
-            Without<ViewDistanceSlider>,
+            Without<RenderDistanceSlider>,
         ),
     >,
     mut hint: Query<'_, '_, &mut Text, With<PauseSettingsHint>>,
@@ -1738,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn view_distance_slider_projects_only_exact_widget_integers() {
+    fn render_distance_slider_projects_only_exact_widget_integers() {
         let state = SettingsIntegerSliderState {
             min: 2,
             max: 32,
@@ -1758,7 +1785,32 @@ mod tests {
     }
 
     #[test]
-    fn engine_source_has_no_competing_view_distance_model_or_range() {
+    fn runtime_projection_keeps_all_terrain_controls_distinct() {
+        let prior = AppliedRuntimeSettings {
+            terrain_distances: TerrainDistanceRequestsV1::default(),
+            far_terrain_quality: FarTerrainQualityV1::Balanced,
+            video: VideoRuntimeSettings::default(),
+            tick_rate: SimulationTickRate::default(),
+        };
+        let proposed = BTreeMap::from([
+            (render_distance_setting_id(), serde_json::json!(21)),
+            (simulation_distance_setting_id(), serde_json::json!(3)),
+            (full_detail_distance_setting_id(), serde_json::json!(5)),
+            (
+                distant_terrain_quality_setting_id(),
+                serde_json::json!("quality"),
+            ),
+        ]);
+        let projected = runtime_settings_from_proposed(prior, &proposed)
+            .expect("catalog-valid terrain controls project independently");
+        assert_eq!(projected.terrain_distances.render().chunks(), 21);
+        assert_eq!(projected.terrain_distances.simulation().chunks(), 3);
+        assert_eq!(projected.terrain_distances.full_detail().chunks(), 5);
+        assert_eq!(projected.far_terrain_quality, FarTerrainQualityV1::Quality);
+    }
+
+    #[test]
+    fn engine_source_has_no_competing_terrain_distance_model_or_range() {
         let source = include_str!("pause.rs");
         for duplicate in [
             concat!("struct ViewDistance", "Range"),
@@ -1772,6 +1824,7 @@ mod tests {
                 "engine duplicate settings authority returned: {duplicate}"
             );
         }
+        assert!(!source.contains(concat!("view_distance_setting", "_id")));
         assert!(source.contains("surface: SettingsSurfaceModel"));
         assert!(source.contains("SettingsSurfaceCommand::Apply"));
         assert!(source.contains("SettingsSurfaceCommand::Undo"));

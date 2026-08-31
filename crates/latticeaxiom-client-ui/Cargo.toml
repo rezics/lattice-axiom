@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+latticeaxiom-runtime-contracts.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 unicode-normalization.workspace = true

@@ -15,10 +15,10 @@ use latticeaxiom_runtime_contracts::{
     InputBindingV1, IsolationReason, KnownInputBindingV1, LatticeLocalSettingsV1,
     LocalSettingsOrigin, LocalSettingsStore, PreviewPolicyV1, SettingsApplyTransaction,
     SettingsCatalogFragment, SettingsCatalogPolicy, SettingsTransactionPhase, StoredSettingEntryV1,
-    ValidatedSettingsCatalog, assert_foundation_catalog, clamp_view_distance_chunks,
-    decode_local_settings, foundation_setting_specs, project_user_settings,
-    resolve_effective_settings, settings_package_name, ui_scale_setting_id,
-    view_distance_setting_id,
+    ValidatedSettingsCatalog, assert_foundation_catalog, decode_local_settings,
+    distant_terrain_quality_setting_id, foundation_setting_specs, full_detail_distance_setting_id,
+    project_user_settings, render_distance_setting_id, resolve_effective_settings,
+    settings_package_name, simulation_distance_setting_id, ui_scale_setting_id,
 };
 
 const PACKAGE_CATALOG: &str = concat!(
@@ -73,7 +73,7 @@ fn shipped_package_catalog_matches_owned_foundation_specs() {
 }
 
 #[test]
-fn complete_envelope_round_trips_scale_view_distance_and_orphan_bindings() {
+fn legacy_view_value_projects_as_render_distance_without_losing_orphans() {
     let catalog = compile_package_catalog();
     let envelope = decode_local_settings(&read(COMPLETE_ENVELOPE))
         .unwrap_or_else(|reason| panic!("complete envelope: {reason:?}"));
@@ -88,9 +88,11 @@ fn complete_envelope_round_trips_scale_view_distance_and_orphan_bindings() {
         project_user_settings(resolution.snapshot(), envelope.binding_profile().clone(), 8)
             .unwrap_or_else(|error| panic!("project: {error}"));
     assert_eq!(projection.ui_scale().to_string(), "2.0");
-    assert_eq!(projection.requested_view_distance(), 12);
-    assert_eq!(projection.clamped_view_distance(), 8);
-    assert_eq!(clamp_view_distance_chunks(12, 8), 8);
+    assert_eq!(projection.requested_render_distance().chunks(), 12);
+    assert_eq!(projection.target_render_distance().chunks(), 8);
+    assert_eq!(projection.requested_simulation_distance().chunks(), 4);
+    assert_eq!(projection.requested_full_detail_distance().chunks(), 6);
+    assert_eq!(projection.far_terrain_quality().as_str(), "balanced");
 
     let defaults = BTreeMap::from([(
         "latticeaxiom:action/gameplay/pause@1"
@@ -111,7 +113,7 @@ fn complete_envelope_round_trips_scale_view_distance_and_orphan_bindings() {
 fn foundation_user_values() -> BTreeMap<StableId, serde_json::Value> {
     BTreeMap::from([
         (ui_scale_setting_id(), serde_json::json!(2.0)),
-        (view_distance_setting_id(), serde_json::json!(12)),
+        (render_distance_setting_id(), serde_json::json!(12)),
     ])
 }
 
@@ -222,7 +224,7 @@ fn persist_survives_replacement_process_and_cannot_roll_back() {
         loaded
             .envelope()
             .user()
-            .get(&view_distance_setting_id())
+            .get(&render_distance_setting_id())
             .map(StoredSettingEntryV1::value),
         Some(&serde_json::json!(12))
     );
@@ -272,7 +274,13 @@ fn corrupt_and_newer_fixtures_are_isolated_from_defaults() {
 #[test]
 fn user_scope_is_the_owning_persistence_lane_for_foundation_rows() {
     let catalog = compile_package_catalog();
-    for id in [ui_scale_setting_id(), view_distance_setting_id()] {
+    for id in [
+        ui_scale_setting_id(),
+        render_distance_setting_id(),
+        simulation_distance_setting_id(),
+        full_detail_distance_setting_id(),
+        distant_terrain_quality_setting_id(),
+    ] {
         let spec = catalog
             .as_catalog()
             .runtime

@@ -134,8 +134,8 @@ impl StreamingProfileEvidenceV1 {
         counts: StreamingProfileCountsV1,
     ) -> Self {
         let limits = clamps.hard_limits;
-        let status = clamps.view_distance_status();
-        let interest_radius = status.effective_render_distance().chunks();
+        let status = clamps.terrain_distance_status();
+        let interest_radius = status.full_detail_distance().chunks();
         let edge = config.chunk_edge_voxels;
         let interest_coverage = coverage_m(interest_radius, edge);
         let simulation_coverage = coverage_m(status.simulation_distance().chunks(), edge);
@@ -154,8 +154,8 @@ impl StreamingProfileEvidenceV1 {
             vertical_voxels: [config.world_floor_y, config.world_ceiling_y],
             view_distance_chunks: limits.view_distance_chunks,
             requested_render_distance_chunks: status.requested_render_distance().chunks(),
-            admitted_render_distance_chunks: status.admitted_render_distance().chunks(),
-            effective_render_distance_chunks: status.effective_render_distance().chunks(),
+            admitted_render_distance_chunks: status.target_render_distance().chunks(),
+            effective_render_distance_chunks: status.full_detail_distance().chunks(),
             simulation_distance_chunks: status.simulation_distance().chunks(),
             resident_distance_chunks: status.resident_distance().chunks(),
             prefetch_distance_chunks: status.prefetch_distance().chunks(),

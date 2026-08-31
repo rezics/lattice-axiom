@@ -105,7 +105,12 @@ pub use display::{
 };
 pub use fluid::HostFluidTickV1;
 pub use gameplay::{HOTBAR_SLOTS, INVENTORY_SLOTS, ProductionInventoryView};
-pub use latticeaxiom_runtime_contracts::WorldgenInspectReportV1;
+pub use latticeaxiom_runtime_contracts::{
+    FarTerrainQualityV1, FullDetailDistanceChunksV1, PresentedRenderDistanceChunksV1,
+    RequestedFullDetailDistanceChunksV1, RequestedRenderDistanceChunksV1,
+    RequestedSimulationDistanceChunksV1, SimulationDistanceChunksV1, TargetRenderDistanceChunksV1,
+    TerrainDistanceRequestsV1, WorldgenInspectReportV1,
+};
 pub use latticeaxiom_worldgen::{CaveOccupancyArbitrationV1, ChunkFaceV1};
 pub use profile::{
     ADR_0026_ACTIVE_COVERAGE_M, ADR_0026_CHUNK_EDGE_VOXELS, ADR_0026_RESIDENT_COVERAGE_M,
@@ -120,9 +125,8 @@ pub use start::{
     ChildResultV1, ProductionMemoryStart, ProductionMemoryStartError, ProductionWorldList,
 };
 pub use stream::{
-    AdmittedRenderDistanceChunksV1, ChunkLifecycle, EffectiveRenderDistanceChunksV1,
-    PrefetchDistanceChunksV1, RequestedRenderDistanceChunksV1, ResidentDistanceChunksV1,
-    SimulationDistanceChunksV1, ViewDistanceClampReasonV1, ViewDistanceStatusV1,
+    ChunkLifecycle, FullDetailClampReasonV1, PrefetchDistanceChunksV1,
+    PresentedRenderDistanceMetersV1, ResidentDistanceChunksV1, TerrainDistanceStatusV1,
 };
 pub use surface::ProductionSurfaceRouter;
 pub use worldgen::RequiredCaveEntranceV1;
@@ -400,7 +404,7 @@ impl Plugin for ProductionHostPlugin {
                 ),
             );
         #[cfg(feature = "client")]
-        app.add_observer(pause::view_distance_slider_changed)
+        app.add_observer(pause::render_distance_slider_changed)
             .add_observer(pause::pause_menu_activated)
             .add_observer(settings_view::settings_page_activated)
             .add_observer(settings_view::settings_integer_slider_changed)
@@ -661,7 +665,7 @@ impl EngineInstance {
             })?;
         let state = pause::ProductionSettingsState::new(root, user, catalog, active_lock)?;
         spine
-            .set_requested_view_distance(state.applied_request())
+            .set_terrain_distances(state.applied_terrain_distances())
             .map_err(|error| crate::settings::HostSettingsError::Runtime {
                 reason: error.to_string(),
             })?;
@@ -886,6 +890,28 @@ fn sync_collider_safety(
             &mut by_coordinate,
             update,
         );
+    }
+}
+
+#[cfg(all(test, feature = "client"))]
+mod production_schedule_tests {
+    use bevy::{app::App, ecs::schedule::Schedules, prelude::Update};
+
+    use super::ProductionHostPlugin;
+
+    #[test]
+    fn production_update_schedule_builds_without_ordering_cycles() {
+        let mut app = App::new();
+        app.add_plugins(ProductionHostPlugin);
+        let mut schedule = app
+            .world_mut()
+            .resource_mut::<Schedules>()
+            .remove(Update)
+            .expect("the production plugin registers the Update schedule");
+
+        schedule
+            .initialize(app.world_mut())
+            .expect("the production Update schedule must be acyclic");
     }
 }
 

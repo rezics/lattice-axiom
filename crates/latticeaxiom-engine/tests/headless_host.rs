@@ -42,9 +42,8 @@ use latticeaxiom_engine::{
     PlayerActionV1, PreparationError, ProductionInspectSurface, ProductionMemoryStart,
     ProductionSessionPause, ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId,
     STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost, SealedWriterHostError, SlotIndex,
-    StructurallyValidatedComposeImages, VerifiedProductLockHash, ViewDistanceClampReasonV1,
-    WorkingSetDiagnosticsV1, WorkstationId, compile_authored_gameplay_catalog,
-    empty_gameplay_catalog,
+    StructurallyValidatedComposeImages, VerifiedProductLockHash, WorkingSetDiagnosticsV1,
+    WorkstationId, compile_authored_gameplay_catalog, empty_gameplay_catalog,
 };
 use latticeaxiom_gameplay::{BlockId, GameplayModeV1, MiningStepCountV1, PlayerId};
 use latticeaxiom_launcher::{
@@ -58,6 +57,10 @@ use latticeaxiom_player::{
 use latticeaxiom_registration::{
     CallbackDeclaration, CompiledRegistration, PackageRegistrationInput, ReceiptValidationError,
     RegistrationCompileInput, RegistrationCompiler, SystemDeclaration,
+};
+use latticeaxiom_runtime_contracts::{
+    TerrainDistanceRequestsV1, clamp_full_detail_distance_chunks,
+    clamp_requested_render_distance_chunks, clamp_simulation_distance_chunks,
 };
 use latticeaxiom_start_ui::{
     ClientShellGraph, InputSource, MemoryStartEffect, SemanticActionId, SemanticCommand,
@@ -85,6 +88,18 @@ fn production_host_test_guard() -> MutexGuard<'static, ()> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+fn terrain_distance_requests(
+    render: i64,
+    simulation: i64,
+    full_detail: i64,
+) -> TerrainDistanceRequestsV1 {
+    TerrainDistanceRequestsV1::new(
+        clamp_requested_render_distance_chunks(render),
+        clamp_simulation_distance_chunks(simulation),
+        clamp_full_detail_distance_chunks(full_detail),
+    )
 }
 
 #[test]
@@ -343,10 +358,20 @@ fn reopened_lock_decodes_exact_package_data_once() {
 
 const SPINE_TIMESTEP: Duration = Duration::from_nanos(1_000_000_000 / 60);
 const ASYNC_TEST_POLL_INTERVAL: Duration = Duration::from_millis(5);
-// One entrance shaft can edit four chunks and enqueue a mesh rebuild per
-// accepted cell. Preserve a finite 12.8-second settling window under a
-// contended default test harness rather than assuming one aperture chunk.
-const CAVE_SHAFT_REBUILD_MAX_TICKS: u32 = 2_560;
+// Middle-scale terrain generation is intentionally heavier than the legacy
+// provider. Movement fixtures yield longer when collider safety blocks forward
+// progress so bounded background generation can catch up on a contended host.
+const CONTENDED_WORLDGEN_POLL_INTERVAL: Duration = Duration::from_millis(20);
+// Reaching the outer full-detail ring can require generating most of the
+// bounded 1,183-chunk resident set first.
+const DISTANT_CHUNK_SETTLING_MAX_TICKS: u32 = 2_560;
+// One entrance shaft can span four chunks. Resident polling advances sixteen
+// ticks per 5 ms yield, so this preserves a finite 12.8-second wall-clock
+// settling window under a contended default test harness.
+const CAVE_SHAFT_RESIDENT_SETTLING_MAX_TICKS: u32 = 40_960;
+// Derived readiness polling advances one tick per 5 ms yield. Keep the same
+// wall-clock budget without multiplying the wait by the resident batch size.
+const CAVE_DERIVED_REBUILD_MAX_TICKS: u32 = 2_560;
 
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1028,7 +1053,7 @@ fn production_host_exposes_working_set_diagnostics() {
 }
 
 #[test]
-fn requested_view_distance_is_clamped_by_host_limits() {
+fn terrain_distance_requests_keep_target_full_detail_and_simulation_distinct() {
     let _production_host_guard = production_host_test_guard();
     let mut instance =
         EngineInstance::new_headless_host_from_lock(lock_boot_fixture().prepared(), SPINE_TIMESTEP)
@@ -1044,37 +1069,40 @@ fn requested_view_distance_is_clamped_by_host_limits() {
         .expect("playable host clamps exist")
         .view_distance_chunks;
     assert_eq!(cap, 32);
-    let effective_minimum = spine
-        .set_requested_view_distance(1)
-        .expect("undersize view distance clamps to the authored minimum");
-    assert_eq!(spine.admitted_view_distance(), 2);
-    assert_eq!(effective_minimum, spine.effective_view_distance());
-    assert!(effective_minimum <= 2);
-    let effective_cap = spine
-        .set_requested_view_distance(cap)
-        .expect("hard-cap view distance is admitted");
-    assert_eq!(spine.admitted_view_distance(), cap);
-    assert_eq!(effective_cap, 6);
+    let minimum = spine
+        .set_terrain_distances(terrain_distance_requests(1, 4, 6))
+        .expect("undersize render distance clamps to the authored minimum");
+    assert_eq!(spine.target_render_distance(), 2);
+    assert_eq!(minimum.full_detail_distance().chunks(), 2);
+    let cap_status = spine
+        .set_terrain_distances(terrain_distance_requests(i64::from(cap), 4, 6))
+        .expect("hard-cap render target is admitted");
+    assert_eq!(spine.target_render_distance(), cap);
+    assert_eq!(cap_status.full_detail_distance().chunks(), 6);
     let status = spine
-        .view_distance_status()
-        .expect("view-distance status is available");
+        .terrain_distance_status()
+        .expect("terrain-distance status is available");
     assert_eq!(status.requested_render_distance().chunks(), cap);
-    assert_eq!(status.admitted_render_distance().chunks(), cap);
-    assert_eq!(status.effective_render_distance().chunks(), 6);
+    assert_eq!(status.target_render_distance().chunks(), cap);
+    assert_eq!(status.requested_full_detail_distance().chunks(), 6);
+    assert_eq!(status.full_detail_distance().chunks(), 6);
+    assert_eq!(status.presented_render_distance().chunks(), 6);
+    assert_eq!(status.requested_simulation_distance().chunks(), 4);
     assert_eq!(status.simulation_distance().chunks(), 4);
     assert_eq!(status.resident_distance().chunks(), 6);
     assert_eq!(status.prefetch_distance().chunks(), 7);
     assert_eq!(status.requested_cap(), 32);
     assert_eq!(status.active_budget_cap(), 4);
     assert_eq!(status.resident_budget_cap(), 6);
-    assert_eq!(
-        status.clamp_reason(),
-        Some(ViewDistanceClampReasonV1::ResidentBudget)
-    );
+    assert_eq!(status.full_detail_clamp_reason(), None);
     let _ = spine
-        .set_requested_view_distance(cap.saturating_add(8))
+        .set_terrain_distances(terrain_distance_requests(
+            i64::from(cap.saturating_add(8)),
+            4,
+            6,
+        ))
         .expect("oversize requests clamp");
-    assert_eq!(spine.admitted_view_distance(), cap);
+    assert_eq!(spine.target_render_distance(), cap);
     let rebuilds_before = spine.desired_chunk_set_rebuild_count();
     instance
         .advance_fixed_ticks(1)
@@ -1216,11 +1244,15 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
     let spawn_chunk = chunk_from_translation(spine.spawn_center(), spine.chunk_edge());
     let edited = spine.edited_chunks();
     let mut selected = None;
-    for _ in 0..640 {
+    for _ in 0..DISTANT_CHUNK_SETTLING_MAX_TICKS {
         selected = spine
             .resident_chunks()
             .into_iter()
-            .filter(|chunk| chunk.x <= spawn_chunk.x.saturating_sub(4) && !edited.contains(chunk))
+            .filter(|chunk| {
+                chunk.x <= spawn_chunk.x.saturating_sub(4)
+                    && (chunk.x < 0 || chunk.z < 0)
+                    && !edited.contains(chunk)
+            })
             .filter_map(|chunk| spine.mesh_cursor(chunk).map(|cursor| (chunk, cursor)))
             .min_by_key(|(chunk, _)| chunk.x);
         if selected.is_some() {
@@ -1233,13 +1265,9 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
     }
     let (sample, before) =
         selected.expect("bounded streaming must discover a far clean negative-coordinate chunk");
-    assert!(
-        sample.x < 0 || sample.z < 0,
-        "sample must be a negative coordinate, got {sample:?}"
-    );
     spine
-        .set_requested_view_distance(2)
-        .expect("shrinking the view-distance request is admitted");
+        .set_terrain_distances(terrain_distance_requests(2, 2, 2))
+        .expect("shrinking the render and full-detail requests is admitted");
     for _ in 0..64 {
         if !spine.resident_chunks().contains(&sample) {
             break;
@@ -1254,9 +1282,14 @@ fn negative_coordinate_eviction_revisit_restores_identical_clean_chunk() {
         "clean negative chunk {sample:?} must evict after the view distance shrinks"
     );
     spine
-        .set_requested_view_distance(8)
-        .expect("restoring the view-distance request is admitted");
-    await_resident_chunk(&mut instance, &spine, sample, 640);
+        .set_terrain_distances(terrain_distance_requests(8, 4, 6))
+        .expect("restoring the terrain-distance requests is admitted");
+    await_resident_chunk(
+        &mut instance,
+        &spine,
+        sample,
+        DISTANT_CHUNK_SETTLING_MAX_TICKS,
+    );
     assert!(
         spine.resident_chunks().contains(&sample),
         "revisiting {sample:?} must rematerialize the evicted clean chunk (pose {:?})",
@@ -1337,8 +1370,12 @@ fn derived_queues_stay_bounded_during_async_traversal() {
     let max_resident = usize::try_from(limits.max_resident_chunks).expect("resident cap fits");
     let max_in_flight = usize::try_from(limits.max_in_flight_chunks).expect("in-flight cap fits");
     let _ = spine
-        .set_requested_view_distance(limits.view_distance_chunks)
-        .expect("view distance clamp");
+        .set_terrain_distances(terrain_distance_requests(
+            i64::from(limits.view_distance_chunks),
+            4,
+            6,
+        ))
+        .expect("terrain distance admission");
     await_resident_count(&mut instance, &spine, max_in_flight.max(1), 640);
     let traversal_ticks = scaled_fixture_ticks(&spine, 480);
     enqueue_look_then_walk(
@@ -1364,7 +1401,7 @@ fn derived_queues_stay_bounded_during_async_traversal() {
         let rendered = spine.render_scoped_chunks();
         let player_chunk =
             chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
-        let render_distance = spine.effective_view_distance();
+        let render_distance = spine.full_detail_distance();
         let resident = usize::try_from(diagnostics.resident()).unwrap_or(usize::MAX);
         high_resident = high_resident.max(resident);
         assert!(
@@ -1691,11 +1728,11 @@ fn production_host_streams_past_v2_neighborhood_in_two_horizontal_directions() {
     let spawn = spine.spawn_center();
     let spawn_chunk = chunk_from_translation(spawn, spine.chunk_edge());
     spine
-        .set_requested_view_distance(2)
-        .expect("the traversal fixture admits its compact view distance");
+        .set_terrain_distances(terrain_distance_requests(2, 2, 2))
+        .expect("the traversal fixture admits its compact terrain distances");
     let resident_radius = i32::try_from(
         spine
-            .view_distance_status()
+            .terrain_distance_status()
             .expect("streaming status is installed")
             .resident_distance()
             .chunks(),
@@ -3172,7 +3209,7 @@ fn sample_look_then_walk_until(
         instance
             .advance_fixed_ticks(batch.saturating_add(2))
             .expect("bounded state-driven walk advances");
-        std::thread::park_timeout(ASYNC_TEST_POLL_INTERVAL);
+        std::thread::park_timeout(CONTENDED_WORLDGEN_POLL_INTERVAL);
         record_stream_sample(spine, seen_resident, seen_player_chunks, min_y);
         let player_chunk =
             chunk_from_translation(spine.player_pose().translation, spine.chunk_edge());
@@ -4094,6 +4131,17 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
     seed_tool(&spine, 1, "terrenia:item/stone-shovel", 131);
     seed_tool(&spine, 2, "terrenia:item/stone-pickaxe", 131);
 
+    let column = latticeaxiom_gameplay::BlockPosition {
+        x: surface[0],
+        y: surface[1],
+        z: surface[2],
+    };
+    let aperture_pos = latticeaxiom_gameplay::BlockPosition {
+        x: aperture[0],
+        y: aperture[1],
+        z: aperture[2],
+    };
+    await_required_entrance_shaft_resident(&mut instance, &spine, column, aperture_pos);
     let mut generation = 1_u64;
     generation = walk_toward_column(
         &mut instance,
@@ -4101,7 +4149,7 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
         generation,
         surface[0],
         surface[2],
-        1_200,
+        4_800,
     );
     assert!(
         !spine.occupies_unready_cave_void(),
@@ -4119,21 +4167,10 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
         pose.translation
     );
 
-    let column = latticeaxiom_gameplay::BlockPosition {
-        x: surface[0],
-        y: surface[1],
-        z: surface[2],
-    };
-    let aperture_pos = latticeaxiom_gameplay::BlockPosition {
-        x: aperture[0],
-        y: aperture[1],
-        z: aperture[2],
-    };
     generation = wait_for_resident(&mut instance, &spine, generation, aperture_pos, 180);
-    await_required_entrance_shaft_resident(&mut instance, &spine, column, aperture_pos);
     let rebuilt_chunks = open_required_entrance_shaft(&spine, column, aperture_pos);
     for chunk in rebuilt_chunks {
-        await_chunk_active(&mut instance, &spine, chunk, CAVE_SHAFT_REBUILD_MAX_TICKS);
+        await_chunk_active(&mut instance, &spine, chunk, CAVE_DERIVED_REBUILD_MAX_TICKS);
     }
     generation = idle_at_hole(&mut instance, &spine, generation, 90);
 
@@ -4252,6 +4289,17 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
         .expect("V6 field portals must include a required entrance");
     let aperture = entrance.aperture();
     let surface = entrance.surface_footing();
+    let surface_pos = latticeaxiom_gameplay::BlockPosition {
+        x: surface[0],
+        y: surface[1],
+        z: surface[2],
+    };
+    let aperture_pos = latticeaxiom_gameplay::BlockPosition {
+        x: aperture[0],
+        y: aperture[1],
+        z: aperture[2],
+    };
+    await_required_entrance_shaft_resident(&mut instance, &spine, surface_pos, aperture_pos);
     let mut generation = 1_u64;
     generation = walk_toward_column(
         &mut instance,
@@ -4259,50 +4307,14 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
         generation,
         surface[0],
         surface[2],
-        1_200,
+        4_800,
     );
-    generation = wait_for_resident(
-        &mut instance,
-        &spine,
-        generation,
-        latticeaxiom_gameplay::BlockPosition {
-            x: aperture[0],
-            y: aperture[1],
-            z: aperture[2],
-        },
-        180,
-    );
-    await_required_entrance_shaft_resident(
-        &mut instance,
-        &spine,
-        latticeaxiom_gameplay::BlockPosition {
-            x: surface[0],
-            y: surface[1],
-            z: surface[2],
-        },
-        latticeaxiom_gameplay::BlockPosition {
-            x: aperture[0],
-            y: aperture[1],
-            z: aperture[2],
-        },
-    );
+    generation = wait_for_resident(&mut instance, &spine, generation, aperture_pos, 180);
     seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
     seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
-    let rebuilt_chunks = open_required_entrance_shaft(
-        &spine,
-        latticeaxiom_gameplay::BlockPosition {
-            x: surface[0],
-            y: surface[1],
-            z: surface[2],
-        },
-        latticeaxiom_gameplay::BlockPosition {
-            x: aperture[0],
-            y: aperture[1],
-            z: aperture[2],
-        },
-    );
+    let rebuilt_chunks = open_required_entrance_shaft(&spine, surface_pos, aperture_pos);
     for chunk in rebuilt_chunks {
-        await_chunk_active(&mut instance, &spine, chunk, CAVE_SHAFT_REBUILD_MAX_TICKS);
+        await_chunk_active(&mut instance, &spine, chunk, CAVE_DERIVED_REBUILD_MAX_TICKS);
     }
     generation = idle_at_hole(&mut instance, &spine, generation, 90);
     generation = walk_toward_column(
@@ -5693,6 +5705,7 @@ fn walk_toward_column(
     let mut remaining = ticks;
     let mut strafe = 0.0_f32;
     let mut avoidance_sign = 1.0_f32;
+    let mut blocked_batches = 0_u8;
     while remaining > 0 {
         let pose = spine.player_pose();
         let dx = (target_x as f32 + 0.5) - pose.translation.x;
@@ -5710,15 +5723,23 @@ fn walk_toward_column(
         instance
             .advance_fixed_ticks(u32::try_from(consumed).expect("step fits u32"))
             .expect("walk ticks toward the required entrance");
-        std::thread::park_timeout(ASYNC_TEST_POLL_INTERVAL);
+        std::thread::park_timeout(CONTENDED_WORLDGEN_POLL_INTERVAL);
         let position = spine.player_pose().translation;
         let next_distance =
             ((target_x as f32 + 0.5) - position.x).hypot((target_z as f32 + 0.5) - position.z);
         if next_distance + 0.1 >= distance {
-            strafe = avoidance_sign;
-            avoidance_sign = -avoidance_sign;
+            blocked_batches = blocked_batches.saturating_add(1);
+            if strafe == 0.0 {
+                strafe = avoidance_sign;
+            }
+            if blocked_batches >= 8 {
+                avoidance_sign = -avoidance_sign;
+                strafe = avoidance_sign;
+                blocked_batches = 0;
+            }
         } else {
             strafe = 0.0;
+            blocked_batches = 0;
         }
         remaining = remaining.saturating_sub(step);
         assert!(
@@ -5808,7 +5829,12 @@ fn await_required_entrance_shaft_resident(
         "required entrance shaft must map to chunks"
     );
     for chunk in chunks {
-        await_resident_chunk(instance, spine, chunk, 640);
+        await_resident_chunk(
+            instance,
+            spine,
+            chunk,
+            CAVE_SHAFT_RESIDENT_SETTLING_MAX_TICKS,
+        );
     }
 }
 

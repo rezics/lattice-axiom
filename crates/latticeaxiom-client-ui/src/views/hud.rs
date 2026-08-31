@@ -2,6 +2,10 @@
 
 use std::collections::BTreeSet;
 
+use latticeaxiom_runtime_contracts::{
+    PresentedRenderDistanceChunksV1, TargetRenderDistanceChunksV1,
+};
+
 use crate::semantic::{SemanticKey, SemanticNode, SemanticRole, SemanticState};
 use crate::views::keys::{surface_key, try_surface_key};
 use crate::widgets::ButtonWidget;
@@ -9,7 +13,7 @@ use crate::widgets::ButtonWidget;
 /// Hotbar prefix of the 36-slot inventory container.
 pub const HUD_HOTBAR_SLOTS: u8 = 9;
 
-/// Presentation-neutral vitality, mining, durability, and view-distance strip.
+/// Presentation-neutral vitality, mining, durability, and render-distance strip.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HudStatusV1 {
     /// Current vitality points.
@@ -20,10 +24,10 @@ pub struct HudStatusV1 {
     pub mining_remaining: Option<u32>,
     /// Remaining durability of the selected tool, when present.
     pub tool_durability: Option<u32>,
-    /// Requested view distance before host clamp.
-    pub requested_view_distance: u32,
-    /// Effective view distance after host clamp.
-    pub effective_view_distance: u32,
+    /// Total terrain horizon admitted by the active host.
+    pub target_render_distance: TargetRenderDistanceChunksV1,
+    /// Largest contiguous near-plus-far radius ready for presentation.
+    pub presented_render_distance: PresentedRenderDistanceChunksV1,
 }
 
 impl HudStatusV1 {
@@ -37,11 +41,11 @@ impl HudStatusV1 {
             .tool_durability
             .map_or_else(|| "Tool —".to_owned(), |left| format!("Tool {left}"));
         format!(
-            "Vitality {}/{}  {mine}  {tool}  View {}/{}",
+            "Vitality {}/{}  {mine}  {tool}  Render {}/{}",
             self.vitality_current,
             self.vitality_max,
-            self.effective_view_distance,
-            self.requested_view_distance
+            self.presented_render_distance.chunks(),
+            self.target_render_distance.chunks()
         )
     }
 
@@ -54,7 +58,8 @@ impl HudStatusV1 {
             name: "Player status".to_owned(),
             value: Some(self.line()),
             description: Some(
-                "Vitality, mining progress, tool durability, and clamped view distance".to_owned(),
+                "Vitality, mining progress, tool durability, and presented render distance"
+                    .to_owned(),
             ),
             state: SemanticState::default(),
             actions: BTreeSet::new(),
@@ -303,8 +308,8 @@ impl HudModelV1 {
                 vitality_max: 20,
                 mining_remaining: None,
                 tool_durability: None,
-                requested_view_distance: 8,
-                effective_view_distance: 8,
+                target_render_distance: TargetRenderDistanceChunksV1::default(),
+                presented_render_distance: PresentedRenderDistanceChunksV1::default(),
             },
             hotbar: HotbarV1::empty(),
             inspect: InspectOverlayV1::none(),

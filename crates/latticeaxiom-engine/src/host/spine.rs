@@ -84,9 +84,9 @@ use super::{
     profile::StreamingProfileEvidenceV1,
     session::{DurablePlayerSessionV1, PLAYER_SESSION_ENTITY},
     stream::{
-        InterestClass, LOOK_AHEAD_EXPIRY_TICKS, StreamClamps, ViewDistanceStatusV1, chebyshev_xz,
-        desired_chunks, interest_class, is_render_chunk, prioritize_chunks, retain_protected,
-        sticky_look_ahead,
+        InterestClass, LOOK_AHEAD_EXPIRY_TICKS, StreamClamps, TerrainDistanceStatusV1,
+        chebyshev_xz, desired_chunks, interest_class, is_render_chunk, prioritize_chunks,
+        retain_protected, sticky_look_ahead,
     },
     worldgen::{
         RequiredCaveEntranceV1, compile_host_worldgen_inspect, compile_plan, generate_plan_chunks,
@@ -1464,40 +1464,43 @@ impl ProductionSpine {
         self.lock_inner().ok().map(|inner| inner.clamps.hard_limits)
     }
 
-    /// Returns the player request admitted after the host cap.
+    /// Returns the total terrain horizon admitted after the host cap.
     #[must_use]
-    pub fn admitted_view_distance(&self) -> u32 {
+    pub fn target_render_distance(&self) -> u32 {
         self.lock_inner()
-            .map_or(1, |inner| inner.clamps.admitted_render_distance())
+            .map_or(1, |inner| inner.clamps.target_render_distance())
     }
 
-    /// Returns the interest radius actually admitted after resident-budget clamping.
+    /// Returns the complete authoritative voxel radius.
     #[must_use]
-    pub fn effective_view_distance(&self) -> u32 {
+    pub fn full_detail_distance(&self) -> u32 {
         self.lock_inner()
-            .map_or(1, |inner| inner.clamps.effective_render_distance())
+            .map_or(1, |inner| inner.clamps.full_detail_distance())
     }
 
-    /// Returns the accepted request and its effective host clamp.
+    /// Returns the independent target, near, presented, and simulation radii.
     #[must_use]
-    pub fn view_distance_status(&self) -> Option<ViewDistanceStatusV1> {
+    pub fn terrain_distance_status(&self) -> Option<TerrainDistanceStatusV1> {
         self.lock_inner()
             .ok()
-            .map(|inner| inner.clamps.view_distance_status())
+            .map(|inner| inner.clamps.terrain_distance_status())
     }
 
-    /// Requests an authored render radius in `2..=32` chunks.
+    /// Applies independent render, simulation, and full-detail requests.
     ///
-    /// Host admission, generation, and resident budgets may lower the effective
-    /// render radius without mutating the authored request.
+    /// Host admission and working-set budgets do not rewrite the authored
+    /// requests.
     ///
     /// # Errors
     ///
     /// Returns [`ProductionHostError::Poisoned`] when the spine lock is poisoned.
-    pub fn set_requested_view_distance(&self, chunks: u32) -> Result<u32, ProductionHostError> {
+    pub fn set_terrain_distances(
+        &self,
+        requests: latticeaxiom_runtime_contracts::TerrainDistanceRequestsV1,
+    ) -> Result<TerrainDistanceStatusV1, ProductionHostError> {
         let mut inner = self.lock_inner()?;
-        inner.clamps.set_requested_view_distance(chunks)?;
-        Ok(inner.clamps.effective_render_distance())
+        inner.clamps.set_terrain_distances(requests)?;
+        Ok(inner.clamps.terrain_distance_status())
     }
 
     /// Returns occupancy copied from [`VoxelRuntime`] diagnostics.
