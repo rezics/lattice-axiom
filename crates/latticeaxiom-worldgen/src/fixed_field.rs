@@ -4,8 +4,8 @@
 //! from K.jpg's CC0 `OpenSimplex2` reference revision
 //! `4cd120d35bfc27096698de90d1bcbf4f9d359a3b`. Authoritative evaluation uses
 //! no floating point, mutable global table, SIMD-width choice, or unsafe code.
-//! This module is conformance infrastructure only; the existing terrain epoch
-//! does not consume it.
+//! Semantic terrain and versioned natural surface profiles consume this same
+//! authoritative implementation.
 //!
 //! Inputs use a split integer plus Q0.32 fraction. Transformed offsets and
 //! outputs use signed Q30. Every multiplication reduces by round-to-nearest,

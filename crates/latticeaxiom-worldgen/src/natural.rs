@@ -4,17 +4,20 @@
 //! The layer is optional. D4 plans omit it and keep byte-identical output.
 //! Host crates never supply Terrenia concrete IDs; frozen Role bindings do.
 
+use std::num::NonZeroU32;
+
 use latticeaxiom_core::canonical_json_bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    D4BlockCatalogClosureV1, D4MaterialRoleV1, FrozenRoleBindingsV1, GenerationDiagnosticsV1,
-    NaturalLayerHashV1, NaturalRoleVocabularyV1, PlacementPredicateKindV1,
+    D4BlockCatalogClosureV1, D4MaterialRoleV1, FixedCoordinateV1, FrozenRoleBindingsV1,
+    GenerationDiagnosticsV1, NaturalLayerHashV1, NaturalRoleVocabularyV1, PlacementPredicateKindV1,
     PlacementPredicateReceiptV1, ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1,
     RiverBasinIdV1, RoleBindingReceiptV1, TerrainStyleV1, WorldgenConfigV1, WorldgenError,
     WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
     config::MAX_TERRAIN_RELIEF,
     hashes::{domain_hash, hash_u64, sample_hash_2d, sample_hash_3d},
+    open_simplex_2s_2d_v1,
     provider::ResolvedProvidersV1,
     terrain_field::{DrainageFieldV3, DrainageSampleV3},
     tree_morphology::{
@@ -28,6 +31,10 @@ const BASIN_DOMAIN: &[u8] = b"latticeaxiom.natural-basin.v1\0";
 const GEOLOGY_DOMAIN: &[u8] = b"latticeaxiom.natural-geology.v1\0";
 const RESOURCE_DOMAIN: &[u8] = b"latticeaxiom.natural-resource.v1\0";
 const COVER_DOMAIN: &[u8] = b"latticeaxiom.natural-cover.v1\0";
+const SOIL_DEPTH_DOMAIN: &[u8] = b"latticeaxiom.natural-soil-depth.v1\0";
+const SOIL_DEPTH_SCALE_VOXELS: NonZeroU32 =
+    NonZeroU32::new(128).expect("the authored soil-depth scale is nonzero");
+const FIXED_FIELD_UNIT_Q30: i64 = 1_i64 << 30;
 
 /// Closed integer configuration for the V5 natural layer.
 ///
@@ -317,13 +324,116 @@ pub(crate) struct NaturalSamplerV1 {
     config: NaturalLayerConfigV1,
     layer_hash: NaturalLayerHashV1,
     hydrology: ProviderGenerationIdentityV1,
+    surface_material_policy: SurfaceMaterialPolicyV1,
     basin_seed: u64,
     geology_seed: u64,
     resource_seed: u64,
+    soil_depth_seed: i64,
     trees: TreeMorphologySamplerV1,
     cover_seed: u64,
     drainage: DrainageFieldV3,
     receipts: Vec<RoleBindingReceiptV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SurfaceMaterialPolicyV1 {
+    PreliminaryHeight,
+    FinalSurfaceAndSlope,
+}
+
+/// Environmental and final-topography controls for one surface profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceFormationInputV1 {
+    maximum_neighbor_descent: u16,
+    neighbor_height_delta_sum: i16,
+    precipitation_per_1024: i16,
+    infiltration_per_1024: i16,
+    effective_runoff_q16: u32,
+}
+
+impl SurfaceFormationInputV1 {
+    pub(crate) const fn new(
+        maximum_neighbor_descent: u16,
+        neighbor_height_delta_sum: i16,
+        precipitation_per_1024: i16,
+        infiltration_per_1024: i16,
+        effective_runoff_q16: u32,
+    ) -> Self {
+        Self {
+            maximum_neighbor_descent,
+            neighbor_height_delta_sum,
+            precipitation_per_1024,
+            infiltration_per_1024,
+            effective_runoff_q16,
+        }
+    }
+}
+
+/// Cached boundary between surface sediment and base rock for one column.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceMaterialProfileV1 {
+    subsurface_depth_voxels: u8,
+}
+
+/// One voxel query bound to the preliminary and final surface contracts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MaterializedNaturalSampleV1 {
+    x: i64,
+    y: i64,
+    z: i64,
+    preliminary_surface_y: i32,
+    final_surface_y: i64,
+    surface_profile: SurfaceMaterialProfileV1,
+    style: TerrainStyleV1,
+}
+
+impl MaterializedNaturalSampleV1 {
+    pub(crate) const fn new(
+        position: (i64, i64, i64),
+        preliminary_surface_y: i32,
+        final_surface_y: i64,
+        surface_profile: SurfaceMaterialProfileV1,
+        style: TerrainStyleV1,
+    ) -> Self {
+        Self {
+            x: position.0,
+            y: position.1,
+            z: position.2,
+            preliminary_surface_y,
+            final_surface_y,
+            surface_profile,
+            style,
+        }
+    }
+}
+
+impl SurfaceMaterialProfileV1 {
+    const LEGACY: Self = Self {
+        subsurface_depth_voxels: 3,
+    };
+
+    pub(crate) const fn legacy() -> Self {
+        Self::LEGACY
+    }
+
+    const fn minimum_resource_depth(self) -> i64 {
+        let below_sediment = self.subsurface_depth_voxels as i64 + 1;
+        if below_sediment < 4 {
+            4
+        } else {
+            below_sediment
+        }
+    }
+}
+
+impl SurfaceMaterialPolicyV1 {
+    const fn for_geology_revision(revision: u32) -> Self {
+        if revision >= 3 {
+            Self::FinalSurfaceAndSlope
+        } else {
+            Self::PreliminaryHeight
+        }
+    }
 }
 
 impl NaturalSamplerV1 {
@@ -358,6 +468,7 @@ impl NaturalSamplerV1 {
         let basin_seed = natural_sample_seed(BASIN_DOMAIN, seed_root);
         let geology_seed = natural_sample_seed(GEOLOGY_DOMAIN, seed_root);
         let resource_seed = natural_sample_seed(RESOURCE_DOMAIN, seed_root);
+        let soil_depth_seed = natural_sample_seed_i64(SOIL_DEPTH_DOMAIN, seed_root);
         let trees = TreeMorphologySamplerV1::new(seed_root);
         let cover_seed = natural_sample_seed(COVER_DOMAIN, seed_root);
         let drainage = DrainageFieldV3::new(seed_root, layer.config.river_cell_edge_voxels);
@@ -387,9 +498,13 @@ impl NaturalSamplerV1 {
             config: layer.config,
             layer_hash,
             hydrology,
+            surface_material_policy: SurfaceMaterialPolicyV1::for_geology_revision(
+                geology.algorithm_revision(),
+            ),
             basin_seed,
             geology_seed,
             resource_seed,
+            soil_depth_seed,
             trees,
             cover_seed,
             drainage,
@@ -411,6 +526,29 @@ impl NaturalSamplerV1 {
 
     pub(crate) const fn hydrology_identity(&self) -> &ProviderGenerationIdentityV1 {
         &self.hydrology
+    }
+
+    pub(crate) const fn uses_final_surface_materials(&self) -> bool {
+        matches!(
+            self.surface_material_policy,
+            SurfaceMaterialPolicyV1::FinalSurfaceAndSlope
+        )
+    }
+
+    /// Resolves one bounded sediment/bedrock profile from coherent geology,
+    /// climate, runoff, and final four-neighbor topography.
+    pub(crate) fn surface_material_profile(
+        &self,
+        x: i64,
+        z: i64,
+        input: SurfaceFormationInputV1,
+    ) -> WorldgenResult<SurfaceMaterialProfileV1> {
+        if self.surface_material_policy == SurfaceMaterialPolicyV1::PreliminaryHeight {
+            return Ok(SurfaceMaterialProfileV1::LEGACY);
+        }
+
+        let normalized = soil_depth_control_per_1024(self.soil_depth_seed, x, z)?;
+        Ok(surface_material_profile_from_control(normalized, input))
     }
 
     pub(crate) fn river_sample(&self, x: i64, z: i64) -> RiverSampleV1 {
@@ -488,9 +626,43 @@ impl NaturalSamplerV1 {
         style: TerrainStyleV1,
     ) -> GeologicSampleV1 {
         let depth = i64::from(height).saturating_sub(y);
+        self.geologic_sample_at_depth(x, y, z, depth, style, None)
+    }
+
+    pub(crate) fn materialized_geologic_sample(
+        &self,
+        input: MaterializedNaturalSampleV1,
+    ) -> GeologicSampleV1 {
+        let depth = match self.surface_material_policy {
+            SurfaceMaterialPolicyV1::PreliminaryHeight => {
+                i64::from(input.preliminary_surface_y).saturating_sub(input.y)
+            }
+            SurfaceMaterialPolicyV1::FinalSurfaceAndSlope => {
+                input.final_surface_y.saturating_sub(input.y)
+            }
+        };
+        let profile = matches!(
+            self.surface_material_policy,
+            SurfaceMaterialPolicyV1::FinalSurfaceAndSlope
+        )
+        .then_some(input.surface_profile);
+        self.geologic_sample_at_depth(input.x, input.y, input.z, depth, input.style, profile)
+    }
+
+    fn geologic_sample_at_depth(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+        depth: i64,
+        style: TerrainStyleV1,
+        profile: Option<SurfaceMaterialProfileV1>,
+    ) -> GeologicSampleV1 {
         let roll = sample_hash_3d(self.geology_seed, x, y, z);
-        let intrusion =
-            depth >= 4 && roll % 1_024 < u64::from(self.config.intrusion_threshold_per_1024);
+        let minimum_rock_depth =
+            profile.map_or(4, SurfaceMaterialProfileV1::minimum_resource_depth);
+        let intrusion = depth >= minimum_rock_depth
+            && roll % 1_024 < u64::from(self.config.intrusion_threshold_per_1024);
         let stratum = if intrusion {
             match roll % 3 {
                 0 => D4MaterialRoleV1::Tuff,
@@ -499,7 +671,7 @@ impl NaturalSamplerV1 {
             }
         } else if depth <= 0 {
             surface_role(style)
-        } else if depth <= 3 {
+        } else if depth <= profile.map_or(3, |profile| i64::from(profile.subsurface_depth_voxels)) {
             shallow_role(style, roll)
         } else if depth <= 8 {
             upper_rock_role(style, roll)
@@ -528,7 +700,40 @@ impl NaturalSamplerV1 {
         style: TerrainStyleV1,
     ) -> ResourceFieldSampleV1 {
         let depth = i64::from(height).saturating_sub(y);
-        if depth < 4 {
+        self.resource_sample_at_depth(x, y, z, depth, 4, style)
+    }
+
+    pub(crate) fn materialized_resource_sample(
+        &self,
+        input: MaterializedNaturalSampleV1,
+    ) -> ResourceFieldSampleV1 {
+        let depth = match self.surface_material_policy {
+            SurfaceMaterialPolicyV1::PreliminaryHeight => {
+                i64::from(input.preliminary_surface_y).saturating_sub(input.y)
+            }
+            SurfaceMaterialPolicyV1::FinalSurfaceAndSlope => {
+                input.final_surface_y.saturating_sub(input.y)
+            }
+        };
+        let minimum_depth = match self.surface_material_policy {
+            SurfaceMaterialPolicyV1::PreliminaryHeight => 4,
+            SurfaceMaterialPolicyV1::FinalSurfaceAndSlope => {
+                input.surface_profile.minimum_resource_depth()
+            }
+        };
+        self.resource_sample_at_depth(input.x, input.y, input.z, depth, minimum_depth, input.style)
+    }
+
+    fn resource_sample_at_depth(
+        &self,
+        x: i64,
+        y: i64,
+        z: i64,
+        depth: i64,
+        minimum_depth: i64,
+        style: TerrainStyleV1,
+    ) -> ResourceFieldSampleV1 {
+        if depth < minimum_depth {
             return ResourceFieldSampleV1 { role: None };
         }
         let candidates = [
@@ -803,6 +1008,57 @@ impl NaturalSamplerV1 {
     }
 }
 
+fn soil_depth_control_per_1024(seed: i64, x: i64, z: i64) -> WorldgenResult<i64> {
+    let noise = open_simplex_2s_2d_v1(
+        seed,
+        FixedCoordinateV1::from_voxel(x, SOIL_DEPTH_SCALE_VOXELS)?,
+        FixedCoordinateV1::from_voxel(z, SOIL_DEPTH_SCALE_VOXELS)?,
+    )?;
+    Ok(i64::from(noise.raw_q30())
+        .saturating_mul(1_024)
+        .div_euclid(FIXED_FIELD_UNIT_Q30)
+        .clamp(-1_024, 1_024))
+}
+
+fn surface_material_profile_from_control(
+    normalized: i64,
+    input: SurfaceFormationInputV1,
+) -> SurfaceMaterialProfileV1 {
+    let mut depth = match normalized {
+        ..=-257 => 1_i64,
+        -256..=-1 => 2,
+        0..=255 => 3,
+        _ => 4,
+    };
+
+    let climate = i64::from(input.precipitation_per_1024)
+        .saturating_add(i64::from(input.infiltration_per_1024));
+    if climate >= 768 {
+        depth = depth.saturating_add(1);
+    } else if climate <= -768 {
+        depth = depth.saturating_sub(1);
+    }
+    if input.effective_runoff_q16 >= 49_152 {
+        depth = depth.saturating_sub(1);
+    }
+
+    if input.neighbor_height_delta_sum >= 2 {
+        depth = depth.saturating_add(1);
+    } else if input.neighbor_height_delta_sum <= -2 {
+        depth = depth.saturating_sub(1);
+    }
+    depth = depth.clamp(0, 5);
+
+    let subsurface_depth_voxels = match input.maximum_neighbor_descent {
+        0 => u8::try_from(depth).unwrap_or(5),
+        1 => u8::try_from(depth.min(1)).unwrap_or(1),
+        _ => 0,
+    };
+    SurfaceMaterialProfileV1 {
+        subsurface_depth_voxels,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LocalRiverSampleV1 {
     cell_x: i64,
@@ -829,6 +1085,10 @@ pub(crate) struct NaturalWorkCountersV1 {
 
 fn natural_sample_seed(domain: &[u8], seed_root: WorldgenSeedRootV2) -> u64 {
     hash_u64(domain, &[seed_root.as_bytes()])
+}
+
+fn natural_sample_seed_i64(domain: &[u8], seed_root: WorldgenSeedRootV2) -> i64 {
+    i64::from_be_bytes(natural_sample_seed(domain, seed_root).to_be_bytes())
 }
 
 fn required_natural(
@@ -974,5 +1234,69 @@ impl D4MaterialRoleV1 {
             Self::CrystalResource => 6,
             _ => 255,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{
+        SurfaceFormationInputV1, soil_depth_control_per_1024, surface_material_profile_from_control,
+    };
+
+    const fn formation(
+        descent: u16,
+        neighbor_delta_sum: i16,
+        precipitation: i16,
+        infiltration: i16,
+        runoff: u32,
+    ) -> SurfaceFormationInputV1 {
+        SurfaceFormationInputV1::new(
+            descent,
+            neighbor_delta_sum,
+            precipitation,
+            infiltration,
+            runoff,
+        )
+    }
+
+    #[test]
+    fn coherent_control_produces_multiple_bounded_soil_depths() {
+        let mut depths = BTreeSet::new();
+        for z in (-1_024_i64..=1_024).step_by(128) {
+            for x in (-1_024_i64..=1_024).step_by(128) {
+                let control = soil_depth_control_per_1024(0x0003_0511, x, z)
+                    .expect("fixed corpus lies inside the field envelope");
+                let profile =
+                    surface_material_profile_from_control(control, formation(0, 0, 0, 0, 32_768));
+                assert!(profile.subsurface_depth_voxels <= 5);
+                depths.insert(profile.subsurface_depth_voxels);
+            }
+        }
+        assert!(
+            depths.len() >= 3,
+            "coherent fixed corpus collapsed to {depths:?}"
+        );
+    }
+
+    #[test]
+    fn climate_runoff_and_curvature_adjust_but_bound_the_profile() {
+        let wet_concave =
+            surface_material_profile_from_control(0, formation(0, 4, 768, 768, 16_384));
+        let dry_exposed =
+            surface_material_profile_from_control(0, formation(0, -4, -768, -768, 65_536));
+        assert_eq!(wet_concave.subsurface_depth_voxels, 5);
+        assert_eq!(dry_exposed.subsurface_depth_voxels, 0);
+    }
+
+    #[test]
+    fn final_surface_descent_thins_soil_without_replacing_the_biome_top() {
+        let neutral =
+            |descent| surface_material_profile_from_control(0, formation(descent, 0, 0, 0, 32_768));
+        assert_eq!(neutral(0).subsurface_depth_voxels, 3);
+        assert_eq!(neutral(1).subsurface_depth_voxels, 1);
+        assert_eq!(neutral(2).subsurface_depth_voxels, 0);
+        assert_eq!(neutral(3).subsurface_depth_voxels, 0);
     }
 }

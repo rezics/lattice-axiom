@@ -136,9 +136,9 @@ pub use roles::{
 pub use seed::{WorldSeedV1, WorldgenSeedRootV2};
 pub use semantic_terrain::{
     ClosedSplinePointV1, ClosedSplineV1, HydrologyConstrainedTerrainSamplerV1,
-    SemanticDensitySampleV1, SemanticFieldSampleV1, SemanticFieldSpecV1,
-    SemanticHydrologicTerrainInputV1, SemanticHydrologicTerrainPlanV1, SemanticTerrainFieldV1,
-    SemanticTerrainPolicyV1, TerrainBoundaryAdapterEvidenceV1,
+    SemanticDensityColumnV1, SemanticDensitySampleV1, SemanticFieldSampleV1, SemanticFieldSpecV1,
+    SemanticHydrologicTerrainInputV1, SemanticHydrologicTerrainPlanV1, SemanticMorphologyPolicyV1,
+    SemanticTerrainFieldV1, SemanticTerrainPolicyV1, TerrainBoundaryAdapterEvidenceV1,
     build_semantic_hydrologic_terrain_plan_v1,
 };
 pub use spawn::{

@@ -4,8 +4,9 @@ use latticeaxiom_core::{StableId, canonical_json_bytes};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ProviderGenerationIdentityV1, SemanticTerrainFieldV1, SemanticTerrainPolicyV1, TerrainConfigV2,
-    TerrainStyleV1, WorldgenError, WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
+    ProviderGenerationIdentityV1, SemanticDensityColumnV1, SemanticTerrainFieldV1,
+    SemanticTerrainPolicyV1, TerrainConfigV2, TerrainStyleV1, WorldgenError, WorldgenLimitsV1,
+    WorldgenResult, WorldgenSeedRootV2,
     terrain_field::{TerrainColumnSampleV2, TerrainFieldV2},
 };
 
@@ -151,6 +152,14 @@ pub enum TerrainBaseAlgorithmV1 {
     SemanticAridHighlands,
     /// Hydrology-constrained semantic boreal density, revision 1.
     SemanticBorealLowlands,
+    /// Semantic marine density with middle-scale morphology, revision 2.
+    SemanticMarineBasinV2,
+    /// Semantic temperate density with middle-scale morphology, revision 2.
+    SemanticTemperateReliefV2,
+    /// Semantic arid density with middle-scale morphology, revision 2.
+    SemanticAridHighlandsV2,
+    /// Semantic boreal density with middle-scale morphology, revision 2.
+    SemanticBorealLowlandsV2,
 }
 
 impl TerrainBaseAlgorithmV1 {
@@ -161,6 +170,10 @@ impl TerrainBaseAlgorithmV1 {
                 | Self::SemanticTemperateRelief
                 | Self::SemanticAridHighlands
                 | Self::SemanticBorealLowlands
+                | Self::SemanticMarineBasinV2
+                | Self::SemanticTemperateReliefV2
+                | Self::SemanticAridHighlandsV2
+                | Self::SemanticBorealLowlandsV2
         )
     }
 }
@@ -290,7 +303,7 @@ struct CompiledTerrainProgramV1 {
 #[derive(Clone, Debug)]
 enum CompiledTerrainFieldV1 {
     Legacy(TerrainFieldV2),
-    Semantic(SemanticTerrainFieldV1),
+    Semantic(Box<SemanticTerrainFieldV1>),
 }
 
 impl CompiledTerrainFieldV1 {
@@ -312,28 +325,21 @@ impl CompiledTerrainFieldV1 {
         }
     }
 
-    fn is_solid(
+    fn prepare_density_column(
         &self,
         x: i64,
-        y: i64,
         z: i64,
         approved_surface_y: i32,
         protected_water: bool,
-    ) -> bool {
+    ) -> Option<SemanticDensityColumnV1> {
         match self {
-            Self::Legacy(_) => y <= i64::from(approved_surface_y),
-            Self::Semantic(field) => {
+            Self::Legacy(_) => None,
+            Self::Semantic(field) => Some(
                 field
-                    .density(x, y, z, approved_surface_y, protected_water)
-                    .unwrap_or_else(|error| invalid_semantic_coordinate(x, y, z, &error))
-                    .final_density_q8()
-                    >= 0
-            }
+                    .prepare_density_column(x, z, approved_surface_y, protected_water)
+                    .unwrap_or_else(|error| invalid_semantic_coordinate(x, 0, z, &error)),
+            ),
         }
-    }
-
-    const fn is_semantic(&self) -> bool {
-        matches!(self, Self::Semantic(_))
     }
 }
 
@@ -343,7 +349,6 @@ pub(crate) struct ResolvedTerrainProgramsV1 {
     ordered: Vec<SurfaceBiomeTerrainProgramV1>,
     domain_field: CompiledTerrainFieldV1,
     terrain_config: TerrainConfigV2,
-    semantic: bool,
 }
 
 impl ResolvedTerrainProgramsV1 {
@@ -376,7 +381,6 @@ impl ResolvedTerrainProgramsV1 {
                 style: TerrainStyleV1::Marine,
             })?;
         let domain_field = compile_field(domain_program, seed_root, terrain_config)?;
-        let semantic = domain_field.is_semantic();
         let programs = ordered
             .iter()
             .cloned()
@@ -395,7 +399,6 @@ impl ResolvedTerrainProgramsV1 {
             ordered,
             domain_field,
             terrain_config,
-            semantic,
         })
     }
 
@@ -408,24 +411,19 @@ impl ResolvedTerrainProgramsV1 {
         apply_algorithm(program.authored.algorithm, sample, self.terrain_config)
     }
 
-    pub(crate) fn is_solid(
+    pub(crate) fn prepare_density_column(
         &self,
         style: TerrainStyleV1,
         x: i64,
-        y: i64,
         z: i64,
         approved_surface_y: i32,
         protected_water: bool,
-    ) -> bool {
+    ) -> Option<SemanticDensityColumnV1> {
         self.programs
             .get(&style)
             .unwrap_or_else(|| missing_validated_program(style))
             .field
-            .is_solid(x, y, z, approved_surface_y, protected_water)
-    }
-
-    pub(crate) const fn uses_semantic(&self) -> bool {
-        self.semantic
+            .prepare_density_column(x, z, approved_surface_y, protected_water)
     }
 
     pub(crate) fn semantic_policy(&self) -> Option<&SemanticTerrainPolicyV1> {
@@ -517,6 +515,7 @@ fn compile_field(
 ) -> WorldgenResult<CompiledTerrainFieldV1> {
     if let Some(policy) = &program.semantic_policy {
         return SemanticTerrainFieldV1::new(seed_root, terrain_config, policy.clone())
+            .map(Box::new)
             .map(CompiledTerrainFieldV1::Semantic);
     }
     Ok(CompiledTerrainFieldV1::Legacy(TerrainFieldV2::new(
@@ -533,7 +532,9 @@ fn apply_algorithm(
     let sea = config.world.sea_level_y;
     match algorithm {
         TerrainBaseAlgorithmV1::ContinentalComposite => sample,
-        TerrainBaseAlgorithmV1::MarineBasin | TerrainBaseAlgorithmV1::SemanticMarineBasin => {
+        TerrainBaseAlgorithmV1::MarineBasin
+        | TerrainBaseAlgorithmV1::SemanticMarineBasin
+        | TerrainBaseAlgorithmV1::SemanticMarineBasinV2 => {
             let maximum_bed = sea.saturating_sub(3);
             sample.height = sample.height.min(maximum_bed);
             let depth = sea.saturating_sub(sample.height);
@@ -546,8 +547,11 @@ fn apply_algorithm(
             sample
         }
         TerrainBaseAlgorithmV1::TemperateRelief
-        | TerrainBaseAlgorithmV1::SemanticTemperateRelief => force_land(sample, sea),
-        TerrainBaseAlgorithmV1::AridHighlands | TerrainBaseAlgorithmV1::SemanticAridHighlands => {
+        | TerrainBaseAlgorithmV1::SemanticTemperateRelief
+        | TerrainBaseAlgorithmV1::SemanticTemperateReliefV2 => force_land(sample, sea),
+        TerrainBaseAlgorithmV1::AridHighlands
+        | TerrainBaseAlgorithmV1::SemanticAridHighlands
+        | TerrainBaseAlgorithmV1::SemanticAridHighlandsV2 => {
             sample = force_land(sample, sea);
             let uplift = i32::from(config.relief.plateau_height_voxels).div_euclid(2);
             sample.height = sample.height.saturating_add(uplift).min(
@@ -567,7 +571,9 @@ fn apply_algorithm(
             sample.surface_water_y = None;
             sample
         }
-        TerrainBaseAlgorithmV1::BorealLowlands | TerrainBaseAlgorithmV1::SemanticBorealLowlands => {
+        TerrainBaseAlgorithmV1::BorealLowlands
+        | TerrainBaseAlgorithmV1::SemanticBorealLowlands
+        | TerrainBaseAlgorithmV1::SemanticBorealLowlandsV2 => {
             sample = force_land(sample, sea);
             let lowland_ceiling = sea
                 .saturating_add(i32::from(config.relief.base_height_voxels))
@@ -939,15 +945,22 @@ mod tests {
             TerrainConfigV2::representative_test_baseline(),
         )
         .expect("semantic terrain programs resolve");
-        assert!(resolved.uses_semantic());
         let column = resolved.sample(TerrainStyleV1::TemperateWoodland, 17, -31);
-        assert!(!resolved.is_solid(
-            TerrainStyleV1::TemperateWoodland,
-            17,
-            i64::from(column.height) + 1,
-            -31,
-            column.height,
-            true,
-        ));
+        let density = resolved
+            .prepare_density_column(
+                TerrainStyleV1::TemperateWoodland,
+                17,
+                -31,
+                column.height,
+                true,
+            )
+            .expect("semantic program prepares density controls");
+        assert!(
+            density
+                .density_at(i64::from(column.height) + 1)
+                .expect("semantic density coordinate is valid")
+                .final_density_q8()
+                < 0
+        );
     }
 }

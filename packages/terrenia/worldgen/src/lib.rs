@@ -9,10 +9,10 @@ use std::num::NonZeroU32;
 use latticeaxiom_core::{CanonicalHash, StableId};
 use latticeaxiom_worldgen::{
     BiomeSelectionRuleV1, ClimateConfigV2, ClosedSplinePointV1, ClosedSplineV1, LandmassConfigV2,
-    ProviderGenerationIdentityV1, ReliefConfigV2, SemanticFieldSpecV1, SemanticTerrainPolicyV1,
-    SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1, SurfaceTerrainDomainV1, SurfaceWaterConfigV2,
-    TerrainBaseAlgorithmV1, TerrainConfigV2, TerrainStyleV1, UndergroundConfigV2, WorldBoundsV2,
-    WorldgenError, WorldgenResult,
+    ProviderGenerationIdentityV1, ReliefConfigV2, SemanticFieldSpecV1, SemanticMorphologyPolicyV1,
+    SemanticTerrainPolicyV1, SurfaceBiomeIdV1, SurfaceBiomeTerrainProgramV1,
+    SurfaceTerrainDomainV1, SurfaceWaterConfigV2, TerrainBaseAlgorithmV1, TerrainConfigV2,
+    TerrainStyleV1, UndergroundConfigV2, WorldBoundsV2, WorldgenError, WorldgenResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -168,7 +168,7 @@ pub fn surface_biome_terrain_programs(
     .collect()
 }
 
-/// Resolves Terrenia's new-world semantic terrain revision.
+/// Resolves Terrenia's original semantic terrain revision for old snapshots.
 ///
 /// The returned provider identities use registration major `@2` and
 /// algorithm revision 13. The package-owned policy is serialized into every
@@ -178,11 +178,72 @@ pub fn surface_biome_terrain_programs(
 ///
 /// Returns an invalid-program or invalid-config error if package constants,
 /// resolved frequencies, or closed spline rows violate their contracts.
+pub fn semantic_surface_biome_terrain_programs_v1(
+    terrain: TerrainConfigV2,
+    implementation_fingerprint: CanonicalHash,
+) -> WorldgenResult<Vec<SurfaceBiomeTerrainProgramV1>> {
+    let policy = semantic_policy_v1(terrain)?;
+    semantic_surface_programs(
+        &policy,
+        implementation_fingerprint,
+        SemanticProviderEpoch {
+            registration_major: 2,
+            algorithm_revision: 13,
+        },
+        [
+            TerrainBaseAlgorithmV1::SemanticMarineBasin,
+            TerrainBaseAlgorithmV1::SemanticTemperateRelief,
+            TerrainBaseAlgorithmV1::SemanticAridHighlands,
+            TerrainBaseAlgorithmV1::SemanticBorealLowlands,
+        ],
+    )
+}
+
+/// Resolves Terrenia's current middle-scale semantic terrain revision.
+///
+/// The returned provider identities use registration major `@3` and
+/// algorithm revision 14. Its independently seeded middle-relief and plateau
+/// policy is serialized into every program and participates in the generation
+/// epoch. Call [`semantic_surface_biome_terrain_programs_v1`] only when opening
+/// a snapshot that already names the original revision.
+///
+/// # Errors
+///
+/// Returns an invalid-program or invalid-config error if package constants,
+/// resolved frequencies, or closed spline rows violate their contracts.
 pub fn semantic_surface_biome_terrain_programs(
     terrain: TerrainConfigV2,
     implementation_fingerprint: CanonicalHash,
 ) -> WorldgenResult<Vec<SurfaceBiomeTerrainProgramV1>> {
-    let policy = semantic_policy(terrain)?;
+    let policy = semantic_policy_v2(terrain)?;
+    semantic_surface_programs(
+        &policy,
+        implementation_fingerprint,
+        SemanticProviderEpoch {
+            registration_major: 3,
+            algorithm_revision: 14,
+        },
+        [
+            TerrainBaseAlgorithmV1::SemanticMarineBasinV2,
+            TerrainBaseAlgorithmV1::SemanticTemperateReliefV2,
+            TerrainBaseAlgorithmV1::SemanticAridHighlandsV2,
+            TerrainBaseAlgorithmV1::SemanticBorealLowlandsV2,
+        ],
+    )
+}
+
+#[derive(Clone, Copy)]
+struct SemanticProviderEpoch {
+    registration_major: u8,
+    algorithm_revision: u32,
+}
+
+fn semantic_surface_programs(
+    policy: &SemanticTerrainPolicyV1,
+    implementation_fingerprint: CanonicalHash,
+    epoch: SemanticProviderEpoch,
+    algorithms: [TerrainBaseAlgorithmV1; 4],
+) -> WorldgenResult<Vec<SurfaceBiomeTerrainProgramV1>> {
     [
         (
             "open-ocean",
@@ -190,7 +251,7 @@ pub fn semantic_surface_biome_terrain_programs(
             SurfaceTerrainDomainV1::Marine,
             u16::MAX,
             BiomeSelectionRuleV1::Fallback,
-            TerrainBaseAlgorithmV1::SemanticMarineBasin,
+            algorithms[0],
         ),
         (
             "temperate-woodland",
@@ -198,7 +259,7 @@ pub fn semantic_surface_biome_terrain_programs(
             SurfaceTerrainDomainV1::Land,
             u16::MAX,
             BiomeSelectionRuleV1::Fallback,
-            TerrainBaseAlgorithmV1::SemanticTemperateRelief,
+            algorithms[1],
         ),
         (
             "arid-badlands",
@@ -209,7 +270,7 @@ pub fn semantic_surface_biome_terrain_programs(
                 min_aridity: 96,
                 max_humidity: -384,
             },
-            TerrainBaseAlgorithmV1::SemanticAridHighlands,
+            algorithms[2],
         ),
         (
             "boreal-wetland",
@@ -222,7 +283,7 @@ pub fn semantic_surface_biome_terrain_programs(
                 min_humidity: -319,
                 max_humidity: 1_024,
             },
-            TerrainBaseAlgorithmV1::SemanticBorealLowlands,
+            algorithms[3],
         ),
     ]
     .into_iter()
@@ -236,6 +297,7 @@ pub fn semantic_surface_biome_terrain_programs(
             algorithm,
             implementation_fingerprint,
             policy.clone(),
+            epoch,
         )
     })
     .collect()
@@ -254,10 +316,13 @@ fn semantic_terrain_program(
     algorithm: TerrainBaseAlgorithmV1,
     implementation_fingerprint: CanonicalHash,
     policy: SemanticTerrainPolicyV1,
+    epoch: SemanticProviderEpoch,
 ) -> WorldgenResult<SurfaceBiomeTerrainProgramV1> {
     let biome = parse_program_identity(&format!("terrenia:biome/{path}"))?;
-    let provider =
-        parse_program_identity(&format!("terrenia:worldgen-provider/terrain-base/{path}@2"))?;
+    let provider = parse_program_identity(&format!(
+        "terrenia:worldgen-provider/terrain-base/{path}@{}",
+        epoch.registration_major
+    ))?;
     Ok(SurfaceBiomeTerrainProgramV1::new_semantic(
         SurfaceBiomeIdV1::new(biome)?,
         style,
@@ -268,14 +333,14 @@ fn semantic_terrain_program(
         ProviderGenerationIdentityV1::new(
             provider,
             NonZeroU32::MIN,
-            13,
+            epoch.algorithm_revision,
             implementation_fingerprint,
         ),
         policy,
     ))
 }
 
-fn semantic_policy(terrain: TerrainConfigV2) -> WorldgenResult<SemanticTerrainPolicyV1> {
+fn semantic_policy_v1(terrain: TerrainConfigV2) -> WorldgenResult<SemanticTerrainPolicyV1> {
     let scale = |value: u32| {
         NonZeroU32::new(value.max(1)).map(|scale| SemanticFieldSpecV1::new(scale, 1_024))
     };
@@ -323,6 +388,37 @@ fn semantic_policy(terrain: TerrainConfigV2) -> WorldgenResult<SemanticTerrainPo
             .saturating_add(terrain.water.river_depth_voxels)
             .saturating_mul(256),
     )
+}
+
+fn semantic_policy_v2(terrain: TerrainConfigV2) -> WorldgenResult<SemanticTerrainPolicyV1> {
+    let morphology_scale = NonZeroU32::new(
+        terrain.relief.mountain_scale_voxels.div_euclid(4).max(256),
+    )
+    .ok_or_else(|| WorldgenError::InvalidConfig {
+        field: "terrenia.semantic.morphology.scale",
+        reason: "resolved morphology field scale must be nonzero".to_owned(),
+    })?;
+    let morphology = SemanticMorphologyPolicyV1::new(
+        SemanticFieldSpecV1::new(morphology_scale, 1_024),
+        SemanticFieldSpecV1::new(morphology_scale, 1_024),
+        closed_spline(&[
+            (-1_024, 384),
+            (-256, 640),
+            (0, 960),
+            (384, 1_440),
+            (768, 2_048),
+            (1_024, 2_048),
+        ])?,
+        closed_spline(&[
+            (-1_024, 128),
+            (-256, 256),
+            (256, 640),
+            (768, 1_024),
+            (1_024, 1_024),
+        ])?,
+        64,
+    )?;
+    semantic_policy_v1(terrain)?.with_morphology(morphology)
 }
 
 fn closed_spline(points: &[(i16, i32)]) -> WorldgenResult<ClosedSplineV1> {
@@ -600,27 +696,57 @@ mod tests {
         let fingerprint = CanonicalHash::digest("package");
         let legacy = surface_biome_terrain_programs(fingerprint)
             .expect("legacy programs remain available for frozen epochs");
-        let semantic = semantic_surface_biome_terrain_programs(
+        let semantic_v1 = semantic_surface_biome_terrain_programs_v1(
             TerrainPresetV2::Balanced.resolve(),
             fingerprint,
         )
-        .expect("semantic programs are valid");
-        assert_eq!(legacy.len(), semantic.len());
-        for (old, new) in legacy.iter().zip(&semantic) {
+        .expect("original semantic programs remain available for frozen epochs");
+        let semantic_v2 = semantic_surface_biome_terrain_programs(
+            TerrainPresetV2::Balanced.resolve(),
+            fingerprint,
+        )
+        .expect("current semantic programs are valid");
+        assert_eq!(legacy.len(), semantic_v1.len());
+        assert_eq!(legacy.len(), semantic_v2.len());
+        for ((old, semantic_old), semantic_new) in legacy.iter().zip(&semantic_v1).zip(&semantic_v2)
+        {
             assert_eq!(old.provider().algorithm_revision(), 12);
-            assert_eq!(new.provider().algorithm_revision(), 13);
+            assert_eq!(semantic_old.provider().algorithm_revision(), 13);
+            assert_eq!(semantic_new.provider().algorithm_revision(), 14);
             assert!(old.provider().provider_stable_id().as_str().ends_with("@1"));
-            assert!(new.provider().provider_stable_id().as_str().ends_with("@2"));
+            assert!(
+                semantic_old
+                    .provider()
+                    .provider_stable_id()
+                    .as_str()
+                    .ends_with("@2")
+            );
+            assert!(
+                semantic_new
+                    .provider()
+                    .provider_stable_id()
+                    .as_str()
+                    .ends_with("@3")
+            );
             assert!(old.semantic_policy().is_none());
-            assert!(new.semantic_policy().is_some());
+            assert!(
+                semantic_old
+                    .semantic_policy()
+                    .is_some_and(|policy| policy.morphology().is_none())
+            );
+            assert!(
+                semantic_new
+                    .semantic_policy()
+                    .is_some_and(|policy| policy.morphology().is_some())
+            );
         }
-        let hashes = semantic
+        let hashes = semantic_v2
             .iter()
             .filter_map(SurfaceBiomeTerrainProgramV1::semantic_policy)
             .map(|policy| policy.canonical_hash().expect("policy canonicalizes"))
             .collect::<BTreeSet<_>>();
         assert_eq!(hashes.len(), 1);
-        assert!(semantic.iter().all(|program| {
+        assert!(semantic_v2.iter().all(|program| {
             program
                 .semantic_policy()
                 .is_some_and(|policy| policy.maximum_density_displacement_voxels() == 8)
@@ -630,7 +756,7 @@ mod tests {
     #[test]
     fn semantic_default_has_land_ocean_relief_and_no_axis_lock() {
         let terrain = TerrainPresetV2::Balanced.resolve();
-        let policy = semantic_policy(terrain).expect("balanced semantic policy is valid");
+        let policy = semantic_policy_v1(terrain).expect("balanced semantic policy is valid");
         let field = SemanticTerrainFieldV1::new(
             WorldgenSeedRootV2::from_world_seed(WorldSeedV1::from_integer(0x51_7a)),
             terrain,

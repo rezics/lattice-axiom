@@ -32,6 +32,12 @@ const TEMPERATURE_DOMAIN: &[u8] = b"latticeaxiom.semantic.temperature.v1\0";
 const PRECIPITATION_DOMAIN: &[u8] = b"latticeaxiom.semantic.precipitation.v1\0";
 const INFILTRATION_DOMAIN: &[u8] = b"latticeaxiom.semantic.infiltration.v1\0";
 const DETAIL_DOMAIN: &[u8] = b"latticeaxiom.semantic.detail.v1\0";
+const MIDDLE_RELIEF_DOMAIN: &[u8] = b"latticeaxiom.semantic.middle-relief.v1\0";
+const MIDDLE_RELIEF_OCTAVE_DOMAIN: &[u8] = b"latticeaxiom.semantic.middle-relief.octave-1.v1\0";
+const MIDDLE_RELIEF_OCTAVE_2_DOMAIN: &[u8] = b"latticeaxiom.semantic.middle-relief.octave-2.v1\0";
+const MIDDLE_RELIEF_OCTAVE_3_DOMAIN: &[u8] = b"latticeaxiom.semantic.middle-relief.octave-3.v1\0";
+const MIDDLE_RELIEF_OCTAVE_4_DOMAIN: &[u8] = b"latticeaxiom.semantic.middle-relief.octave-4.v1\0";
+const PLATEAU_DOMAIN: &[u8] = b"latticeaxiom.semantic.plateau.v1\0";
 const TERRAIN_VOLUME_DOMAIN: &[u8] = b"latticeaxiom.semantic.terrain-volume.v1\0";
 const GEOLOGIC_VOLUME_DOMAIN: &[u8] = b"latticeaxiom.semantic.geologic-volume.v1\0";
 
@@ -71,6 +77,79 @@ impl SemanticFieldSpecV1 {
         }
         if self.amplitude_per_1024 > 1_024 {
             return invalid(field, "amplitude must be in 0..=1024");
+        }
+        Ok(())
+    }
+}
+
+/// Optional versioned middle-scale relief, plateau, and cliff-gate policy.
+///
+/// Absence preserves the original semantic policy byte encoding and behavior.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticMorphologyPolicyV1 {
+    middle_relief: SemanticFieldSpecV1,
+    plateau: SemanticFieldSpecV1,
+    middle_relief_amplitude: ClosedSplineV1,
+    cliff_lithology: ClosedSplineV1,
+    plateau_transition_half_width_per_1024: u16,
+}
+
+impl SemanticMorphologyPolicyV1 {
+    /// Creates one closed middle-scale morphology policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-config error for unbounded fields, malformed
+    /// splines, or a zero/excessive plateau-transition width.
+    pub fn new(
+        middle_relief: SemanticFieldSpecV1,
+        plateau: SemanticFieldSpecV1,
+        middle_relief_amplitude: ClosedSplineV1,
+        cliff_lithology: ClosedSplineV1,
+        plateau_transition_half_width_per_1024: u16,
+    ) -> WorldgenResult<Self> {
+        let policy = Self {
+            middle_relief,
+            plateau,
+            middle_relief_amplitude,
+            cliff_lithology,
+            plateau_transition_half_width_per_1024,
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    /// Returns the independent middle-scale relief field.
+    #[must_use]
+    pub const fn middle_relief(&self) -> SemanticFieldSpecV1 {
+        self.middle_relief
+    }
+
+    /// Returns the independent plateau-coverage field.
+    #[must_use]
+    pub const fn plateau(&self) -> SemanticFieldSpecV1 {
+        self.plateau
+    }
+
+    /// Returns the half-width of the closed plateau transition in normalized
+    /// field units.
+    #[must_use]
+    pub const fn plateau_transition_half_width_per_1024(&self) -> u16 {
+        self.plateau_transition_half_width_per_1024
+    }
+
+    fn validate(&self) -> WorldgenResult<()> {
+        self.middle_relief
+            .validate("semantic.morphology.middle_relief")?;
+        self.plateau.validate("semantic.morphology.plateau")?;
+        self.middle_relief_amplitude.validate()?;
+        self.cliff_lithology.validate()?;
+        if !(1..=512).contains(&self.plateau_transition_half_width_per_1024) {
+            return invalid(
+                "semantic.morphology.plateau_transition_half_width_per_1024",
+                "must be in 1..=512",
+            );
         }
         Ok(())
     }
@@ -220,6 +299,8 @@ pub struct SemanticTerrainPolicyV1 {
     max_terrain_volume_q8: u16,
     max_geologic_volume_q8: u16,
     water_protection_radius_q8: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    morphology: Option<SemanticMorphologyPolicyV1>,
 }
 
 impl SemanticTerrainPolicyV1 {
@@ -270,6 +351,7 @@ impl SemanticTerrainPolicyV1 {
             max_terrain_volume_q8,
             max_geologic_volume_q8,
             water_protection_radius_q8,
+            morphology: None,
         };
         policy.validate()?;
         Ok(policy)
@@ -305,6 +387,28 @@ impl SemanticTerrainPolicyV1 {
         self.water_protection_radius_q8
     }
 
+    /// Adds a versioned middle-scale morphology extension.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-config error when the extension violates its closed
+    /// field, spline, or transition-width bounds.
+    pub fn with_morphology(
+        mut self,
+        morphology: SemanticMorphologyPolicyV1,
+    ) -> WorldgenResult<Self> {
+        morphology.validate()?;
+        self.morphology = Some(morphology);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Returns the optional versioned middle-scale morphology policy.
+    #[must_use]
+    pub const fn morphology(&self) -> Option<&SemanticMorphologyPolicyV1> {
+        self.morphology.as_ref()
+    }
+
     /// Returns the closed vertical displacement envelope of both 3D density
     /// contributors, rounded up to whole voxels.
     ///
@@ -336,6 +440,9 @@ impl SemanticTerrainPolicyV1 {
         self.uplift_relief.validate()?;
         self.roughness.validate()?;
         self.cliff_tendency.validate()?;
+        if let Some(morphology) = &self.morphology {
+            morphology.validate()?;
+        }
         if self.max_detail_displacement_q8 == 0
             || self.max_terrain_volume_q8 == 0
             || self.max_geologic_volume_q8 == 0
@@ -362,7 +469,33 @@ pub struct SemanticFieldSampleV1 {
     effective_runoff_q16: u32,
     initial_surface_y_q8: i32,
     detail_displacement_q8: i32,
+    middle_relief_per_1024: i16,
+    plateau_per_1024: i16,
+    plateau_weight_per_1024: u16,
+    plateau_transition_per_1024: u16,
+    middle_relief_displacement_q8: i32,
+    plateau_displacement_q8: i32,
+    morphology_displacement_q8: i32,
     family: TerrainFamilyV2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SemanticDensityControlsV1 {
+    continentalness: i16,
+    uplift: i16,
+    lithology: i16,
+    plateau: i16,
+}
+
+impl From<SemanticFieldSampleV1> for SemanticDensityControlsV1 {
+    fn from(sample: SemanticFieldSampleV1) -> Self {
+        Self {
+            continentalness: sample.continentalness_per_1024(),
+            uplift: sample.uplift_per_1024(),
+            lithology: sample.lithology_per_1024(),
+            plateau: sample.plateau_per_1024(),
+        }
+    }
 }
 
 impl SemanticFieldSampleV1 {
@@ -420,6 +553,54 @@ impl SemanticFieldSampleV1 {
         self.detail_displacement_q8
     }
 
+    /// Returns the independent middle-scale relief field, or zero when the
+    /// policy predates the morphology extension.
+    #[must_use]
+    pub const fn middle_relief_per_1024(self) -> i16 {
+        self.middle_relief_per_1024
+    }
+
+    /// Returns the independent plateau-coverage field, or zero when the
+    /// policy predates the morphology extension.
+    #[must_use]
+    pub const fn plateau_per_1024(self) -> i16 {
+        self.plateau_per_1024
+    }
+
+    /// Returns plateau membership in normalized `0..=1024` units.
+    #[must_use]
+    pub const fn plateau_weight_per_1024(self) -> u16 {
+        self.plateau_weight_per_1024
+    }
+
+    /// Returns the triangular plateau-edge signal in normalized `0..=1024`
+    /// units. It is zero in plateau interiors and exteriors.
+    #[must_use]
+    pub const fn plateau_transition_per_1024(self) -> u16 {
+        self.plateau_transition_per_1024
+    }
+
+    /// Returns the middle-relief contribution in Q8 voxels, or zero for the
+    /// original semantic policy.
+    #[must_use]
+    pub const fn middle_relief_displacement_q8(self) -> i32 {
+        self.middle_relief_displacement_q8
+    }
+
+    /// Returns the plateau-profile contribution in Q8 voxels, or zero for the
+    /// original semantic policy.
+    #[must_use]
+    pub const fn plateau_displacement_q8(self) -> i32 {
+        self.plateau_displacement_q8
+    }
+
+    /// Returns the combined middle-relief and plateau displacement in Q8
+    /// voxels, or zero for the original semantic policy.
+    #[must_use]
+    pub const fn morphology_displacement_q8(self) -> i32 {
+        self.morphology_displacement_q8
+    }
+
     /// Returns the macro terrain family.
     #[must_use]
     pub const fn family(self) -> TerrainFamilyV2 {
@@ -463,6 +644,78 @@ impl SemanticDensitySampleV1 {
     }
 }
 
+/// One coordinate-bound semantic density evaluator prepared for a whole
+/// vertical column.
+///
+/// The two-dimensional cliff controls are sampled once when this value is
+/// created. Its private fields bind the coordinates, approved surface,
+/// protection decision, seed domains, and policy constants together so a
+/// caller cannot accidentally combine pieces from different columns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticDensityColumnV1 {
+    world_x: i64,
+    world_z: i64,
+    approved_surface_y: i32,
+    protected_water: bool,
+    cliff_per_1024: i32,
+    terrain_volume_seed: i64,
+    geologic_volume_seed: i64,
+    terrain_volume: SemanticFieldSpecV1,
+    geologic_volume: SemanticFieldSpecV1,
+    max_terrain_volume_q8: u16,
+    max_geologic_volume_q8: u16,
+}
+
+impl SemanticDensityColumnV1 {
+    /// Samples one vertical coordinate with the column's prepared controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed-field coordinate or arithmetic error outside the
+    /// supported world coordinate envelope.
+    pub fn density_at(&self, world_y: i64) -> WorldgenResult<SemanticDensitySampleV1> {
+        let terrain_noise = sample_3d(
+            self.terrain_volume_seed,
+            self.terrain_volume,
+            self.world_x,
+            world_y,
+            self.world_z,
+        )?;
+        let geology_noise = sample_3d(
+            self.geologic_volume_seed,
+            self.geologic_volume,
+            self.world_x,
+            world_y,
+            self.world_z,
+        )?;
+        let terrain_volume = i64::from(terrain_noise)
+            .saturating_mul(i64::from(self.max_terrain_volume_q8))
+            .saturating_mul(i64::from(self.cliff_per_1024))
+            .div_euclid(SEMANTIC_UNIT * SEMANTIC_UNIT);
+        let geology_volume = i64::from(geology_noise)
+            .saturating_mul(i64::from(self.max_geologic_volume_q8))
+            .div_euclid(SEMANTIC_UNIT);
+        let base = i64::from(self.approved_surface_y)
+            .saturating_sub(world_y)
+            .saturating_mul(256);
+        let unconstrained = base
+            .saturating_add(terrain_volume)
+            .saturating_add(geology_volume);
+        let final_density = if self.protected_water {
+            unconstrained.min(base)
+        } else {
+            unconstrained
+        };
+        Ok(SemanticDensitySampleV1 {
+            base_surface_density_q8: clamp_i64_i32(base),
+            terrain_family_volume_q8: clamp_i64_i32(terrain_volume),
+            geologic_volume_q8: clamp_i64_i32(geology_volume),
+            protected_water: self.protected_water,
+            final_density_q8: clamp_i64_i32(final_density),
+        })
+    }
+}
+
 /// Compiled deterministic semantic field and density evaluator.
 #[derive(Clone, Debug)]
 pub struct SemanticTerrainFieldV1 {
@@ -480,8 +733,25 @@ struct SemanticSeeds {
     precipitation: i64,
     infiltration: i64,
     detail: i64,
+    middle_relief: i64,
+    middle_relief_octave: i64,
+    middle_relief_octave_2: i64,
+    middle_relief_octave_3: i64,
+    middle_relief_octave_4: i64,
+    plateau: i64,
     terrain_volume: i64,
     geologic_volume: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SemanticMorphologySample {
+    middle_relief_per_1024: i16,
+    plateau_per_1024: i16,
+    plateau_weight_per_1024: u16,
+    plateau_transition_per_1024: u16,
+    middle_relief_displacement_q8: i32,
+    plateau_displacement_q8: i32,
+    displacement_q8: i32,
 }
 
 impl SemanticTerrainFieldV1 {
@@ -508,6 +778,12 @@ impl SemanticTerrainFieldV1 {
                 precipitation: seed(PRECIPITATION_DOMAIN),
                 infiltration: seed(INFILTRATION_DOMAIN),
                 detail: seed(DETAIL_DOMAIN),
+                middle_relief: seed(MIDDLE_RELIEF_DOMAIN),
+                middle_relief_octave: seed(MIDDLE_RELIEF_OCTAVE_DOMAIN),
+                middle_relief_octave_2: seed(MIDDLE_RELIEF_OCTAVE_2_DOMAIN),
+                middle_relief_octave_3: seed(MIDDLE_RELIEF_OCTAVE_3_DOMAIN),
+                middle_relief_octave_4: seed(MIDDLE_RELIEF_OCTAVE_4_DOMAIN),
+                plateau: seed(PLATEAU_DOMAIN),
                 terrain_volume: seed(TERRAIN_VOLUME_DOMAIN),
                 geologic_volume: seed(GEOLOGIC_VOLUME_DOMAIN),
             },
@@ -570,6 +846,14 @@ impl SemanticTerrainFieldV1 {
         let uplift_curve = self.policy.uplift_relief.evaluate(i32::from(uplift))?;
         let roughness = self.policy.roughness.evaluate(i32::from(lithology))?;
         let sea_q8 = i64::from(self.terrain.world.sea_level_y).saturating_mul(256);
+        let coast_width = i64::from(self.terrain.landmass.coast_width_per_1024).max(1);
+        let coast_mask = i64::from(continentalness)
+            .unsigned_abs()
+            .saturating_mul(1_024)
+            .div_euclid(coast_width.cast_unsigned())
+            .min(1_024)
+            .cast_signed();
+        let land_blend = land_blend_per_1024(continentalness, coast_width);
         let macro_q8 = if continentalness < 0 {
             sea_q8.saturating_add(
                 i64::from(self.terrain.landmass.ocean_depth_voxels)
@@ -578,8 +862,8 @@ impl SemanticTerrainFieldV1 {
                     .div_euclid(SEMANTIC_UNIT),
             )
         } else {
-            sea_q8
-                .saturating_add(i64::from(self.terrain.relief.base_height_voxels) * 256)
+            let land_contribution_q8 = i64::from(self.terrain.relief.base_height_voxels)
+                .saturating_mul(256)
                 .saturating_add(
                     i64::from(self.terrain.relief.continental_lift_voxels)
                         .saturating_mul(256)
@@ -591,19 +875,33 @@ impl SemanticTerrainFieldV1 {
                         .saturating_mul(256)
                         .saturating_mul(i64::from(uplift_curve.max(0)))
                         .div_euclid(SEMANTIC_UNIT),
-                )
+                );
+            if self.policy.morphology.is_some() {
+                sea_q8.saturating_add(round_divide_i64(
+                    land_contribution_q8.saturating_mul(land_blend),
+                    SEMANTIC_UNIT,
+                ))
+            } else {
+                sea_q8.saturating_add(land_contribution_q8)
+            }
         };
-        let coast_width = i64::from(self.terrain.landmass.coast_width_per_1024).max(1);
-        let coast_mask = i64::from(continentalness)
-            .unsigned_abs()
-            .saturating_mul(1_024)
-            .div_euclid(coast_width.cast_unsigned())
-            .min(1_024)
-            .cast_signed();
+        let morphology = self.sample_morphology(
+            world_x,
+            world_z,
+            continentalness,
+            uplift,
+            lithology,
+            land_blend,
+        )?;
+        let detail_mask = if self.policy.morphology.is_some() && continentalness >= 0 {
+            land_blend
+        } else {
+            coast_mask
+        };
         let detail_q8 = i64::from(detail)
             .saturating_mul(i64::from(self.policy.max_detail_displacement_q8))
             .saturating_mul(i64::from(roughness.clamp(0, 1_024)))
-            .saturating_mul(coast_mask)
+            .saturating_mul(detail_mask)
             .div_euclid(SEMANTIC_UNIT * SEMANTIC_UNIT * SEMANTIC_UNIT);
         let minimum_q8 = i64::from(self.terrain.world.floor_y)
             .saturating_add(1)
@@ -613,6 +911,7 @@ impl SemanticTerrainFieldV1 {
             .saturating_mul(256);
         let initial_surface_y_q8 = i32::try_from(
             macro_q8
+                .saturating_add(i64::from(morphology.displacement_q8))
                 .saturating_add(detail_q8)
                 .clamp(minimum_q8, maximum_q8),
         )
@@ -620,7 +919,13 @@ impl SemanticTerrainFieldV1 {
             operation: "semantic terrain surface",
         })?;
         let effective_runoff_q16 = effective_runoff(precipitation, infiltration);
-        let family = semantic_family(continentalness, uplift, lithology);
+        let mut family = semantic_family(continentalness, uplift, lithology);
+        if continentalness >= 96
+            && morphology.plateau_weight_per_1024 >= 512
+            && family != TerrainFamilyV2::MountainRange
+        {
+            family = TerrainFamilyV2::Plateau;
+        }
         Ok(SemanticFieldSampleV1 {
             continentalness_per_1024: continentalness,
             uplift_per_1024: uplift,
@@ -637,7 +942,119 @@ impl SemanticTerrainFieldV1 {
                     i32::MAX
                 },
             ),
+            middle_relief_per_1024: morphology.middle_relief_per_1024,
+            plateau_per_1024: morphology.plateau_per_1024,
+            plateau_weight_per_1024: morphology.plateau_weight_per_1024,
+            plateau_transition_per_1024: morphology.plateau_transition_per_1024,
+            middle_relief_displacement_q8: morphology.middle_relief_displacement_q8,
+            plateau_displacement_q8: morphology.plateau_displacement_q8,
+            morphology_displacement_q8: morphology.displacement_q8,
             family,
+        })
+    }
+
+    fn sample_middle_relief_octaves(
+        &self,
+        policy: &SemanticMorphologyPolicyV1,
+        world_x: i64,
+        world_z: i64,
+    ) -> WorldgenResult<i16> {
+        let base_scale = policy.middle_relief.scale_voxels().get();
+        let amplitude = policy.middle_relief.amplitude_per_1024();
+        let octaves = [
+            (self.seeds.middle_relief, 1_u32, 20_i64),
+            (self.seeds.middle_relief_octave, 2, 15),
+            (self.seeds.middle_relief_octave_2, 4, 10),
+            (self.seeds.middle_relief_octave_3, 8, 5),
+            (self.seeds.middle_relief_octave_4, 16, 4),
+        ];
+        let mut weighted_sum = 0_i64;
+        for (seed, divisor, weight) in octaves {
+            let scale =
+                NonZeroU32::new(base_scale.div_euclid(divisor).max(1)).unwrap_or(NonZeroU32::MIN);
+            let sample = sample_2d(
+                seed,
+                SemanticFieldSpecV1::new(scale, amplitude),
+                world_x,
+                world_z,
+            )?;
+            weighted_sum = weighted_sum.saturating_add(i64::from(sample).saturating_mul(weight));
+        }
+        i16::try_from(round_divide_i64(weighted_sum, 54).clamp(-1_024, 1_024)).map_err(|_| {
+            WorldgenError::ArithmeticOverflow {
+                operation: "semantic middle-relief octave composition",
+            }
+        })
+    }
+
+    fn sample_morphology(
+        &self,
+        world_x: i64,
+        world_z: i64,
+        continentalness: i16,
+        uplift: i16,
+        lithology: i16,
+        land_blend_per_1024: i64,
+    ) -> WorldgenResult<SemanticMorphologySample> {
+        let Some(policy) = self.policy.morphology.as_ref() else {
+            return Ok(SemanticMorphologySample::default());
+        };
+        let middle_relief = self.sample_middle_relief_octaves(policy, world_x, world_z)?;
+        let plateau = sample_2d(self.seeds.plateau, policy.plateau, world_x, world_z)?;
+        let plateau_weight = plateau_weight_per_1024(
+            plateau,
+            self.terrain.relief.plateau_amount_per_1024,
+            policy.plateau_transition_half_width_per_1024,
+        );
+        let plateau_transition = plateau_transition_per_1024(plateau_weight);
+        let (middle_relief_displacement_q8, plateau_displacement_q8) = if continentalness < 0 {
+            (0, 0)
+        } else {
+            let amplitude = i64::from(
+                policy
+                    .middle_relief_amplitude
+                    .evaluate(i32::from(uplift))?
+                    .clamp(0, 2_048),
+            );
+            let erosion_retention =
+                2_048_i64.saturating_sub(i64::from(self.terrain.relief.erosion_strength_per_1024));
+            let middle_relief_control = signed_ease_out_per_1024(i64::from(middle_relief));
+            let middle_q8 = round_divide_i64(
+                middle_relief_control
+                    .saturating_mul(i64::from(self.terrain.relief.hill_height_voxels))
+                    .saturating_mul(256)
+                    .saturating_mul(amplitude)
+                    .saturating_mul(land_blend_per_1024)
+                    .saturating_mul(erosion_retention),
+                SEMANTIC_UNIT
+                    .saturating_mul(SEMANTIC_UNIT)
+                    .saturating_mul(SEMANTIC_UNIT)
+                    .saturating_mul(2_048),
+            );
+            let plateau_cliff = policy
+                .cliff_lithology
+                .evaluate(i32::from(lithology))?
+                .clamp(0, 1_024);
+            let plateau_displacement_weight =
+                plateau_displacement_weight(plateau_weight, plateau_cliff);
+            let plateau_q8 = round_divide_i64(
+                i64::from(self.terrain.relief.plateau_height_voxels)
+                    .saturating_mul(256)
+                    .saturating_mul(i64::from(plateau_displacement_weight))
+                    .saturating_mul(land_blend_per_1024),
+                SEMANTIC_UNIT.saturating_mul(SEMANTIC_UNIT),
+            );
+            (clamp_i64_i32(middle_q8), clamp_i64_i32(plateau_q8))
+        };
+        let displacement_q8 = middle_relief_displacement_q8.saturating_add(plateau_displacement_q8);
+        Ok(SemanticMorphologySample {
+            middle_relief_per_1024: middle_relief,
+            plateau_per_1024: plateau,
+            plateau_weight_per_1024: plateau_weight,
+            plateau_transition_per_1024: plateau_transition,
+            middle_relief_displacement_q8,
+            plateau_displacement_q8,
+            displacement_q8,
         })
     }
 
@@ -675,50 +1092,127 @@ impl SemanticTerrainFieldV1 {
         approved_surface_y: i32,
         protected_water: bool,
     ) -> WorldgenResult<SemanticDensitySampleV1> {
-        let semantic = self.sample(world_x, world_z)?;
-        let cliff = self
+        self.prepare_density_column(world_x, world_z, approved_surface_y, protected_water)?
+            .density_at(world_y)
+    }
+
+    /// Prepares coordinate-bound two-dimensional controls once for a complete
+    /// vertical density column.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed-field coordinate or arithmetic error outside the
+    /// supported world coordinate envelope.
+    pub fn prepare_density_column(
+        &self,
+        world_x: i64,
+        world_z: i64,
+        approved_surface_y: i32,
+        protected_water: bool,
+    ) -> WorldgenResult<SemanticDensityColumnV1> {
+        let uplift_per_1024 = sample_2d(self.seeds.uplift, self.policy.uplift, world_x, world_z)?;
+        let (continentalness_per_1024, lithology_per_1024, plateau_per_1024) =
+            if let Some(morphology) = self.policy.morphology.as_ref() {
+                (
+                    sample_2d(
+                        self.seeds.continentalness,
+                        self.policy.continentalness,
+                        world_x,
+                        world_z,
+                    )?,
+                    sample_2d(
+                        self.seeds.lithology,
+                        self.policy.lithology,
+                        world_x,
+                        world_z,
+                    )?,
+                    sample_2d(self.seeds.plateau, morphology.plateau, world_x, world_z)?,
+                )
+            } else {
+                (0, 0, 0)
+            };
+        self.prepare_density_column_from_controls(
+            world_x,
+            world_z,
+            approved_surface_y,
+            protected_water,
+            SemanticDensityControlsV1 {
+                continentalness: continentalness_per_1024,
+                uplift: uplift_per_1024,
+                lithology: lithology_per_1024,
+                plateau: plateau_per_1024,
+            },
+        )
+    }
+
+    pub(crate) fn prepare_density_column_from_semantic(
+        &self,
+        world_x: i64,
+        world_z: i64,
+        approved_surface_y: i32,
+        protected_water: bool,
+        semantic: SemanticFieldSampleV1,
+    ) -> WorldgenResult<SemanticDensityColumnV1> {
+        self.prepare_density_column_from_controls(
+            world_x,
+            world_z,
+            approved_surface_y,
+            protected_water,
+            semantic.into(),
+        )
+    }
+
+    fn prepare_density_column_from_controls(
+        &self,
+        world_x: i64,
+        world_z: i64,
+        approved_surface_y: i32,
+        protected_water: bool,
+        controls: SemanticDensityControlsV1,
+    ) -> WorldgenResult<SemanticDensityColumnV1> {
+        let uplift_cliff = self
             .policy
             .cliff_tendency
-            .evaluate(i32::from(semantic.uplift_per_1024))?
+            .evaluate(i32::from(controls.uplift))?
             .clamp(0, 1_024);
-        let terrain_noise = sample_3d(
-            self.seeds.terrain_volume,
-            self.policy.terrain_volume,
-            world_x,
-            world_y,
-            world_z,
-        )?;
-        let geology_noise = sample_3d(
-            self.seeds.geologic_volume,
-            self.policy.geologic_volume,
-            world_x,
-            world_y,
-            world_z,
-        )?;
-        let terrain_volume = i64::from(terrain_noise)
-            .saturating_mul(i64::from(self.policy.max_terrain_volume_q8))
-            .saturating_mul(i64::from(cliff))
-            .div_euclid(SEMANTIC_UNIT * SEMANTIC_UNIT);
-        let geology_volume = i64::from(geology_noise)
-            .saturating_mul(i64::from(self.policy.max_geologic_volume_q8))
-            .div_euclid(SEMANTIC_UNIT);
-        let base = i64::from(approved_surface_y)
-            .saturating_sub(world_y)
-            .saturating_mul(256);
-        let unconstrained = base
-            .saturating_add(terrain_volume)
-            .saturating_add(geology_volume);
-        let final_density = if protected_water {
-            unconstrained.min(base)
+        let cliff = if let Some(morphology) = self.policy.morphology.as_ref() {
+            let plateau_weight = plateau_weight_per_1024(
+                controls.plateau,
+                self.terrain.relief.plateau_amount_per_1024,
+                morphology.plateau_transition_half_width_per_1024,
+            );
+            let plateau_transition = i32::from(plateau_transition_per_1024(plateau_weight));
+            let lithology_cliff = morphology
+                .cliff_lithology
+                .evaluate(i32::from(controls.lithology))?
+                .clamp(0, 1_024);
+            let cliff = (uplift_cliff
+                .saturating_mul(2)
+                .saturating_add(lithology_cliff)
+                .saturating_add(plateau_transition.saturating_mul(2)))
+            .div_euclid(5);
+            let coast_width = i64::from(self.terrain.landmass.coast_width_per_1024).max(1);
+            i32::try_from(round_divide_i64(
+                i64::from(cliff)
+                    .saturating_mul(land_blend_per_1024(controls.continentalness, coast_width)),
+                SEMANTIC_UNIT,
+            ))
+            .unwrap_or(i32::MAX)
         } else {
-            unconstrained
+            uplift_cliff
         };
-        Ok(SemanticDensitySampleV1 {
-            base_surface_density_q8: clamp_i64_i32(base),
-            terrain_family_volume_q8: clamp_i64_i32(terrain_volume),
-            geologic_volume_q8: clamp_i64_i32(geology_volume),
+        Ok(SemanticDensityColumnV1 {
+            world_x,
+            world_z,
+            approved_surface_y,
             protected_water,
-            final_density_q8: clamp_i64_i32(final_density),
+            cliff_per_1024: cliff,
+            terrain_volume_seed: self.seeds.terrain_volume,
+            geologic_volume_seed: self.seeds.geologic_volume,
+            terrain_volume: self.policy.terrain_volume,
+            geologic_volume: self.policy.geologic_volume,
+            max_terrain_volume_q8: self.policy.max_terrain_volume_q8,
+            max_geologic_volume_q8: self.policy.max_geologic_volume_q8,
         })
     }
 
@@ -1006,6 +1500,15 @@ impl HydrologyConstrainedTerrainSamplerV1 {
         world_z: i64,
     ) -> WorldgenResult<TerrainColumnSampleV2> {
         let semantic = self.field.sample(world_x, world_z)?;
+        self.terrain_column_from_semantic(world_x, world_z, semantic)
+    }
+
+    fn terrain_column_from_semantic(
+        &self,
+        world_x: i64,
+        world_z: i64,
+        semantic: SemanticFieldSampleV1,
+    ) -> WorldgenResult<TerrainColumnSampleV2> {
         let domain = &self.plan.domain;
         let topology = &self.plan.topology;
         let coordinate = domain.grid().nearest_coordinate(world_x, world_z);
@@ -1023,6 +1526,16 @@ impl HydrologyConstrainedTerrainSamplerV1 {
         ))
     }
 
+    pub(crate) fn terrain_column_with_semantic(
+        &self,
+        world_x: i64,
+        world_z: i64,
+    ) -> WorldgenResult<(TerrainColumnSampleV2, SemanticFieldSampleV1)> {
+        let semantic = self.field.sample(world_x, world_z)?;
+        let column = self.terrain_column_from_semantic(world_x, world_z, semantic)?;
+        Ok((column, semantic))
+    }
+
     /// Samples bounded density with hard river/lake/ocean protection.
     ///
     /// # Errors
@@ -1034,7 +1547,28 @@ impl HydrologyConstrainedTerrainSamplerV1 {
         world_y: i64,
         world_z: i64,
     ) -> WorldgenResult<SemanticDensitySampleV1> {
-        let column = self.terrain_column(world_x, world_z)?;
+        self.terrain_column_with_density(world_x, world_z)?
+            .1
+            .density_at(world_y)
+    }
+
+    pub(crate) fn terrain_column_with_density(
+        &self,
+        world_x: i64,
+        world_z: i64,
+    ) -> WorldgenResult<(TerrainColumnSampleV2, SemanticDensityColumnV1)> {
+        let (column, semantic) = self.terrain_column_with_semantic(world_x, world_z)?;
+        let density = self.density_column_from_semantic(world_x, world_z, column, semantic)?;
+        Ok((column, density))
+    }
+
+    pub(crate) fn density_column_from_semantic(
+        &self,
+        world_x: i64,
+        world_z: i64,
+        column: TerrainColumnSampleV2,
+        semantic: SemanticFieldSampleV1,
+    ) -> WorldgenResult<SemanticDensityColumnV1> {
         let river = self
             .plan
             .topology
@@ -1042,8 +1576,13 @@ impl HydrologyConstrainedTerrainSamplerV1 {
         let protected = river.is_some_and(|sample| {
             sample.signed_distance_q8() <= i64::from(self.field.policy.water_protection_radius_q8())
         }) || column.surface_water_y().is_some();
-        self.field
-            .density(world_x, world_y, world_z, column.height(), protected)
+        self.field.prepare_density_column_from_semantic(
+            world_x,
+            world_z,
+            column.height(),
+            protected,
+            semantic,
+        )
     }
 }
 
@@ -1247,6 +1786,81 @@ fn effective_runoff(precipitation: i16, infiltration: i16) -> u32 {
     u32::try_from(runoff).unwrap_or(u32::MAX)
 }
 
+fn plateau_weight_per_1024(
+    plateau: i16,
+    amount_per_1024: u16,
+    transition_half_width_per_1024: u16,
+) -> u16 {
+    let plateau = signed_ease_out_per_1024(i64::from(plateau));
+    let threshold = 1_024_i64.saturating_sub(i64::from(amount_per_1024).saturating_mul(2));
+    let half_width = i64::from(transition_half_width_per_1024);
+    let lower = threshold.saturating_sub(half_width);
+    let upper = threshold.saturating_add(half_width);
+    let weight = if plateau <= lower {
+        0
+    } else if plateau >= upper {
+        1_024
+    } else {
+        round_divide_i64(
+            plateau.saturating_sub(lower).saturating_mul(SEMANTIC_UNIT),
+            upper.saturating_sub(lower),
+        )
+    };
+    u16::try_from(weight.clamp(0, 1_024)).unwrap_or(1_024)
+}
+
+fn signed_ease_out_per_1024(value: i64) -> i64 {
+    let magnitude = value.unsigned_abs().min(1_024).cast_signed();
+    let eased = magnitude
+        .saturating_mul(SEMANTIC_UNIT.saturating_mul(2).saturating_sub(magnitude))
+        .div_euclid(SEMANTIC_UNIT);
+    eased.saturating_mul(value.signum())
+}
+
+fn smoothstep_per_1024(value: i64) -> i64 {
+    let value = value.clamp(0, SEMANTIC_UNIT);
+    round_divide_i64(
+        value.saturating_mul(value).saturating_mul(
+            SEMANTIC_UNIT
+                .saturating_mul(3)
+                .saturating_sub(value.saturating_mul(2)),
+        ),
+        SEMANTIC_UNIT.saturating_mul(SEMANTIC_UNIT),
+    )
+    .clamp(0, SEMANTIC_UNIT)
+}
+
+fn land_blend_per_1024(continentalness: i16, coast_width: i64) -> i64 {
+    if continentalness <= 0 {
+        return 0;
+    }
+    let linear = i64::from(continentalness)
+        .saturating_mul(SEMANTIC_UNIT)
+        .div_euclid(coast_width.max(1));
+    smoothstep_per_1024(linear)
+}
+
+fn plateau_transition_per_1024(plateau_weight_per_1024: u16) -> u16 {
+    let centered = i32::from(plateau_weight_per_1024)
+        .saturating_mul(2)
+        .saturating_sub(1_024)
+        .unsigned_abs();
+    u16::try_from(1_024_u32.saturating_sub(centered)).unwrap_or_default()
+}
+
+fn plateau_displacement_weight(plateau_weight_per_1024: u16, cliff_per_1024: i32) -> u16 {
+    let smooth = smoothstep_per_1024(i64::from(plateau_weight_per_1024));
+    let sharpened = smoothstep_per_1024(smoothstep_per_1024(smooth));
+    let cliff = i64::from(cliff_per_1024).clamp(0, SEMANTIC_UNIT);
+    let weight = round_divide_i64(
+        smooth
+            .saturating_mul(SEMANTIC_UNIT.saturating_sub(cliff))
+            .saturating_add(sharpened.saturating_mul(cliff)),
+        SEMANTIC_UNIT,
+    );
+    u16::try_from(weight.clamp(0, SEMANTIC_UNIT)).unwrap_or(1_024)
+}
+
 fn semantic_family(continentalness: i16, uplift: i16, lithology: i16) -> TerrainFamilyV2 {
     if continentalness < -512 {
         TerrainFamilyV2::DeepOcean
@@ -1314,13 +1928,37 @@ fn invalid<T>(field: &'static str, reason: impl Into<String>) -> WorldgenResult<
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU16, str::FromStr};
+    use std::{collections::BTreeSet, num::NonZeroU16, str::FromStr};
 
     use latticeaxiom_core::CanonicalHash;
     use latticeaxiom_storage::DimensionId;
 
     use super::*;
     use crate::{TerrainConfigV2, WorldSeedV1};
+
+    #[test]
+    fn coast_and_plateau_profiles_are_continuous_without_fixed_terrace_levels() {
+        assert_eq!(land_blend_per_1024(-1, 192), 0);
+        assert_eq!(land_blend_per_1024(0, 192), 0);
+        assert_eq!(land_blend_per_1024(192, 192), 1_024);
+        assert_eq!(land_blend_per_1024(1_024, 192), 1_024);
+        let coast_weights: Vec<_> = (0_i16..=192)
+            .map(|continentalness| land_blend_per_1024(continentalness, 192))
+            .collect();
+        assert!(coast_weights.windows(2).all(|pair| pair[0] <= pair[1]));
+
+        for cliff in [0, 512, 1_024] {
+            let weights: Vec<_> = (0_u16..=1_024)
+                .map(|weight| plateau_displacement_weight(weight, cliff))
+                .collect();
+            assert_eq!(weights.first(), Some(&0));
+            assert_eq!(weights.last(), Some(&1_024));
+            assert!(weights.windows(2).all(|pair| pair[0] <= pair[1]));
+            assert!(weights.iter().copied().collect::<BTreeSet<_>>().len() > 256);
+        }
+        assert!(plateau_displacement_weight(256, 1_024) < plateau_displacement_weight(256, 0));
+        assert!(plateau_displacement_weight(768, 1_024) > plateau_displacement_weight(768, 0));
+    }
 
     fn spline(points: &[(i16, i32)]) -> ClosedSplineV1 {
         ClosedSplineV1::new(
@@ -1408,6 +2046,19 @@ mod tests {
         assert_ne!(first.continentalness_per_1024, first.uplift_per_1024);
         assert!(first.effective_runoff_q16 >= 256);
         assert!(first.detail_displacement_q8.unsigned_abs() <= 384);
+    }
+
+    #[test]
+    fn retained_semantic_controls_prepare_the_same_density_column() {
+        let field = field();
+        let semantic = field.sample(113, -277).expect("semantic sample fits");
+        let sampled = field
+            .prepare_density_column(113, -277, 64, false)
+            .expect("sampled controls prepare density");
+        let retained = field
+            .prepare_density_column_from_semantic(113, -277, 64, false, semantic)
+            .expect("retained controls prepare density");
+        assert_eq!(sampled, retained);
     }
 
     #[test]

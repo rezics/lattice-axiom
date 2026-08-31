@@ -2,8 +2,8 @@ use latticeaxiom_core::{CanonicalHash, StableId};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, TerrainConfigV2,
-    TerrainFamilyV2, WorldgenConfigV1, WorldgenSeedRootV2,
+    GenerationInputHashV1, PlanningCellIdV1, ProviderGenerationIdentityV1, SemanticDensityColumnV1,
+    TerrainConfigV2, TerrainFamilyV2, WorldgenConfigV1, WorldgenSeedRootV2,
     hashes::{domain_hash, hash_u64},
     terrain_field::{TerrainColumnSampleV2, climate_field},
     terrain_program::ResolvedTerrainProgramsV1,
@@ -306,21 +306,21 @@ impl TerritorySamplerV1 {
         self.terrain_column(x, z).family
     }
 
-    pub(crate) fn is_solid(
+    pub(crate) fn prepare_density_column(
         &self,
         style: TerrainStyleV1,
         x: i64,
-        y: i64,
         z: i64,
         approved_surface_y: i32,
         protected_water: bool,
-    ) -> bool {
-        self.terrain_programs
-            .is_solid(style, x, y, z, approved_surface_y, protected_water)
-    }
-
-    pub(crate) const fn uses_semantic(&self) -> bool {
-        self.terrain_programs.uses_semantic()
+    ) -> Option<SemanticDensityColumnV1> {
+        self.terrain_programs.prepare_density_column(
+            style,
+            x,
+            z,
+            approved_surface_y,
+            protected_water,
+        )
     }
 
     pub(crate) fn maximum_density_displacement_voxels(&self) -> u32 {

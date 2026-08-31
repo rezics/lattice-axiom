@@ -19,18 +19,21 @@ use crate::{
     HydrologyOccupancyCandidateV1, HydrologyOccupancyHashV1, HydrologyOccupancyInputV1,
     HydrologyOccupancySampleV1, LockedClosureFingerprintV1, NaturalLayerInputV1,
     PlanActivationIdV1, PlanningCellCoordinateV1, ProviderGenerationIdentityV1, ProviderOfferV1,
-    ProviderSlotV1, ResourceFieldSampleV1, RiverSampleV1, SemanticHydrologicTerrainPlanV1,
-    SnapshotChecksumV1, SurfaceBiomeTerrainProgramV1, TerrainColumnSampleV2, TerrainConfigHashV2,
-    TerrainConfigV2, TerrainFamilyV2, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1,
-    WorldgenConfigHashV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult,
-    WorldgenSeedRootV2,
+    ProviderSlotV1, ResourceFieldSampleV1, RiverSampleV1, SemanticDensityColumnV1,
+    SemanticFieldSampleV1, SemanticHydrologicTerrainPlanV1, SnapshotChecksumV1,
+    SurfaceBiomeTerrainProgramV1, TerrainColumnSampleV2, TerrainConfigHashV2, TerrainConfigV2,
+    TerrainFamilyV2, TerrainStyleV1, TerritoryQueryV1, WorldSeedV1, WorldgenConfigHashV1,
+    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1, WorldgenResult, WorldgenSeedRootV2,
     cave::{CaveFieldPortalPlanV1, CaveSamplerV1, snapshot_checksum},
     epoch::validate_epoch_boundaries,
     hashes::{concatenated_hash, domain_hash, hash_u64, sample_hash_3d},
     hydrology::{
         HydrologySamplerV1, hydrology_adjacent_chunk, hydrology_face_axis, hydrology_face_hash,
     },
-    natural::{NaturalSamplerV1, NaturalWorkCountersV1},
+    natural::{
+        MaterializedNaturalSampleV1, NaturalSamplerV1, NaturalWorkCountersV1,
+        SurfaceFormationInputV1, SurfaceMaterialProfileV1,
+    },
     provider::ResolvedProvidersV1,
     terrain_program::ResolvedTerrainProgramsV1,
     territory::TerritorySamplerV1,
@@ -1145,24 +1148,17 @@ impl GenerationPlanV1 {
     #[must_use]
     pub fn terrain_density_is_solid(&self, x: i64, y: i64, z: i64) -> bool {
         let column = self.generation_column(x, z);
-        if let Some(semantic) = self.semantic_terrain_at(x, z) {
-            return semantic
-                .density(x, y, z)
-                .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
-                .final_density_q8()
-                >= 0;
-        }
-        if !self.territory.uses_semantic() {
-            return y <= i64::from(column.height);
-        }
-        self.territory.is_solid(
-            column.material_style,
-            x,
-            y,
-            z,
-            column.height,
-            column.in_river_channel() || column.surface_water_y.is_some(),
-        )
+        self.prepare_semantic_density_column(x, z, column)
+            .map_or_else(
+                || y <= i64::from(column.height),
+                |density| {
+                    density
+                        .density_at(y)
+                        .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
+                        .final_density_q8()
+                        >= 0
+                },
+            )
     }
 
     /// Returns whether terrain materializes as solid before vegetation at the
@@ -1173,7 +1169,9 @@ impl GenerationPlanV1 {
     /// vegetation placement uses this same decision.
     #[must_use]
     pub fn terrain_materializes_as_solid(&self, x: i64, y: i64, z: i64) -> bool {
-        self.pre_vegetation_occupancy(x, y, z, self.generation_column(x, z))
+        let column = self.generation_column(x, z);
+        let density = self.prepare_semantic_density_column(x, z, column);
+        self.pre_vegetation_occupancy(x, y, z, column, density.as_ref())
             == PreVegetationOccupancyV1::Solid
     }
 
@@ -1733,8 +1731,8 @@ impl GenerationPlanV1 {
 
     fn generation_column(&self, x: i64, z: i64) -> ColumnSampleV1 {
         if let Some(semantic) = self.semantic_terrain_at(x, z) {
-            let terrain = semantic
-                .terrain_column(x, z)
+            let (terrain, semantic_field) = semantic
+                .terrain_column_with_semantic(x, z)
                 .unwrap_or_else(|error| invalid_semantic_plan_query(x, 0, z, &error));
             let territory = self.territory.sample(x, z);
             return ColumnSampleV1 {
@@ -1742,6 +1740,7 @@ impl GenerationPlanV1 {
                 material_style: self.territory.choose_material_style(x, z, territory),
                 river: None,
                 surface_water_y: terrain.surface_water_y,
+                semantic_field: Some(semantic_field),
             };
         }
         let terrain = self.territory.terrain_column(x, z);
@@ -1761,7 +1760,38 @@ impl GenerationPlanV1 {
             material_style: self.territory.choose_material_style(x, z, territory),
             river,
             surface_water_y: terrain.surface_water_y,
+            semantic_field: None,
         }
+    }
+
+    fn prepare_semantic_density_column(
+        &self,
+        x: i64,
+        z: i64,
+        column: ColumnSampleV1,
+    ) -> Option<SemanticDensityColumnV1> {
+        if let Some(semantic) = self.semantic_terrain_at(x, z) {
+            let semantic_field = column
+                .semantic_field
+                .unwrap_or_else(|| missing_validated_semantic_field_sample());
+            let terrain = TerrainColumnSampleV2::from_semantic_with_water(
+                column.height,
+                semantic_field.family(),
+                column.surface_water_y,
+            );
+            return Some(
+                semantic
+                    .density_column_from_semantic(x, z, terrain, semantic_field)
+                    .unwrap_or_else(|error| invalid_semantic_plan_query(x, 0, z, &error)),
+            );
+        }
+        self.territory.prepare_density_column(
+            column.material_style,
+            x,
+            z,
+            column.height,
+            column.in_river_channel() || column.surface_water_y.is_some(),
+        )
     }
 
     fn materialize_columns(&self, origin: (i64, i64, i64), edge: usize) -> Vec<ColumnSampleV1> {
@@ -1775,6 +1805,31 @@ impl GenerationPlanV1 {
             }
         }
         columns
+    }
+
+    fn materialize_density_columns(
+        &self,
+        origin: (i64, i64, i64),
+        edge: usize,
+        columns: &[ColumnSampleV1],
+    ) -> Option<Vec<SemanticDensityColumnV1>> {
+        if self.territory.maximum_density_displacement_voxels() == 0 {
+            return None;
+        }
+        Some(
+            columns
+                .iter()
+                .enumerate()
+                .map(|(index, column)| {
+                    let local_x = index % edge;
+                    let local_z = index / edge;
+                    let x = local_world_axis(origin.0, local_x);
+                    let z = local_world_axis(origin.2, local_z);
+                    self.prepare_semantic_density_column(x, z, *column)
+                        .unwrap_or_else(|| missing_validated_semantic_density_column())
+                })
+                .collect(),
+        )
     }
 
     #[allow(
@@ -1808,6 +1863,7 @@ impl GenerationPlanV1 {
                 operation: "materialized column count",
             });
         }
+        let density_columns = self.materialize_density_columns(origin, edge, &columns);
         let mut styles = BTreeSet::new();
         for column in &columns {
             styles.insert(column.material_style);
@@ -1831,8 +1887,37 @@ impl GenerationPlanV1 {
             resource_accepts: 0,
         };
         let mut natural_counters = NaturalWorkCountersV1::default();
-        let vegetation_surfaces =
-            self.materialize_vegetation_surfaces(origin, edge, &columns, &mut counters);
+        let mut vegetation_surfaces = self.materialize_vegetation_surfaces(
+            origin,
+            edge,
+            &columns,
+            density_columns.as_deref(),
+            &mut counters,
+        );
+        let surface_material_columns = if let Some(natural) = self
+            .natural
+            .as_ref()
+            .filter(|natural| natural.uses_final_surface_materials())
+        {
+            Some(self.materialize_surface_material_columns(
+                origin,
+                edge,
+                &columns,
+                density_columns.as_deref(),
+                &vegetation_surfaces,
+                natural,
+                &mut counters,
+            )?)
+        } else {
+            None
+        };
+        if let Some(material_columns) = &surface_material_columns {
+            for (surface, material) in vegetation_surfaces.iter_mut().zip(material_columns.iter()) {
+                if !material.vegetation_eligibility().allows_candidate() {
+                    *surface = None;
+                }
+            }
+        }
         let vegetation = if self.natural.is_some() {
             self.natural_vegetation_overlay(
                 origin,
@@ -1860,12 +1945,21 @@ impl GenerationPlanV1 {
                         .saturating_add(i64::try_from(local_z).unwrap_or_default());
                     let column_index = local_z * edge + local_x;
                     let column = &columns[column_index];
+                    let density = density_columns
+                        .as_deref()
+                        .and_then(|density_columns| density_columns.get(column_index));
+                    let surface_material = surface_material_columns
+                        .as_deref()
+                        .and_then(|columns| columns.get(column_index))
+                        .copied();
                     let voxel_index = (local_y * edge + local_z) * edge + local_x;
                     let purpose = self.material_role(
                         world_x,
                         world_y,
                         world_z,
                         *column,
+                        density,
+                        surface_material,
                         vegetation[voxel_index],
                         &mut counters,
                         &mut natural_counters,
@@ -2030,11 +2124,13 @@ impl GenerationPlanV1 {
         y: i64,
         z: i64,
         column: ColumnSampleV1,
+        density: Option<&SemanticDensityColumnV1>,
+        surface_material: Option<SurfaceMaterialColumnV1>,
         vegetation: Option<D4MaterialRoleV1>,
         counters: &mut WorkCountersV1,
         natural_counters: &mut NaturalWorkCountersV1,
     ) -> D4MaterialRoleV1 {
-        match self.pre_vegetation_occupancy(x, y, z, column) {
+        match self.pre_vegetation_occupancy(x, y, z, column, density) {
             PreVegetationOccupancyV1::OutsideWorld => return D4MaterialRoleV1::Empty,
             PreVegetationOccupancyV1::DensityVoid => {
                 return vegetation.unwrap_or(D4MaterialRoleV1::Empty);
@@ -2051,21 +2147,32 @@ impl GenerationPlanV1 {
 
         let depth = i64::from(column.height).saturating_sub(y);
         if let Some(natural) = &self.natural {
+            let final_surface_y = surface_material
+                .map_or(i64::from(column.height), SurfaceMaterialColumnV1::surface_y);
+            let surface_profile = surface_material.map_or_else(
+                SurfaceMaterialProfileV1::legacy,
+                SurfaceMaterialColumnV1::profile,
+            );
             natural_counters.river_samples = natural_counters.river_samples.saturating_add(1);
             if column.in_river_channel() && y == i64::from(column.height) {
                 return natural.channel_bed_role(x, z, column.material_style);
             }
             natural_counters.geology_samples = natural_counters.geology_samples.saturating_add(1);
             natural_counters.resource_samples = natural_counters.resource_samples.saturating_add(1);
-            let resource = natural.resource_sample(x, y, z, column.height, column.material_style);
+            let materialized = MaterializedNaturalSampleV1::new(
+                (x, y, z),
+                column.height,
+                final_surface_y,
+                surface_profile,
+                column.material_style,
+            );
+            let resource = natural.materialized_resource_sample(materialized);
             if let Some(role) = resource.role() {
                 natural_counters.resource_accepts =
                     natural_counters.resource_accepts.saturating_add(1);
                 return role;
             }
-            return natural
-                .geologic_sample(x, y, z, column.height, column.material_style)
-                .role();
+            return natural.materialized_geologic_sample(materialized).role();
         }
         match column.material_style {
             TerrainStyleV1::TemperateWoodland | TerrainStyleV1::BorealWetland => {
@@ -2089,28 +2196,21 @@ impl GenerationPlanV1 {
         y: i64,
         z: i64,
         column: ColumnSampleV1,
+        density: Option<&SemanticDensityColumnV1>,
     ) -> PreVegetationOccupancyV1 {
         if y < i64::from(self.config.world_floor_y) || y > i64::from(self.config.world_ceiling_y) {
             return PreVegetationOccupancyV1::OutsideWorld;
         }
-        let density_is_solid = if let Some(semantic) = self.semantic_terrain_at(x, z) {
-            semantic
-                .density(x, y, z)
-                .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
-                .final_density_q8()
-                >= 0
-        } else if self.territory.uses_semantic() {
-            self.territory.is_solid(
-                column.material_style,
-                x,
-                y,
-                z,
-                column.height,
-                column.in_river_channel() || column.surface_water_y.is_some(),
-            )
-        } else {
-            y <= i64::from(column.height)
-        };
+        let density_is_solid = density.map_or_else(
+            || y <= i64::from(column.height),
+            |density| {
+                density
+                    .density_at(y)
+                    .unwrap_or_else(|error| invalid_semantic_plan_query(x, y, z, &error))
+                    .final_density_q8()
+                    >= 0
+            },
+        );
         if !density_is_solid {
             return PreVegetationOccupancyV1::DensityVoid;
         }
@@ -2142,12 +2242,32 @@ impl GenerationPlanV1 {
         x: i64,
         z: i64,
         column: ColumnSampleV1,
+        density: Option<&SemanticDensityColumnV1>,
         style: TerrainStyleV1,
         counters: &mut WorkCountersV1,
     ) -> Option<VegetationSurfaceV1> {
         if !column.supports_terrestrial_vegetation(style) {
             return None;
         }
+        let support_y = self.final_surface_y_for_column(x, z, column, density, counters)?;
+        let placement_y = support_y.saturating_add(1);
+        if self
+            .hydrology_occupancy_sample(x, placement_y, z)
+            .is_some_and(|sample| sample.is_occupied())
+        {
+            return None;
+        }
+        Some(VegetationSurfaceV1::from_checked(x, support_y, z, style))
+    }
+
+    fn final_surface_y_for_column(
+        &self,
+        x: i64,
+        z: i64,
+        column: ColumnSampleV1,
+        density: Option<&SemanticDensityColumnV1>,
+        counters: &mut WorkCountersV1,
+    ) -> Option<i64> {
         let displacement = self.semantic_terrain_at(x, z).map_or_else(
             || self.territory.maximum_density_displacement_voxels(),
             HydrologyConstrainedTerrainSamplerV1::maximum_density_displacement_voxels,
@@ -2161,24 +2281,18 @@ impl GenerationPlanV1 {
             .saturating_add(displacement)
             .min(i64::from(self.config.world_ceiling_y).saturating_sub(1));
         for support_y in (minimum_y..=maximum_y).rev() {
-            let support = self.pre_vegetation_occupancy(x, support_y, z, column);
+            let support = self.pre_vegetation_occupancy(x, support_y, z, column, density);
             Self::record_pre_vegetation_sample(support, counters);
             if support != PreVegetationOccupancyV1::Solid {
                 continue;
             }
             let placement_y = support_y.saturating_add(1);
-            let placement = self.pre_vegetation_occupancy(x, placement_y, z, column);
+            let placement = self.pre_vegetation_occupancy(x, placement_y, z, column, density);
             Self::record_pre_vegetation_sample(placement, counters);
             if !placement.is_empty() {
                 continue;
             }
-            if self
-                .hydrology_occupancy_sample(x, placement_y, z)
-                .is_some_and(|sample| sample.is_occupied())
-            {
-                continue;
-            }
-            return Some(VegetationSurfaceV1::from_checked(x, support_y, z, style));
+            return Some(support_y);
         }
         None
     }
@@ -2192,13 +2306,9 @@ impl GenerationPlanV1 {
     ) -> Option<VegetationSurfaceV1> {
         counters.territory_queries = counters.territory_queries.saturating_add(1);
         counters.height_samples = counters.height_samples.saturating_add(1);
-        self.checked_vegetation_surface_for_column(
-            x,
-            z,
-            self.generation_column(x, z),
-            style,
-            counters,
-        )
+        let column = self.generation_column(x, z);
+        let density = self.prepare_semantic_density_column(x, z, column);
+        self.checked_vegetation_surface_for_column(x, z, column, density.as_ref(), style, counters)
     }
 
     fn materialize_vegetation_surfaces(
@@ -2206,24 +2316,131 @@ impl GenerationPlanV1 {
         origin: (i64, i64, i64),
         edge: usize,
         columns: &[ColumnSampleV1],
+        density_columns: Option<&[SemanticDensityColumnV1]>,
         counters: &mut WorkCountersV1,
     ) -> Vec<Option<VegetationSurfaceV1>> {
         let mut surfaces = Vec::with_capacity(columns.len());
         for local_z in 0..edge {
             for local_x in 0..edge {
-                let column = columns[local_z.saturating_mul(edge).saturating_add(local_x)];
+                let column_index = local_z.saturating_mul(edge).saturating_add(local_x);
+                let column = columns[column_index];
+                let density = density_columns.and_then(|columns| columns.get(column_index));
                 let x = local_world_axis(origin.0, local_x);
                 let z = local_world_axis(origin.2, local_z);
                 surfaces.push(self.checked_vegetation_surface_for_column(
                     x,
                     z,
                     column,
+                    density,
                     column.material_style,
                     counters,
                 ));
             }
         }
         surfaces
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "column, density, surface, provider, and diagnostic caches remain explicit"
+    )]
+    fn materialize_surface_material_columns(
+        &self,
+        origin: (i64, i64, i64),
+        edge: usize,
+        columns: &[ColumnSampleV1],
+        density_columns: Option<&[SemanticDensityColumnV1]>,
+        vegetation_surfaces: &[Option<VegetationSurfaceV1>],
+        natural: &NaturalSamplerV1,
+        counters: &mut WorkCountersV1,
+    ) -> WorldgenResult<Vec<SurfaceMaterialColumnV1>> {
+        let mut final_surface_ys = Vec::with_capacity(columns.len());
+        for local_z in 0..edge {
+            for local_x in 0..edge {
+                let index = local_z.saturating_mul(edge).saturating_add(local_x);
+                let column = columns[index];
+                let surface_y = vegetation_surfaces[index].map_or_else(
+                    || {
+                        let x = local_world_axis(origin.0, local_x);
+                        let z = local_world_axis(origin.2, local_z);
+                        let density = density_columns.and_then(|columns| columns.get(index));
+                        self.final_surface_y_for_column(x, z, column, density, counters)
+                            .unwrap_or(i64::from(column.height))
+                    },
+                    VegetationSurfaceV1::support_y,
+                );
+                final_surface_ys.push(surface_y);
+            }
+        }
+
+        let mut material_columns = Vec::with_capacity(columns.len());
+        for local_z in 0..edge {
+            for local_x in 0..edge {
+                let index = local_z.saturating_mul(edge).saturating_add(local_x);
+                let surface_y = final_surface_ys[index];
+                let mut maximum_neighbor_descent = 0_u16;
+                let mut neighbor_height_delta_sum = 0_i64;
+                for (offset_x, offset_z) in [(-1_i64, 0_i64), (1, 0), (0, -1), (0, 1)] {
+                    let neighbor_x = i64::try_from(local_x)
+                        .unwrap_or(i64::MAX)
+                        .saturating_add(offset_x);
+                    let neighbor_z = i64::try_from(local_z)
+                        .unwrap_or(i64::MAX)
+                        .saturating_add(offset_z);
+                    let neighbor_surface_y = if (0..i64::try_from(edge).unwrap_or_default())
+                        .contains(&neighbor_x)
+                        && (0..i64::try_from(edge).unwrap_or_default()).contains(&neighbor_z)
+                    {
+                        let neighbor_index = usize::try_from(neighbor_z)
+                            .unwrap_or_default()
+                            .saturating_mul(edge)
+                            .saturating_add(usize::try_from(neighbor_x).unwrap_or_default());
+                        final_surface_ys[neighbor_index]
+                    } else {
+                        let x = local_world_axis(origin.0, local_x).saturating_add(offset_x);
+                        let z = local_world_axis(origin.2, local_z).saturating_add(offset_z);
+                        counters.territory_queries = counters.territory_queries.saturating_add(1);
+                        counters.height_samples = counters.height_samples.saturating_add(1);
+                        let column = self.generation_column(x, z);
+                        let density = self.prepare_semantic_density_column(x, z, column);
+                        self.final_surface_y_for_column(x, z, column, density.as_ref(), counters)
+                            .unwrap_or(i64::from(column.height))
+                    };
+                    maximum_neighbor_descent = maximum_neighbor_descent.max(
+                        u16::try_from(surface_y.saturating_sub(neighbor_surface_y))
+                            .unwrap_or(u16::MAX),
+                    );
+                    neighbor_height_delta_sum = neighbor_height_delta_sum
+                        .saturating_add(neighbor_surface_y.saturating_sub(surface_y));
+                }
+                let x = local_world_axis(origin.0, local_x);
+                let z = local_world_axis(origin.2, local_z);
+                let semantic = columns[index].semantic_field;
+                let (precipitation, infiltration, runoff) =
+                    semantic.map_or((0, 0, 32_768), |sample| {
+                        (
+                            sample.precipitation_per_1024(),
+                            sample.infiltration_per_1024(),
+                            sample.effective_runoff_q16(),
+                        )
+                    });
+                let formation = SurfaceFormationInputV1::new(
+                    maximum_neighbor_descent,
+                    i16::try_from(neighbor_height_delta_sum.clamp(-128, 128)).unwrap_or_default(),
+                    precipitation,
+                    infiltration,
+                    runoff,
+                );
+                material_columns.push(SurfaceMaterialColumnV1 {
+                    surface_y,
+                    profile: natural.surface_material_profile(x, z, formation)?,
+                    vegetation_eligibility: SurfaceVegetationEligibilityV1::from_maximum_descent(
+                        maximum_neighbor_descent,
+                    ),
+                });
+            }
+        }
+        Ok(material_columns)
     }
 
     #[allow(
@@ -2518,12 +2735,14 @@ impl GenerationPlanV1 {
             counters.territory_queries = counters.territory_queries.saturating_add(1);
             counters.height_samples = counters.height_samples.saturating_add(1);
             let column = self.generation_column(x, z);
+            let density = self.prepare_semantic_density_column(x, z, column);
             for voxel in blueprint
                 .voxels()
                 .iter()
                 .filter(|voxel| voxel.x() == x && voxel.z() == z)
             {
-                let occupancy = self.pre_vegetation_occupancy(x, voxel.y(), z, column);
+                let occupancy =
+                    self.pre_vegetation_occupancy(x, voxel.y(), z, column, density.as_ref());
                 Self::record_pre_vegetation_sample(occupancy, counters);
                 if !occupancy.is_empty()
                     || self
@@ -2578,12 +2797,14 @@ impl GenerationPlanV1 {
                 counters.territory_queries = counters.territory_queries.saturating_add(1);
                 counters.height_samples = counters.height_samples.saturating_add(1);
                 let column = self.generation_column(x, z);
+                let density = self.prepare_semantic_density_column(x, z, column);
                 for relative_y in 4..=height {
                     let occupancy = self.pre_vegetation_occupancy(
                         x,
                         anchor.support_y().saturating_add(relative_y),
                         z,
                         column,
+                        density.as_ref(),
                     );
                     Self::record_pre_vegetation_sample(occupancy, counters);
                     if !occupancy.is_empty() {
@@ -2595,12 +2816,14 @@ impl GenerationPlanV1 {
         counters.territory_queries = counters.territory_queries.saturating_add(1);
         counters.height_samples = counters.height_samples.saturating_add(1);
         let column = self.generation_column(anchor.x(), anchor.z());
+        let density = self.prepare_semantic_density_column(anchor.x(), anchor.z(), column);
         for relative_y in 1..=4 {
             let occupancy = self.pre_vegetation_occupancy(
                 anchor.x(),
                 anchor.support_y().saturating_add(relative_y),
                 anchor.z(),
                 column,
+                density.as_ref(),
             );
             Self::record_pre_vegetation_sample(occupancy, counters);
             if !occupancy.is_empty() {
@@ -2701,6 +2924,48 @@ struct ColumnSampleV1 {
     material_style: TerrainStyleV1,
     river: Option<RiverSampleV1>,
     surface_water_y: Option<i32>,
+    semantic_field: Option<SemanticFieldSampleV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SurfaceMaterialColumnV1 {
+    surface_y: i64,
+    profile: SurfaceMaterialProfileV1,
+    vegetation_eligibility: SurfaceVegetationEligibilityV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SurfaceVegetationEligibilityV1 {
+    Candidate,
+    SevereRelief,
+}
+
+impl SurfaceVegetationEligibilityV1 {
+    const fn from_maximum_descent(maximum_descent: u16) -> Self {
+        if maximum_descent >= 3 {
+            Self::SevereRelief
+        } else {
+            Self::Candidate
+        }
+    }
+
+    const fn allows_candidate(self) -> bool {
+        matches!(self, Self::Candidate)
+    }
+}
+
+impl SurfaceMaterialColumnV1 {
+    const fn surface_y(self) -> i64 {
+        self.surface_y
+    }
+
+    const fn profile(self) -> SurfaceMaterialProfileV1 {
+        self.profile
+    }
+
+    const fn vegetation_eligibility(self) -> SurfaceVegetationEligibilityV1 {
+        self.vegetation_eligibility
+    }
 }
 
 impl ColumnSampleV1 {
@@ -3042,6 +3307,14 @@ fn invalid_semantic_plan_query(x: i64, y: i64, z: i64, error: &WorldgenError) ->
     panic!(
         "validated semantic hydrologic terrain plan rejected world coordinate ({x}, {y}, {z}): {error}"
     )
+}
+
+fn missing_validated_semantic_density_column() -> ! {
+    panic!("validated semantic terrain program did not prepare a density column")
+}
+
+fn missing_validated_semantic_field_sample() -> ! {
+    panic!("validated semantic terrain column did not retain its semantic field sample")
 }
 
 fn add_identity_bytes(

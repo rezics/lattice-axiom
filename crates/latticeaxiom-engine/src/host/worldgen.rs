@@ -1,10 +1,10 @@
-//! Sparse V5/V6 plan streaming for the production host.
+//! Sparse production-plan streaming for the production host.
 //!
 //! Chunks are generated from the compiled [`GenerationPlanV1`], not from the
 //! D4 four-chunk origin neighborhood. Spawn is the validated surface cell.
-//! V6 attaches package-owned cave topology and hydrology occupancy on the
-//! existing V4 coordinator. This module does not open a writer or compile a
-//! second Atlas.
+//! The current revision attaches package-owned semantic morphology, cave
+//! topology, and hydrology occupancy. This module does not open a writer or
+//! compile a second Atlas.
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
@@ -44,8 +44,8 @@ use super::{
     catalog::{HostWorldgenCatalog, package_registration_namespace},
 };
 
-/// Production plan revision 6 adds bounded deterministic tree species and archetypes.
-const WORLDGEN_PLAN_REVISION: u64 = 6;
+/// Production plan revision 7 adds middle-scale relief and authored cliff gates.
+const WORLDGEN_PLAN_REVISION: u64 = 7;
 
 /// Compiles the current plan bound to a reopened product lock and package catalog.
 pub(super) fn compile_plan(
@@ -520,11 +520,13 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
 
 const fn provider_revision(slot: ProviderSlotV1) -> u32 {
     match slot {
-        ProviderSlotV1::GenerationCoordinator | ProviderSlotV1::Materializer => 10,
+        ProviderSlotV1::GenerationCoordinator | ProviderSlotV1::Materializer => 11,
         ProviderSlotV1::CaveTopology | ProviderSlotV1::StyleSelector => 9,
         ProviderSlotV1::TerrainTransition => 8,
-        ProviderSlotV1::Geology | ProviderSlotV1::Resources => 2,
-        ProviderSlotV1::Vegetation | ProviderSlotV1::Hydrology => 4,
+        ProviderSlotV1::Geology => 3,
+        ProviderSlotV1::Resources => 2,
+        ProviderSlotV1::Vegetation => 5,
+        ProviderSlotV1::Hydrology => 4,
     }
 }
 
@@ -1467,15 +1469,16 @@ mod tests {
     }
 
     #[test]
-    fn tree_morphology_contract_has_distinct_provider_revisions() {
-        assert_eq!(WORLDGEN_PLAN_REVISION, 6);
-        assert_eq!(provider_revision(ProviderSlotV1::GenerationCoordinator), 10);
-        assert_eq!(provider_revision(ProviderSlotV1::Materializer), 10);
-        assert_eq!(provider_revision(ProviderSlotV1::Vegetation), 4);
+    fn terrain_morphology_contract_has_distinct_provider_revisions() {
+        assert_eq!(WORLDGEN_PLAN_REVISION, 7);
+        assert_eq!(provider_revision(ProviderSlotV1::GenerationCoordinator), 11);
+        assert_eq!(provider_revision(ProviderSlotV1::Materializer), 11);
+        assert_eq!(provider_revision(ProviderSlotV1::Vegetation), 5);
         assert_eq!(provider_revision(ProviderSlotV1::CaveTopology), 9);
         assert_eq!(provider_revision(ProviderSlotV1::StyleSelector), 9);
         assert_eq!(provider_revision(ProviderSlotV1::TerrainTransition), 8);
         assert_eq!(provider_revision(ProviderSlotV1::Hydrology), 4);
+        assert_eq!(provider_revision(ProviderSlotV1::Geology), 3);
     }
 
     #[test]
@@ -1515,6 +1518,16 @@ mod tests {
             .role_target(D4MaterialRoleV1::WoodlandGroundCover)
             .clone();
         let moss = plan.role_target(D4MaterialRoleV1::Moss).clone();
+        let temperate_surface = plan.role_target(D4MaterialRoleV1::TemperateSurface).clone();
+        let temperate_soils = [
+            D4MaterialRoleV1::TemperateSubsurface,
+            D4MaterialRoleV1::CoarseDirt,
+            D4MaterialRoleV1::RootedDirt,
+            D4MaterialRoleV1::TemperateClay,
+        ]
+        .map(|role| plan.role_target(role).clone())
+        .into_iter()
+        .collect::<BTreeSet<_>>();
         let log_blocks = [D4MaterialRoleV1::WoodlandLog, D4MaterialRoleV1::BorealLog]
             .map(|role| plan.role_target(role).clone())
             .into_iter()
@@ -1530,6 +1543,10 @@ mod tests {
         let mut ground_cover_count = 0_u64;
         let mut tree_voxel_count = 0_u64;
         let mut corrected_surface_count = 0_u64;
+        let mut dry_temperate_surface_count = 0_u64;
+        let mut density_corrected_top_count = 0_u64;
+        let mut exposed_temperate_soil_count = 0_u64;
+        let mut flat_temperate_soil_depths = BTreeMap::<(i64, i64), u8>::new();
         let mut supported_roots = BTreeSet::<(i64, i64, i64)>::new();
 
         for chunk_z in -1_i32..=1 {
@@ -1538,14 +1555,60 @@ mod tests {
                 let origin_z = i64::from(chunk_z).saturating_mul(edge);
                 let mut minimum_y = i64::MAX;
                 let mut maximum_y = i64::MIN;
+                let mut final_surface_ys = Vec::with_capacity(
+                    usize::try_from(edge.saturating_mul(edge))
+                        .expect("fixture column count fits usize"),
+                );
+                let mut dry_temperate_columns = Vec::with_capacity(
+                    usize::try_from(edge.saturating_mul(edge))
+                        .expect("fixture column count fits usize"),
+                );
                 for local_z in 0..edge {
                     for local_x in 0..edge {
-                        let height = i64::from(plan.terrain_height(
-                            origin_x.saturating_add(local_x),
-                            origin_z.saturating_add(local_z),
-                        ));
+                        let world_x = origin_x.saturating_add(local_x);
+                        let world_z = origin_z.saturating_add(local_z);
+                        let height = i64::from(plan.terrain_height(world_x, world_z));
                         minimum_y = minimum_y.min(height.saturating_sub(10));
                         maximum_y = maximum_y.max(height.saturating_add(10));
+                        let final_surface_y = final_surface_y(&plan, world_x, world_z);
+                        final_surface_ys.push(final_surface_y);
+                        dry_temperate_columns.push(
+                            plan.material_style(world_x, world_z)
+                                == TerrainStyleV1::TemperateWoodland
+                                && !plan
+                                    .hydrology_occupancy_sample(
+                                        world_x,
+                                        final_surface_y.saturating_add(1),
+                                        world_z,
+                                    )
+                                    .is_some_and(|sample| sample.is_occupied()),
+                        );
+                    }
+                }
+                let edge_usize = usize::try_from(edge).expect("fixture chunk edge fits usize");
+                for local_z in 1..edge.saturating_sub(1) {
+                    for local_x in 1..edge.saturating_sub(1) {
+                        let index =
+                            usize::try_from(local_z.saturating_mul(edge).saturating_add(local_x))
+                                .expect("fixture column index fits usize");
+                        let surface_y = final_surface_ys[index];
+                        let flat = [
+                            final_surface_ys[index - 1],
+                            final_surface_ys[index + 1],
+                            final_surface_ys[index - edge_usize],
+                            final_surface_ys[index + edge_usize],
+                        ]
+                        .into_iter()
+                        .all(|neighbor| neighbor == surface_y);
+                        if dry_temperate_columns[index] && flat {
+                            flat_temperate_soil_depths.insert(
+                                (
+                                    origin_x.saturating_add(local_x),
+                                    origin_z.saturating_add(local_z),
+                                ),
+                                0,
+                            );
+                        }
                     }
                 }
                 for chunk_y in minimum_y.div_euclid(edge)..=maximum_y.div_euclid(edge) {
@@ -1575,6 +1638,56 @@ mod tests {
                                 let world_x = origin_x.saturating_add(local_x);
                                 let world_y = origin_y.saturating_add(local_y);
                                 let world_z = origin_z.saturating_add(local_z);
+                                let column_index = usize::try_from(
+                                    local_z.saturating_mul(edge).saturating_add(local_x),
+                                )
+                                .expect("fixture column index fits usize");
+                                let final_surface_y = final_surface_ys[column_index];
+                                let dry_temperate = dry_temperate_columns[column_index];
+                                if dry_temperate && world_y == final_surface_y {
+                                    dry_temperate_surface_count =
+                                        dry_temperate_surface_count.saturating_add(1);
+                                    assert_eq!(
+                                        block, &temperate_surface,
+                                        "final dry temperate top at ({world_x},{world_y},{world_z}) must retain its biome surface"
+                                    );
+                                    density_corrected_top_count = density_corrected_top_count
+                                        .saturating_add(u64::from(
+                                            final_surface_y
+                                                != i64::from(plan.terrain_height(world_x, world_z)),
+                                        ));
+                                }
+                                if dry_temperate
+                                    && temperate_soils.contains(block)
+                                    && world_y < final_surface_y
+                                    && (1..edge.saturating_sub(1)).contains(&local_x)
+                                    && (1..edge.saturating_sub(1)).contains(&local_z)
+                                {
+                                    let west = final_surface_ys[column_index - 1];
+                                    let east = final_surface_ys[column_index + 1];
+                                    let north = final_surface_ys[column_index.saturating_sub(
+                                        usize::try_from(edge)
+                                            .expect("fixture chunk edge fits usize"),
+                                    )];
+                                    let south = final_surface_ys[column_index.saturating_add(
+                                        usize::try_from(edge)
+                                            .expect("fixture chunk edge fits usize"),
+                                    )];
+                                    let lowest_neighbor = west.min(east).min(north).min(south);
+                                    if final_surface_y.saturating_sub(lowest_neighbor) >= 2
+                                        && world_y > lowest_neighbor
+                                    {
+                                        exposed_temperate_soil_count =
+                                            exposed_temperate_soil_count.saturating_add(1);
+                                    }
+                                }
+                                if dry_temperate && temperate_soils.contains(block) {
+                                    if let Some(depth) =
+                                        flat_temperate_soil_depths.get_mut(&(world_x, world_z))
+                                    {
+                                        *depth = depth.saturating_add(1);
+                                    }
+                                }
                                 if block == &woodland_cover || block == &moss {
                                     ground_cover_count = ground_cover_count.saturating_add(1);
                                     assert_final_vegetation_support(
@@ -1628,6 +1741,37 @@ mod tests {
             corrected_surface_count > 0,
             "fixture must exercise a 3D-density surface that differs from height intent"
         );
+        assert!(
+            dry_temperate_surface_count > 0,
+            "fixture must exercise dry temperate final surfaces"
+        );
+        assert!(
+            density_corrected_top_count > 0,
+            "fixture must exercise final tops below or above preliminary height intent"
+        );
+        assert_eq!(
+            exposed_temperate_soil_count, 0,
+            "two-or-more-voxel temperate drops must expose rock rather than subsurface soil"
+        );
+        let distinct_flat_depths = flat_temperate_soil_depths
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            distinct_flat_depths.len() >= 2,
+            "flat temperate corpus must materialize variable soil depth, got {distinct_flat_depths:?}"
+        );
+    }
+
+    #[test]
+    fn dry_vegetated_biomes_keep_their_owned_final_surface_role() {
+        let plan = semantic_vegetation_plan(0, false);
+        assert_final_surface_role(
+            &plan,
+            TerrainStyleV1::TemperateWoodland,
+            D4MaterialRoleV1::TemperateSurface,
+        );
+        assert_final_surface_role(&plan, TerrainStyleV1::BorealWetland, D4MaterialRoleV1::Snow);
     }
 
     #[test]
@@ -2324,6 +2468,69 @@ mod tests {
                 .is_some_and(|sample| sample.is_occupied()),
             "vegetation at ({x},{y},{z}) intersects hydrology occupancy"
         );
+    }
+
+    fn final_surface_y(plan: &GenerationPlanV1, x: i64, z: i64) -> i64 {
+        let intended = i64::from(plan.terrain_height(x, z));
+        for y in (intended.saturating_sub(8)..=intended.saturating_add(8)).rev() {
+            if plan.terrain_materializes_as_solid(x, y, z)
+                && !plan.terrain_materializes_as_solid(x, y.saturating_add(1), z)
+            {
+                return y;
+            }
+        }
+        panic!("fixture column ({x},{z}) must contain a final terrain surface");
+    }
+
+    fn assert_final_surface_role(
+        plan: &GenerationPlanV1,
+        style: TerrainStyleV1,
+        role: D4MaterialRoleV1,
+    ) {
+        let edge = i64::from(plan.config().chunk_edge_voxels);
+        for z in (-4_096_i64..=4_096).step_by(32) {
+            for x in (-4_096_i64..=4_096).step_by(32) {
+                if plan.material_style(x, z) != style {
+                    continue;
+                }
+                let surface_y = final_surface_y(plan, x, z);
+                if plan
+                    .hydrology_occupancy_sample(x, surface_y.saturating_add(1), z)
+                    .is_some_and(|sample| sample.is_occupied())
+                {
+                    continue;
+                }
+                let coordinate = ChunkCoordinate::new(
+                    i32::try_from(x.div_euclid(edge)).expect("fixture chunk X fits i32"),
+                    i32::try_from(surface_y.div_euclid(edge)).expect("fixture chunk Y fits i32"),
+                    i32::try_from(z.div_euclid(edge)).expect("fixture chunk Z fits i32"),
+                );
+                let outcome = plan
+                    .generate(
+                        plan.vacant_generation_request(coordinate)
+                            .expect("fixture request is valid"),
+                    )
+                    .expect("fixture surface chunk generates");
+                let ChunkGenerationOutcomeV1::Prepared(candidate) = outcome else {
+                    panic!("fixture requires a new candidate");
+                };
+                let block = candidate
+                    .draft()
+                    .block_at(
+                        u16::try_from(x.rem_euclid(edge)).expect("local X fits u16"),
+                        u16::try_from(surface_y.rem_euclid(edge)).expect("local Y fits u16"),
+                        u16::try_from(z.rem_euclid(edge)).expect("local Z fits u16"),
+                    )
+                    .expect("surface voxel lies inside the candidate");
+                assert_eq!(
+                    block,
+                    plan.role_target(role),
+                    "dry {style:?} final surface at ({x},{surface_y},{z}) must retain its biome role"
+                );
+                return;
+            }
+        }
+        panic!("fixed corpus must contain a dry {style:?} final surface");
     }
 
     fn assert_final_tree_clearance(plan: &GenerationPlanV1, x: i64, y: i64, z: i64) {

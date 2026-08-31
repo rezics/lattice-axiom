@@ -1042,20 +1042,24 @@ changes remain. Code fixes discovered here receive their own scoped commit.
   measured 12.438-12.614 ms, 12.729-12.834 ms, and a final post-connectivity
   12.377-12.513 ms, remaining below 15 ms and within the +25% budget. No
   dependency was added.
-- [ ] Slice 4 middle-scale terrain/cliffs and variable final-surface sediment
-  implemented, automated gates passed, and fixed-seed visual acceptance in
-  progress. The corrected corpus contains 6,769 delta-at-least-two land edges,
+- [x] 2026-08-31: Slice 4 middle-scale terrain/cliffs and variable final-surface
+  sediment implemented, automated gates passed, and fixed-seed visual
+  acceptance completed. The corrected corpus contains 6,769
+  delta-at-least-two land edges,
   maximum delta 7, 969,237 walkable neighbors per million, 12,524 exposed cliff
   faces, and median 64/256/1,024-window relief of 7/32/141 voxels. The shoreline
   corpus retains 1,553 crossings with p95/max jump one and no saturated middle
   field samples. Old provider policies and outputs remain frozen. Worldgen has
   75 passing unit tests; Terrenia has seven unit and four morphology integration
-  tests; the engine has 163 passing unit tests. Strict affected-library Clippy
+  tests; the engine has 165 passing unit tests. Strict affected-library Clippy
   and rustfmt pass. The optimized compensating-budget evidence is recorded in
   the performance table above. The next visual review accepted the variable
-  dirt improvement but rejected globally slope-triggered rock caps; the
-  evidence and replacement material contract are recorded in the second
-  visual-review correction above and await implementation.
+  dirt improvement but rejected globally slope-triggered rock caps. The
+  replacement contract now preserves each biome's owned grass or snow top on
+  dry land, exposes base rock immediately below steep edges, and retains a
+  separately typed severe-relief vegetation exclusion. The user accepted the
+  corrected running build as having no material remaining terrain objection.
+  No dependency was added.
 - [ ] Slice 5 integrated acceptance completed and evidence committed.
 
 ## Authoritative and primary references
