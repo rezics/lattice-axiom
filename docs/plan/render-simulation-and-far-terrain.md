@@ -1,6 +1,7 @@
 # Render, simulation, and far-terrain plan
 
-Status: approved; implementation in progress through Slice 3, 2026-08-31.
+Status: approved; Slices 0-5 implemented, awaiting Slice 6 visual and soak
+acceptance, 2026-08-31.
 
 ## Decision
 
@@ -457,9 +458,42 @@ Commit: `test(streaming): certify far terrain presentation`.
   4 without increasing the authoritative resident cap (5.64-second complete
   test runtime), a 32-to-4 change cancels the old bounded queue, and camera-only
   rotation does not rebuild far interest.
-- [ ] Slice 4 Bevy presentation and transition implemented.
-- [ ] Slice 5 settings information architecture and diagnostics cleanup
-  implemented.
+- [x] 2026-08-31: Slice 4 Bevy presentation committed as `26c553d`. Derived
+  far tiles now materialize through conventional Bevy solid and translucent
+  water mesh lanes. Surface heights convert to top planes, upward normals and
+  winding are tested, and east/south half-open skirt ownership gives every
+  shared border one wall owner. Near and far entities use Bevy
+  `VisibilityRange` with abrupt, non-overlapping ranges: a single rendered
+  surface owner was selected instead of a crossfade because the current
+  materials cannot guarantee depth-safe coplanar blending. Water is likewise
+  single-owned across the boundary. Camera range and loading fog follow the
+  contiguous GPU-uploaded frontier rather than CPU-ready tiles, preventing a
+  tile from opening a visible hole before its mesh assets exist. Uploads are
+  nearest-first and hard-capped at two tiles per frame; replaced and evicted
+  mesh assets are explicitly released. Far entities carry no collider, edit,
+  simulation, or persistence authority. Five focused far-mesh tests and the
+  final 176-test all-feature engine library suite passed; strict affected-crate
+  Clippy, rustfmt, and diff checks passed. GPU-visible cracks, transitions, and
+  water shimmer remain part of Slice 6 rather than being claimed from
+  headless tests.
+- [x] 2026-08-31: Slice 5 settings information architecture and diagnostics
+  cleanup committed as `4ecaed5`. The compatibility ID
+  `latticeaxiom:setting/view-distance` now presents as **Render Distance**.
+  Its row and detail show a chunk radius and compiled meter conversion, so 21
+  is explicitly `21 chunks radius (672 m)`. Player help distinguishes total
+  terrain draw radius, authoritative Simulation Distance, Full Detail
+  Distance, and radius-neutral Distant Terrain Quality. The existing General,
+  Gameplay, Quality, and Advanced section routing is covered by contract
+  tests. Generic catalog keys, package ownership, requested/admitted/effective
+  internals, and raw stable IDs were removed from the normal detail view;
+  actionable availability limits remain. Sliders and buttons now expose their
+  real labels and distance help through AccessKit. Always-visible
+  target/presented distance telemetry was removed from the settings hint and
+  normal HUD without removing the typed diagnostic contracts. Client UI
+  passed 17 unit plus 6, 7, and 10 integration tests; Settings UI passed one
+  unit plus 15 and 13 integration tests; the engine passed 176 all-feature
+  library tests. Strict all-target Clippy for all three crates, rustfmt, and
+  diff checks passed.
 - [ ] Slice 6 integrated acceptance completed.
 
 ## Approval boundary
