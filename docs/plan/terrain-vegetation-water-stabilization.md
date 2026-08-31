@@ -302,6 +302,42 @@ species and a bounded minority chance where ecologically allowed. This avoids
 one silhouette/material pair covering every tree in a large region without
 turning the map into uniform random mixtures.
 
+The Slice 3 implementation contract is frozen before morphology tuning:
+
+| Species/archetype | Trunk height | Crown start | Maximum radius | Branches |
+| --- | ---: | ---: | ---: | ---: |
+| oak round | 5-6 | relative Y 3 | 2 | 0 |
+| oak tall | 7-8 | trunk height minus 3 | 2 | 0 |
+| oak branched | 6-7 | relative Y 4 | 3 | 2-3, length 2 |
+| pine conical | 6-7 | relative Y 2 | 3 | 0 |
+| pine tall | 8-9 | relative Y 4 | 2 | 0 |
+| pine old-growth | 8-9 | relative Y 3 | 3 | 3-4, length 2 |
+
+Canopy tips may extend one voxel above the trunk, so the closed implementation
+limits are height 10, horizontal radius 3, four branches, and 512 unique voxels
+per blueprint. Natural-layer validation must reserve that full headroom and an
+exclusion radius of at least six voxels, twice the maximum crown radius. This
+makes accepted blueprint extents disjoint even at chunk boundaries; the
+existing canonical `(rank, x, z)` anchor priority resolves competing anchors
+before either blueprint is emitted. Logs win over leaves only while
+deduplicating one blueprint, never as an order-dependent collision repair.
+Diagonal branches use a deterministic staircase so every log remains
+six-neighbor connected to the root.
+
+Temperate woodland selects oak with weight 7/8 and pine with weight 1/8;
+boreal wetland applies the inverse weights. Each species selects its three
+archetypes uniformly. Eligibility density is unchanged except for the
+provider-revision boundary. The independent domains are named
+`tree-eligibility`, `tree-species`, `tree-archetype`, `tree-dimensions`,
+`tree-canopy`, `tree-branch`, and `tree-priority`; adding a field must not reuse
+bits from another decision.
+
+The pre-Slice-3 baseline emits the same four-voxel trunk and radius-two crown
+for both materials and therefore has exactly one normalized occupancy
+signature. The fixed morphology corpus must emit all six archetypes, both
+species, and at least five normalized signatures while staying within the
+limits above.
+
 ### 3. Vector-aware water mip chain
 
 Generate all six mip levels for the 32 by 32 RGBA8 normal texture:
@@ -421,6 +457,7 @@ RTX 4080 Laptop environment:
 | semantic terrain column sampling | 426.86-431.22 ns |
 | semantic density, 32 cubed | 15.220-15.340 ms |
 | Slice 1 checked-surface natural chunk | 11.986-12.077 ms (median estimate 12.031 ms, +3.79%) |
+| Slice 3 checked tree-blueprint natural chunk | 12.438-12.614 ms, 12.729-12.834 ms, and final 12.377-12.513 ms (median estimates 12.510/12.772/12.437 ms; worst median +10.18% from the original baseline and +6.16% from Slice 1) |
 
 Gates:
 
@@ -628,7 +665,29 @@ changes remain. Code fixes discovered here receive their own scoped commit.
   exposed a latent cave fixture that loaded only one chunk of a four-chunk
   shaft; commit `804316c` made that fixture await every touched chunk under a
   finite contended-run bound before this render commit.
-- [ ] Slice 3 tree morphology implemented and committed.
+- [x] 2026-08-31: Slice 3 deterministic tree morphology implemented and
+  approved for its dedicated commit. Seven independent hash domains now own
+  eligibility, species, archetype, dimensions, canopy perturbation, branch
+  direction, and anchor priority. The checked blueprint boundary sorts and
+  deduplicates complete tree voxels, preserves log-over-leaf structure, and
+  rejects any target intersecting final terrain, caves, world bounds, or
+  hydrology occupancy before materialization. The fixed corpus emits oak and
+  pine, all six archetypes, and six distinct material-independent occupancy
+  signatures; its 8,192-coordinate species corpus proves dominant but
+  non-exclusive biome weighting. Height, radius, branch, voxel-count,
+  headroom, and non-overlap bounds are closed and tested. Cross-biome anchor
+  exclusion now samples each neighbor's own style, accepted blueprints are
+  emitted in canonical priority order, and existing chunk/offer permutation
+  tests remain byte-identical. Production plan revision 6 binds coordinator
+  and materializer revision 10 plus vegetation revision 4; cave, style,
+  terrain-transition, hydrology, geology, and resource identities remain on
+  their prior revisions. The complete worldgen boundary passed 70 unit tests
+  and 64 integration tests, the Terrenia provider passed seven tests, and the
+  engine passed 162 unit tests. Strict affected-crate all-target/all-feature
+  Clippy, rustfmt, and diff checks passed. Three optimized natural-chunk runs
+  measured 12.438-12.614 ms, 12.729-12.834 ms, and a final post-connectivity
+  12.377-12.513 ms, remaining below 15 ms and within the +25% budget. No
+  dependency was added.
 - [ ] Slice 4 middle-scale terrain/cliffs implemented and committed.
 - [ ] Slice 5 integrated acceptance completed and evidence committed.
 

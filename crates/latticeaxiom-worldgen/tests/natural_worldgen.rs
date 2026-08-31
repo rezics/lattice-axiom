@@ -169,7 +169,7 @@ fn river_distance_is_lipschitz_across_coarse_cell_boundaries() {
 #[test]
 fn exclusion_radius_rejects_closer_tree_anchors() {
     let plan = natural_plan(42, false);
-    let radius = 5_i64;
+    let radius = i64::from(NaturalLayerConfigV1::default().tree_exclusion_radius_voxels);
     let planning_edge = i64::from(plan.config().chunk_edge_voxels)
         .saturating_mul(i64::from(plan.config().planning_cell_edge_chunks));
     let sea = plan.terrain_config().world.sea_level_y;
@@ -202,6 +202,42 @@ fn exclusion_radius_rejects_closer_tree_anchors() {
             );
         }
     }
+}
+
+#[test]
+fn tree_morphology_config_reserves_disjoint_canopies_and_full_headroom() {
+    let spine = WorldgenConfigV1::default();
+    let too_close = NaturalLayerConfigV1 {
+        tree_exclusion_radius_voxels: 5,
+        ..NaturalLayerConfigV1::default()
+    };
+    assert!(matches!(
+        too_close.validate(&spine),
+        Err(WorldgenError::InvalidConfig {
+            field: "tree_exclusion_radius_voxels",
+            ..
+        })
+    ));
+
+    let maximum_surface = spine
+        .temperate_base_height
+        .saturating_add(i32::from(spine.temperate_relief))
+        .max(
+            spine
+                .arid_base_height
+                .saturating_add(i32::from(spine.arid_relief)),
+        );
+    let short_spine = WorldgenConfigV1 {
+        world_ceiling_y: maximum_surface.saturating_add(9),
+        ..spine
+    };
+    assert!(matches!(
+        NaturalLayerConfigV1::default().validate(&short_spine),
+        Err(WorldgenError::InvalidConfig {
+            field: "world_ceiling_y",
+            ..
+        })
+    ));
 }
 
 #[test]

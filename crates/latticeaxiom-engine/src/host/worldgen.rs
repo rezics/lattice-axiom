@@ -44,10 +44,10 @@ use super::{
     catalog::{HostWorldgenCatalog, package_registration_namespace},
 };
 
-/// Worldgen V5 binds vegetation to final density and cave-arbitrated surfaces.
-const WORLDGEN_PLAN_REVISION: u64 = 5;
+/// Production plan revision 6 adds bounded deterministic tree species and archetypes.
+const WORLDGEN_PLAN_REVISION: u64 = 6;
 
-/// Compiles the V5 plan bound to a reopened product lock and package catalog.
+/// Compiles the current plan bound to a reopened product lock and package catalog.
 pub(super) fn compile_plan(
     locked_receipt: CanonicalHash,
     semantic_receipt: CanonicalHash,
@@ -520,14 +520,11 @@ const fn provider_path(slot: ProviderSlotV1) -> &'static str {
 
 const fn provider_revision(slot: ProviderSlotV1) -> u32 {
     match slot {
-        ProviderSlotV1::GenerationCoordinator
-        | ProviderSlotV1::Materializer
-        | ProviderSlotV1::CaveTopology
-        | ProviderSlotV1::StyleSelector => 9,
+        ProviderSlotV1::GenerationCoordinator | ProviderSlotV1::Materializer => 10,
+        ProviderSlotV1::CaveTopology | ProviderSlotV1::StyleSelector => 9,
         ProviderSlotV1::TerrainTransition => 8,
         ProviderSlotV1::Geology | ProviderSlotV1::Resources => 2,
-        ProviderSlotV1::Vegetation => 3,
-        ProviderSlotV1::Hydrology => 4,
+        ProviderSlotV1::Vegetation | ProviderSlotV1::Hydrology => 4,
     }
 }
 
@@ -1421,11 +1418,11 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        compile_host_worldgen_inspect, generate_plan_chunks, host_spawn_bounds,
-        hydrology_occupancy_config, hydrology_occupancy_config_for, natural_layer_config,
-        occupancy_candidate_is_current, production_terrain_config, provider_offers,
-        provider_revision, required_cave_entrance, spawn_center, spine_config, spine_config_for,
-        validated_spawn,
+        WORLDGEN_PLAN_REVISION, compile_host_worldgen_inspect, generate_plan_chunks,
+        host_spawn_bounds, hydrology_occupancy_config, hydrology_occupancy_config_for,
+        natural_layer_config, occupancy_candidate_is_current, production_terrain_config,
+        provider_offers, provider_revision, required_cave_entrance, spawn_center, spine_config,
+        spine_config_for, validated_spawn,
     };
     use latticeaxiom_core::CanonicalHash;
     use latticeaxiom_runtime_contracts::{
@@ -1470,10 +1467,13 @@ mod tests {
     }
 
     #[test]
-    fn final_surface_contract_has_distinct_provider_revisions() {
-        assert_eq!(provider_revision(ProviderSlotV1::GenerationCoordinator), 9);
-        assert_eq!(provider_revision(ProviderSlotV1::Materializer), 9);
-        assert_eq!(provider_revision(ProviderSlotV1::Vegetation), 3);
+    fn tree_morphology_contract_has_distinct_provider_revisions() {
+        assert_eq!(WORLDGEN_PLAN_REVISION, 6);
+        assert_eq!(provider_revision(ProviderSlotV1::GenerationCoordinator), 10);
+        assert_eq!(provider_revision(ProviderSlotV1::Materializer), 10);
+        assert_eq!(provider_revision(ProviderSlotV1::Vegetation), 4);
+        assert_eq!(provider_revision(ProviderSlotV1::CaveTopology), 9);
+        assert_eq!(provider_revision(ProviderSlotV1::StyleSelector), 9);
         assert_eq!(provider_revision(ProviderSlotV1::TerrainTransition), 8);
         assert_eq!(provider_revision(ProviderSlotV1::Hydrology), 4);
     }
@@ -1505,6 +1505,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the fixed 3D corpus keeps tree, ground-cover, terrain, and water assertions together"
+    )]
     fn semantic_vegetation_is_supported_by_final_materialized_terrain() {
         let plan = semantic_vegetation_plan(0, false);
         let woodland_cover = plan
@@ -1515,10 +1519,18 @@ mod tests {
             .map(|role| plan.role_target(role).clone())
             .into_iter()
             .collect::<BTreeSet<_>>();
+        let leaf_blocks = [
+            D4MaterialRoleV1::WoodlandLeaves,
+            D4MaterialRoleV1::BorealLeaves,
+        ]
+        .map(|role| plan.role_target(role).clone())
+        .into_iter()
+        .collect::<BTreeSet<_>>();
         let edge = i64::from(plan.config().chunk_edge_voxels);
         let mut ground_cover_count = 0_u64;
+        let mut tree_voxel_count = 0_u64;
         let mut corrected_surface_count = 0_u64;
-        let mut lowest_log_by_column = BTreeMap::<(i64, i64), i64>::new();
+        let mut supported_roots = BTreeSet::<(i64, i64, i64)>::new();
 
         for chunk_z in -1_i32..=1 {
             for chunk_x in -1_i32..=1 {
@@ -1574,11 +1586,18 @@ mod tests {
                                                 != i64::from(plan.terrain_height(world_x, world_z)),
                                         ));
                                 }
-                                if log_blocks.contains(block) {
-                                    lowest_log_by_column
-                                        .entry((world_x, world_z))
-                                        .and_modify(|minimum| *minimum = (*minimum).min(world_y))
-                                        .or_insert(world_y);
+                                if log_blocks.contains(block) || leaf_blocks.contains(block) {
+                                    tree_voxel_count = tree_voxel_count.saturating_add(1);
+                                    assert_final_tree_clearance(&plan, world_x, world_y, world_z);
+                                }
+                                if log_blocks.contains(block)
+                                    && plan.terrain_materializes_as_solid(
+                                        world_x,
+                                        world_y.saturating_sub(1),
+                                        world_z,
+                                    )
+                                {
+                                    supported_roots.insert((world_x, world_y, world_z));
                                 }
                             }
                         }
@@ -1592,10 +1611,14 @@ mod tests {
             "fixture must emit checked ground cover"
         );
         assert!(
-            !lowest_log_by_column.is_empty(),
+            tree_voxel_count > 0,
+            "fixture must emit checked tree voxels"
+        );
+        assert!(
+            !supported_roots.is_empty(),
             "fixture must emit at least one checked tree root"
         );
-        for ((x, z), root_y) in lowest_log_by_column {
+        for (x, root_y, z) in supported_roots {
             assert_final_vegetation_support(&plan, x, root_y, z);
             corrected_surface_count = corrected_surface_count.saturating_add(u64::from(
                 root_y.saturating_sub(1) != i64::from(plan.terrain_height(x, z)),
@@ -2300,6 +2323,18 @@ mod tests {
                 .hydrology_occupancy_sample(x, y, z)
                 .is_some_and(|sample| sample.is_occupied()),
             "vegetation at ({x},{y},{z}) intersects hydrology occupancy"
+        );
+    }
+
+    fn assert_final_tree_clearance(plan: &GenerationPlanV1, x: i64, y: i64, z: i64) {
+        assert!(
+            !plan.terrain_materializes_as_solid(x, y, z),
+            "tree voxel ({x},{y},{z}) intersects final terrain"
+        );
+        assert!(
+            plan.hydrology_occupancy_sample(x, y, z)
+                .is_none_or(|sample| !sample.is_occupied()),
+            "tree voxel ({x},{y},{z}) intersects water"
         );
     }
 

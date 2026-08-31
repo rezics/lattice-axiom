@@ -34,6 +34,7 @@ use crate::{
     provider::ResolvedProvidersV1,
     terrain_program::ResolvedTerrainProgramsV1,
     territory::TerritorySamplerV1,
+    tree_morphology::{TreeBlueprintV1, TreeVoxelRoleV1},
 };
 
 const LOCK_FINGERPRINT_DOMAIN: &[u8] = b"latticeaxiom.locked-closure.v1\0";
@@ -2415,8 +2416,7 @@ impl GenerationPlanV1 {
         let edge_i64 = i64::try_from(edge).map_err(|_| WorldgenError::ArithmeticOverflow {
             operation: "natural vegetation chunk edge",
         })?;
-        let radius = NaturalSamplerV1::tree_radius()
-            .saturating_add(i64::from(natural.config().tree_exclusion_radius_voxels));
+        let radius = NaturalSamplerV1::tree_radius();
         let minimum_x = origin.0.saturating_sub(radius);
         let maximum_x = origin
             .0
@@ -2427,6 +2427,7 @@ impl GenerationPlanV1 {
             .2
             .saturating_add(edge_i64.saturating_sub(1))
             .saturating_add(radius);
+        let mut blueprints = Vec::new();
         for anchor_z in minimum_z..=maximum_z {
             for anchor_x in minimum_x..=maximum_x {
                 if !natural.may_have_tree_anchor(anchor_x, anchor_z) {
@@ -2436,10 +2437,22 @@ impl GenerationPlanV1 {
                 let style = self
                     .territory
                     .choose_material_style(anchor_x, anchor_z, sample);
-                let Some((log, leaves)) = NaturalSamplerV1::tree_roles(style) else {
+                let Some(descriptor) = natural.tree_descriptor(anchor_x, anchor_z, style) else {
                     continue;
                 };
-                if !natural.is_exclusive_tree_anchor(anchor_x, anchor_z, style, counters) {
+                if !natural.is_exclusive_tree_anchor(
+                    anchor_x,
+                    anchor_z,
+                    style,
+                    counters,
+                    |other_x, other_z| {
+                        work_counters.territory_queries =
+                            work_counters.territory_queries.saturating_add(1);
+                        let sample = self.territory.sample(other_x, other_z);
+                        self.territory
+                            .choose_material_style(other_x, other_z, sample)
+                    },
+                ) {
                     continue;
                 }
                 counters.habitat_samples = counters.habitat_samples.saturating_add(1);
@@ -2451,57 +2464,77 @@ impl GenerationPlanV1 {
                 };
                 if !self.vegetation_footprint_allows(
                     surface,
-                    NaturalSamplerV1::tree_radius(),
-                    work_counters,
-                ) || !self.legacy_tree_shape_is_clear(
-                    surface,
-                    NaturalSamplerV1::tree_radius(),
-                    NaturalSamplerV1::tree_height(),
+                    descriptor.footprint_radius(),
                     work_counters,
                 ) {
                     counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
                     continue;
                 }
+                let Some(blueprint) =
+                    natural.tree_blueprint(anchor_x, surface.support_y(), anchor_z, &descriptor)
+                else {
+                    counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
+                    continue;
+                };
+                debug_assert_eq!(blueprint.support_y(), surface.support_y());
+                debug_assert_eq!(blueprint.archetype(), descriptor.archetype());
+                debug_assert_eq!(blueprint.species(), descriptor.species());
+                if !self.tree_blueprint_is_clear(&blueprint, work_counters) {
+                    counters.habitat_rejects = counters.habitat_rejects.saturating_add(1);
+                    continue;
+                }
                 counters.tree_anchor_accepts = counters.tree_anchor_accepts.saturating_add(1);
-                let anchor_height = surface.support_y();
-                for relative_y in 4..=NaturalSamplerV1::tree_height() {
-                    for offset_z in
-                        -NaturalSamplerV1::tree_radius()..=NaturalSamplerV1::tree_radius()
-                    {
-                        for offset_x in
-                            -NaturalSamplerV1::tree_radius()..=NaturalSamplerV1::tree_radius()
-                        {
-                            if offset_x.abs().saturating_add(offset_z.abs())
-                                > NaturalSamplerV1::tree_radius().saturating_add(1)
-                            {
-                                continue;
-                            }
-                            set_vegetation_role(
-                                &mut overlay,
-                                origin,
-                                edge,
-                                anchor_x.saturating_add(offset_x),
-                                anchor_height.saturating_add(relative_y),
-                                anchor_z.saturating_add(offset_z),
-                                leaves,
-                            );
-                        }
-                    }
-                }
-                for relative_y in 1..=4 {
-                    set_vegetation_role(
-                        &mut overlay,
-                        origin,
-                        edge,
-                        anchor_x,
-                        anchor_height.saturating_add(relative_y),
-                        anchor_z,
-                        log,
-                    );
-                }
+                blueprints.push(blueprint);
+            }
+        }
+        blueprints.sort_unstable_by_key(TreeBlueprintV1::priority);
+        for blueprint in blueprints {
+            let (log, leaves) = blueprint.species().roles();
+            for voxel in blueprint.voxels() {
+                let role = match voxel.role() {
+                    TreeVoxelRoleV1::Log => log,
+                    TreeVoxelRoleV1::Leaves => leaves,
+                };
+                set_vegetation_role(
+                    &mut overlay,
+                    origin,
+                    edge,
+                    voxel.x(),
+                    voxel.y(),
+                    voxel.z(),
+                    role,
+                );
             }
         }
         Ok(overlay)
+    }
+
+    fn tree_blueprint_is_clear(
+        &self,
+        blueprint: &TreeBlueprintV1,
+        counters: &mut WorkCountersV1,
+    ) -> bool {
+        for &(x, z) in blueprint.occupied_columns() {
+            counters.territory_queries = counters.territory_queries.saturating_add(1);
+            counters.height_samples = counters.height_samples.saturating_add(1);
+            let column = self.generation_column(x, z);
+            for voxel in blueprint
+                .voxels()
+                .iter()
+                .filter(|voxel| voxel.x() == x && voxel.z() == z)
+            {
+                let occupancy = self.pre_vegetation_occupancy(x, voxel.y(), z, column);
+                Self::record_pre_vegetation_sample(occupancy, counters);
+                if !occupancy.is_empty()
+                    || self
+                        .hydrology_occupancy_sample(x, voxel.y(), z)
+                        .is_some_and(|sample| sample.is_occupied())
+                {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn vegetation_footprint_allows(

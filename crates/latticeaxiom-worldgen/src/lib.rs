@@ -49,6 +49,7 @@ mod terrain_config;
 mod terrain_field;
 mod terrain_program;
 mod territory;
+mod tree_morphology;
 
 pub use cave::{
     CaveFaceFieldRequestV1, CaveFaceOccupancyValidationV1, CaveFieldPortalAssertionV1,

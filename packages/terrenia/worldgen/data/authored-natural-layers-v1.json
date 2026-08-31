@@ -86,7 +86,7 @@
   },
   "vegetation": {
     "point_procedure": "terrenia:worldgen-plan/vegetation-points@1",
-    "exclusion_radius_voxels": 3,
+    "exclusion_radius_voxels": 6,
     "roles": [
       "terrenia:block-role/woodland-log@1",
       "terrenia:block-role/woodland-leaves@1",

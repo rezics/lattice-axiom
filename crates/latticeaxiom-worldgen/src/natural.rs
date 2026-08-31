@@ -17,16 +17,17 @@ use crate::{
     hashes::{domain_hash, hash_u64, sample_hash_2d, sample_hash_3d},
     provider::ResolvedProvidersV1,
     terrain_field::{DrainageFieldV3, DrainageSampleV3},
+    tree_morphology::{
+        MAX_TREE_HEIGHT_VOXELS, MAX_TREE_RADIUS_VOXELS, MIN_TREE_EXCLUSION_RADIUS_VOXELS,
+        TreeBlueprintV1, TreeDescriptorV1, TreeMorphologySamplerV1,
+    },
 };
 
 const NATURAL_LAYER_DOMAIN: &[u8] = b"latticeaxiom.natural-layer.v1\0";
 const BASIN_DOMAIN: &[u8] = b"latticeaxiom.natural-basin.v1\0";
 const GEOLOGY_DOMAIN: &[u8] = b"latticeaxiom.natural-geology.v1\0";
 const RESOURCE_DOMAIN: &[u8] = b"latticeaxiom.natural-resource.v1\0";
-const TREE_DOMAIN: &[u8] = b"latticeaxiom.natural-tree.v1\0";
 const COVER_DOMAIN: &[u8] = b"latticeaxiom.natural-cover.v1\0";
-const MAX_TREE_RADIUS: i64 = 2;
-const MAX_TREE_HEIGHT: i64 = 6;
 
 /// Closed integer configuration for the V5 natural layer.
 ///
@@ -79,7 +80,7 @@ impl Default for NaturalLayerConfigV1 {
             river_width_voxels: 3,
             river_accumulation: 3,
             river_incision_voxels: 2,
-            tree_exclusion_radius_voxels: 5,
+            tree_exclusion_radius_voxels: MIN_TREE_EXCLUSION_RADIUS_VOXELS,
             pine_threshold_per_1024: 14,
             moss_threshold_per_1024: 80,
             coal_threshold_per_1024: 24,
@@ -130,7 +131,7 @@ impl NaturalLayerConfigV1 {
         bounded_u16(
             "tree_exclusion_radius_voxels",
             self.tree_exclusion_radius_voxels,
-            1,
+            MIN_TREE_EXCLUSION_RADIUS_VOXELS,
             16,
         )?;
         for (field, value) in [
@@ -172,10 +173,11 @@ impl NaturalLayerConfigV1 {
             )
             .min(i64::from(spine.arid_base_height).saturating_sub(i64::from(spine.arid_relief)))
             .saturating_sub(i64::from(self.river_incision_voxels));
-        if maximum_surface.saturating_add(7) > i64::from(spine.world_ceiling_y) {
+        if maximum_surface.saturating_add(MAX_TREE_HEIGHT_VOXELS) > i64::from(spine.world_ceiling_y)
+        {
             return Err(invalid(
                 "world_ceiling_y",
-                "must leave seven voxels above the natural maximum surface",
+                "must leave ten voxels above the natural maximum surface",
             ));
         }
         if minimum_surface.saturating_sub(8) < i64::from(spine.world_floor_y) {
@@ -318,7 +320,7 @@ pub(crate) struct NaturalSamplerV1 {
     basin_seed: u64,
     geology_seed: u64,
     resource_seed: u64,
-    tree_seed: u64,
+    trees: TreeMorphologySamplerV1,
     cover_seed: u64,
     drainage: DrainageFieldV3,
     receipts: Vec<RoleBindingReceiptV1>,
@@ -356,7 +358,7 @@ impl NaturalSamplerV1 {
         let basin_seed = natural_sample_seed(BASIN_DOMAIN, seed_root);
         let geology_seed = natural_sample_seed(GEOLOGY_DOMAIN, seed_root);
         let resource_seed = natural_sample_seed(RESOURCE_DOMAIN, seed_root);
-        let tree_seed = natural_sample_seed(TREE_DOMAIN, seed_root);
+        let trees = TreeMorphologySamplerV1::new(seed_root);
         let cover_seed = natural_sample_seed(COVER_DOMAIN, seed_root);
         let drainage = DrainageFieldV3::new(seed_root, layer.config.river_cell_edge_voxels);
         let receipts = resolve_natural_roles(&layer.vocabulary, bindings, catalog, d4_targets)?;
@@ -388,7 +390,7 @@ impl NaturalSamplerV1 {
             basin_seed,
             geology_seed,
             resource_seed,
-            tree_seed,
+            trees,
             cover_seed,
             drainage,
             receipts,
@@ -611,13 +613,17 @@ impl NaturalSamplerV1 {
         }
     }
 
-    pub(crate) fn is_exclusive_tree_anchor(
+    pub(crate) fn is_exclusive_tree_anchor<F>(
         &self,
         x: i64,
         z: i64,
         style: TerrainStyleV1,
         counters: &mut NaturalWorkCountersV1,
-    ) -> bool {
+        mut style_at: F,
+    ) -> bool
+    where
+        F: FnMut(i64, i64) -> TerrainStyleV1,
+    {
         if !self.is_tree_candidate(x, z, style) {
             return false;
         }
@@ -631,7 +637,7 @@ impl NaturalSamplerV1 {
                 }
                 let other_x = x.saturating_add(offset_x);
                 let other_z = z.saturating_add(offset_z);
-                if !self.is_tree_candidate(other_x, other_z, style) {
+                if !self.is_tree_candidate(other_x, other_z, style_at(other_x, other_z)) {
                     continue;
                 }
                 counters.exclusion_samples = counters.exclusion_samples.saturating_add(1);
@@ -647,7 +653,7 @@ impl NaturalSamplerV1 {
 
     pub(crate) fn may_have_tree_anchor(&self, x: i64, z: i64) -> bool {
         let maximum_threshold = self.config.pine_threshold_per_1024.max(14);
-        Self::sample_threshold(self.tree_seed, x, 0, z, maximum_threshold)
+        self.trees.is_eligible(x, z, maximum_threshold)
     }
 
     pub(crate) fn ground_cover_role(
@@ -685,27 +691,27 @@ impl NaturalSamplerV1 {
         }
     }
 
-    pub(crate) fn tree_roles(
+    pub(crate) fn tree_descriptor(
+        &self,
+        x: i64,
+        z: i64,
         style: TerrainStyleV1,
-    ) -> Option<(D4MaterialRoleV1, D4MaterialRoleV1)> {
-        match style {
-            TerrainStyleV1::TemperateWoodland => Some((
-                D4MaterialRoleV1::WoodlandLog,
-                D4MaterialRoleV1::WoodlandLeaves,
-            )),
-            TerrainStyleV1::BorealWetland => {
-                Some((D4MaterialRoleV1::BorealLog, D4MaterialRoleV1::BorealLeaves))
-            }
-            TerrainStyleV1::Marine | TerrainStyleV1::AridBadlands => None,
-        }
+    ) -> Option<TreeDescriptorV1> {
+        self.trees.descriptor(x, z, style)
+    }
+
+    pub(crate) fn tree_blueprint(
+        &self,
+        x: i64,
+        support_y: i64,
+        z: i64,
+        descriptor: &TreeDescriptorV1,
+    ) -> Option<TreeBlueprintV1> {
+        self.trees.blueprint(x, support_y, z, descriptor)
     }
 
     pub(crate) const fn tree_radius() -> i64 {
-        MAX_TREE_RADIUS
-    }
-
-    pub(crate) const fn tree_height() -> i64 {
-        MAX_TREE_HEIGHT
+        MAX_TREE_RADIUS_VOXELS
     }
 
     pub(crate) fn placement_predicates(
@@ -781,11 +787,11 @@ impl NaturalSamplerV1 {
             TerrainStyleV1::BorealWetland => self.config.pine_threshold_per_1024,
             TerrainStyleV1::Marine | TerrainStyleV1::AridBadlands => return false,
         };
-        Self::sample_threshold(self.tree_seed, x, 0, z, threshold) && !self.in_river_channel(x, z)
+        self.trees.is_eligible(x, z, threshold) && !self.in_river_channel(x, z)
     }
 
     fn tree_rank(&self, x: i64, z: i64) -> u64 {
-        sample_hash_2d(self.tree_seed, x, z)
+        self.trees.priority(x, z)
     }
 
     fn basin_rank(&self, cell_x: i64, cell_z: i64) -> u64 {
