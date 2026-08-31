@@ -343,6 +343,10 @@ fn reopened_lock_decodes_exact_package_data_once() {
 
 const SPINE_TIMESTEP: Duration = Duration::from_nanos(1_000_000_000 / 60);
 const ASYNC_TEST_POLL_INTERVAL: Duration = Duration::from_millis(5);
+// One entrance shaft can edit four chunks and enqueue a mesh rebuild per
+// accepted cell. Preserve a finite 12.8-second settling window under a
+// contended default test harness rather than assuming one aperture chunk.
+const CAVE_SHAFT_REBUILD_MAX_TICKS: u32 = 2_560;
 
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -4126,9 +4130,10 @@ fn production_host_enters_required_cave_and_gathers_natural_resource() {
         z: aperture[2],
     };
     generation = wait_for_resident(&mut instance, &spine, generation, aperture_pos, 180);
+    await_required_entrance_shaft_resident(&mut instance, &spine, column, aperture_pos);
     let rebuilt_chunks = open_required_entrance_shaft(&spine, column, aperture_pos);
     for chunk in rebuilt_chunks {
-        await_chunk_active(&mut instance, &spine, chunk, 640);
+        await_chunk_active(&mut instance, &spine, chunk, CAVE_SHAFT_REBUILD_MAX_TICKS);
     }
     generation = idle_at_hole(&mut instance, &spine, generation, 90);
 
@@ -4267,6 +4272,20 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
         },
         180,
     );
+    await_required_entrance_shaft_resident(
+        &mut instance,
+        &spine,
+        latticeaxiom_gameplay::BlockPosition {
+            x: surface[0],
+            y: surface[1],
+            z: surface[2],
+        },
+        latticeaxiom_gameplay::BlockPosition {
+            x: aperture[0],
+            y: aperture[1],
+            z: aperture[2],
+        },
+    );
     seed_tool(&spine, 0, "terrenia:item/wooden-pickaxe", 59);
     seed_tool(&spine, 1, "terrenia:item/wooden-shovel", 59);
     let rebuilt_chunks = open_required_entrance_shaft(
@@ -4283,7 +4302,7 @@ fn production_host_reaches_both_underground_territories_and_three_resource_class
         },
     );
     for chunk in rebuilt_chunks {
-        await_chunk_active(&mut instance, &spine, chunk, 640);
+        await_chunk_active(&mut instance, &spine, chunk, CAVE_SHAFT_REBUILD_MAX_TICKS);
     }
     generation = idle_at_hole(&mut instance, &spine, generation, 90);
     generation = walk_toward_column(
@@ -5774,12 +5793,31 @@ fn idle_at_hole(
     generation + ticks
 }
 
-#[allow(clippy::cast_precision_loss)]
-fn open_required_entrance_shaft(
+fn await_required_entrance_shaft_resident(
+    instance: &mut EngineInstance,
     spine: &ProductionSpine,
     surface: latticeaxiom_gameplay::BlockPosition,
     aperture: latticeaxiom_gameplay::BlockPosition,
-) -> BTreeSet<ChunkCoordinate> {
+) {
+    let chunks: BTreeSet<_> = required_entrance_shaft_positions(spine, surface, aperture)
+        .into_iter()
+        .filter_map(|position| spine.chunk_of(position))
+        .collect();
+    assert!(
+        !chunks.is_empty(),
+        "required entrance shaft must map to chunks"
+    );
+    for chunk in chunks {
+        await_resident_chunk(instance, spine, chunk, 640);
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn required_entrance_shaft_positions(
+    spine: &ProductionSpine,
+    surface: latticeaxiom_gameplay::BlockPosition,
+    aperture: latticeaxiom_gameplay::BlockPosition,
+) -> Vec<latticeaxiom_gameplay::BlockPosition> {
     let approach = spine.player_pose().translation;
     let offset_x = if approach.x >= surface.x as f32 + 0.5 {
         1
@@ -5791,55 +5829,64 @@ fn open_required_entrance_shaft(
     } else {
         -1
     };
-    let mut opened = 0_u32;
-    let mut rebuilt_chunks = BTreeSet::new();
-    let mut y = surface.y.saturating_add(8);
-    while y >= aperture.y {
+    let mut positions = Vec::new();
+    for y in (aperture.y..=surface.y.saturating_add(8)).rev() {
         for offset_x in [0, offset_x] {
             for offset_z in [0, offset_z] {
-                let position = latticeaxiom_gameplay::BlockPosition {
+                positions.push(latticeaxiom_gameplay::BlockPosition {
                     x: surface.x.saturating_add(offset_x),
                     y,
                     z: surface.z.saturating_add(offset_z),
-                };
-                if let Some(chunk) = spine.chunk_of(position) {
-                    rebuilt_chunks.insert(chunk);
-                }
-                if spine
-                    .cave_occupancy_arbitration(
-                        i64::from(position.x),
-                        i64::from(position.y),
-                        i64::from(position.z),
-                    )
-                    .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
-                {
-                    continue;
-                }
-                if mine_cover_cell(spine, position) {
-                    opened = opened.saturating_add(1);
-                    continue;
-                }
-                if spine
-                    .inspect_occupancy(position)
-                    .ok()
-                    .is_some_and(|occupancy| {
-                        occupancy.solid.is_none()
-                            || occupancy
-                                .solid
-                                .as_ref()
-                                .is_some_and(|block| block.as_str().ends_with("/air"))
-                    })
-                {
-                    continue;
-                }
-                panic!(
-                    "required entrance cover {position:?} did not break, reject={:?}, gameplay={:?}",
-                    spine.last_reject(),
-                    spine.last_gameplay_reject()
-                );
+                });
             }
         }
-        y -= 1;
+    }
+    positions
+}
+
+fn open_required_entrance_shaft(
+    spine: &ProductionSpine,
+    surface: latticeaxiom_gameplay::BlockPosition,
+    aperture: latticeaxiom_gameplay::BlockPosition,
+) -> BTreeSet<ChunkCoordinate> {
+    let mut opened = 0_u32;
+    let mut rebuilt_chunks = BTreeSet::new();
+    for position in required_entrance_shaft_positions(spine, surface, aperture) {
+        if let Some(chunk) = spine.chunk_of(position) {
+            rebuilt_chunks.insert(chunk);
+        }
+        if spine
+            .cave_occupancy_arbitration(
+                i64::from(position.x),
+                i64::from(position.y),
+                i64::from(position.z),
+            )
+            .is_some_and(latticeaxiom_engine::CaveOccupancyArbitrationV1::is_finally_void)
+        {
+            continue;
+        }
+        if mine_cover_cell(spine, position) {
+            opened = opened.saturating_add(1);
+            continue;
+        }
+        if spine
+            .inspect_occupancy(position)
+            .ok()
+            .is_some_and(|occupancy| {
+                occupancy.solid.is_none()
+                    || occupancy
+                        .solid
+                        .as_ref()
+                        .is_some_and(|block| block.as_str().ends_with("/air"))
+            })
+        {
+            continue;
+        }
+        panic!(
+            "required entrance cover {position:?} did not break, reject={:?}, gameplay={:?}",
+            spine.last_reject(),
+            spine.last_gameplay_reject()
+        );
     }
     assert!(
         opened > 0,
