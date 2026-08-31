@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::{
     asset::{Assets, Handle, RenderAssetUsages},
     camera::primitives::Aabb as GpuAabb,
+    camera::visibility::VisibilityRange,
     image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::{Indices, Mesh, PrimitiveTopology},
     prelude::{
@@ -33,6 +34,8 @@ const FALLBACK_COLOR: [f32; 4] = [0.38, 0.41, 0.43, 1.0];
 pub(super) struct ProductionTerrainMaterials {
     standard_handles: [Option<Handle<StandardMaterial>>; MeshGroup::ALL.len()],
     water_handle: Handle<WaterMaterial>,
+    far_solid_handle: Handle<StandardMaterial>,
+    far_water_handle: Handle<StandardMaterial>,
 }
 
 impl ProductionTerrainMaterials {
@@ -50,9 +53,28 @@ impl ProductionTerrainMaterials {
             atlas.clone(),
             water_normal_map.clone(),
         ));
+        let far_solid_handle = standard_materials.add(StandardMaterial {
+            base_color: bevy::prelude::Color::WHITE,
+            perceptual_roughness: 0.95,
+            reflectance: 0.06,
+            double_sided: true,
+            cull_mode: None,
+            ..StandardMaterial::default()
+        });
+        let far_water_handle = standard_materials.add(StandardMaterial {
+            base_color: bevy::prelude::Color::srgba(0.12, 0.38, 0.72, 0.72),
+            perceptual_roughness: 0.18,
+            reflectance: 0.35,
+            alpha_mode: AlphaMode::Blend,
+            double_sided: true,
+            cull_mode: None,
+            ..StandardMaterial::default()
+        });
         Self {
             standard_handles,
             water_handle,
+            far_solid_handle,
+            far_water_handle,
         }
     }
 
@@ -62,6 +84,14 @@ impl ProductionTerrainMaterials {
 
     pub(super) fn water_handle(&self) -> &Handle<WaterMaterial> {
         &self.water_handle
+    }
+
+    pub(super) fn far_solid_handle(&self) -> &Handle<StandardMaterial> {
+        &self.far_solid_handle
+    }
+
+    pub(super) fn far_water_handle(&self) -> &Handle<StandardMaterial> {
+        &self.far_water_handle
     }
 }
 
@@ -370,6 +400,7 @@ pub(super) fn apply_chunk_mesh(
                     Mesh3d(handle),
                     MeshMaterial3d(materials.water_handle().clone()),
                     ChunkGroupMesh(group),
+                    terrain_visibility_range(),
                 ))
                 .id()
         } else {
@@ -382,6 +413,7 @@ pub(super) fn apply_chunk_mesh(
                     Mesh3d(handle),
                     MeshMaterial3d(material),
                     ChunkGroupMesh(group),
+                    terrain_visibility_range(),
                 ))
                 .id()
         };
@@ -397,6 +429,12 @@ pub(super) fn apply_chunk_mesh(
         return;
     }
     commands.entity(entity).insert(ChunkGpuMesh { groups });
+}
+
+fn terrain_visibility_range() -> VisibilityRange {
+    let mut range = VisibilityRange::abrupt(0.0, f32::MAX);
+    range.use_aabb = true;
+    range
 }
 
 fn mesh_from_group(
@@ -742,6 +780,13 @@ mod tests {
 
         assert!(materials.standard_handle(MeshGroup::Water).is_none());
         assert!(water_assets.get(materials.water_handle()).is_some());
+        assert!(standard_assets.get(materials.far_solid_handle()).is_some());
+        assert!(standard_assets.get(materials.far_water_handle()).is_some());
+        assert_ne!(
+            materials.far_solid_handle(),
+            materials.far_water_handle(),
+            "solid and water retain separate render-material ownership"
+        );
         for group in MeshGroup::ALL {
             if !matches!(group, MeshGroup::Water) {
                 assert!(materials.standard_handle(group).is_some());

@@ -64,8 +64,8 @@ use latticeaxiom_world_db::{
     StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitRequestV1, WorldStorage,
 };
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, FarTerrainTileV1, GenerationPlanV1,
-    HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
+    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, D4MaterialRoleV1, FarTerrainTileV1,
+    GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
     MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1, TerrainConfigV2, WorldSeedV1,
 };
 
@@ -1662,6 +1662,25 @@ impl ProductionSpine {
     pub fn far_terrain_ready_tiles(&self) -> Vec<Arc<FarTerrainTileV1>> {
         self.lock_inner()
             .map_or_else(|_| Vec::new(), |inner| inner.far_terrain.ready_tiles())
+    }
+
+    /// Resolves far-surface semantic roles to package-selected block identities.
+    #[cfg(feature = "client")]
+    pub(super) fn far_terrain_role_blocks(&self) -> BTreeMap<D4MaterialRoleV1, BlockId> {
+        self.lock_inner().map_or_else(
+            |_| BTreeMap::new(),
+            |inner| {
+                D4MaterialRoleV1::ALL
+                    .into_iter()
+                    .chain(D4MaterialRoleV1::NATURAL)
+                    .filter_map(|role| {
+                        BlockId::parse(inner.plan.role_target(role).as_str())
+                            .ok()
+                            .map(|block| (role, block))
+                    })
+                    .collect()
+            },
+        )
     }
 
     /// Streams interest, generation, and eviction from the latest player pose.

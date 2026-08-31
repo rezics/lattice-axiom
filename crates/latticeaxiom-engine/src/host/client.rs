@@ -17,6 +17,7 @@ use latticeaxiom_player::{LocalPlayerInput, PlayerMovementProfileV1, PlayerViewV
 use super::chunk_mesh::{
     ProductionTerrainMaterials, ProductionTerrainPalette, nearest_clamp_sampler,
 };
+use super::far_mesh::{FarTerrainPresentationStatusV1, FarTerrainRolePalette};
 use super::water_material::{WaterMaterial, water_normal_image};
 use super::{CellOccupancyV1, ProductionSpine, TerrainDistanceStatusV1};
 
@@ -78,6 +79,7 @@ type ProductionCameraQuery<'world, 'state> = Query<
 pub(super) fn spawn_production_client_view(
     mut commands: Commands<'_, '_>,
     profile: Res<'_, EngineProfile>,
+    spine: Res<'_, ProductionSpine>,
     mut standard_materials: ResMut<'_, Assets<StandardMaterial>>,
     mut water_materials: ResMut<'_, Assets<WaterMaterial>>,
     mut images: ResMut<'_, Assets<Image>>,
@@ -96,6 +98,9 @@ pub(super) fn spawn_production_client_view(
         &mut water_materials,
         &atlas,
         &water_normal_map,
+    ));
+    commands.insert_resource(FarTerrainRolePalette::from_blocks(
+        &spine.far_terrain_role_blocks(),
     ));
     commands.spawn((
         Name::new("Production Camera"),
@@ -154,6 +159,7 @@ pub(super) fn sync_water_material_medium(
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn sync_production_camera(
     spine: Res<'_, ProductionSpine>,
+    far_presentation: Option<Res<'_, FarTerrainPresentationStatusV1>>,
     players: Query<
         '_,
         '_,
@@ -183,9 +189,17 @@ pub(super) fn sync_production_camera(
     camera_transform.rotation =
         Quat::from_rotation_y(view.yaw_radians()) * Quat::from_rotation_x(view.pitch_radians());
 
-    let next_view_range = spine
-        .terrain_distance_status()
-        .map_or_else(ProductionCameraViewRangeV1::default, camera_view_range);
+    let next_view_range = spine.terrain_distance_status().map_or_else(
+        ProductionCameraViewRangeV1::default,
+        |status| {
+            camera_view_range(
+                status,
+                far_presentation
+                    .as_ref()
+                    .and_then(|presentation| presentation.contiguous_meters()),
+            )
+        },
+    );
     if *view_range != next_view_range {
         *view_range = next_view_range;
         apply_camera_view_range(*view_range, *medium, &mut projection, &mut fog);
@@ -305,10 +319,26 @@ fn resolve_camera_medium(
     }
 }
 
-fn camera_view_range(status: TerrainDistanceStatusV1) -> ProductionCameraViewRangeV1 {
+fn camera_view_range(
+    status: TerrainDistanceStatusV1,
+    gpu_presented_meters: Option<u32>,
+) -> ProductionCameraViewRangeV1 {
+    let cpu_presented_chunks = status.presented_render_distance().chunks();
+    let cpu_presented_meters = status.presented_render_distance_meters().meters();
+    let chunk_edge_meters = cpu_presented_meters
+        .checked_div(cpu_presented_chunks)
+        .unwrap_or(1)
+        .max(1);
+    let fail_closed_meters = status
+        .full_detail_distance()
+        .chunks()
+        .saturating_mul(chunk_edge_meters);
     camera_view_range_from_values(
-        status.presented_render_distance().chunks(),
-        status.presented_render_distance_meters().meters(),
+        gpu_presented_meters
+            .unwrap_or(fail_closed_meters)
+            .clamp(fail_closed_meters, cpu_presented_meters),
+        status.target_render_distance().chunks(),
+        chunk_edge_meters,
     )
 }
 
@@ -317,12 +347,13 @@ fn camera_view_range(status: TerrainDistanceStatusV1) -> ProductionCameraViewRan
     reason = "bounded view distances are exactly representable in f32"
 )]
 fn camera_view_range_from_values(
-    effective_chunks: u32,
-    effective_meters: u32,
+    presented_meters: u32,
+    target_chunks: u32,
+    chunk_edge_meters: u32,
 ) -> ProductionCameraViewRangeV1 {
-    let chunk_edge_meters = effective_meters.checked_div(effective_chunks).unwrap_or(1);
-    let fog_visibility_m = effective_meters.saturating_add(chunk_edge_meters / 2);
-    let far_plane_m = effective_meters
+    let fog_visibility_m = presented_meters.saturating_add(chunk_edge_meters / 2);
+    let far_plane_m = target_chunks
+        .saturating_mul(chunk_edge_meters)
         .saturating_add(chunk_edge_meters)
         .saturating_mul(2);
     ProductionCameraViewRangeV1 {
@@ -512,13 +543,13 @@ mod tests {
 
     #[test]
     fn camera_range_tracks_presented_chunks_in_world_meters() {
-        let six_chunks = camera_view_range_from_values(6, 192);
-        let four_chunks = camera_view_range_from_values(4, 128);
-        assert!((six_chunks.air_fog_visibility_m - 208.0).abs() < f32::EPSILON);
-        assert!((six_chunks.far_plane_m - 448.0).abs() < f32::EPSILON);
+        let six_of_twenty_one = camera_view_range_from_values(192, 21, 32);
+        let four_chunks = camera_view_range_from_values(128, 4, 32);
+        assert!((six_of_twenty_one.air_fog_visibility_m - 208.0).abs() < f32::EPSILON);
+        assert!((six_of_twenty_one.far_plane_m - 1_408.0).abs() < f32::EPSILON);
         assert!((four_chunks.air_fog_visibility_m - 144.0).abs() < f32::EPSILON);
         assert!((four_chunks.far_plane_m - 320.0).abs() < f32::EPSILON);
-        assert!(four_chunks.air_fog_visibility_m < six_chunks.air_fog_visibility_m);
-        assert!(four_chunks.far_plane_m < six_chunks.far_plane_m);
+        assert!(four_chunks.air_fog_visibility_m < six_of_twenty_one.air_fog_visibility_m);
+        assert!(four_chunks.far_plane_m < six_of_twenty_one.far_plane_m);
     }
 }

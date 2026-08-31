@@ -15,6 +15,8 @@ mod chunk_mesh;
 #[cfg(feature = "client")]
 mod client;
 mod display;
+#[cfg(feature = "client")]
+mod far_mesh;
 mod far_stream;
 mod fluid;
 mod gameplay;
@@ -409,7 +411,8 @@ impl Plugin for ProductionHostPlugin {
                 ),
             );
         #[cfg(feature = "client")]
-        app.add_observer(pause::render_distance_slider_changed)
+        app.init_resource::<far_mesh::FarTerrainPresentationStatusV1>()
+            .add_observer(pause::render_distance_slider_changed)
             .add_observer(pause::pause_menu_activated)
             .add_observer(settings_view::settings_page_activated)
             .add_observer(settings_view::settings_integer_slider_changed)
@@ -436,6 +439,13 @@ impl Plugin for ProductionHostPlugin {
                     .chain()
                     .after(InputSystems)
                     .before(ClientInputSystemSet::Sample)
+                    .run_if(is_interactive_client),
+            )
+            .add_systems(
+                Update,
+                far_mesh::sync_far_terrain_presentation
+                    .after(pump_chunk_background)
+                    .before(client::sync_production_camera)
                     .run_if(is_interactive_client),
             )
             .add_systems(
