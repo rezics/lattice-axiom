@@ -31,6 +31,7 @@ mod cave_topology;
 mod config;
 mod epoch;
 mod error;
+mod far_terrain;
 mod fixed_field;
 mod generation;
 mod hashes;
@@ -68,6 +69,16 @@ pub use epoch::{
     PlanningCellCoordinateV1,
 };
 pub use error::{WorldgenError, WorldgenResult};
+pub use far_terrain::{
+    FAR_TERRAIN_MESH_ALGORITHM_REVISION_V1, FarTerrainBorderSideV1, FarTerrainBorderSkirtV1,
+    FarTerrainCacheKeyV1, FarTerrainCellEnvelopeV1, FarTerrainCommittedProvenanceV1,
+    FarTerrainLodLevelV1, FarTerrainProceduralProvenanceV1, FarTerrainShellV1,
+    FarTerrainSourceProvenanceV1, FarTerrainSurfaceSampleV1, FarTerrainSurfaceSourceV1,
+    FarTerrainTileAddressV1, FarTerrainTileCoordinateV1, FarTerrainTileV1, FarTerrainTriangleV1,
+    FarTerrainVertexV1, FarTerrainWallAxisV1, FarTerrainWallV1, FarTerrainWaterVertexV1,
+    MAX_FAR_TERRAIN_BASE_TILE_EDGE_V1, MAX_FAR_TERRAIN_LOD_LEVEL_V1, build_far_terrain_tile_v1,
+    far_terrain_edit_invalidation_v1,
+};
 pub use fixed_field::{
     AuthoritativeFieldAlgorithmV1, FIXED_FIELD_FRACTION_BITS_V1, FIXED_FIELD_OUTPUT_BITS_V1,
     FixedCoordinateV1, FixedFieldSampleV1, MAX_FIXED_FIELD_INTEGER_COORDINATE_V1,

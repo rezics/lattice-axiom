@@ -426,6 +426,14 @@ pub enum WorldgenError {
         /// Actionable validation diagnostic.
         reason: String,
     },
+    /// A bounded far-terrain tile request or derived shell was invalid.
+    #[error("invalid far-terrain tile field `{field}`: {reason}")]
+    InvalidFarTerrainTile {
+        /// Stable field name.
+        field: &'static str,
+        /// Actionable validation diagnostic.
+        reason: String,
+    },
     /// Hydrologic planning observed a caller-owned cancellation request.
     #[error("hydrologic domain planning was cancelled after {completed_work_units} work units")]
     HydrologicPlanningCancelled {

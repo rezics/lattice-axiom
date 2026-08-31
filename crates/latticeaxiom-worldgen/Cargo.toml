@@ -36,3 +36,7 @@ harness = false
 [[bench]]
 name = "hydrologic_domain"
 harness = false
+
+[[bench]]
+name = "far_terrain"
+harness = false

@@ -23,11 +23,13 @@ use latticeaxiom_worldgen::{
     BoundedGeneratedRegionV1, CellEpochStateV1, ChunkCoordinate, ChunkFaceV1,
     ChunkGenerationOutcomeV1, ChunkGenerationRequestV1, ChunkRevision, ChunkRevisionExpectation,
     D4BlockCatalogClosureV1, D4MaterialRoleV1, D4RoleVocabularyV1, DimensionId,
-    ExistingSnapshotEvidenceV1, FrozenRoleBindingsV1, GenerationEpochIdV1, GenerationPlanInputV1,
-    GenerationPlanV1, MAX_BOUNDED_REGION_CHUNKS, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1,
-    PlacementPredicateKindV1, PlanActivationIdV1, PlanningCellCoordinateV1,
-    ProviderGenerationIdentityV1, ProviderOfferV1, ProviderSlotV1, TerrainStyleV1, WorldSeedV1,
-    WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
+    ExistingSnapshotEvidenceV1, FarTerrainLodLevelV1, FarTerrainProceduralProvenanceV1,
+    FarTerrainSourceProvenanceV1, FarTerrainTileAddressV1, FarTerrainTileCoordinateV1,
+    FrozenRoleBindingsV1, GenerationEpochIdV1, GenerationPlanInputV1, GenerationPlanV1,
+    MAX_BOUNDED_REGION_CHUNKS, ORIGIN_NEIGHBORHOOD_CHUNK_COORDINATES_V1, PlacementPredicateKindV1,
+    PlanActivationIdV1, PlanningCellCoordinateV1, ProviderGenerationIdentityV1, ProviderOfferV1,
+    ProviderSlotV1, TerrainStyleV1, WorldSeedV1, WorldgenConfigV1, WorldgenError, WorldgenLimitsV1,
+    build_far_terrain_tile_v1,
 };
 use proptest::prelude::*;
 use support::surface_terrain_programs;
@@ -159,6 +161,87 @@ fn provider_restart_and_chunk_permutations_preserve_exact_bytes() {
     ];
     let first = generated_by_coordinate(&forward, chunks);
     let second = generated_by_coordinate(&reverse, chunks.into_iter().rev());
+    assert_eq!(first, second);
+}
+
+#[test]
+fn far_surface_query_matches_materialized_top_role_at_signed_columns() {
+    let plan = fixture_plan(false, &[b"lock-a"]);
+    let edge = i64::from(plan.config().chunk_edge_voxels);
+    for (x, z) in [(-17_i64, -9_i64), (-1, 0), (0, -1), (13, 21)] {
+        let sample = plan
+            .far_terrain_surface_sample(x, z)
+            .expect("final surface query succeeds");
+        let coordinate = ChunkCoordinate::new(
+            i32::try_from(x.div_euclid(edge)).expect("fixture chunk X fits"),
+            sample
+                .solid_y()
+                .div_euclid(i32::from(plan.config().chunk_edge_voxels)),
+            i32::try_from(z.div_euclid(edge)).expect("fixture chunk Z fits"),
+        );
+        let outcome = plan
+            .generate(vacant_request(coordinate))
+            .expect("surface chunk materializes");
+        let draft = prepared(&outcome).draft();
+        let local_x = u16::try_from(x.rem_euclid(edge)).expect("local X fits");
+        let local_y = u16::try_from(
+            sample
+                .solid_y()
+                .rem_euclid(i32::from(plan.config().chunk_edge_voxels)),
+        )
+        .expect("local Y fits");
+        let local_z = u16::try_from(z.rem_euclid(edge)).expect("local Z fits");
+        assert_eq!(
+            draft.block_at(local_x, local_y, local_z),
+            Some(plan.role_target(sample.material())),
+            "far surface must reuse the final materialized top at ({x}, {}, {z})",
+            sample.solid_y()
+        );
+        let above_y = local_y.saturating_add(1);
+        if above_y < plan.config().chunk_edge_voxels {
+            assert_eq!(
+                draft.block_at(local_x, above_y, local_z),
+                Some(plan.role_target(D4MaterialRoleV1::Empty)),
+                "sampled final surface must have empty support clearance"
+            );
+        }
+    }
+}
+
+#[test]
+fn far_tiles_are_identical_across_provider_and_generation_order() {
+    let forward = fixture_plan(false, &[b"lock-a"]);
+    let reverse = fixture_plan(true, &[b"lock-a"]);
+    let addresses = [
+        FarTerrainTileAddressV1::new(
+            FarTerrainTileCoordinateV1::new(-2, 1),
+            FarTerrainLodLevelV1::new(0).expect("LOD zero is valid"),
+        ),
+        FarTerrainTileAddressV1::new(
+            FarTerrainTileCoordinateV1::new(1, -3),
+            FarTerrainLodLevelV1::new(1).expect("LOD one is valid"),
+        ),
+    ];
+    let build = |plan: &GenerationPlanV1, ordered: &[FarTerrainTileAddressV1]| {
+        ordered
+            .iter()
+            .map(|&address| {
+                build_far_terrain_tile_v1(
+                    plan,
+                    FarTerrainSourceProvenanceV1::Procedural(
+                        FarTerrainProceduralProvenanceV1::from_plan(plan),
+                    ),
+                    address,
+                    plan.config().chunk_edge_voxels,
+                )
+                .and_then(|tile| tile.canonical_bytes())
+                .map(|bytes| (address, bytes))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()
+    };
+    let first = build(&forward, &addresses).expect("forward tiles build");
+    let second = build(&reverse, &addresses.into_iter().rev().collect::<Vec<_>>())
+        .expect("reverse tiles build");
     assert_eq!(first, second);
 }
 

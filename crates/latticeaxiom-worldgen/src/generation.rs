@@ -1137,6 +1137,52 @@ impl GenerationPlanV1 {
         self.terrain_column(x, z).surface_water_y()
     }
 
+    /// Samples the final pre-vegetation surface used by presentation-only far
+    /// terrain. Height and material reuse the same density, cave arbitration,
+    /// final-slope profile, and Role selection as chunk materialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the column has no final solid support or its
+    /// bounded material profile cannot be evaluated.
+    pub fn far_terrain_surface_sample(
+        &self,
+        x: i64,
+        z: i64,
+    ) -> WorldgenResult<crate::FarTerrainSurfaceSampleV1> {
+        let column = self.generation_column(x, z);
+        let density = self.prepare_semantic_density_column(x, z, column);
+        let mut counters = WorkCountersV1::default();
+        let support_y = self
+            .final_surface_y_for_column(x, z, column, density.as_ref(), &mut counters)
+            .ok_or_else(|| WorldgenError::InvalidFarTerrainTile {
+                field: "surface",
+                reason: format!("column ({x}, {z}) has no final solid support"),
+            })?;
+        let surface_material =
+            self.far_surface_material_column(x, z, column, support_y, &mut counters)?;
+        let mut natural_counters = NaturalWorkCountersV1::default();
+        let role = self.material_role(
+            x,
+            support_y,
+            z,
+            column,
+            density.as_ref(),
+            surface_material,
+            None,
+            &mut counters,
+            &mut natural_counters,
+        );
+        let solid_y = i32::try_from(support_y).map_err(|_| WorldgenError::ArithmeticOverflow {
+            operation: "far-terrain final surface height",
+        })?;
+        Ok(crate::FarTerrainSurfaceSampleV1::new(
+            solid_y,
+            role,
+            column.surface_water_y,
+        ))
+    }
+
     /// Returns the macro shape family independently from climate materials.
     #[must_use]
     pub fn terrain_family(&self, x: i64, z: i64) -> TerrainFamilyV2 {
@@ -2297,6 +2343,70 @@ impl GenerationPlanV1 {
         None
     }
 
+    fn far_surface_material_column(
+        &self,
+        x: i64,
+        z: i64,
+        column: ColumnSampleV1,
+        surface_y: i64,
+        counters: &mut WorkCountersV1,
+    ) -> WorldgenResult<Option<SurfaceMaterialColumnV1>> {
+        let Some(natural) = self
+            .natural
+            .as_ref()
+            .filter(|natural| natural.uses_final_surface_materials())
+        else {
+            return Ok(None);
+        };
+        let mut maximum_neighbor_descent = 0_u16;
+        let mut neighbor_height_delta_sum = 0_i64;
+        for (offset_x, offset_z) in [(-1_i64, 0_i64), (1, 0), (0, -1), (0, 1)] {
+            let neighbor_x = x.saturating_add(offset_x);
+            let neighbor_z = z.saturating_add(offset_z);
+            counters.territory_queries = counters.territory_queries.saturating_add(1);
+            counters.height_samples = counters.height_samples.saturating_add(1);
+            let neighbor_column = self.generation_column(neighbor_x, neighbor_z);
+            let neighbor_density =
+                self.prepare_semantic_density_column(neighbor_x, neighbor_z, neighbor_column);
+            let neighbor_surface_y = self
+                .final_surface_y_for_column(
+                    neighbor_x,
+                    neighbor_z,
+                    neighbor_column,
+                    neighbor_density.as_ref(),
+                    counters,
+                )
+                .unwrap_or(i64::from(neighbor_column.height));
+            maximum_neighbor_descent = maximum_neighbor_descent.max(
+                u16::try_from(surface_y.saturating_sub(neighbor_surface_y)).unwrap_or(u16::MAX),
+            );
+            neighbor_height_delta_sum = neighbor_height_delta_sum
+                .saturating_add(neighbor_surface_y.saturating_sub(surface_y));
+        }
+        let (precipitation, infiltration, runoff) =
+            column.semantic_field.map_or((0, 0, 32_768), |sample| {
+                (
+                    sample.precipitation_per_1024(),
+                    sample.infiltration_per_1024(),
+                    sample.effective_runoff_q16(),
+                )
+            });
+        let formation = SurfaceFormationInputV1::new(
+            maximum_neighbor_descent,
+            i16::try_from(neighbor_height_delta_sum.clamp(-128, 128)).unwrap_or_default(),
+            precipitation,
+            infiltration,
+            runoff,
+        );
+        Ok(Some(SurfaceMaterialColumnV1 {
+            surface_y,
+            profile: natural.surface_material_profile(x, z, formation)?,
+            vegetation_eligibility: SurfaceVegetationEligibilityV1::from_maximum_descent(
+                maximum_neighbor_descent,
+            ),
+        }))
+    }
+
     fn checked_vegetation_surface(
         &self,
         x: i64,
@@ -3160,7 +3270,7 @@ fn set_vegetation_role(
         *slot = Some(role);
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct WorkCountersV1 {
     territory_queries: u64,
     height_samples: u64,

@@ -76,6 +76,47 @@ fn negative_coordinates_match_independent_regeneration() {
 }
 
 #[test]
+fn far_surface_query_matches_final_natural_material_profile() {
+    let plan = natural_plan(42, false);
+    let edge = i64::from(plan.config().chunk_edge_voxels);
+    for (x, z) in [(-31_i64, -17_i64), (-1, 0), (0, -1), (19, 37)] {
+        let sample = plan
+            .far_terrain_surface_sample(x, z)
+            .expect("natural far-surface query succeeds");
+        let coordinate = ChunkCoordinate::new(
+            i32::try_from(x.div_euclid(edge)).expect("fixture chunk X fits"),
+            sample
+                .solid_y()
+                .div_euclid(i32::from(plan.config().chunk_edge_voxels)),
+            i32::try_from(z.div_euclid(edge)).expect("fixture chunk Z fits"),
+        );
+        let outcome = plan
+            .generate(
+                plan.vacant_generation_request(coordinate)
+                    .expect("vacant request is valid"),
+            )
+            .expect("natural surface chunk materializes");
+        let ChunkGenerationOutcomeV1::Prepared(candidate) = outcome else {
+            panic!("natural surface fixture must prepare a candidate");
+        };
+        let local_x = u16::try_from(x.rem_euclid(edge)).expect("local X fits");
+        let local_y = u16::try_from(
+            sample
+                .solid_y()
+                .rem_euclid(i32::from(plan.config().chunk_edge_voxels)),
+        )
+        .expect("local Y fits");
+        let local_z = u16::try_from(z.rem_euclid(edge)).expect("local Z fits");
+        assert_eq!(
+            candidate.draft().block_at(local_x, local_y, local_z),
+            Some(plan.role_target(sample.material())),
+            "far terrain must reuse the final slope-aware natural top at ({x}, {}, {z})",
+            sample.solid_y()
+        );
+    }
+}
+
+#[test]
 fn river_plan_is_continuous_across_style_boundaries() {
     let plan = natural_plan(42, false);
     let mut found_crossing = false;
