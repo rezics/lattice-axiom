@@ -13,6 +13,7 @@
 //! matches the storage permit, including plan generation. The storage permit
 //! alone is not authority.
 mod contract;
+mod disk;
 mod durable;
 mod error;
 mod header;
@@ -21,6 +22,7 @@ mod memory;
 mod model;
 
 pub use contract::{WorldReadView, WorldStorage, WorldWriter};
+pub use disk::{DiskWorldEntryV1, DiskWorldError, DiskWorldStore, DurableWorldImageV1};
 pub use error::{WorldDbError, WorldDbResult};
 pub use header::{
     DeterministicHeaderPublisher, HeaderFaultPointV1, HeaderPublishErrorV1, HeaderPublishReceiptV1,

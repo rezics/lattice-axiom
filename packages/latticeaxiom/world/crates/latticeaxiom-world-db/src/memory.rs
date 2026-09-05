@@ -184,6 +184,47 @@ impl fmt::Debug for DeterministicWorldStorage {
     }
 }
 impl DeterministicWorldStorage {
+    /// Exports the last synchronized logical image for a physical storage adapter.
+    ///
+    /// # Errors
+    /// Returns a storage error when no durable image is available or it is corrupt.
+    pub fn export_durable_image(&self) -> WorldDbResult<crate::DurableWorldImageV1> {
+        self.require_durable("export durable image")?;
+        let (bytes, digest) = self
+            .lock("exporting durable image")?
+            .durable_root
+            .clone()
+            .ok_or_else(|| WorldDbError::CorruptDurableImage {
+                reason: "no durable image is available".to_owned(),
+            })?;
+        let root = DurableRootImageV1::decode(&bytes, digest)?;
+        Ok(crate::DurableWorldImageV1 {
+            world: root.world().world(),
+            bytes,
+            digest,
+        })
+    }
+
+    /// Restores a physical adapter's verified image without copying writer leases.
+    ///
+    /// # Errors
+    /// Returns a storage error for corrupt bytes, identity mismatch or invalid records.
+    pub fn from_durable_image(
+        image: &crate::DurableWorldImageV1,
+        record_owner: StableId,
+        wire_limits: WorldWireLimits,
+        limits: WorldStorageLimitsV1,
+        publisher: Arc<dyn HeaderPublisher>,
+    ) -> WorldDbResult<Self> {
+        let root = DurableRootImageV1::decode(&image.bytes, image.digest)?;
+        if root.world().world() != image.world {
+            return Err(WorldDbError::CorruptDurableImage {
+                reason: "physical world identity does not match its image".to_owned(),
+            });
+        }
+        Self::from_durable_root(record_owner, wire_limits, limits, publisher, &root)
+    }
+
     /// Creates a volatile fake with an explicit portable record contract.
     #[must_use]
     pub fn new(

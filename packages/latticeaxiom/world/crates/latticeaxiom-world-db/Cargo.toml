@@ -14,6 +14,7 @@ latticeaxiom-storage = { path = "../latticeaxiom-storage" }
 latticeaxiom-world-catalog = { path = "../../../world-library/crates/latticeaxiom-world-catalog" }
 latticeaxiom-world-wire = { path = "../latticeaxiom-world-wire" }
 postcard.workspace = true
+redb.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,6 +22,7 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 proptest.workspace = true
 
 [lints]

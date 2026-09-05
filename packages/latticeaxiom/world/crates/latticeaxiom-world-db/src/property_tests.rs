@@ -111,7 +111,7 @@ fn sealed_activation(world: WorldId, permit: ActivationPermitV1) -> WriterActiva
     WriterActivationV1::new(accepted, permit).expect("property accepted plan is writable")
 }
 
-fn durable_store() -> (
+pub(super) fn durable_store() -> (
     DeterministicWorldStorage,
     WorldId,
     AuthoritativeMetadataInputV1,
@@ -129,7 +129,7 @@ fn durable_store() -> (
     (storage, world, fixture_metadata())
 }
 
-fn provision_ready(
+pub(super) fn provision_ready(
     storage: &DeterministicWorldStorage,
     world: WorldId,
     metadata: &AuthoritativeMetadataInputV1,
