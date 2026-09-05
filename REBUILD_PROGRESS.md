@@ -21,7 +21,7 @@ the original proposal's asset delivery and future asset-management suggestions.
 - [x] Package-owned workspace and text-only repository checks.
 - [x] Multi-crate source realization and frozen-source link conformance.
 - [ ] Generated product assembly used by the actual client.
-- [ ] Independently selectable resource packs.
+- [x] Independently selectable texture/shader resource graph and runtime consumers.
 - [ ] Code-designed client UI and interaction verification.
 - [ ] Streaming measurements, corrective changes, and acceptance.
 - [ ] Complete gameplay journey and durable re-entry.
@@ -62,3 +62,13 @@ tests and four source-build tests passed, including a two-crate package whose
 text resource is read from frozen CAS after the mutable original changes.
 `cargo clippy -p latticeaxiom-compose --all-targets --all-features --offline -- -D warnings` passed.
 These link proofs do not yet claim production-client activation.
+
+## Independent resource graph validation
+
+Client resources resolve through `profiles/resources.toml` to a separate lock.
+A resource-only relock and frozen verify succeeded and left the gameplay lock
+SHA-256 unchanged. Material patterns feed near terrain, distant color and item
+previews; independently locked WGSL replaces the versioned water shader.
+Four Python boundary tests, two resource overlay tests, all 176 engine library
+tests and engine/render-contract clippy passed. GPU presentation is still pending.
+No binary asset was imported or committed.

@@ -4,13 +4,15 @@ use std::f32::consts::TAU;
 
 use bevy::{
     app::App,
-    asset::{Asset, AssetPath, Handle, RenderAssetUsages, embedded_asset, embedded_path},
+    asset::{Asset, Assets, Handle, RenderAssetUsages, load_internal_asset, uuid_handle},
     image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin},
     prelude::{AlphaMode, Color, Reflect, StandardMaterial, Vec3, Vec4},
     render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat},
-    shader::ShaderRef,
+    shader::{Shader, ShaderRef},
 };
+
+const WATER_SHADER_HANDLE: Handle<Shader> = uuid_handle!("7c057de1-0ec1-44c8-88ad-fc3ba207ac65");
 
 /// Edge length of the deterministic, tileable tangent-space normal map.
 const WATER_NORMAL_MAP_EDGE: u32 = 32;
@@ -100,16 +102,30 @@ impl WaterMaterialExtension {
 
 impl MaterialExtension for WaterMaterialExtension {
     fn fragment_shader() -> ShaderRef {
-        let path =
-            AssetPath::from_path_buf(embedded_path!("water_material.wgsl")).with_source("embedded");
-        path.into()
+        WATER_SHADER_HANDLE.clone().into()
     }
 }
 
 /// Registers the embedded shader and its typed Bevy material pipeline.
 pub(super) fn install_water_material(app: &mut App) {
-    embedded_asset!(app, "water_material.wgsl");
+    load_internal_asset!(
+        app,
+        WATER_SHADER_HANDLE,
+        "water_material.wgsl",
+        Shader::from_wgsl
+    );
     app.add_plugins(MaterialPlugin::<WaterMaterial>::default());
+}
+
+/// Installs source read from the independently verified resource graph.
+pub(crate) fn install_resource_water_shader(app: &mut App, source: &str) -> Result<(), String> {
+    app.world_mut()
+        .resource_mut::<Assets<Shader>>()
+        .insert(
+            WATER_SHADER_HANDLE.id(),
+            Shader::from_wgsl(source.to_owned(), "resource-pack://water-interface-1"),
+        )
+        .map_err(|error| error.to_string())
 }
 
 /// Constructs the single shared production water material.
@@ -437,7 +453,9 @@ mod tests {
 
     #[test]
     fn embedded_shader_declares_every_water_optics_stage() {
-        let shader = include_str!("water_material.wgsl");
+        let shader = include_str!(
+            "../../../../../../../resource-packs/latticeaxiom/water-default/data/water.wgsl"
+        );
         for required in [
             "schlick_fresnel",
             "beer_lambert",

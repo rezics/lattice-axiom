@@ -1,0 +1,24 @@
+schema_version = 1
+projection = "client-shell"
+projection_domains = ["client"]
+evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1"
+realization_policy = ["data"]
+nickel_profile_entry = "profiles/resources.ncl"
+
+[roots."@terrenia/textures-default"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[roots."@latticeaxiom/water-default"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[[sources]]
+kind = "path"
+package = "@terrenia/textures-default"
+path = "resource-packs/terrenia/textures-default"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/water-default"
+path = "resource-packs/latticeaxiom/water-default"

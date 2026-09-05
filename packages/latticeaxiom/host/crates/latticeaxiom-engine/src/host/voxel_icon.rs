@@ -53,17 +53,20 @@ pub(super) fn build_production_voxel_icons(
     mut commands: Commands<'_, '_>,
     spine: Res<'_, ProductionSpine>,
     mut images: ResMut<'_, Assets<Image>>,
+    resources: Option<Res<'_, crate::resource_packs::ClientResourcePacks>>,
 ) {
+    let empty = latticeaxiom_render_contracts::ResolvedResourcePacks::default();
+    let resources = resources.as_ref().map_or(&empty, |value| &value.0);
     let fallback = images.add(voxel_icon_image("latticeaxiom:missing/voxel-icon"));
     let mut blocks = BTreeMap::new();
     let mut items = BTreeMap::new();
 
     for block in spine.palette_ids() {
-        insert_block_icon(&mut blocks, &mut images, block);
+        insert_block_icon(&mut blocks, &mut images, block, resources);
     }
     if let Some(catalog) = spine.gameplay_catalog() {
         for block in catalog.blocks().keys().cloned() {
-            insert_block_icon(&mut blocks, &mut images, block);
+            insert_block_icon(&mut blocks, &mut images, block, resources);
         }
         for (item, definition) in catalog.items() {
             let handle = definition
@@ -87,17 +90,27 @@ fn insert_block_icon(
     blocks: &mut BTreeMap<BlockId, Handle<Image>>,
     images: &mut Assets<Image>,
     block: BlockId,
+    resources: &latticeaxiom_render_contracts::ResolvedResourcePacks,
 ) {
     if blocks.contains_key(&block) {
         return;
     }
-    let handle = images.add(voxel_icon_image(block.as_str()));
+    let handle = images.add(voxel_icon_image_with_color(
+        block.as_str(),
+        resources.material(block.as_str()).map_or_else(
+            || block_color(block.as_str()),
+            latticeaxiom_render_contracts::ResourceMaterial::rgba,
+        ),
+    ));
     blocks.insert(block, handle);
 }
 
 fn voxel_icon_image(identity: &str) -> Image {
+    voxel_icon_image_with_color(identity, block_color(identity))
+}
+
+fn voxel_icon_image_with_color(identity: &str, base: [f32; 4]) -> Image {
     let mut rgba = vec![0_u8; ICON_EDGE_USIZE * ICON_EDGE_USIZE * 4];
-    let base = block_color(identity);
     let seed = stable_hash(identity.as_bytes());
     paint_face(&mut rgba, TOP_FACE, base, 1.12, seed, 0);
     paint_face(&mut rgba, LEFT_FACE, base, 0.72, seed, 1);

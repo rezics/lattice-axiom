@@ -83,12 +83,19 @@ pub(super) fn spawn_production_client_view(
     mut standard_materials: ResMut<'_, Assets<StandardMaterial>>,
     mut water_materials: ResMut<'_, Assets<WaterMaterial>>,
     mut images: ResMut<'_, Assets<Image>>,
-    palette: Res<'_, ProductionTerrainPalette>,
+    presentation: (
+        ResMut<'_, ProductionTerrainPalette>,
+        Option<Res<'_, crate::resource_packs::ClientResourcePacks>>,
+    ),
 ) {
     if *profile != EngineProfile::Client {
         return;
     }
 
+    let (mut palette, resources) = presentation;
+    let empty = latticeaxiom_render_contracts::ResolvedResourcePacks::default();
+    let resources = resources.as_ref().map_or(&empty, |value| &value.0);
+    palette.apply_resource_packs(resources);
     let mut atlas_image = palette.atlas_image();
     atlas_image.sampler = nearest_clamp_sampler();
     let atlas = images.add(atlas_image);
@@ -101,6 +108,7 @@ pub(super) fn spawn_production_client_view(
     ));
     commands.insert_resource(FarTerrainRolePalette::from_blocks(
         &spine.far_terrain_role_blocks(),
+        resources,
     ));
     commands.spawn((
         Name::new("Production Camera"),

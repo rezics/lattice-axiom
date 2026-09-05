@@ -1,0 +1,600 @@
+{
+  "schema_version": 1,
+  "id": "terrenia:resource-pack/textures-default",
+  "kind": "textures",
+  "priority": 0,
+  "materials": {
+    "terrenia:block/air": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/basalt": {
+      "color": [
+        58,
+        65,
+        75
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/basalt-tiles": {
+      "color": [
+        58,
+        65,
+        75
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/bricks": {
+      "color": [
+        151,
+        79,
+        64
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/brown-mushroom": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/cactus": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/calcite": {
+      "color": [
+        188,
+        172,
+        127
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/chest": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/clay": {
+      "color": [
+        115,
+        83,
+        57
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/coal-block": {
+      "color": [
+        58,
+        65,
+        75
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/coal-ore": {
+      "color": [
+        58,
+        65,
+        75
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/coarse-dirt": {
+      "color": [
+        115,
+        83,
+        57
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/cobblestone": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/copper-block": {
+      "color": [
+        171,
+        107,
+        67
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/copper-grating": {
+      "color": [
+        132,
+        150,
+        155
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/copper-ore": {
+      "color": [
+        171,
+        107,
+        67
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/crystal-cluster": {
+      "color": [
+        126,
+        176,
+        188
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/deepstone": {
+      "color": [
+        58,
+        65,
+        75
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/dirt": {
+      "color": [
+        115,
+        83,
+        57
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/dripstone": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/fern": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/furnace": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/glass": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/glow-moss": {
+      "color": [
+        126,
+        176,
+        188
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/gold-block": {
+      "color": [
+        203,
+        168,
+        67
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/gold-ore": {
+      "color": [
+        203,
+        168,
+        67
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/granite": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/grass": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/gravel": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/ice": {
+      "color": [
+        210,
+        229,
+        234
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/iron-block": {
+      "color": [
+        132,
+        150,
+        155
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/iron-ore": {
+      "color": [
+        132,
+        150,
+        155
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/limestone": {
+      "color": [
+        188,
+        172,
+        127
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/marble": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/moss": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/mossy-stone-bricks": {
+      "color": [
+        151,
+        79,
+        64
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/mud": {
+      "color": [
+        115,
+        83,
+        57
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/oak-leaves": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/oak-log": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/oak-planks": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/obsidian": {
+      "color": [
+        58,
+        65,
+        75
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/peat": {
+      "color": [
+        115,
+        83,
+        57
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/pine-leaves": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/pine-log": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/pine-planks": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/polished-granite": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/polished-slate": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/polished-stone": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/red-mushroom": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/red-sand": {
+      "color": [
+        188,
+        172,
+        127
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/red-sandstone": {
+      "color": [
+        188,
+        172,
+        127
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/reed": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/roof-tiles": {
+      "color": [
+        151,
+        79,
+        64
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/rooted-dirt": {
+      "color": [
+        115,
+        83,
+        57
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/sand": {
+      "color": [
+        188,
+        172,
+        127
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/sandstone": {
+      "color": [
+        188,
+        172,
+        127
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/silt": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/slate": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/snow": {
+      "color": [
+        210,
+        229,
+        234
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/stone": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/stone-bricks": {
+      "color": [
+        151,
+        79,
+        64
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/stripped-oak-log": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/stripped-pine-log": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/sulfur-ore": {
+      "color": [
+        203,
+        168,
+        67
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/tall-grass": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/tin-block": {
+      "color": [
+        132,
+        150,
+        155
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/tin-ore": {
+      "color": [
+        132,
+        150,
+        155
+      ],
+      "pattern": "strata"
+    },
+    "terrenia:block/torch": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/tuff": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/vine": {
+      "color": [
+        74,
+        112,
+        60
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/wildflowers": {
+      "color": [
+        125,
+        130,
+        136
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:block/workbench": {
+      "color": [
+        134,
+        96,
+        55
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:fluid/water": {
+      "color": [
+        51,
+        127,
+        165
+      ],
+      "pattern": "solid"
+    },
+    "terrenia:fluid/lava": {
+      "color": [
+        230,
+        86,
+        27
+      ],
+      "pattern": "solid"
+    }
+  }
+}

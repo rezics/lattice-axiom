@@ -48,11 +48,22 @@ pub(super) struct FarTerrainRolePalette {
 }
 
 impl FarTerrainRolePalette {
-    pub(super) fn from_blocks(blocks: &BTreeMap<D4MaterialRoleV1, BlockId>) -> Self {
+    pub(super) fn from_blocks(
+        blocks: &BTreeMap<D4MaterialRoleV1, BlockId>,
+        resources: &latticeaxiom_render_contracts::ResolvedResourcePacks,
+    ) -> Self {
         Self {
             colors: blocks
                 .iter()
-                .map(|(role, block)| (*role, block_color(block.as_str())))
+                .map(|(role, block)| {
+                    (
+                        *role,
+                        resources.material(block.as_str()).map_or_else(
+                            || block_color(block.as_str()),
+                            latticeaxiom_render_contracts::ResourceMaterial::rgba,
+                        ),
+                    )
+                })
                 .collect(),
         }
     }

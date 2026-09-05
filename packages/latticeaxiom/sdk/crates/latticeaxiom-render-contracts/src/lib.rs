@@ -13,6 +13,12 @@ mod graph;
 mod layer;
 mod provider;
 mod registration;
+mod resource_pack;
+
+pub use resource_pack::{
+    MaterialPattern, ResolvedResourcePacks, ResourceMaterial, ResourcePackError, ResourcePackKind,
+    ResourcePackV1,
+};
 
 pub use command::{
     Command, CommandCatalog, CommandFrame, CommandFrameLimits, CommandHandle, CommandList,

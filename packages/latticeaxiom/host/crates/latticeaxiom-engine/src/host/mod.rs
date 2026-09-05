@@ -41,6 +41,8 @@ mod surface;
 mod voxel_icon;
 #[cfg(feature = "client")]
 mod water_material;
+#[cfg(feature = "client")]
+pub(crate) use water_material::install_resource_water_shader;
 mod worldgen;
 mod writer;
 

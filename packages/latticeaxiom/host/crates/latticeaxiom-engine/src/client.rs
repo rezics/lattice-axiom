@@ -25,6 +25,12 @@ const CLIENT_CATALOG_DIRECTORY: &str = "catalog";
 /// Failure to boot the production `DefaultPlugins` client from a reopened lock.
 #[derive(Debug, Error)]
 pub enum ProductionClientError {
+    /// A selected client resource pack failed validation.
+    #[error("client resource pack failed: {reason}")]
+    ResourcePack {
+        /// Validation diagnostic.
+        reason: String,
+    },
     /// The workspace current directory could not be resolved.
     #[error("workspace directory is unavailable: {source}")]
     Workspace {
@@ -160,7 +166,7 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
     let active_lock = images.product_lock_hash();
     let compiled = crate::input::compile_lock_selected_input(&images, &profile)?;
     let selects_shell = ProductionMemoryStart::lock_graph_selects_shell(images.images().graph())?;
-    let (instance, _proof) = if selects_shell {
+    let (mut instance, _proof) = if selects_shell {
         EngineInstance::new_client_shell_from_lock(
             images,
             lease,
@@ -180,6 +186,7 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
         instance.install_user_settings(settings_root, settings, catalog, active_lock)?;
         (instance, proof)
     };
+    crate::resource_packs::install_client_resource_packs(&mut instance, workspace)?;
     let role = if selects_shell { "shell" } else { "world" };
     bevy::log::info!(
         target: "latticeaxiom::lifecycle",

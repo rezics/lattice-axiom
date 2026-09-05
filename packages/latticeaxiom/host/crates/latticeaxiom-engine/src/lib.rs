@@ -33,6 +33,8 @@ mod playable;
 mod prepared;
 #[cfg(feature = "client")]
 mod presentation_fixture;
+#[cfg(feature = "client")]
+mod resource_packs;
 mod settings;
 #[cfg(feature = "client")]
 mod supervisor;

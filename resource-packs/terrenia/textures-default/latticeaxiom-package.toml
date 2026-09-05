@@ -1,0 +1,15 @@
+schema_version = 1
+name = "@terrenia/textures-default"
+version = "0.1.0"
+domains = ["client"]
+trust = "data-only"
+[realizations.data]
+id = "data"
+kind = "data"
+domains = ["client"]
+artifact = { kind = "data-root", path = "data" }
+trust = "data-only"
+[nickel_public_entrypoints]
+default = "package.ncl"
+[source_inclusion]
+include = ["latticeaxiom-package.toml", "package.ncl", "data"]

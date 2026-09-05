@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": "latticeaxiom:resource-pack/water-default",
+  "kind": "shaders",
+  "priority": 0,
+  "water_shader": "data/water.wgsl",
+  "water_interface": 1
+}

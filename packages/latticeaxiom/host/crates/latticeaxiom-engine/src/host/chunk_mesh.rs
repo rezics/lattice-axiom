@@ -135,7 +135,7 @@ pub(super) struct ProductionTerrainPalette {
     layer_tiles: BTreeMap<StableId, AtlasTile>,
 }
 
-/// One 16×16 atlas tile in UV space, inset by half a texel.
+/// One 16Ã—16 atlas tile in UV space, inset by half a texel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AtlasTile {
     min: [f32; 2],
@@ -189,6 +189,25 @@ impl ProductionTerrainPalette {
     }
 
     pub(super) fn from_layer_table(table: CompiledTerrainLayerTableV1) -> Self {
+        Self::from_resource_layers(
+            table,
+            &latticeaxiom_render_contracts::ResolvedResourcePacks::default(),
+        )
+    }
+
+    pub(super) fn apply_resource_packs(
+        &mut self,
+        resources: &latticeaxiom_render_contracts::ResolvedResourcePacks,
+    ) {
+        if let Some(table) = self.layer_table.clone() {
+            *self = Self::from_resource_layers(table, resources);
+        }
+    }
+
+    fn from_resource_layers(
+        table: CompiledTerrainLayerTableV1,
+        resources: &latticeaxiom_render_contracts::ResolvedResourcePacks,
+    ) -> Self {
         let mut layer_ids = BTreeSet::new();
         for row in table.rows() {
             for face in TerrainFaceV1::ALL {
@@ -199,7 +218,12 @@ impl ProductionTerrainPalette {
         let colors: Vec<[f32; 4]> = table
             .rows()
             .iter()
-            .map(|row| block_color(row.content().as_str()))
+            .map(|row| {
+                resources.material(row.content().as_str()).map_or_else(
+                    || block_color(row.content().as_str()),
+                    latticeaxiom_render_contracts::ResourceMaterial::rgba,
+                )
+            })
             .collect();
         let tile_count = unique_layers.len().max(1);
         let columns = ceil_sqrt(tile_count);
@@ -227,7 +251,7 @@ impl ProductionTerrainPalette {
                 let index = u32::try_from(tile_index).unwrap_or(0);
                 let col = index % columns.max(1);
                 let row = index / columns.max(1);
-                let color = table
+                let material = table
                     .rows()
                     .iter()
                     .find(|candidate| {
@@ -235,8 +259,16 @@ impl ProductionTerrainPalette {
                             .iter()
                             .any(|face| candidate.faces().layer(*face) == layer)
                     })
-                    .map_or(FALLBACK_COLOR, |row| block_color(row.content().as_str()));
-                blit_tile(&mut atlas_rgba, atlas_width, col, row, &solid_tile(color));
+                    .map(|row| row.content().as_str());
+                let tile_pixels = material.and_then(|id| resources.material(id)).map_or_else(
+                    || solid_tile(material.map_or(FALLBACK_COLOR, block_color)),
+                    |style| {
+                        (0..TILE_PX)
+                            .flat_map(|y| (0..TILE_PX).flat_map(move |x| style.texel(x, y)))
+                            .collect()
+                    },
+                );
+                blit_tile(&mut atlas_rgba, atlas_width, col, row, &tile_pixels);
                 let tile = atlas_tile(tile_index, columns, atlas_width, atlas_height);
                 tiles.push(tile);
                 layer_tiles.insert(layer.clone(), tile);
@@ -323,7 +355,7 @@ impl ProductionTerrainPalette {
 
     /// Deterministic solid-color atlas from palette IDs in index order.
     ///
-    /// Missing PNG textures use this 16×16 color-block fallback. Tiles are
+    /// Missing PNG textures use this 16Ã—16 color-block fallback. Tiles are
     /// packed left-to-right, top-to-bottom, with nearest sampling and clamp.
     pub(super) fn atlas_image(&self) -> Image {
         let mut image = Image::new_uninit(
@@ -580,30 +612,7 @@ fn encode_fluid_flow(flow: Option<FluidMeshFlow>) -> [f32; 2] {
 }
 
 pub(super) fn block_color(block_id: &str) -> [f32; 4] {
-    // Fallback presentation is keyed by the content path, not by a game
-    // namespace.  A replacement package can therefore reuse the same basic
-    // material vocabulary without changing engine code.
-    let path = block_id.rsplit_once('/').map_or(block_id, |(_, path)| path);
-    match path {
-        "grass" => [0.31, 0.66, 0.22, 1.0],
-        "tall-grass" => [0.20, 0.52, 0.14, 1.0],
-        "moss" => [0.22, 0.48, 0.18, 1.0],
-        "dirt" => [0.45, 0.29, 0.16, 1.0],
-        "coarse-dirt" => [0.36, 0.23, 0.13, 1.0],
-        "rooted-dirt" => [0.40, 0.25, 0.13, 1.0],
-        "peat" | "mud" => [0.32, 0.22, 0.16, 1.0],
-        "sand" => [0.78, 0.69, 0.45, 1.0],
-        "sandstone" | "silt" => [0.65, 0.54, 0.34, 1.0],
-        "red-sand" | "red-sandstone" => [0.72, 0.38, 0.22, 1.0],
-        "stone" | "cobblestone" | "stone-bricks" | "polished-stone" => [0.42, 0.45, 0.48, 1.0],
-        "water" => [0.16, 0.42, 0.74, 1.0],
-        "lava" => [0.90, 0.27, 0.06, 1.0],
-        "oak-log" | "pine-log" => [0.46, 0.30, 0.15, 1.0],
-        "oak-leaves" | "pine-leaves" => [0.16, 0.46, 0.18, 1.0],
-        "snow" | "ice" => [0.86, 0.91, 0.96, 1.0],
-        "coal-ore" | "coal-block" => [0.16, 0.17, 0.20, 1.0],
-        _ => hashed_color(block_id),
-    }
+    hashed_color(block_id)
 }
 
 fn hashed_color(block_id: &str) -> [f32; 4] {
