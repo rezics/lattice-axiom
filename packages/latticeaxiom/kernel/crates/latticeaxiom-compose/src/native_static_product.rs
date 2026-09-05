@@ -43,7 +43,7 @@ use unicode_normalization::UnicodeNormalization as _;
 use crate::SourceSnapshot;
 
 /// Schema version for NativeStatic product build plans and receipts.
-pub const NATIVE_STATIC_PRODUCT_BUILD_SCHEMA_VERSION: u32 = 1;
+pub const NATIVE_STATIC_PRODUCT_BUILD_SCHEMA_VERSION: u32 = 2;
 
 /// Stable generated Cargo package and binary name.
 pub const NATIVE_STATIC_PRODUCT_BINARY_NAME: &str = "latticeaxiom-locked-product";
@@ -131,6 +131,10 @@ pub struct NativeStaticPackageBuildPlanV1 {
     pub cargo_package: String,
     /// Generated-workspace package root.
     pub workspace_path: CanonicalLogicalPath,
+    /// Primary crate manifest relative to the package source root.
+    pub cargo_manifest: CanonicalLogicalPath,
+    /// All declared internal Cargo manifests relative to the package source root.
+    pub cargo_members: BTreeSet<CanonicalLogicalPath>,
     /// Verified source-table digest.
     pub source_digest: CanonicalHash,
     /// Verified serialized source-object digest.
@@ -600,7 +604,13 @@ fn validate_selected_packages(
             input.expected_source_object_digest,
             Some(input.expected_source_digest),
         )?;
-        verify_cargo_root(package.as_str(), &input.cargo_package, &snapshot)?;
+        let (cargo_manifest, cargo_members) = selected_cargo_sources(&snapshot)?;
+        verify_cargo_manifest(
+            package.as_str(),
+            &input.cargo_package,
+            &snapshot,
+            cargo_manifest.as_str(),
+        )?;
         let workspace_path: CanonicalLogicalPath =
             format!("{SELECTED_PACKAGES_MEMBER}/{SELECTED_PACKAGE_MEMBER_PREFIX}{index:04}")
                 .parse()
@@ -613,6 +623,8 @@ fn validate_selected_packages(
             package: package.clone(),
             cargo_package: input.cargo_package.clone(),
             workspace_path: workspace_path.clone(),
+            cargo_manifest,
+            cargo_members,
             source_digest: snapshot.source_hash(),
             source_object_digest: input.expected_source_object_digest,
             registration_hash: input.registration_hash,
@@ -788,13 +800,48 @@ fn verify_cargo_root(
     expected_cargo_package: &str,
     snapshot: &SourceSnapshot,
 ) -> Result<(), NativeStaticProductBuildError> {
-    let manifest = snapshot.resolve_path("Cargo.toml").map_err(|error| {
+    verify_cargo_manifest(owner, expected_cargo_package, snapshot, "Cargo.toml")
+}
+
+fn selected_cargo_sources(
+    snapshot: &SourceSnapshot,
+) -> Result<(CanonicalLogicalPath, BTreeSet<CanonicalLogicalPath>), NativeStaticProductBuildError> {
+    if let Ok(file) = snapshot.resolve_path("latticeaxiom-package.toml") {
+        let text = std::str::from_utf8(file.bytes())
+            .map_err(|error| NativeStaticProductBuildError::invalid(error.to_string()))?;
+        let manifest = crate::PackageSourceManifestV1::from_toml_str(text)
+            .map_err(|error| NativeStaticProductBuildError::invalid(error.to_string()))?;
+        if let Some(rust) = manifest.rust {
+            for member in &rust.members {
+                snapshot.resolve_path(member.as_str()).map_err(|error| {
+                    NativeStaticProductBuildError::invalid(format!(
+                        "declared Rust member {member} is missing: {error}"
+                    ))
+                })?;
+            }
+            return Ok((rust.entry, rust.members));
+        }
+    }
+    let entry = "Cargo.toml"
+        .parse::<CanonicalLogicalPath>()
+        .map_err(|error| NativeStaticProductBuildError::invalid(error.to_string()))?;
+    Ok((entry.clone(), BTreeSet::from([entry])))
+}
+
+fn verify_cargo_manifest(
+    owner: &str,
+    expected_cargo_package: &str,
+    snapshot: &SourceSnapshot,
+    entry: &str,
+) -> Result<(), NativeStaticProductBuildError> {
+    let prefix = entry.strip_suffix("Cargo.toml").unwrap_or_default();
+    let manifest = snapshot.resolve_path(entry).map_err(|error| {
         NativeStaticProductBuildError::source(owner, format!("Cargo.toml is missing: {error}"))
     })?;
     if !snapshot
         .files()
         .keys()
-        .any(|logical_path| logical_path.starts_with("src/"))
+        .any(|logical_path| logical_path.starts_with(&format!("{prefix}src/")))
     {
         return Err(NativeStaticProductBuildError::source(
             owner,
@@ -961,12 +1008,17 @@ fn generated_workspace_manifest(
     let suffix = suffix_line.map_or(String::new(), |index| lines[index..].join("\n"));
 
     let mut members = vec![PRODUCT_MEMBER.to_owned()];
-    members.extend(
-        selected
-            .plans
-            .iter()
-            .map(|row| row.workspace_path.to_string()),
-    );
+    members.extend(selected.plans.iter().flat_map(|row| {
+        row.cargo_members.iter().map(|manifest| {
+            format!(
+                "{}/{}",
+                row.workspace_path,
+                manifest.as_str().trim_end_matches("/Cargo.toml")
+            )
+            .trim_end_matches("/Cargo.toml")
+            .to_owned()
+        })
+    }));
     members.extend(
         platforms
             .plans
@@ -994,7 +1046,13 @@ fn generated_product_manifest(packages: &[NativeStaticPackageBuildPlanV1]) -> St
         let _ = writeln!(
             manifest,
             "latticeaxiom_product_package_{index:04} = {{ package = \"{}\", path = \"../{}\" }}",
-            package.cargo_package, package.workspace_path
+            package.cargo_package,
+            format!(
+                "{}/{}",
+                package.workspace_path,
+                package.cargo_manifest.as_str()
+            )
+            .trim_end_matches("/Cargo.toml")
         );
     }
     manifest.push_str("\n[lints]\nworkspace = true\n");
@@ -1695,6 +1753,97 @@ mod tests {
         maximum_files: 32,
         maximum_bytes: 64 * 1_024,
     };
+
+    #[test]
+    fn nested_package_links_two_crates_and_frozen_text_resource() {
+        let input = TestDirectory::new("nested-input");
+        let cache = TestDirectory::new("nested-cache");
+        let registration_hash = CanonicalHash::digest(b"nested-registration");
+        input.write(
+            "latticeaxiom-package.toml",
+            br#"
+schema_version = 1
+name = "@example/nested"
+version = "0.1.0"
+domains = ["authoritative"]
+trust = "trusted-native"
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["authoritative"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+[nickel_public_entrypoints]
+default = "package.ncl"
+[source_inclusion]
+include = ["latticeaxiom-package.toml", "package.ncl", "crates", "data"]
+[rust]
+entry = "crates/runtime/Cargo.toml"
+members = ["crates/runtime/Cargo.toml", "crates/model/Cargo.toml"]
+"#,
+        );
+        input.write("package.ncl", b"{}\n");
+        input.write(
+            "crates/runtime/Cargo.toml",
+            br#"
+[package]
+name = "nested-runtime"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+nested-model = { path = "../model" }
+"#,
+        );
+        input.write(
+            "crates/model/Cargo.toml",
+            br#"
+[package]
+name = "nested-model"
+version.workspace = true
+edition.workspace = true
+"#,
+        );
+        input.write("crates/runtime/src/lib.rs", b"pub fn native_static_registration_hash() -> Result<&'static str, &'static str> { Ok(nested_model::hash()) }\n");
+        input.write("crates/model/src/lib.rs", b"pub fn hash() -> &'static str { include_str!(\"../../../data/registration.txt\").trim() }\n");
+        input.write(
+            "data/registration.txt",
+            registration_hash.to_string().as_bytes(),
+        );
+        let snapshot = snapshot(&input);
+        let bytes = canonical_json_bytes(&snapshot).expect("source bytes");
+        input.write(
+            "data/registration.txt",
+            b"mutable source must not be consumed",
+        );
+        let request = NativeStaticProductBuildRequestV1 {
+            graph_hash: CanonicalHash::digest(b"nested-graph"),
+            target: host_target(),
+            requested_toolchain: CanonicalHash::digest(b"nested-toolchain"),
+            registration_image_hash: registration_hash,
+            selected_packages: vec![NativeStaticPackageSourceInputV1 {
+                package: "@example/nested".parse().expect("package"),
+                cargo_package: "nested-runtime".to_owned(),
+                expected_source_digest: snapshot.source_hash(),
+                expected_source_object_digest: CanonicalHash::digest(&bytes),
+                source_object_bytes: bytes,
+                registration_hash,
+            }],
+            platform_sources: Vec::new(),
+            workspace_scaffold_bytes: workspace_scaffold().into_bytes(),
+            cargo_lock_seed_bytes: Vec::new(),
+            cargo_program: std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
+            rustc_program: std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc")),
+        };
+        let output =
+            build_native_static_product(&request, cache.path()).expect("nested product builds");
+        assert_eq!(output.plan.packages[0].cargo_members.len(), 2);
+        assert!(
+            Command::new(&output.executable_path)
+                .status()
+                .expect("product starts")
+                .success()
+        );
+    }
 
     #[allow(
         clippy::too_many_lines,

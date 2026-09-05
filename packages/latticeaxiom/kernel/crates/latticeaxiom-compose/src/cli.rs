@@ -915,9 +915,15 @@ fn source_build_payload(
     target: &TargetTriple,
     catalog_root: &Path,
 ) -> Result<RealizedPayload, CliError> {
-    let cargo_manifest_file = package.snapshot.resolve_path("Cargo.toml").map_err(|error| {
+    let entry = package
+        .manifest
+        .rust
+        .as_ref()
+        .map_or("Cargo.toml", |rust| rust.entry.as_str());
+    let source_prefix = entry.strip_suffix("Cargo.toml").unwrap_or_default();
+    let cargo_manifest_file = package.snapshot.resolve_path(entry).map_err(|error| {
         CliError::lock(format!(
-            "package {} SourceBuild must include Cargo.toml in its frozen source snapshot: {error}",
+            "package {} SourceBuild must include its declared Cargo entry in the frozen source snapshot: {error}",
             package.manifest.name
         ))
     })?;
@@ -939,7 +945,7 @@ fn source_build_payload(
         .snapshot
         .files()
         .keys()
-        .any(|logical_path| logical_path.starts_with("src/"))
+        .any(|logical_path| logical_path.starts_with(&format!("{source_prefix}src/")))
     {
         return Err(CliError::lock(format!(
             "package {} SourceBuild must include package-local src files",
@@ -980,15 +986,48 @@ fn source_build_payload(
 
     let staged_root = staging.path().join("source");
     materialize_source_snapshot(&package.snapshot, &staged_root)?;
+    if let Some(rust_sources) = &package.manifest.rust {
+        let members = rust_sources
+            .members
+            .iter()
+            .map(|manifest| {
+                format!(
+                    "source/{}",
+                    manifest.as_str().trim_end_matches("/Cargo.toml")
+                )
+            })
+            .collect::<Vec<_>>();
+        let workspace = format!(
+            "[workspace]\nresolver = \"3\"\nmembers = {}\n",
+            serde_json::to_string(&members).map_err(|error| CliError::lock(error.to_string()))?
+        );
+        fs::write(staging.path().join("Cargo.toml"), workspace)
+            .map_err(|source| CliError::io(staging.path(), &source))?;
+        let lock = package
+            .snapshot
+            .resolve_path("Cargo.lock")
+            .map_err(|error| {
+                CliError::lock(format!(
+                    "nested source build requires a frozen Cargo.lock: {error}"
+                ))
+            })?;
+        fs::write(staging.path().join("Cargo.lock"), lock.bytes())
+            .map_err(|source| CliError::io(staging.path(), &source))?;
+    }
     let target_dir =
         create_source_build_target_directory(staging.path(), target, realization.id.as_str())?;
-    let manifest_path = staged_root.join("Cargo.toml");
+    let manifest_path = staged_root.join(entry);
     let expected_crate_type = match realization.kind {
         RealizationKind::NativeStatic => "rlib",
         RealizationKind::PortableNative => "cdylib",
         _ => unreachable!("unsupported kinds returned before Cargo execution"),
     };
-    let metadata = load_cargo_metadata(&cargo, &manifest_path, &staged_root)?;
+    let metadata_root = if package.manifest.rust.is_some() {
+        staging.path()
+    } else {
+        &staged_root
+    };
+    let metadata = load_cargo_metadata(&cargo, &manifest_path, metadata_root)?;
     let canonical_manifest_path =
         canonical_source_build_regular_file(&manifest_path, "primary Cargo manifest")?;
     let mut primary_packages = metadata.packages.iter().filter(|candidate| {
@@ -2298,6 +2337,41 @@ version = "0.1.0"
             .err()
             .unwrap_or_else(|| panic!("tampered artifact must fail frozen verification"));
         assert!(error.details.contains("artifact") || error.details.contains("mismatch"));
+    }
+
+    #[test]
+    fn source_build_uses_declared_nested_crate_entry() {
+        let _guard = SOURCE_BUILD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let directory = TestDirectory::create();
+        let package = write_source_build_fixture_workspace(directory.path());
+        let manifest_path = package.join(PACKAGE_SOURCE_MANIFEST_FILE_NAME);
+        let text = fs::read_to_string(&manifest_path)
+            .expect("fixture manifest")
+            .replace("\"Cargo.toml\",", "")
+            .replace("\"src\"]", "\"crates\"]");
+        fs::write(&manifest_path, format!("{text}\n[rust]\nentry = 'crates/runtime/Cargo.toml'\nmembers = ['crates/runtime/Cargo.toml']\n")).expect("nested manifest");
+        let crate_dir = package.join("crates/runtime");
+        fs::create_dir_all(&crate_dir).expect("crate folder");
+        fs::rename(package.join("Cargo.toml"), crate_dir.join("Cargo.toml"))
+            .expect("move manifest inside package");
+        fs::rename(package.join("src"), crate_dir.join("src"))
+            .expect("move implementation inside package");
+        let request = LockRequest {
+            workspace_root: directory.path().to_path_buf(),
+            bootstrap_path: PathBuf::from(COMPOSITION_BOOTSTRAP_FILE_NAME),
+            catalog_root: PathBuf::from(CLI_CATALOG_DIRECTORY),
+            lock_path: PathBuf::from(PRODUCT_LOCK_FILE_NAME),
+            target: controller_host_target().expect("host target"),
+            toolchain: default_toolchain(),
+        };
+        let (lock, _) = lock_workspace(&request).expect("nested source realization");
+        assert!(lock.realizations.contains_key(&request.target));
+        assert!(
+            !package.join("Cargo.toml").exists(),
+            "builder must not rewrite the source package"
+        );
     }
 
     #[test]

@@ -19,7 +19,8 @@ the original proposal's asset delivery and future asset-management suggestions.
 
 - [x] Recovery bundles and runtime-data backup.
 - [x] Package-owned workspace and text-only repository checks.
-- [ ] Multi-crate source realization and generated product assembly.
+- [x] Multi-crate source realization and frozen-source link conformance.
+- [ ] Generated product assembly used by the actual client.
 - [ ] Independently selectable resource packs.
 - [ ] Code-designed client UI and interaction verification.
 - [ ] Streaming measurements, corrective changes, and acceptance.
@@ -52,3 +53,12 @@ media extensions. The import excludes all 201 tracked PNG files.
 
 The old smoke artifact is saved in the recovery directory; it is a development
 headless smoke result, not an optimized or GPU performance certification.
+
+## Nested package build validation
+
+SourceBuild honors the package manifest Rust entry. NativeStatic plan schema 2
+records the primary manifest and all internal crates. Six generated-product
+tests and four source-build tests passed, including a two-crate package whose
+text resource is read from frozen CAS after the mutable original changes.
+`cargo clippy -p latticeaxiom-compose --all-targets --all-features --offline -- -D warnings` passed.
+These link proofs do not yet claim production-client activation.
