@@ -1,16 +1,13 @@
 //! System UI font selection for interactive clients.
 
-use bevy::prelude::TextFont;
+use bevy::{prelude::TextFont, text::FontSource};
 
-/// Installed font family requested by every Lattice Axiom UI text node.
-///
-/// TODO: Replace the system-family lookup with a game-owned font asset handle
-/// when font files become part of the packaged game assets.
-const SYSTEM_UI_FONT_FAMILY: &str = "Noto Sans TC";
-
-/// Creates UI text styling that resolves Noto Sans TC from the operating system.
+/// Uses the operating system's UI sans-serif family and native glyph fallback.
 pub(crate) fn ui_text_font(font_size: f32) -> TextFont {
-    TextFont::from_font_size(font_size).with_family(SYSTEM_UI_FONT_FAMILY)
+    TextFont {
+        font: FontSource::UiSansSerif,
+        ..TextFont::from_font_size(font_size)
+    }
 }
 
 #[cfg(test)]
@@ -20,11 +17,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ui_text_font_requests_the_installed_noto_sans_tc_family() {
+    fn ui_text_font_uses_the_system_ui_family_without_bundled_assets() {
         let font = ui_text_font(16.0);
-        assert!(matches!(
-            font.font,
-            FontSource::Family(family) if family == SYSTEM_UI_FONT_FAMILY
-        ));
+        assert!(matches!(font.font, FontSource::UiSansSerif));
     }
 }

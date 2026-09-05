@@ -19,6 +19,7 @@ use bevy::{
     ui::widget::ImageNode,
     ui_widgets::{Activate, Button, ScrollArea},
 };
+use latticeaxiom_client_ui::desktop_style as style;
 use latticeaxiom_gameplay::{
     ContainerId, GameplayModeV1, ItemCategoryId, ItemId, RecipeId, SlotIndex, WorkstationId,
 };
@@ -556,7 +557,7 @@ fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                                     backpack.spawn((
                                         Text::new("Backpack"),
                                         ui_text_font(14.0),
-                                        TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                                        TextColor(style::MUTED),
                                     ));
                                     backpack
                                         .spawn((
@@ -585,7 +586,7 @@ fn spawn_inventory_overlay(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComman
                                     backpack.spawn((
                                         Text::new("Hand recipes"),
                                         ui_text_font(14.0),
-                                        TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                                        TextColor(style::MUTED),
                                     ));
                                     spawn_recipe_list(
                                         backpack,
@@ -617,7 +618,7 @@ fn spawn_item_browser(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_
             browser.spawn((
                 Text::new("Items"),
                 ui_text_font(14.0),
-                TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                TextColor(style::MUTED),
                 Node {
                     margin: UiRect::axes(Val::Px(8.0), Val::Px(0.0)),
                     ..Node::default()
@@ -749,7 +750,7 @@ fn spawn_item_browser(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_
                         ProductionItemBrowserPageLabel,
                         Text::new("1 / 1"),
                         ui_text_font(12.0),
-                        TextColor(Color::srgb(0.82, 0.84, 0.78)),
+                        TextColor(style::MUTED),
                     ));
                     spawn_page_button(pages, 1, "›");
                 });
@@ -976,7 +977,7 @@ fn spawn_item_slot<M: Component>(
             slot.spawn((
                 Text::new(""),
                 ui_text_font(12.0),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
+                TextColor(style::TEXT),
                 Node {
                     position_type: PositionType::Absolute,
                     right: Val::Px(2.0),

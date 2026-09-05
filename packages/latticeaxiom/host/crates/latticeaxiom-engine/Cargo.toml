@@ -13,6 +13,7 @@ default-run = "latticeaxiom-engine"
 # default features for a statically linked distributable build.
 default = ["client", "development"]
 client = [
+  "latticeaxiom-client-ui/bevy-ui",
   "dep:bevy_framepace",
   "dep:bevy_winit",
   "dep:winit",

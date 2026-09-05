@@ -42,6 +42,8 @@ mod supervisor;
 mod ui_font;
 #[cfg(feature = "client")]
 mod video;
+#[cfg(feature = "client")]
+mod visual_capture;
 
 #[cfg(feature = "client")]
 pub use client::{

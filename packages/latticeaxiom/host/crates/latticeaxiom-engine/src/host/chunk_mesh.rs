@@ -135,7 +135,7 @@ pub(super) struct ProductionTerrainPalette {
     layer_tiles: BTreeMap<StableId, AtlasTile>,
 }
 
-/// One 16Ã—16 atlas tile in UV space, inset by half a texel.
+/// One 16×16 atlas tile in UV space, inset by half a texel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AtlasTile {
     min: [f32; 2],
@@ -355,7 +355,7 @@ impl ProductionTerrainPalette {
 
     /// Deterministic solid-color atlas from palette IDs in index order.
     ///
-    /// Missing PNG textures use this 16Ã—16 color-block fallback. Tiles are
+    /// Missing PNG textures use this 16×16 color-block fallback. Tiles are
     /// packed left-to-right, top-to-bottom, with nearest sampling and clamp.
     pub(super) fn atlas_image(&self) -> Image {
         let mut image = Image::new_uninit(

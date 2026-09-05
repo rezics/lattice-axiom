@@ -22,7 +22,7 @@ the original proposal's asset delivery and future asset-management suggestions.
 - [x] Multi-crate source realization and frozen-source link conformance.
 - [ ] Generated product assembly used by the actual client.
 - [x] Independently selectable texture/shader resource graph and runtime consumers.
-- [ ] Code-designed client UI and interaction verification.
+- [x] Code-designed shell/settings style, native focus, editable name, and initial GPU captures.
 - [ ] Streaming measurements, corrective changes, and acceptance.
 - [ ] Complete gameplay journey and durable re-entry.
 - [ ] Documentation consolidation, release checks, and history convergence.
@@ -72,3 +72,25 @@ previews; independently locked WGSL replaces the versioned water shader.
 Four Python boundary tests, two resource overlay tests, all 176 engine library
 tests and engine/render-contract clippy passed. GPU presentation is still pending.
 No binary asset was imported or committed.
+
+## Code-designed UI validation
+
+The native 1280x720 home and 960x640 create screens were captured and inspected.
+A real Bevy KeyboardInput message entered Chinese text into the creation form.
+Create/back actions remain outside the scroll region, profile choices wrap, and
+focus scrolling reacts to focus changes rather than fighting mouse scrolling.
+All 18 client-ui and 177 engine library tests passed, including contrast and
+Unicode editing checks. Clippy passed for both crates with all features/targets.
+Screenshots remain ignored under `.temp/qa/`, never committed.
+
+## Newly verified integration gaps still to close
+
+The interactive shell constructs ProductionMemoryStart without attached storage;
+world IDs from the supervisor are not consumed by the game spine. The current
+world-db durable mode is an in-memory recovery oracle, not filesystem persistence.
+These are production integration gaps despite the component test results and must
+be closed before claiming the full playable proposal complete.
+
+The optimized old traversal harness failed twice in rustc (access violation,
+then illegal instruction with one build job). Its development smoke succeeded.
+No optimized or reference-host performance certification is claimed.

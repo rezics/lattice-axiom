@@ -141,7 +141,7 @@ impl StartShellModel {
             role: SemanticRole::Application,
             name: "Lattice Axiom".to_owned(),
             value: None,
-            description: Some("Package-driven client shell".to_owned()),
+            description: Some("Choose a world and continue exploring.".to_owned()),
             state: SemanticState::default(),
             actions: BTreeSet::new(),
             children,
@@ -391,6 +391,14 @@ impl StartShellModel {
                 [SemanticActionId::Activate],
             ),
         ]);
+        if self.worlds.records().is_empty()
+            && let Some(index) = nodes
+                .iter()
+                .position(|node| node.id.as_str() == "home/new-world")
+        {
+            let create = nodes.remove(index);
+            nodes.insert(0, create);
+        }
         nodes
     }
 
@@ -522,7 +530,7 @@ impl StartShellModel {
                 role: SemanticRole::TextInput,
                 name: "World name".to_owned(),
                 value: None,
-                description: Some("Accepts composition and IME committed-text events".to_owned()),
+                description: Some("Give this world a name.".to_owned()),
                 state: SemanticState {
                     focusable: true,
                     ..SemanticState::default()

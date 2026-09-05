@@ -18,6 +18,7 @@ use bevy::{
     },
     window::PrimaryWindow,
 };
+use latticeaxiom_client_ui::desktop_style as style;
 use latticeaxiom_core::StableId;
 use latticeaxiom_runtime_contracts::{
     ValueType, distant_terrain_quality_setting_id, full_detail_distance_setting_id,
@@ -83,7 +84,9 @@ pub(super) fn spawn_settings_page(parent: &mut bevy::ecs::hierarchy::ChildSpawne
         Node {
             width: Val::Percent(94.0),
             max_width: Val::Px(1180.0),
-            height: Val::Px(520.0),
+            height: Val::Percent(78.0),
+            max_height: Val::Px(760.0),
+            min_height: Val::Px(320.0),
             display: Display::None,
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(8.0),
@@ -91,8 +94,8 @@ pub(super) fn spawn_settings_page(parent: &mut bevy::ecs::hierarchy::ChildSpawne
             border: UiRect::all(Val::Px(1.0)),
             ..Node::default()
         },
-        BackgroundColor(Color::srgba(0.04, 0.05, 0.05, 0.92)),
-        BorderColor::all(Color::srgb(0.16, 0.22, 0.20)),
+        BackgroundColor(style::SURFACE),
+        BorderColor::all(style::BORDER),
         FocusPolicy::Block,
     ));
 }
@@ -141,7 +144,9 @@ fn spawn_populated_page(
             Node {
                 width: Val::Percent(94.0),
                 max_width: Val::Px(1180.0),
-                height: Val::Px(520.0),
+                height: Val::Percent(78.0),
+                max_height: Val::Px(760.0),
+                min_height: Val::Px(320.0),
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
@@ -149,8 +154,8 @@ fn spawn_populated_page(
                 border: UiRect::all(Val::Px(1.0)),
                 ..Node::default()
             },
-            BackgroundColor(Color::srgba(0.04, 0.05, 0.05, 0.92)),
-            BorderColor::all(Color::srgb(0.16, 0.22, 0.20)),
+            BackgroundColor(style::SURFACE),
+            BorderColor::all(style::BORDER),
             FocusPolicy::Block,
         ))
         .with_children(|page_root| {
@@ -158,7 +163,7 @@ fn spawn_populated_page(
                 Name::new("Settings title"),
                 Text::new("Settings"),
                 ui_text_font(28.0),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
+                TextColor(style::TEXT),
             ));
             page_root
                 .spawn((
@@ -272,7 +277,7 @@ fn spawn_content(
                     content,
                     SettingsPageAction::Binding(binding.action.clone()),
                     &format!(
-                        "{}  ·  {}",
+                        "{}  Â·  {}",
                         setting_display_name(&binding.action),
                         binding.effective_label
                     ),
@@ -349,14 +354,10 @@ fn spawn_detail(
                 overflow: Overflow::scroll_y(),
                 ..Node::default()
             },
-            BackgroundColor(Color::srgb(0.06, 0.08, 0.08)),
+            BackgroundColor(style::SURFACE),
         ))
         .with_children(|detail_root| {
-            detail_root.spawn((
-                Text::new(text),
-                ui_text_font(14.0),
-                TextColor(Color::srgb(0.82, 0.84, 0.78)),
-            ));
+            detail_root.spawn((Text::new(text), ui_text_font(14.0), TextColor(style::MUTED)));
             if detail.editable {
                 spawn_text_button(
                     detail_root,
@@ -500,7 +501,7 @@ fn spawn_integer_slider(
                         border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..Node::default()
                     },
-                    BackgroundColor(Color::srgb(0.14, 0.18, 0.17)),
+                    BackgroundColor(style::BORDER),
                 ));
                 slider
                     .spawn((
@@ -578,14 +579,10 @@ fn spawn_transaction_button(
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..Node::default()
             },
-            BackgroundColor(Color::srgb(0.08, 0.11, 0.10)),
+            BackgroundColor(style::SURFACE),
         ))
         .with_children(|button| {
-            button.spawn((
-                Text::new(label),
-                ui_text_font(16.0),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
-            ));
+            button.spawn((Text::new(label), ui_text_font(16.0), TextColor(style::TEXT)));
         });
 }
 
@@ -615,14 +612,14 @@ fn spawn_text_button(
             BackgroundColor(if selected {
                 Color::srgb(0.16, 0.32, 0.28)
             } else {
-                Color::srgb(0.08, 0.11, 0.10)
+                style::SURFACE
             }),
         ))
         .with_children(|button| {
             button.spawn((
                 Text::new(label.to_owned()),
                 ui_text_font(16.0),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
+                TextColor(style::TEXT),
             ));
         });
 }
@@ -674,7 +671,7 @@ fn format_value(value: &Value) -> String {
 
 fn setting_value_label(id: &StableId, value: &Value) -> String {
     format!(
-        "{}  ·  {}",
+        "{}  Â·  {}",
         setting_display_name(id),
         setting_value_text(id, value)
     )
@@ -885,7 +882,7 @@ mod tests {
         let render = render_distance_setting_id();
         assert_eq!(
             setting_value_label(&render, &json!(21)),
-            "Render Distance  ·  21 chunks radius (672 m)"
+            "Render Distance  Â·  21 chunks radius (672 m)"
         );
         let render_help = setting_help_text(&render, &json!(21));
         assert!(render_help.contains("One chunk is 32 m"), "{render_help}");

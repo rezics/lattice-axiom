@@ -8,7 +8,12 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+bevy-ui = ["dep:bevy"]
+
 [dependencies]
+bevy = { workspace = true, optional = true, features = ["ui"] }
 latticeaxiom-runtime-contracts.workspace = true
 serde.workspace = true
 thiserror.workspace = true

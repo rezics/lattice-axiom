@@ -7,6 +7,8 @@
 //! changing authoritative registration.
 
 mod a11y;
+#[cfg(feature = "bevy-ui")]
+pub mod desktop_style;
 mod focus;
 mod key_capture;
 mod layout;

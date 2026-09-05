@@ -1,5 +1,6 @@
 //! In-session pause overlay and cursor capture for the interactive client.
 
+use latticeaxiom_client_ui::desktop_style as style;
 use std::{collections::BTreeMap, path::PathBuf};
 
 use accesskit::{Node as AccessKitNode, Role as AccessKitRole};
@@ -612,7 +613,7 @@ impl ProductionSettingsState {
             match self.draft_chunks() {
                 Ok(_) => {
                     fragments.push(if self.publication == SettingsPublicationState::Confirmed {
-                        "Unsaved changes · Apply to save".to_owned()
+                        "Unsaved changes Â· Apply to save".to_owned()
                     } else {
                         "Unconfirmed changes retained".to_owned()
                     });
@@ -626,9 +627,9 @@ impl ProductionSettingsState {
             fragments.push(diagnostic.clone());
         }
         if fragments.is_empty() {
-            "Select a setting for details · Apply saves changes".to_owned()
+            "Select a setting for details Â· Apply saves changes".to_owned()
         } else {
-            fragments.join(" · ")
+            fragments.join(" Â· ")
         }
     }
 }
@@ -948,7 +949,7 @@ fn spawn_pause_overlay(
                 Name::new("Paused title"),
                 Text::new("Paused"),
                 ui_text_font(36.0),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
+                TextColor(style::TEXT),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..Node::default()
@@ -961,9 +962,9 @@ fn spawn_pause_overlay(
             overlay.spawn((
                 PauseSettingsHint,
                 Name::new("Pause hint"),
-                Text::new("Esc resumes · Settings opens the full catalog"),
+                Text::new("Esc resumes Â· Settings opens the full catalog"),
                 ui_text_font(16.0),
-                TextColor(Color::srgb(0.72, 0.74, 0.68)),
+                TextColor(style::MUTED),
                 Node {
                     margin: UiRect::top(Val::Px(8.0)),
                     ..Node::default()
@@ -1020,7 +1021,7 @@ fn spawn_render_distance_slider(
                     border_radius: BorderRadius::all(Val::Px(4.0)),
                     ..Node::default()
                 },
-                BackgroundColor(Color::srgb(0.14, 0.18, 0.17)),
+                BackgroundColor(style::BORDER),
             ));
             slider
                 .spawn((
@@ -1074,11 +1075,7 @@ fn spawn_pause_button(
             BackgroundColor(button_color(false, false, false)),
         ))
         .with_children(|button| {
-            button.spawn((
-                Text::new(label),
-                ui_text_font(20.0),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
-            ));
+            button.spawn((Text::new(label), ui_text_font(20.0), TextColor(style::TEXT)));
         });
 }
 
@@ -1672,7 +1669,7 @@ pub(super) fn sync_pause_menu_page(
                 |settings| settings.status_text(),
             )
         } else {
-            "Esc resumes · Settings opens the full catalog".to_owned()
+            "Esc resumes Â· Settings opens the full catalog".to_owned()
         };
         if text.0 != label {
             *text = Text::new(label);
@@ -1682,13 +1679,13 @@ pub(super) fn sync_pause_menu_page(
 
 const fn button_color(pressed: bool, hovered: bool, focused: bool) -> Color {
     if pressed {
-        Color::srgb(0.18, 0.42, 0.36)
+        style::RAISED
     } else if hovered {
-        Color::srgb(0.16, 0.22, 0.20)
+        style::BORDER
     } else if focused {
         Color::srgb(0.13, 0.28, 0.24)
     } else {
-        Color::srgb(0.08, 0.11, 0.10)
+        style::SURFACE
     }
 }
 

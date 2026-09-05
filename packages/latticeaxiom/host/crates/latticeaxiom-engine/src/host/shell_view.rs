@@ -12,15 +12,20 @@ use bevy::{
     ecs::query::Has,
     ecs::schedule::IntoScheduleConfigs,
     input::{ButtonInput, keyboard::KeyCode},
+    input_focus::{
+        AutoFocus, InputFocus,
+        tab_navigation::{TabGroup, TabIndex},
+    },
     picking::hover::Hovered,
     prelude::{
-        AlignItems, BackgroundColor, Camera2d, ClearColor, Color, Commands, Component, Entity,
-        FlexDirection, JustifyContent, MessageWriter, Name, Node, Query, Res, ResMut, Resource,
-        Text, TextColor, UiRect, Val, With,
+        AlignItems, BackgroundColor, BorderColor, BorderRadius, Camera2d, ClearColor, Color,
+        Commands, Component, Entity, FlexDirection, JustifyContent, MessageWriter, Name, Node,
+        Overflow, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
     },
     ui::Pressed,
-    ui_widgets::{Activate, Button},
+    ui_widgets::{Activate, Button, ScrollArea},
 };
+use latticeaxiom_client_ui::desktop_style as style;
 use latticeaxiom_core::WorldId;
 use latticeaxiom_launcher::{
     FreshClientAppLeaseProof, FreshClientAppLeaseToken, SettingTransactionRevision,
@@ -49,6 +54,11 @@ struct ClientShellSession {
     confirmed_setting_transaction_revision: SettingTransactionRevision,
     focused: Option<SemanticNodeId>,
     tree_epoch: u64,
+    world_name: String,
+    message: Option<String>,
+    editing_name: bool,
+    select_name: bool,
+    composition: String,
 }
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
@@ -56,9 +66,13 @@ struct ShellViewRoot {
     epoch: u64,
 }
 
+#[derive(Component, Debug)]
+struct ShellScrollView;
+
 #[derive(Clone, Component, Debug)]
 struct ShellControl {
     id: SemanticNodeId,
+    primary: bool,
 }
 
 /// Bevy plugin that projects the start-ui semantic tree as `ui_widgets` nodes.
@@ -73,10 +87,15 @@ impl Plugin for ClientShellPlugin {
                 Update,
                 (
                     shell_keyboard,
+                    shell_text_input,
                     rebuild_shell_view,
                     sync_shell_control_visuals,
                 )
                     .chain(),
+            )
+            .add_systems(
+                bevy::app::PostUpdate,
+                reveal_shell_focus.after(bevy::ui::UiSystems::Layout),
             );
     }
 }
@@ -125,17 +144,44 @@ impl EngineInstance {
 fn install_client_shell(
     app: &mut App,
     product_lock_hash: VerifiedProductLockHash,
-    start: ProductionMemoryStart,
+    mut start: ProductionMemoryStart,
     confirmed_setting_transaction_revision: SettingTransactionRevision,
 ) {
+    if std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").is_some() {
+        let action = match std::env::var("LATTICEAXIOM_CAPTURE_ROUTE").as_deref() {
+            Ok("new-world") => Some(SemanticActionId::QuickCreate),
+            Ok("worlds") => Some(SemanticActionId::OpenWorlds),
+            Ok("settings") => Some(SemanticActionId::OpenSettings),
+            _ => None,
+        };
+        if let Some(action) = action {
+            let tree = start.flow().shell().semantic_tree();
+            if let Some(node) = tree
+                .children
+                .iter()
+                .find(|node| node.actions.contains(&action))
+            {
+                let _ = start.inject(&SemanticCommand {
+                    target: node.id.clone(),
+                    action,
+                    source: InputSource::Headless,
+                });
+            }
+        }
+    }
     let focused = first_focusable(&start);
     app.insert_resource(product_lock_hash)
-        .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.07)))
+        .insert_resource(ClearColor(style::CANVAS))
         .insert_resource(ClientShellSession {
             start,
             confirmed_setting_transaction_revision,
             focused,
             tree_epoch: 0,
+            world_name: "New World".to_owned(),
+            message: None,
+            editing_name: false,
+            select_name: false,
+            composition: String::new(),
         })
         .add_plugins(ClientShellPlugin);
 }
@@ -161,28 +207,181 @@ fn rebuild_shell_view(
     }
 }
 
+fn shell_heading(screen: latticeaxiom_start_ui::ShellScreen) -> &'static str {
+    use latticeaxiom_start_ui::ShellScreen;
+    match screen {
+        ShellScreen::Home => "Choose where your story continues.",
+        ShellScreen::Worlds => "Your worlds",
+        ShellScreen::NewWorld => "Create a world",
+        ShellScreen::Trash => "Recently removed worlds",
+        ShellScreen::QuitConfirm => "Leave for now?",
+        ShellScreen::Loading => "Preparing your world",
+        ShellScreen::PackagesProfiles => "Packages and profiles",
+        ShellScreen::DiagnosticsAbout => "About Lattice Axiom",
+        ShellScreen::Settings => "Settings",
+        ShellScreen::Playing | ShellScreen::Pause => "Your journey",
+    }
+}
+
 fn spawn_shell_root(commands: &mut Commands<'_, '_>, session: &ClientShellSession) {
-    let tree = session.start.flow().shell().semantic_tree();
+    let mut tree = session.start.flow().shell().semantic_tree();
+    project_name_value(
+        &mut tree,
+        &format!("{}{}", session.world_name, session.composition),
+    );
     commands
         .spawn((
             ShellViewRoot {
                 epoch: session.tree_epoch,
             },
             Name::new("Client shell"),
+            TabGroup::default(),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                row_gap: Val::Px(12.0),
-                padding: UiRect::all(Val::Px(24.0)),
+                row_gap: Val::Px(20.0),
+                padding: UiRect::axes(Val::Px(36.0), Val::Px(24.0)),
                 ..Node::default()
             },
+            style::backdrop(),
         ))
         .with_children(|root| {
-            spawn_semantic_node(root, &tree, session.focused.as_ref());
+            spawn_shell_header(root);
+            root.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    max_width: Val::Px(1080.0),
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(12.0),
+                    overflow: Overflow::scroll_y(),
+                    padding: UiRect::right(Val::Px(12.0)),
+                    ..Node::default()
+                },
+                ScrollArea,
+                ShellScrollView,
+            ))
+            .with_children(|body| {
+                spawn_shell_content(body, &tree, session);
+            });
+            if session.start.flow().shell().screen == latticeaxiom_start_ui::ShellScreen::NewWorld {
+                root.spawn(Node {
+                    width: Val::Percent(100.0),
+                    max_width: Val::Px(1080.0),
+                    column_gap: Val::Px(12.0),
+                    ..Node::default()
+                })
+                .with_children(|actions| {
+                    for node in tree
+                        .children
+                        .iter()
+                        .filter(|node| is_creation_action(&node.id))
+                    {
+                        spawn_control(actions, node, session.focused.as_ref());
+                    }
+                });
+            }
+            root.spawn((
+                Text::new("Tab  Move focus     Enter  Select     Esc  Back"),
+                ui_text_font(15.0),
+                TextColor(style::MUTED),
+                Node {
+                    width: Val::Percent(100.0),
+                    max_width: Val::Px(1080.0),
+                    ..Node::default()
+                },
+            ));
         });
+}
+
+fn spawn_shell_header(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
+    root.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            max_width: Val::Px(1080.0),
+            min_height: Val::Px(60.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            border: UiRect::bottom(Val::Px(1.0)),
+            padding: UiRect::bottom(Val::Px(16.0)),
+            ..Node::default()
+        },
+        BorderColor::all(style::BORDER),
+    ))
+    .with_children(|header| {
+        header.spawn((
+            Text::new("Lattice Axiom"),
+            ui_text_font(30.0),
+            TextColor(style::TEXT),
+        ));
+        header.spawn((
+            Text::new("Single player"),
+            ui_text_font(16.0),
+            TextColor(style::MUTED),
+        ));
+    });
+}
+
+fn is_creation_action(id: &SemanticNodeId) -> bool {
+    matches!(id.as_str(), "new-world/back" | "new-world/quick-create")
+}
+
+fn spawn_shell_content(
+    body: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    tree: &SemanticNode,
+    session: &ClientShellSession,
+) {
+    body.spawn((
+        Text::new(shell_heading(session.start.flow().shell().screen)),
+        ui_text_font(36.0),
+        TextColor(style::TEXT),
+        Node {
+            margin: UiRect::bottom(Val::Px(8.0)),
+            ..Node::default()
+        },
+    ));
+    if let Some(message) = &session.message {
+        body.spawn((
+            Text::new(message.clone()),
+            ui_text_font(18.0),
+            TextColor(style::DANGER),
+        ));
+    }
+    for child in &tree.children {
+        if !is_creation_action(&child.id) && !child.id.as_str().starts_with("new-world/profile/") {
+            spawn_semantic_node(body, child, session.focused.as_ref());
+        }
+    }
+    if session.start.flow().shell().screen == latticeaxiom_start_ui::ShellScreen::NewWorld {
+        body.spawn(Node {
+            width: Val::Percent(100.0),
+            flex_wrap: bevy::prelude::FlexWrap::Wrap,
+            column_gap: Val::Px(10.0),
+            row_gap: Val::Px(10.0),
+            ..Node::default()
+        })
+        .with_children(|profiles| {
+            for child in tree
+                .children
+                .iter()
+                .filter(|node| node.id.as_str().starts_with("new-world/profile/"))
+            {
+                spawn_control(profiles, child, session.focused.as_ref());
+            }
+        });
+    }
+}
+
+fn project_name_value(node: &mut SemanticNode, name: &str) {
+    if node.id.as_str() == "new-world/name" {
+        node.value = Some(name.to_owned());
+    }
+    for child in &mut node.children {
+        project_name_value(child, name);
+    }
 }
 
 fn spawn_semantic_node(
@@ -200,7 +399,7 @@ fn spawn_semantic_node(
                 } else {
                     22.0
                 }),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
+                TextColor(style::TEXT),
             ));
             if node.role == SemanticRole::Application
                 && let Some(description) = &node.description
@@ -208,7 +407,7 @@ fn spawn_semantic_node(
                 parent.spawn((
                     Text::new(description.clone()),
                     ui_text_font(16.0),
-                    TextColor(Color::srgb(0.72, 0.74, 0.68)),
+                    TextColor(style::MUTED),
                     Node {
                         margin: UiRect::bottom(Val::Px(8.0)),
                         ..Node::default()
@@ -219,10 +418,10 @@ fn spawn_semantic_node(
                 spawn_semantic_node(parent, child, focused);
             }
         }
-        SemanticRole::Button | SemanticRole::ListItem => {
+        SemanticRole::Button | SemanticRole::ListItem | SemanticRole::TextInput => {
             spawn_control(parent, node, focused);
         }
-        SemanticRole::TextInput | SemanticRole::Status | SemanticRole::Alert => {
+        SemanticRole::Status | SemanticRole::Alert => {
             let label = node.value.as_ref().map_or_else(
                 || node.name.clone(),
                 |value| format!("{}: {value}", node.name),
@@ -232,9 +431,9 @@ fn spawn_semantic_node(
                 Text::new(label),
                 ui_text_font(18.0),
                 TextColor(if node.role == SemanticRole::Alert {
-                    Color::srgb(0.92, 0.62, 0.45)
+                    style::DANGER
                 } else {
-                    Color::srgb(0.86, 0.88, 0.82)
+                    style::MUTED
                 }),
             ));
         }
@@ -247,44 +446,80 @@ fn spawn_control(
     focused: Option<&SemanticNodeId>,
 ) {
     let is_focused = focused.is_some_and(|focused| focused == &node.id);
+    let primary = node.actions.contains(&SemanticActionId::QuickCreate)
+        || node.actions.contains(&SemanticActionId::ContinueWorld)
+        || node.actions.contains(&SemanticActionId::PlayExact);
     let label = node.value.as_ref().map_or_else(
         || node.name.clone(),
         |value| format!("{} — {value}", node.name),
     );
-    parent
-        .spawn((
-            Button,
-            ShellControl {
-                id: node.id.clone(),
+    let profile = node.id.as_str().starts_with("new-world/profile/");
+    let width = if profile {
+        Val::Percent(31.0)
+    } else if node.id.as_str() == "new-world/back" {
+        Val::Px(160.0)
+    } else {
+        Val::Percent(100.0)
+    };
+    let mut control = parent.spawn((
+        Button,
+        TabIndex(0),
+        ShellControl {
+            id: node.id.clone(),
+            primary,
+        },
+        Name::new(node.name.clone()),
+        Hovered::default(),
+        Node {
+            width,
+            min_width: if profile {
+                Val::Px(180.0)
+            } else {
+                Val::Px(0.0)
             },
-            Name::new(node.name.clone()),
-            Hovered::default(),
-            Node {
-                width: Val::Px(480.0),
-                min_height: Val::Px(44.0),
-                padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..Node::default()
-            },
-            BackgroundColor(control_color(false, is_focused)),
-        ))
-        .with_children(|button| {
-            button.spawn((
-                Text::new(label),
-                ui_text_font(20.0),
-                TextColor(Color::srgb(0.94, 0.95, 0.90)),
-            ));
-        });
+            flex_grow: f32::from(u8::from(profile)),
+            max_width: Val::Px(720.0),
+            min_height: Val::Px(52.0),
+            border: UiRect::all(Val::Px(2.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::FlexStart,
+            ..Node::default()
+        },
+        BackgroundColor(control_color(false, is_focused, primary)),
+        BorderColor::all(style::focus_border(is_focused)),
+    ));
+    if is_focused {
+        control.insert(AutoFocus);
+    }
+    if node.state.disabled {
+        control.insert(bevy::ui::InteractionDisabled);
+    }
+    if node.role == SemanticRole::TextInput {
+        let mut accessible = accesskit::Node::new(accesskit::Role::TextInput);
+        accessible.set_label(node.name.clone());
+        accessible.set_value(node.value.clone().unwrap_or_default());
+        control.insert(bevy::a11y::AccessibilityNode(accessible));
+    }
+    control.with_children(|button| {
+        button.spawn((
+            Text::new(label),
+            ui_text_font(20.0),
+            TextColor(if primary { style::CANVAS } else { style::TEXT }),
+        ));
+    });
 }
 
-const fn control_color(pressed: bool, hovered: bool) -> Color {
-    if pressed {
-        Color::srgb(0.18, 0.42, 0.36)
+const fn control_color(pressed: bool, hovered: bool, primary: bool) -> Color {
+    if primary {
+        style::ACCENT
+    } else if pressed {
+        style::BORDER
     } else if hovered {
-        Color::srgb(0.16, 0.22, 0.20)
+        style::RAISED
     } else {
-        Color::srgb(0.08, 0.11, 0.10)
+        style::SURFACE
     }
 }
 
@@ -299,6 +534,9 @@ fn shell_control_activated(
     let Ok(control) = controls.get(activate.entity) else {
         return;
     };
+    if control.id.as_str() == "new-world/name" {
+        return;
+    }
     let target = control.id.clone();
     apply_shell_command(
         &mut commands,
@@ -312,19 +550,37 @@ fn shell_control_activated(
     );
 }
 
+type ShellControlVisualQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static ShellControl,
+        &'static Hovered,
+        Has<Pressed>,
+        &'static mut BackgroundColor,
+        &'static mut BorderColor,
+    ),
+    With<Button>,
+>;
+
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 fn sync_shell_control_visuals(
-    session: Res<'_, ClientShellSession>,
-    mut controls: Query<
-        '_,
-        '_,
-        (&ShellControl, &Hovered, Has<Pressed>, &mut BackgroundColor),
-        With<Button>,
-    >,
+    mut session: ResMut<'_, ClientShellSession>,
+    focus: Res<'_, InputFocus>,
+    mut controls: ShellControlVisualQuery<'_, '_>,
 ) {
-    for (control, hovered, pressed, mut background) in &mut controls {
-        let focused = session.focused.as_ref() == Some(&control.id);
-        let desired = control_color(pressed, hovered.get() || focused);
+    for (entity, control, hovered, pressed, mut background, mut border) in &mut controls {
+        let focused = focus.get() == Some(entity);
+        if focused {
+            session.focused = Some(control.id.clone());
+        }
+        border.set_all(if control.primary && focused {
+            style::TEXT
+        } else {
+            style::focus_border(focused)
+        });
+        let desired = control_color(pressed, hovered.get() || focused, control.primary);
         if background.0 != desired {
             background.0 = desired;
         }
@@ -338,34 +594,6 @@ fn shell_keyboard(
     mut exits: MessageWriter<'_, AppExit>,
     keyboard: Res<'_, ButtonInput<KeyCode>>,
 ) {
-    if keyboard.just_pressed(KeyCode::Tab) {
-        let reverse = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
-        traverse_focus(&mut session, reverse);
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::ArrowDown) {
-        traverse_focus(&mut session, false);
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::ArrowUp) {
-        traverse_focus(&mut session, true);
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space) {
-        if let Some(target) = session.focused.clone() {
-            apply_shell_command(
-                &mut commands,
-                &mut session,
-                &mut exits,
-                &SemanticCommand {
-                    target,
-                    action: SemanticActionId::Activate,
-                    source: InputSource::Keyboard,
-                },
-            );
-        }
-        return;
-    }
     if keyboard.just_pressed(KeyCode::Escape)
         && let Some(target) = back_target(&session.start.flow().shell().semantic_tree())
     {
@@ -382,12 +610,163 @@ fn shell_keyboard(
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
+fn reveal_shell_focus(
+    focus: Res<'_, InputFocus>,
+    mut last_revealed: bevy::prelude::Local<'_, Option<Entity>>,
+    elements: Query<
+        '_,
+        '_,
+        (
+            &bevy::ui::ComputedNode,
+            &bevy::ui::UiGlobalTransform,
+            &ShellControl,
+        ),
+        With<ShellControl>,
+    >,
+    mut scrolls: Query<
+        '_,
+        '_,
+        (
+            &bevy::ui::ComputedNode,
+            &bevy::ui::UiGlobalTransform,
+            &mut bevy::ui::ScrollPosition,
+        ),
+        With<ShellScrollView>,
+    >,
+) {
+    let Some(entity) = focus.get() else {
+        return;
+    };
+    if *last_revealed == Some(entity) {
+        return;
+    }
+    let Ok((item, position, control)) = elements.get(entity) else {
+        return;
+    };
+    if is_creation_action(&control.id) {
+        return;
+    }
+    for (viewport, origin, mut scroll) in &mut scrolls {
+        if viewport.size().y <= 0.0 {
+            continue;
+        }
+        let top = origin.translation.y - viewport.size().y / 2.0;
+        let bottom = top + viewport.size().y;
+        let item_top = position.translation.y - item.size().y / 2.0;
+        let item_bottom = item_top + item.size().y;
+        let delta = if item_top < top {
+            item_top - top
+        } else if item_bottom > bottom {
+            item_bottom - bottom
+        } else {
+            0.0
+        };
+        if delta != 0.0 {
+            scroll.y = (scroll.y + delta * viewport.inverse_scale_factor()).max(0.0);
+        }
+        *last_revealed = Some(entity);
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn shell_text_input(
+    mut session: ResMut<'_, ClientShellSession>,
+    keyboard: Res<'_, ButtonInput<KeyCode>>,
+    mut input: bevy::prelude::MessageReader<'_, '_, bevy::input::keyboard::KeyboardInput>,
+    mut ime: bevy::prelude::MessageReader<'_, '_, bevy::window::Ime>,
+    mut windows: Query<'_, '_, &mut bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+) {
+    let editing = session
+        .focused
+        .as_ref()
+        .is_some_and(|id| id.as_str() == "new-world/name");
+    for mut window in &mut windows {
+        window.ime_enabled = editing;
+    }
+    if !editing {
+        session.editing_name = false;
+        input.clear();
+        ime.clear();
+        return;
+    }
+    if !session.editing_name {
+        session.select_name = true;
+        session.editing_name = true;
+    }
+    let before = (session.world_name.clone(), session.composition.clone());
+    let mut committed_ime = false;
+    for event in ime.read() {
+        match event {
+            bevy::window::Ime::Preedit { value, .. } => session.composition.clone_from(value),
+            bevy::window::Ime::Commit { value, .. } => {
+                committed_ime = true;
+                if session.select_name {
+                    session.world_name.clear();
+                    session.select_name = false;
+                }
+                append_world_name(&mut session.world_name, value);
+                session.composition.clear();
+            }
+            _ => {}
+        }
+    }
+    let control = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    for event in input
+        .read()
+        .filter(|event| event.state == bevy::input::ButtonState::Pressed)
+    {
+        if control && event.key_code == KeyCode::KeyA {
+            session.select_name = true;
+            continue;
+        }
+        if event.key_code == KeyCode::Backspace {
+            if session.select_name {
+                session.world_name.clear();
+                session.select_name = false;
+            } else {
+                session.world_name.pop();
+            }
+        } else if !control
+            && !committed_ime
+            && session.composition.is_empty()
+            && let Some(text) = &event.text
+            && text.chars().any(|ch| !ch.is_control())
+        {
+            if session.select_name {
+                session.world_name.clear();
+                session.select_name = false;
+            }
+            append_world_name(&mut session.world_name, text);
+        }
+    }
+    if before != (session.world_name.clone(), session.composition.clone()) {
+        session.tree_epoch = session.tree_epoch.saturating_add(1);
+    }
+}
+
+fn append_world_name(name: &mut String, text: &str) {
+    let remaining = 64_usize.saturating_sub(name.chars().count());
+    name.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
+}
+
 fn apply_shell_command(
     commands: &mut Commands<'_, '_>,
     session: &mut ClientShellSession,
     exits: &mut MessageWriter<'_, AppExit>,
     command: &SemanticCommand,
 ) {
+    session.message = None;
+    if command.target.as_str() == "new-world/quick-create" {
+        match session.start.quick_create_intent(&session.world_name) {
+            Ok(intent) => session.start.set_draft(intent),
+            Err(error) => {
+                session.message = Some(error.to_string());
+                session.tree_epoch = session.tree_epoch.saturating_add(1);
+                return;
+            }
+        }
+    }
     session.start.set_now_ms(unix_now_ms());
     let Ok(effect) = session.start.inject(command) else {
         return;
@@ -494,6 +873,9 @@ fn exit_with_ready_exact_handoff(
 }
 
 fn first_focusable(start: &ProductionMemoryStart) -> Option<SemanticNodeId> {
+    if start.flow().shell().screen == latticeaxiom_start_ui::ShellScreen::NewWorld {
+        return SemanticNodeId::new("new-world/name").ok();
+    }
     start
         .flow()
         .shell()
@@ -508,4 +890,20 @@ fn back_target(tree: &SemanticNode) -> Option<SemanticNodeId> {
         return Some(tree.id.clone());
     }
     tree.children.iter().find_map(back_target)
+}
+
+#[cfg(test)]
+mod name_editor_tests {
+    use super::append_world_name;
+
+    #[test]
+    fn name_input_preserves_unicode_and_bounds_committed_text() {
+        let mut name = String::new();
+        append_world_name(&mut name, "晶格世界\n");
+        assert_eq!(name, "晶格世界");
+        append_world_name(&mut name, &"界".repeat(100));
+        assert_eq!(name.chars().count(), 64);
+        name.pop();
+        assert_eq!(name.chars().count(), 63);
+    }
 }

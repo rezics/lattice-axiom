@@ -187,6 +187,7 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
         (instance, proof)
     };
     crate::resource_packs::install_client_resource_packs(&mut instance, workspace)?;
+    crate::visual_capture::install(&mut instance.app);
     let role = if selects_shell { "shell" } else { "world" };
     bevy::log::info!(
         target: "latticeaxiom::lifecycle",

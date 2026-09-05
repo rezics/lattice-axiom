@@ -3,6 +3,29 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub(crate) const DESKTOP_COLORS: [[u8; 3]; 8] = [
+    [12, 20, 29],
+    [23, 35, 47],
+    [240, 239, 233],
+    [177, 189, 199],
+    [229, 188, 125],
+    [67, 87, 103],
+    [248, 158, 146],
+    [35, 51, 65],
+];
+
+fn desktop_color(index: usize) -> Result<LinearRgba, ThemeTokenError> {
+    let channels = DESKTOP_COLORS[index].map(|byte| {
+        let value = f32::from(byte) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    LinearRgba::new(channels[0], channels[1], channels[2], 1.0)
+}
+
 /// First-version UI scale factors required by the accessibility gate.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -234,12 +257,12 @@ impl ThemeTokens {
     /// published constants are finite and in range, so this is unreachable for
     /// [`Self::plain_v2`].
     fn try_plain_v2() -> Result<Self, ThemeTokenError> {
-        let canvas = LinearRgba::new(0.07, 0.08, 0.10, 1.0)?;
-        let surface = LinearRgba::new(0.12, 0.13, 0.16, 1.0)?;
-        let text = LinearRgba::new(0.92, 0.93, 0.94, 1.0)?;
-        let muted = LinearRgba::new(0.62, 0.64, 0.68, 1.0)?;
-        let accent = LinearRgba::new(0.55, 0.72, 0.96, 1.0)?;
-        let danger = LinearRgba::new(0.86, 0.31, 0.31, 1.0)?;
+        let canvas = desktop_color(0)?;
+        let surface = desktop_color(1)?;
+        let text = desktop_color(2)?;
+        let muted = desktop_color(3)?;
+        let accent = desktop_color(4)?;
+        let danger = desktop_color(6)?;
         Ok(Self {
             palette: ThemePalette {
                 canvas,
