@@ -2004,7 +2004,7 @@ workspace = true
     #[test]
     fn platform_workspace_paths_accept_crate_and_package_members() {
         for path in [
-            "packages/latticeaxiom/host/crates/latticeaxiom-engine",
+            "packages/latticeaxiom/host/crates/latticeaxiom-host",
             "packages/latticeaxiom/input",
         ] {
             let path: CanonicalLogicalPath = path

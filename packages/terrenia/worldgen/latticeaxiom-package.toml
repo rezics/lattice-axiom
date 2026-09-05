@@ -2,7 +2,7 @@ schema_version = 1
 name = "@terrenia/worldgen"
 version = "0.1.0"
 domains = ["authoritative"]
-trust = "data-only"
+trust = "trusted-native"
 
 [dependencies.blocks]
 package = "@terrenia/blocks"
@@ -30,6 +30,13 @@ domains = ["authoritative"]
 artifact = { kind = "data-root", path = "data" }
 trust = "data-only"
 
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["authoritative"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
 [nickel_public_entrypoints]
 default = "package.ncl"
 
@@ -45,3 +52,7 @@ include = [
 [rust]
 entry = "crates/latticeaxiom-terrenia-worldgen/Cargo.toml"
 members = ["crates/latticeaxiom-terrenia-worldgen/Cargo.toml"]
+
+[rust.dependencies]
+"@latticeaxiom/kernel" = "=0.1.0"
+"@latticeaxiom/world" = "=0.1.0"

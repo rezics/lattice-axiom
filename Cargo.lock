@@ -4148,6 +4148,7 @@ dependencies = [
  "latticeaxiom-content",
  "latticeaxiom-core",
  "latticeaxiom-gameplay",
+ "latticeaxiom-host",
  "latticeaxiom-input",
  "latticeaxiom-launcher",
  "latticeaxiom-packages",
@@ -4181,6 +4182,19 @@ dependencies = [
  "latticeaxiom-storage",
  "proptest",
  "sha2",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "latticeaxiom-host"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "latticeaxiom-compose",
+ "latticeaxiom-core",
+ "latticeaxiom-launcher",
+ "latticeaxiom-registration",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 

@@ -44,6 +44,12 @@ package.make {
     },
   },
   realizations = {
+    "native-static" = {
+      id = "native-static", kind = "native-static",
+      domains = ["authoritative"],
+      artifact = { kind = "source-build" }, trust = "trusted-native",
+      engine_build = null, registration_fragment = registration_fragment_hash,
+    },
     data = {
       id = "data",
       kind = "data",
@@ -57,7 +63,7 @@ package.make {
   },
   domains = ["authoritative"],
   namespace_requests = ["terrenia:worldgen/**", "terrenia:biome/**"],
-  trust = "data-only",
+  trust = "trusted-native",
   registration = fragment,
   provenance = package_provenance,
 }

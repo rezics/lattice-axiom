@@ -20,3 +20,8 @@ include = ["latticeaxiom-package.toml", "package.ncl", "crates"]
 [rust]
 entry = "crates/latticeaxiom-gameplay/Cargo.toml"
 members = ["crates/latticeaxiom-content/Cargo.toml", "crates/latticeaxiom-gameplay/Cargo.toml", "crates/latticeaxiom-player/Cargo.toml"]
+
+[rust.dependencies]
+"@latticeaxiom/input" = "=0.1.0"
+"@latticeaxiom/kernel" = "=0.1.0"
+"@latticeaxiom/world" = "=0.1.0"

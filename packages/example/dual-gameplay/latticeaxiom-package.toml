@@ -2,7 +2,7 @@ schema_version = 1
 name = "@example/dual-gameplay"
 version = "0.1.0"
 domains = ["authoritative"]
-trust = "data-only"
+trust = "trusted-native"
 
 [realizations.data]
 id = "data"
@@ -10,6 +10,13 @@ kind = "data"
 domains = ["authoritative"]
 artifact = { kind = "data-root", path = "crates/latticeaxiom-dual-fixture/tests/fixtures" }
 trust = "data-only"
+
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["authoritative"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
 
 [nickel_public_entrypoints]
 default = "package.ncl"
@@ -28,3 +35,7 @@ include = [
 [rust]
 entry = "crates/latticeaxiom-dual-fixture/Cargo.toml"
 members = ["crates/latticeaxiom-dual-fixture/Cargo.toml"]
+
+[rust.dependencies]
+"@latticeaxiom/kernel" = "=0.1.0"
+"@latticeaxiom/sdk" = "=0.1.0"

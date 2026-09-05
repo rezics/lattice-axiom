@@ -151,7 +151,7 @@ game.make {
         "terrenia:render-feature/**",
       ],
     },
-    maximum_trust = "data-only",
+    maximum_trust = "trusted-native",
     allow_force_override = false,
     allow_recovery = false,
   },

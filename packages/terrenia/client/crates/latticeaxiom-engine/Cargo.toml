@@ -1,0 +1,113 @@
+[package]
+name = "latticeaxiom-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "latticeaxiom-engine"
+
+[features]
+# Dynamic linking makes iterative Bevy builds substantially faster. Disable
+# default features for a statically linked distributable build.
+default = ["client", "development"]
+client = [
+  "latticeaxiom-client-ui/bevy-ui",
+  "dep:bevy_framepace",
+  "dep:bevy_winit",
+  "dep:winit",
+  "bevy/3d",
+  "bevy/audio",
+  "bevy/bevy_picking",
+  "bevy/bevy_settings",
+  "bevy/bevy_ui_widgets",
+  "bevy/default_font",
+  "bevy/keyboard",
+  "bevy/mouse",
+  "bevy/system_font_discovery",
+  "bevy/ui",
+  "latticeaxiom-player/client-input",
+]
+development = ["client", "bevy/dynamic_linking"]
+performance-evidence = []
+# Opt-in acceptance composes fresh fixture locks; ordinary client tests do not
+# need to link a Nickel compiler into their dependency graph.
+acceptance = ["latticeaxiom-compose/nickel-evaluator"]
+
+[[test]]
+name = "physical_world"
+required-features = ["acceptance"]
+
+[[bin]]
+name = "latticeaxiom-engine"
+path = "src/main.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "latticeaxiom-playable-fixture"
+path = "src/bin/playable_fixture.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "latticeaxiom-play"
+path = "src/bin/latticeaxiom_play.rs"
+required-features = ["client"]
+
+[dependencies]
+latticeaxiom-host.workspace = true
+accesskit.workspace = true
+avian3d = { workspace = true, default-features = false, features = ["3d", "default-collider", "f32", "parallel", "parry-f32"] }
+bevy.workspace = true
+bevy_framepace = { workspace = true, optional = true }
+bevy_winit = { workspace = true, optional = true }
+latticeaxiom-client-ui = { path = "../../../../latticeaxiom/client-ui/crates/latticeaxiom-client-ui" }
+latticeaxiom-compose = { path = "../../../../latticeaxiom/kernel/crates/latticeaxiom-compose" }
+latticeaxiom-content = { path = "../../../../latticeaxiom/gameplay/crates/latticeaxiom-content" }
+latticeaxiom-core = { path = "../../../../latticeaxiom/kernel/crates/latticeaxiom-core" }
+latticeaxiom-gameplay = { path = "../../../../latticeaxiom/gameplay/crates/latticeaxiom-gameplay" }
+latticeaxiom-input.workspace = true
+latticeaxiom-launcher = { path = "../../../../latticeaxiom/launcher/crates/latticeaxiom-launcher" }
+latticeaxiom-packages = { path = "../../../../latticeaxiom/kernel/crates/latticeaxiom-packages" }
+latticeaxiom-player = { path = "../../../../latticeaxiom/gameplay/crates/latticeaxiom-player" }
+latticeaxiom-registration = { path = "../../../../latticeaxiom/kernel/crates/latticeaxiom-registration" }
+latticeaxiom-render-contracts = { path = "../../../../latticeaxiom/sdk/crates/latticeaxiom-render-contracts" }
+latticeaxiom-runtime-contracts = { path = "../../../../latticeaxiom/sdk/crates/latticeaxiom-runtime-contracts" }
+latticeaxiom-settings-ui.workspace = true
+latticeaxiom-start-ui.workspace = true
+latticeaxiom-terrenia-worldgen.workspace = true
+latticeaxiom-storage = { path = "../../../../latticeaxiom/world/crates/latticeaxiom-storage" }
+latticeaxiom-voxel-mesh = { path = "../../../../latticeaxiom/voxel/crates/latticeaxiom-voxel-mesh" }
+latticeaxiom-voxel-runtime = { path = "../../../../latticeaxiom/voxel/crates/latticeaxiom-voxel-runtime" }
+latticeaxiom-world-catalog = { path = "../../../../latticeaxiom/world-library/crates/latticeaxiom-world-catalog" }
+latticeaxiom-world-db = { path = "../../../../latticeaxiom/world/crates/latticeaxiom-world-db" }
+latticeaxiom-world-wire = { path = "../../../../latticeaxiom/world/crates/latticeaxiom-world-wire" }
+latticeaxiom-worldgen = { path = "../../../../latticeaxiom/world/crates/latticeaxiom-worldgen" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+winit = { workspace = true, optional = true }
+
+[dev-dependencies]
+latticeaxiom-abi = { path = "../../../../latticeaxiom/sdk/crates/latticeaxiom-abi" }
+latticeaxiom-compose = { path = "../../../../latticeaxiom/kernel/crates/latticeaxiom-compose" }
+latticeaxiom-core = { path = "../../../../latticeaxiom/kernel/crates/latticeaxiom-core" }
+latticeaxiom-launcher = { path = "../../../../latticeaxiom/launcher/crates/latticeaxiom-launcher" }
+latticeaxiom-packages = { path = "../../../../latticeaxiom/kernel/crates/latticeaxiom-packages" }
+latticeaxiom-player = { path = "../../../../latticeaxiom/gameplay/crates/latticeaxiom-player" }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "performance_evidence"
+harness = false
+test = false
+required-features = ["performance-evidence"]
+
+[package.metadata.latticeaxiom]
+owner = "@terrenia/client"

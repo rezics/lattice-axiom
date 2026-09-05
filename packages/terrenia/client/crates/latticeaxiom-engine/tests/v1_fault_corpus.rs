@@ -66,18 +66,16 @@ use serde::Deserialize;
 
 const CORPUS_SCHEMA_ID: &str = "latticeaxiom.v1-fault-corpus.v1";
 const AUTHORED_BLOCK_DISPLAY_JSON: &str =
-    include_str!("../../../../../terrenia/blocks/data/authored-display-v1.json");
+    include_str!("../../../../blocks/data/authored-display-v1.json");
 const AUTHORED_TOOL_DISPLAY_JSON: &str =
-    include_str!("../../../../../terrenia/tools/data/authored-display-v1.json");
-const AUTHORED_TOOLS_JSON: &str =
-    include_str!("../../../../../terrenia/tools/data/authored-tools-v1.json");
-const D9_BLOCK_IDS: &str =
-    include_str!("../../../../../terrenia/blocks/data/goldens/d9-block-ids.txt");
-const FLUID_IDS: &str = include_str!("../../../../../terrenia/blocks/data/goldens/fluid-ids.txt");
+    include_str!("../../../../tools/data/authored-display-v1.json");
+const AUTHORED_TOOLS_JSON: &str = include_str!("../../../../tools/data/authored-tools-v1.json");
+const D9_BLOCK_IDS: &str = include_str!("../../../../blocks/data/goldens/d9-block-ids.txt");
+const FLUID_IDS: &str = include_str!("../../../../blocks/data/goldens/fluid-ids.txt");
 const PRESENTATION_DISPLAY_JSON: &str =
-    include_str!("../../../../../terrenia/presentation/data/authored-display-v1.json");
+    include_str!("../../../../presentation/data/authored-display-v1.json");
 const PRESENTATION_ASSETS_JSON: &str =
-    include_str!("../../../../../terrenia/presentation/data/authored-assets-v1.json");
+    include_str!("../../../../presentation/data/authored-assets-v1.json");
 const REQUIRED_CASE_IDS: [&str; 15] = [
     "package.missing-lock",
     "package.tampered-engine-coupled",

@@ -21,8 +21,7 @@ use latticeaxiom_compose::{
     ProductLockHostReceipts, ProductLockProducerV1, RealizationKind, RealizationSpec,
     RealizedDataRootV1, RegistrationFragment, RegistrationImage, ResolutionStep, RuntimeBinding,
     RuntimeImage, SemanticCatalog, SettingsCatalog, SourceCandidate, SourceSnapshot,
-    TargetPackageRealizationV1, TargetRealizationLockV1, TrustClass, persist_product_lock,
-    reopen_product_lock,
+    TargetPackageRealizationV1, TargetRealizationLockV1, persist_product_lock, reopen_product_lock,
 };
 use latticeaxiom_core::{
     CanonicalHash, CanonicalLogicalPath, PackageName, SourceId, SourceProvenance, StableId,
@@ -410,7 +409,7 @@ fn composition_from_bootstrap(
             target: target.clone(),
             realization_order: bootstrap.realization_policy.clone(),
             namespace_grants: BTreeMap::new(),
-            maximum_trust: TrustClass::DataOnly,
+            maximum_trust: bootstrap.maximum_trust,
             allow_force_override: false,
             allow_recovery: false,
             evaluation_policy: bootstrap.evaluation_policy.clone(),

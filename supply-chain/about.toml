@@ -41,6 +41,9 @@ accepted = ["AGPL-3.0-only"]
 [latticeaxiom-engine]
 accepted = ["AGPL-3.0-only"]
 
+[latticeaxiom-host]
+accepted = ["AGPL-3.0-only"]
+
 [latticeaxiom-gameplay]
 accepted = ["AGPL-3.0-only"]
 

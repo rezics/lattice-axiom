@@ -1752,21 +1752,19 @@ mod tests {
     };
     use latticeaxiom_worldgen::D7_NATURAL_BLOCK_COUNT;
     const AUTHORED_BLOCKS_JSON: &str =
-        include_str!("../../../../../../terrenia/blocks/data/authored-catalog-v1.json");
+        include_str!("../../../../../blocks/data/authored-catalog-v1.json");
     const AUTHORED_RULES_JSON: &str =
-        include_str!("../../../../../../terrenia/gameplay/data/authored-rules-v1.json");
+        include_str!("../../../../../gameplay/data/authored-rules-v1.json");
     const AUTHORED_ITEM_BROWSER_JSON: &str =
-        include_str!("../../../../../../terrenia/gameplay/data/authored-item-browser-v1.json");
+        include_str!("../../../../../gameplay/data/authored-item-browser-v1.json");
     const AUTHORED_TOOLS_JSON: &str =
-        include_str!("../../../../../../terrenia/tools/data/authored-tools-v1.json");
+        include_str!("../../../../../tools/data/authored-tools-v1.json");
     const AUTHORED_BIOMES_JSON: &str =
-        include_str!("../../../../../../terrenia/worldgen/data/authored-biomes-v1.json");
-    const D7_BLOCK_IDS: &str =
-        include_str!("../../../../../../terrenia/blocks/data/goldens/d7-block-ids.txt");
+        include_str!("../../../../../worldgen/data/authored-biomes-v1.json");
+    const D7_BLOCK_IDS: &str = include_str!("../../../../../blocks/data/goldens/d7-block-ids.txt");
     const D7_BIOME_IDS: &str =
-        include_str!("../../../../../../terrenia/worldgen/data/goldens/d7-biome-ids.txt");
-    const D9_BLOCK_IDS: &str =
-        include_str!("../../../../../../terrenia/blocks/data/goldens/d9-block-ids.txt");
+        include_str!("../../../../../worldgen/data/goldens/d7-biome-ids.txt");
+    const D9_BLOCK_IDS: &str = include_str!("../../../../../blocks/data/goldens/d9-block-ids.txt");
 
     fn test_content_catalog() -> Result<ContentCatalogV1, super::ProductionHostError> {
         compile_authored_content_catalog(AuthoredContentCatalogSourcesV1 {
@@ -1862,7 +1860,7 @@ mod tests {
             .expect("the Terrenia package name is canonical");
         let purpose = dimension_purpose_from_descriptor(
             &package,
-            include_bytes!("../../../../../../terrenia/main/data/package-purpose-v1.json"),
+            include_bytes!("../../../../../main/data/package-purpose-v1.json"),
         )
         .expect("the shipped purpose document is valid")
         .expect("the Terrenia root purpose is a dimension");
@@ -1880,7 +1878,9 @@ mod tests {
             .expect("the observability package name is canonical");
         let purpose = dimension_purpose_from_descriptor(
             &package,
-            include_bytes!("../../../../../observability/data/package-purpose-v1.json"),
+            include_bytes!(
+                "../../../../../../latticeaxiom/observability/data/package-purpose-v1.json"
+            ),
         )
         .expect("capability purpose documents remain valid");
         assert_eq!(purpose, None);
@@ -1893,7 +1893,7 @@ mod tests {
             .expect("the blocks package name is canonical");
         let error = dimension_purpose_from_descriptor(
             &package,
-            include_bytes!("../../../../../../terrenia/main/data/package-purpose-v1.json"),
+            include_bytes!("../../../../../main/data/package-purpose-v1.json"),
         )
         .expect_err("a purpose document cannot change its owning package");
         assert!(matches!(

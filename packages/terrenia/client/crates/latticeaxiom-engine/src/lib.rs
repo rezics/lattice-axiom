@@ -32,7 +32,6 @@ mod lifecycle_qa;
 mod observability;
 #[cfg(feature = "client")]
 mod playable;
-mod prepared;
 #[cfg(feature = "client")]
 mod presentation_fixture;
 #[cfg(feature = "client")]
@@ -88,6 +87,10 @@ pub use latticeaxiom_gameplay::{
     PlayerId, ProcessId, RecipeId, RecipeInspectV1, SlotIndex, TransferCommandV1,
     TransferDirectionV1, WorkstationId,
 };
+pub use latticeaxiom_host::{
+    CallbackContext, CatalogKind, LockVerifiedComposeImages, LockedPackageArtifactError,
+    LockedPackageArtifactStore, PreparationError, StructurallyValidatedComposeImages,
+};
 pub use latticeaxiom_player::{
     ActionAxis2V1, ActionFrameInbox, ActionFrameInboxError, BlockEditReceiptV1, BlockEditSuccessV1,
     HeadlessTargetInspectV1, PlayerActionButtonsV1, PlayerActionFrameV1, PlayerActionV1,
@@ -103,10 +106,6 @@ pub use latticeaxiom_voxel_runtime::{
 };
 #[cfg(feature = "client")]
 pub use playable::{PlayableClientError, run_playable_client};
-pub use prepared::{
-    CallbackContext, CatalogKind, LockVerifiedComposeImages, LockedPackageArtifactError,
-    LockedPackageArtifactStore, PreparationError, StructurallyValidatedComposeImages,
-};
 #[cfg(feature = "client")]
 pub use presentation_fixture::run_temporary_client_presentation_fixture;
 pub use settings::{

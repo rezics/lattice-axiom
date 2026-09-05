@@ -1,4 +1,4 @@
-# Package-composed D1 dual-path conformance fixture with a data-only shipped realization.
+# Package-composed D1 conformance data and native source realization.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in
@@ -21,6 +21,12 @@ package.make {
   requires = {},
   provides = {},
   realizations = {
+    "native-static" = {
+      id = "native-static", kind = "native-static",
+      domains = ["authoritative"],
+      artifact = { kind = "source-build" }, trust = "trusted-native",
+      engine_build = null, registration_fragment = registration_fragment_hash,
+    },
     data = {
       id = "data",
       kind = "data",
@@ -38,7 +44,7 @@ package.make {
   parameters = {},
   namespace_requests = [],
   namespace_delegations = {},
-  trust = "data-only",
+  trust = "trusted-native",
   registration = fragment,
   provenance = package_provenance,
 }

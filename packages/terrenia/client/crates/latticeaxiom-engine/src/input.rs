@@ -146,7 +146,7 @@ mod tests {
 
     const SHIPPED_CATALOG: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../input/data/action-catalog-v1.json"
+        "/../../../../latticeaxiom/input/data/action-catalog-v1.json"
     ));
 
     fn package(value: &str) -> PackageName {

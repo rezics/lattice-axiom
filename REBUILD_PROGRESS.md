@@ -131,3 +131,45 @@ their normal profiles. These local overrides are not project profile changes.
 Functional tests and native lifecycle passed, but no optimized or reference-host
 performance certification is claimed. The physical backend still publishes
 complete snapshots and has not passed large-world save/streaming budgets.
+
+## Native ownership and frozen product work in progress
+
+Generic lock preparation moved to `@latticeaxiom/host`; the Terrenia application
+now lives under `@terrenia/client`. Thirty Rust members have fifteen unique
+package owners. Package manifests explicitly declare forty-two acyclic native
+build edges and source entry/membership. The redundant authored crate/package
+inventory was removed; ownership and license checks read real manifests.
+
+The manifest graph, source containment and dependency-free frozen compile tests
+pass. The composer passed 144 all-feature library tests and eight shipped-source
+conformance tests. The moved application passed 178 library tests. Its broader
+headless suite completed with 49 passes and six failures in 780.43 seconds with
+unoptimized project code. Failed cases remain open:
+
+- `production_host_streams_past_v2_neighborhood_in_two_horizontal_directions`
+- `durable_save_and_quit_restores_unpicked_drops`
+- `render_mesh_backpressure_eventually_fills_every_resident_render_slot`
+- `production_host_reaches_both_underground_territories_and_three_resource_classes`
+- `negative_coordinate_eviction_revisit_restores_identical_clean_chunk`
+- `retain_keeps_former_core_after_immediate_boundary_reversal`
+
+These expose traversal, resident-set completion and fixture terrain assumptions;
+no cause or optimized performance pass is inferred from the unoptimized run.
+Full native-product compilation also faulted in rustc on render-contracts (even
+at opt-level 0) and leafwing-input-manager. Build environment stability remains
+an explicit acceptance limitation, not a reason to count unfinished gates as done.
+
+The first full frozen native product build completed from the generated source
+root using one build job, project opt-level 0 and a process-local CPU affinity
+mask selecting logical CPU 24. This is a functional build workaround, not a
+hardware diagnosis or a performance acceptance. The frozen binaries completed
+two native sessions with the same saved world and no failures; durable revision
+was 1 in both runs. Evidence is local under `.temp/qa-frozen-native-20260905/`.
+All-feature Clippy passed for host, application, composer and package resolver.
+The 12 Python repository/build checks passed, including real frozen compilation.
+
+Cache cleanup is incomplete: automatic approval review rejected deletion of
+unused files copied into `target/native-products/debug/deps`, reporting only
+`blocked by policy`. No deletion was executed. Approximately 334.6 GiB of copied
+older cache variants remain, in addition to about 7.1 GiB selected by the build.
+The original demo cache and saved worlds were not deleted or moved.

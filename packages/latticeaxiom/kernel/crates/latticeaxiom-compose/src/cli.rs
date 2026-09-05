@@ -661,6 +661,12 @@ fn select_closure<'a>(
                 "catalog has no published version of package {name}"
             ))
         })?;
+        if package.manifest.trust > bootstrap.maximum_trust {
+            return Err(CliError::lock(format!(
+                "package {name} requires {:?}, exceeding bootstrap trust {:?}",
+                package.manifest.trust, bootstrap.maximum_trust,
+            )));
+        }
         if let Some(request) = bootstrap.roots.get(&name)
             && !request.version.matches(&package.manifest.version)
         {
@@ -2173,6 +2179,7 @@ projection = "headless-test"
 projection_domains = ["authoritative"]
 evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1"
 realization_policy = ["native-static"]
+maximum_trust = "trusted-native"
 nickel_profile_entry = "profiles/test.ncl"
 
 [roots.source-build]
@@ -2243,6 +2250,42 @@ version = "0.1.0"
         )
         .unwrap_or_else(|error| panic!("source-build Rust source failed: {error}"));
         package_dir
+    }
+
+    #[test]
+    fn data_only_bootstrap_rejects_native_source_before_compilation() {
+        let directory = TestDirectory::create();
+        let package = write_source_build_fixture_workspace(directory.path());
+        let bootstrap_path = directory.path().join(COMPOSITION_BOOTSTRAP_FILE_NAME);
+        let text = fs::read_to_string(&bootstrap_path).expect("fixture bootstrap");
+        fs::write(
+            &bootstrap_path,
+            text.replace(
+                "maximum_trust = \"trusted-native\"",
+                "maximum_trust = \"data-only\"",
+            ),
+        )
+        .expect("restricted fixture policy");
+        fs::write(
+            package.join("src/lib.rs"),
+            "compile_error!(\"native code must not run\");",
+        )
+        .expect("non-compilable fixture source");
+        let request = LockRequest {
+            workspace_root: directory.path().to_owned(),
+            bootstrap_path: PathBuf::from(COMPOSITION_BOOTSTRAP_FILE_NAME),
+            catalog_root: PathBuf::from(CLI_CATALOG_DIRECTORY),
+            lock_path: PathBuf::from(PRODUCT_LOCK_FILE_NAME),
+            target: controller_host_target().expect("host target"),
+            toolchain: default_toolchain(),
+        };
+        let error =
+            lock_workspace(&request).expect_err("native source requires explicit admission");
+        assert!(
+            error.to_string().contains("exceeding bootstrap trust"),
+            "{error}"
+        );
+        assert!(!directory.path().join(PRODUCT_LOCK_FILE_NAME).exists());
     }
 
     #[test]

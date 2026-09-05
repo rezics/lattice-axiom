@@ -1,4 +1,4 @@
-"""Project the actual Rust build edges onto Lattice package ownership."""
+"""Validate manifest-owned build edges against the internal Cargo implementation."""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,26 @@ def read_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding='utf-8'))
 
 
-def package_graph(root: Path = ROOT) -> dict[str, set[str]]:
+def package_manifests(root: Path = ROOT) -> dict[str, tuple[Path, dict]]:
+    packages = {}
+    paths = set()
+    for member in read_toml(root / 'Cargo.toml')['workspace']['members']:
+        parts = Path(member).parts
+        if len(parts) != 5 or parts[0] != 'packages' or parts[3] != 'crates' or '..' in parts:
+            raise ValueError(f'non-local package member: {member}')
+        paths.add(root / Path(member).parents[1] / 'latticeaxiom-package.toml')
+    for path in sorted(paths):
+        manifest = read_toml(path)
+        if 'rust' not in manifest:
+            continue
+        name = manifest['name']
+        if name in packages:
+            raise ValueError(f'duplicate Lattice implementation package: {name}')
+        packages[name] = (path, manifest)
+    return packages
+
+
+def cargo_package_graph(root: Path = ROOT) -> dict[str, set[str]]:
     workspace = read_toml(root / 'Cargo.toml')['workspace']
     crates = {}
     for member in workspace['members']:
@@ -37,6 +56,29 @@ def package_graph(root: Path = ROOT) -> dict[str, set[str]]:
                     name = dependency.get('package', alias) if isinstance(dependency, dict) else alias
                     if name in crates and crates[name][0] != owner:
                         graph[owner].add(crates[name][0])
+    return graph
+
+
+def package_graph(root: Path = ROOT) -> dict[str, set[str]]:
+    packages = package_manifests(root)
+    graph = {}
+    for name, (_, manifest) in packages.items():
+        dependencies = manifest['rust'].get('dependencies', {})
+        graph[name] = set(dependencies)
+        for target, version in dependencies.items():
+            if target not in packages:
+                raise ValueError(f'{name}: unknown Rust source owner {target}')
+            if version != '=' + packages[target][1]['version']:
+                raise ValueError(f'{name}: build dependency {target} must pin its source version')
+    dependency_order(graph)
+    observed = cargo_package_graph(root)
+    if set(graph) != set(observed):
+        raise ValueError('native package manifests and Cargo owners disagree')
+    for name, edges in graph.items():
+        if edges != observed[name]:
+            raise ValueError(f'{name}: manifest build edges disagree with Cargo; '
+                             f'undeclared={sorted(observed[name] - edges)}, '
+                             f'unused={sorted(edges - observed[name])}')
     return graph
 
 

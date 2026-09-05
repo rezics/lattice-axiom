@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "packages/latticeaxiom/host/crates/latticeaxiom-host",
   "packages/latticeaxiom/sdk/crates/latticeaxiom-abi",
   "packages/latticeaxiom/client-ui/crates/latticeaxiom-client-ui",
   "packages/latticeaxiom/kernel/crates/latticeaxiom-compose",
@@ -8,7 +9,7 @@ members = [
   "packages/latticeaxiom/kernel/crates/latticeaxiom-core",
   "packages/example/dual-gameplay/crates/latticeaxiom-dual-fixture",
   "packages/terrenia/worldgen/crates/latticeaxiom-terrenia-worldgen",
-  "packages/latticeaxiom/host/crates/latticeaxiom-engine",
+  "packages/terrenia/client/crates/latticeaxiom-engine",
   "packages/latticeaxiom/gameplay/crates/latticeaxiom-gameplay",
   "packages/latticeaxiom/input/crates/latticeaxiom-input",
   "packages/latticeaxiom/launcher/crates/latticeaxiom-launcher",
@@ -31,7 +32,7 @@ members = [
   "packages/latticeaxiom/world/crates/latticeaxiom-world-wire",
   "packages/latticeaxiom/world/crates/latticeaxiom-worldgen",
 ]
-default-members = ["packages/latticeaxiom/host/crates/latticeaxiom-engine"]
+default-members = ["packages/terrenia/client/crates/latticeaxiom-engine"]
 
 [workspace.package]
 version = "0.1.0"
@@ -42,6 +43,7 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/rezics/lattice-axiom"
 
 [workspace.dependencies]
+latticeaxiom-host = { path = "packages/latticeaxiom/host/crates/latticeaxiom-host" }
 # ADR 0014 fixes the implementation baseline at Bevy 0.19.x. Cargo.lock is
 # the authoritative dependency record, so upgrades are deliberate migrations.
 accesskit = "=0.24.1"
@@ -60,7 +62,7 @@ latticeaxiom-abi = { path = "packages/latticeaxiom/sdk/crates/latticeaxiom-abi" 
 latticeaxiom-client-ui = { path = "packages/latticeaxiom/client-ui/crates/latticeaxiom-client-ui" }
 latticeaxiom-compose = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-compose" }
 latticeaxiom-core = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-core" }
-latticeaxiom-engine = { path = "packages/latticeaxiom/host/crates/latticeaxiom-engine", default-features = false }
+latticeaxiom-engine = { path = "packages/terrenia/client/crates/latticeaxiom-engine", default-features = false }
 latticeaxiom-gameplay = { path = "packages/latticeaxiom/gameplay/crates/latticeaxiom-gameplay" }
 latticeaxiom-input = { path = "packages/latticeaxiom/input/crates/latticeaxiom-input" }
 latticeaxiom-launcher = { path = "packages/latticeaxiom/launcher/crates/latticeaxiom-launcher" }

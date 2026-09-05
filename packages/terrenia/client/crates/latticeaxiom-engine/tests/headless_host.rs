@@ -3478,13 +3478,11 @@ fn fixed_elapsed(instance: &EngineInstance) -> Duration {
 fn authored_gameplay_catalog() -> Result<GameplayCatalog, latticeaxiom_engine::ProductionHostError>
 {
     compile_authored_gameplay_catalog(AuthoredGameplayCatalogSourcesV1 {
-        blocks: include_str!("../../../../../terrenia/blocks/data/authored-catalog-v1.json"),
-        rules: include_str!("../../../../../terrenia/gameplay/data/authored-rules-v1.json"),
-        browser: include_str!(
-            "../../../../../terrenia/gameplay/data/authored-item-browser-v1.json"
-        ),
-        tools: include_str!("../../../../../terrenia/tools/data/authored-tools-v1.json"),
-        d9_block_ids: include_str!("../../../../../terrenia/blocks/data/goldens/d9-block-ids.txt"),
+        blocks: include_str!("../../../../blocks/data/authored-catalog-v1.json"),
+        rules: include_str!("../../../../gameplay/data/authored-rules-v1.json"),
+        browser: include_str!("../../../../gameplay/data/authored-item-browser-v1.json"),
+        tools: include_str!("../../../../tools/data/authored-tools-v1.json"),
+        d9_block_ids: include_str!("../../../../blocks/data/goldens/d9-block-ids.txt"),
     })
 }
 

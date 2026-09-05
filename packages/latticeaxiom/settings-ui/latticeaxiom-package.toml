@@ -2,7 +2,7 @@ schema_version = 1
 name = "@latticeaxiom/settings-ui"
 version = "0.1.0"
 domains = ["client", "tool"]
-trust = "data-only"
+trust = "trusted-native"
 
 [dependencies.settings]
 package = "@latticeaxiom/settings"
@@ -30,6 +30,13 @@ domains = ["client", "tool"]
 artifact = { kind = "data-root", path = "data" }
 trust = "data-only"
 
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["client", "tool"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
 [nickel_public_entrypoints]
 default = "package.ncl"
 
@@ -47,3 +54,8 @@ include = [
 [rust]
 entry = "crates/latticeaxiom-settings-ui/Cargo.toml"
 members = ["crates/latticeaxiom-settings-ui/Cargo.toml"]
+
+[rust.dependencies]
+"@latticeaxiom/client-ui" = "=0.1.0"
+"@latticeaxiom/kernel" = "=0.1.0"
+"@latticeaxiom/sdk" = "=0.1.0"

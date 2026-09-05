@@ -80,6 +80,12 @@ package.make {
     },
   },
   realizations = {
+    "native-static" = {
+      id = "native-static", kind = "native-static",
+      domains = ["client"],
+      artifact = { kind = "source-build" }, trust = "trusted-native",
+      engine_build = null, registration_fragment = registration_fragment_hash,
+    },
     data = {
       id = "data",
       kind = "data",
@@ -109,7 +115,7 @@ package.make {
       "latticeaxiom:capability/diagnostic-registry",
     ],
   },
-  trust = "data-only",
+  trust = "trusted-native",
   registration = fragment,
   provenance = package_provenance,
 }

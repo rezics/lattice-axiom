@@ -23,7 +23,7 @@ use latticeaxiom_core::CanonicalHash;
 #[cfg(feature = "client")]
 use latticeaxiom_launcher::{FreshClientAppLeaseProof, FreshClientAppLeaseToken};
 
-use crate::prepared::{LockVerifiedComposeImages, StructurallyValidatedComposeImages};
+use latticeaxiom_host::{LockVerifiedComposeImages, StructurallyValidatedComposeImages};
 
 /// Maximum fixed iterations accepted by one manual advancement call.
 ///

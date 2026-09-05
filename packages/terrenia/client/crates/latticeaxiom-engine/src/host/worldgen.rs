@@ -1442,9 +1442,8 @@ mod tests {
     };
 
     const AUTHORED_BINDINGS_JSON: &str =
-        include_str!("../../../../../../terrenia/worldgen/data/authored-block-bindings-v1.json");
-    const D7_BLOCK_IDS: &str =
-        include_str!("../../../../../../terrenia/blocks/data/goldens/d7-block-ids.txt");
+        include_str!("../../../../../worldgen/data/authored-block-bindings-v1.json");
+    const D7_BLOCK_IDS: &str = include_str!("../../../../../blocks/data/goldens/d7-block-ids.txt");
 
     #[test]
     fn production_world_scale_matches_the_accepted_vertical_and_planning_contract() {

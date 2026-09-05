@@ -52,6 +52,12 @@ package.make {
     },
   },
   realizations = {
+    "native-static" = {
+      id = "native-static", kind = "native-static",
+      domains = ["client", "tool"],
+      artifact = { kind = "source-build" }, trust = "trusted-native",
+      engine_build = null, registration_fragment = registration_fragment_hash,
+    },
     data = {
       id = "data",
       kind = "data",
@@ -65,7 +71,7 @@ package.make {
   },
   domains = ["client", "tool"],
   namespace_requests = ["latticeaxiom:capability/world-catalog"],
-  trust = "data-only",
+  trust = "trusted-native",
   registration = fragment,
   provenance = package_provenance,
 }

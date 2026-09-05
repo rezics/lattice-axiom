@@ -2,7 +2,7 @@ schema_version = 1
 name = "@latticeaxiom/front-end"
 version = "0.1.0"
 domains = ["client"]
-trust = "data-only"
+trust = "trusted-native"
 
 [dependencies."world-library"]
 package = "@latticeaxiom/world-library"
@@ -56,6 +56,13 @@ domains = ["client"]
 artifact = { kind = "data-root", path = "data" }
 trust = "data-only"
 
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["client"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
 [nickel_public_entrypoints]
 default = "package.ncl"
 
@@ -73,3 +80,12 @@ include = [
 [rust]
 entry = "crates/latticeaxiom-start-ui/Cargo.toml"
 members = ["crates/latticeaxiom-start-ui/Cargo.toml"]
+
+[rust.dependencies]
+"@latticeaxiom/client-ui" = "=0.1.0"
+"@latticeaxiom/kernel" = "=0.1.0"
+"@latticeaxiom/launcher" = "=0.1.0"
+"@latticeaxiom/sdk" = "=0.1.0"
+"@latticeaxiom/settings-ui" = "=0.1.0"
+"@latticeaxiom/world" = "=0.1.0"
+"@latticeaxiom/world-library" = "=0.1.0"

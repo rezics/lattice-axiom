@@ -72,6 +72,12 @@ pub struct CompositionBootstrapV1 {
     pub parameters: BTreeMap<StableId, Value>,
     /// Ordered automatic realization preference.
     pub realization_policy: Vec<RealizationKind>,
+    /// Explicit source/realization trust ceiling. Omission preserves data-only admission.
+    #[serde(
+        default = "data_only_trust",
+        skip_serializing_if = "is_data_only_trust"
+    )]
+    pub maximum_trust: TrustClass,
     /// Versioned Nickel evaluation policy.
     pub evaluation_policy: StableId,
     /// Effective evaluator limits authorized by this bootstrap.
@@ -221,6 +227,7 @@ impl CompositionBootstrapV1 {
             features: &self.features,
             parameters: &self.parameters,
             realization_policy: &self.realization_policy,
+            maximum_trust: self.maximum_trust,
             evaluation_policy: &self.evaluation_policy,
             evaluation_limits: self.evaluation_limits,
             nickel_profile_entry: &self.nickel_profile_entry,
@@ -270,9 +277,23 @@ struct BootstrapIdentity<'a> {
     features: &'a BTreeMap<PackageName, BTreeSet<String>>,
     parameters: &'a BTreeMap<StableId, Value>,
     realization_policy: &'a [RealizationKind],
+    #[serde(skip_serializing_if = "is_data_only_trust")]
+    maximum_trust: TrustClass,
     evaluation_policy: &'a StableId,
     evaluation_limits: NickelEvaluationLimits,
     nickel_profile_entry: &'a CanonicalLogicalPath,
+}
+
+const fn data_only_trust() -> TrustClass {
+    TrustClass::DataOnly
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip predicates receive field references"
+)]
+fn is_data_only_trust(trust: &TrustClass) -> bool {
+    *trust == TrustClass::DataOnly
 }
 
 /// Graph-affecting static projection of one package, authored before Nickel.
@@ -327,6 +348,15 @@ pub struct PackageRustSourcesV1 {
     pub entry: CanonicalLogicalPath,
     /// All internal Cargo manifests included in the source closure.
     pub members: BTreeSet<CanonicalLogicalPath>,
+    /// Package-owned normal/build source dependencies used by native assembly.
+    ///
+    /// These select implementation source owners, independently of a data-only
+    /// gameplay projection. Cargo still compiles the declared internal crates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<PackageName, PackageVersionReq>,
+    /// Named executable targets exposed by the entry crate for product builds.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub binaries: BTreeSet<String>,
 }
 
 impl PackageRustSourcesV1 {
@@ -350,6 +380,21 @@ mod rust_source_tests {
         )
         .expect("valid source declaration");
         assert!(sources.is_valid());
+    }
+
+    #[test]
+    fn implementation_dependencies_use_package_identities_and_versions() {
+        let sources: PackageRustSourcesV1 = toml::from_str(
+            "entry = 'crates/runtime/Cargo.toml'\nmembers = ['crates/runtime/Cargo.toml']\n[dependencies]\n'@example/kernel' = '=0.1.0'",
+        ).expect("typed implementation dependency");
+        assert_eq!(sources.dependencies.len(), 1);
+        assert_eq!(
+            sources.dependencies.keys().next().map(ToString::to_string),
+            Some("@example/kernel".to_owned())
+        );
+        assert!(toml::from_str::<PackageRustSourcesV1>(
+            "entry = 'crates/runtime/Cargo.toml'\nmembers = ['crates/runtime/Cargo.toml']\n[dependencies]\n'../ambient' = '=0.1.0'"
+        ).is_err());
     }
 
     #[test]
@@ -541,7 +586,11 @@ impl PackageSourceManifestV1 {
                 package: self.name.clone(),
             });
         }
-        if self.rust.as_ref().is_some_and(|rust| !rust.is_valid()) {
+        if self
+            .rust
+            .as_ref()
+            .is_some_and(|rust| !rust.is_valid() || rust.dependencies.contains_key(&self.name))
+        {
             return Err(BootstrapManifestError::InvalidRustSources {
                 package: self.name.clone(),
             });

@@ -16,7 +16,7 @@ use latticeaxiom_compose::{
     NickelEvaluationLimits, PACKAGE_MODEL_VERSION, PackageAlias, PackageDomain, PackageSpec,
     ProfileKind, R0_AUTHORING_CORPUS_MAJOR, R0_LIBRARY_PACKAGE_ALIAS, RealizationKind,
     SourceAddress, SourceClosureError, SourceClosureRequest, SourceRootGrant, SourceScanLimits,
-    SourceSnapshot, TrustClass, TrustedStagedEvaluation, TrustedStagedEvaluationError,
+    SourceSnapshot, TrustedStagedEvaluation, TrustedStagedEvaluationError,
     evaluate_trusted_staged_nickel_function, evaluate_trusted_staged_package, scan_source_snapshot,
 };
 use latticeaxiom_core::{
@@ -71,7 +71,15 @@ fn shipped_packages_use_verified_alias_closures_and_raw_entry_provenance() {
         assert_eq!(package.model_version, PACKAGE_MODEL_VERSION);
         assert_eq!(&package.name, expected_name);
         assert_eq!(package.version.to_string(), "0.1.0");
-        assert_eq!(package.trust, latticeaxiom_compose::TrustClass::DataOnly);
+        let manifest = latticeaxiom_compose::PackageSourceManifestV1::from_toml_str(
+            &fs::read_to_string(workspace_path(format!(
+                "{}/latticeaxiom-package.toml",
+                source.logical_dir
+            )))
+            .expect("shipped source manifest exists"),
+        )
+        .expect("shipped source manifest validates");
+        assert_eq!(package.trust, manifest.trust);
         assert_eq!(
             result.staged_addresses.len(),
             result.source_closure.sources.len()
@@ -135,37 +143,8 @@ fn shipped_packages_use_verified_alias_closures_and_raw_entry_provenance() {
 }
 
 #[test]
-fn authored_inventory_and_license_policy_cover_derived_workspace_sets() {
+fn license_policy_covers_the_manifest_derived_workspace() {
     let workspace_members = workspace_member_paths();
-    let package_paths = package_sources()
-        .into_iter()
-        .map(|source| (source.package_name.to_string(), source.logical_dir))
-        .collect::<BTreeMap<_, _>>();
-
-    let inventory_path = workspace_path("fixtures/playable/crate-package-inventory.json");
-    let inventory_text = fs::read_to_string(&inventory_path)
-        .unwrap_or_else(|error| panic!("could not read {}: {error}", inventory_path.display()));
-    let inventory = serde_json::from_str::<CratePackageInventory>(&inventory_text)
-        .unwrap_or_else(|error| panic!("could not parse {}: {error}", inventory_path.display()));
-    assert_eq!(
-        inventory.schema,
-        "latticeaxiom.v1-crate-package-inventory.v1"
-    );
-    assert!(
-        !inventory.baseline_commit.trim().is_empty(),
-        "inventory baseline commit cannot be empty"
-    );
-    assert_eq!(
-        inventory_paths(&inventory.crates, "crate"),
-        workspace_members,
-        "crate inventory must exactly cover workspace members"
-    );
-    assert_eq!(
-        inventory_paths(&inventory.packages, "package"),
-        package_paths,
-        "package inventory must exactly cover shipped package.ncl roots"
-    );
-
     let about_path = workspace_path("supply-chain/about.toml");
     let about_text = fs::read_to_string(&about_path)
         .unwrap_or_else(|error| panic!("could not read {}: {error}", about_path.display()));
@@ -301,7 +280,7 @@ fn root_bootstrap_matches_its_evaluated_nickel_profile() {
     assert_eq!(bootstrap.evaluation_policy, profile.evaluation_policy);
     assert_eq!(bootstrap.evaluation_limits, profile.evaluation_limits);
     assert_eq!(bootstrap.realization_policy, [RealizationKind::Data]);
-    assert_eq!(profile.policy.maximum_trust, TrustClass::DataOnly);
+    assert_eq!(profile.policy.maximum_trust, bootstrap.maximum_trust);
 
     let bootstrap_sources = bootstrap
         .sources
@@ -933,44 +912,6 @@ fn workspace_member_paths() -> BTreeMap<String, String> {
     paths
 }
 
-fn inventory_paths(rows: &[InventoryRow], category: &str) -> BTreeMap<String, String> {
-    let workspace_root = canonical_workspace_root();
-    let mut paths = BTreeMap::new();
-    for row in rows {
-        assert!(
-            matches!(row.disposition.as_str(), "reuse" | "adapt"),
-            "{} has an unknown disposition {}",
-            row.name,
-            row.disposition
-        );
-        assert!(
-            !row.v1_role.trim().is_empty() && !row.notes.trim().is_empty(),
-            "{} must document role and ownership notes",
-            row.name
-        );
-        let canonical = fs::canonicalize(workspace_root.join(&row.path)).unwrap_or_else(|error| {
-            panic!("could not canonicalize {category} {}: {error}", row.path)
-        });
-        assert!(
-            canonical.starts_with(&workspace_root),
-            "{category} {} escapes the workspace",
-            row.path
-        );
-        assert_eq!(
-            logical_workspace_dir(&workspace_root, &canonical),
-            row.path,
-            "{category} {} path is not canonical",
-            row.name
-        );
-        assert!(
-            paths.insert(row.name.clone(), row.path.clone()).is_none(),
-            "duplicate {category} inventory name {}",
-            row.name
-        );
-    }
-    paths
-}
-
 fn package_sources() -> Vec<PackageSource> {
     let workspace_root = canonical_workspace_root();
     let packages_root = fs::canonicalize(workspace_root.join("packages"))
@@ -1265,25 +1206,6 @@ fn package_name(value: &str) -> PackageName {
     value
         .parse()
         .unwrap_or_else(|error| panic!("invalid package name {value}: {error}"))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CratePackageInventory {
-    schema: String,
-    baseline_commit: String,
-    crates: Vec<InventoryRow>,
-    packages: Vec<InventoryRow>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InventoryRow {
-    name: String,
-    path: String,
-    disposition: String,
-    v1_role: String,
-    notes: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

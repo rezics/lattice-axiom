@@ -18,5 +18,9 @@ default = "package.ncl"
 include = ["latticeaxiom-package.toml", "package.ncl", "crates"]
 
 [rust]
-entry = "crates/latticeaxiom-engine/Cargo.toml"
-members = ["crates/latticeaxiom-engine/Cargo.toml"]
+entry = "crates/latticeaxiom-host/Cargo.toml"
+members = ["crates/latticeaxiom-host/Cargo.toml"]
+
+[rust.dependencies]
+"@latticeaxiom/kernel" = "=0.1.0"
+"@latticeaxiom/launcher" = "=0.1.0"

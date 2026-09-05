@@ -20,3 +20,5 @@ include = ["latticeaxiom-package.toml", "package.ncl", "crates"]
 [rust]
 entry = "crates/latticeaxiom-compose/Cargo.toml"
 members = ["crates/latticeaxiom-compose/Cargo.toml", "crates/latticeaxiom-core/Cargo.toml", "crates/latticeaxiom-packages/Cargo.toml", "crates/latticeaxiom-registration/Cargo.toml"]
+
+[rust.dependencies]

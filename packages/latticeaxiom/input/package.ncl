@@ -1,5 +1,4 @@
-# Graph-selected action catalog and default bindings. The colocated Rust crate
-# remains a workspace compatibility bridge, not an advertised native realization.
+# Graph-selected action data and an explicitly owned native implementation.
 let latticeaxiom = import latticeaxiom_lib_v3 in
 let package = latticeaxiom.package in
 let registration = latticeaxiom.registration in
@@ -51,6 +50,12 @@ package.make {
     },
   },
   realizations = {
+    "native-static" = {
+      id = "native-static", kind = "native-static",
+      domains = ["client", "server", "tool"],
+      artifact = { kind = "source-build" }, trust = "trusted-native",
+      engine_build = null, registration_fragment = registration_fragment_hash,
+    },
     data = {
       id = "data",
       kind = "data",
@@ -73,7 +78,7 @@ package.make {
       "latticeaxiom:capability/settings-registry",
     ],
   },
-  trust = "data-only",
+  trust = "trusted-native",
   registration = fragment,
   provenance = package_provenance,
 }

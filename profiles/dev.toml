@@ -1,4 +1,5 @@
 schema_version = 1
+maximum_trust = "trusted-native"
 projection = "client-world"
 projection_domains = ["authoritative", "client"]
 evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1"

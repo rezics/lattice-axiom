@@ -1,5 +1,5 @@
 schema_version = 1
-name = "@latticeaxiom/voxel"
+name = "@terrenia/client"
 version = "0.1.0"
 domains = ["authoritative", "client", "server", "tool"]
 trust = "trusted-native"
@@ -18,10 +18,21 @@ default = "package.ncl"
 include = ["latticeaxiom-package.toml", "package.ncl", "crates"]
 
 [rust]
-entry = "crates/latticeaxiom-voxel-mesh/Cargo.toml"
-members = ["crates/latticeaxiom-voxel-mesh/Cargo.toml", "crates/latticeaxiom-voxel-playground/Cargo.toml", "crates/latticeaxiom-voxel-runtime/Cargo.toml"]
+entry = "crates/latticeaxiom-engine/Cargo.toml"
+members = ["crates/latticeaxiom-engine/Cargo.toml"]
+binaries = ["latticeaxiom-engine", "latticeaxiom-play"]
 
 [rust.dependencies]
+"@latticeaxiom/client-ui" = "=0.1.0"
+"@latticeaxiom/front-end" = "=0.1.0"
 "@latticeaxiom/gameplay" = "=0.1.0"
+"@latticeaxiom/host" = "=0.1.0"
+"@latticeaxiom/input" = "=0.1.0"
 "@latticeaxiom/kernel" = "=0.1.0"
+"@latticeaxiom/launcher" = "=0.1.0"
+"@latticeaxiom/sdk" = "=0.1.0"
+"@latticeaxiom/settings-ui" = "=0.1.0"
+"@latticeaxiom/voxel" = "=0.1.0"
 "@latticeaxiom/world" = "=0.1.0"
+"@latticeaxiom/world-library" = "=0.1.0"
+"@terrenia/worldgen" = "=0.1.0"

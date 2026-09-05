@@ -24,29 +24,24 @@ use latticeaxiom_world_wire::{
     classify_fluid_palette_open,
 };
 
-const AUTHORED_BLOCKS_JSON: &str =
-    include_str!("../../../../../terrenia/blocks/data/authored-catalog-v1.json");
+const AUTHORED_BLOCKS_JSON: &str = include_str!("../../../../blocks/data/authored-catalog-v1.json");
 const AUTHORED_BLOCK_DISPLAY_JSON: &str =
-    include_str!("../../../../../terrenia/blocks/data/authored-display-v1.json");
-const AUTHORED_RULES_JSON: &str =
-    include_str!("../../../../../terrenia/gameplay/data/authored-rules-v1.json");
+    include_str!("../../../../blocks/data/authored-display-v1.json");
+const AUTHORED_RULES_JSON: &str = include_str!("../../../../gameplay/data/authored-rules-v1.json");
 const AUTHORED_ITEM_BROWSER_JSON: &str =
-    include_str!("../../../../../terrenia/gameplay/data/authored-item-browser-v1.json");
-const AUTHORED_TOOLS_JSON: &str =
-    include_str!("../../../../../terrenia/tools/data/authored-tools-v1.json");
+    include_str!("../../../../gameplay/data/authored-item-browser-v1.json");
+const AUTHORED_TOOLS_JSON: &str = include_str!("../../../../tools/data/authored-tools-v1.json");
 const AUTHORED_TOOL_DISPLAY_JSON: &str =
-    include_str!("../../../../../terrenia/tools/data/authored-display-v1.json");
+    include_str!("../../../../tools/data/authored-display-v1.json");
 const AUTHORED_BIOMES_JSON: &str =
-    include_str!("../../../../../terrenia/worldgen/data/authored-biomes-v1.json");
-const D7_BIOME_IDS: &str =
-    include_str!("../../../../../terrenia/worldgen/data/goldens/d7-biome-ids.txt");
-const D9_BLOCK_IDS: &str =
-    include_str!("../../../../../terrenia/blocks/data/goldens/d9-block-ids.txt");
-const FLUID_IDS: &str = include_str!("../../../../../terrenia/blocks/data/goldens/fluid-ids.txt");
+    include_str!("../../../../worldgen/data/authored-biomes-v1.json");
+const D7_BIOME_IDS: &str = include_str!("../../../../worldgen/data/goldens/d7-biome-ids.txt");
+const D9_BLOCK_IDS: &str = include_str!("../../../../blocks/data/goldens/d9-block-ids.txt");
+const FLUID_IDS: &str = include_str!("../../../../blocks/data/goldens/fluid-ids.txt");
 const PRESENTATION_DISPLAY_JSON: &str =
-    include_str!("../../../../../terrenia/presentation/data/authored-display-v1.json");
+    include_str!("../../../../presentation/data/authored-display-v1.json");
 const PRESENTATION_ASSETS_JSON: &str =
-    include_str!("../../../../../terrenia/presentation/data/authored-assets-v1.json");
+    include_str!("../../../../presentation/data/authored-assets-v1.json");
 
 fn activate(target: &'static str, source: InputSource) -> latticeaxiom_client_ui::SemanticCommand {
     surface_command(
