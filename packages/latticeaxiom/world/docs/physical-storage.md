@@ -67,3 +67,18 @@ Primary references, checked 2026-09-05:
 - [Database](https://docs.rs/redb/4.2.0/redb/struct.Database.html)
 - [Durability](https://docs.rs/redb/4.2.0/redb/enum.Durability.html)
 - [Commit failure semantics](https://docs.rs/redb/4.2.0/redb/struct.WriteTransaction.html)
+
+## Retaining world rules across default-profile changes
+
+Each successful lock transaction archives the previous and new verified locks
+under `catalog/locks/<product-lock-hash>.lock`. Archive entries are immutable;
+a modified existing archive is rejected. A world's catalog entry keeps its
+original gameplay hash. The shell checks only archived lock metadata during
+listing, then verifies its CAS closure when the world is selected. The supervisor
+starts the world process with that exact archived lock. Changing the default
+profile therefore affects new worlds without rewriting existing world rules.
+
+`task play` selects the survival profile. A new survival inventory is empty;
+the creative starter kit and developer telemetry remain in the explicit dev
+profile. Hand crafting stays available through inventory; opening advanced
+crafting in survival requires aiming at a crafting workstation.

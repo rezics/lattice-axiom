@@ -29,6 +29,28 @@ pub const PRODUCT_LOCK_SCHEMA_VERSION: u32 = 1;
 /// Default file name of the final product lock.
 pub const PRODUCT_LOCK_FILE_NAME: &str = "latticeaxiom.lock";
 
+/// Immutable catalog location for a previously selected product lock.
+#[must_use]
+pub fn archived_product_lock_path(catalog: &Path, hash: CanonicalHash) -> PathBuf {
+    catalog.join("locks").join(format!("{hash}.lock"))
+}
+
+/// Retains a verified lock so existing worlds can keep their original closure.
+///
+/// # Errors
+/// Returns [`ProductLockError`] if publication fails or an existing archive
+/// disagrees with the same lock identity. Existing archives are never replaced.
+pub fn archive_product_lock(catalog: &Path, lock: &LockV1) -> Result<PathBuf, ProductLockError> {
+    let path = archived_product_lock_path(catalog, lock.product_lock_hash);
+    let mode = if path.exists() {
+        LockActionMode::Locked
+    } else {
+        LockActionMode::Offline
+    };
+    persist_product_lock(&path, lock, mode)?;
+    Ok(path)
+}
+
 /// Machine identifier recorded as the lock producer.
 pub const PRODUCT_LOCK_PRODUCER_MACHINE: &str = "latticeaxiom";
 
@@ -1758,6 +1780,26 @@ path = "packages/terrenia/blocks"
             !temporary_lock_path(&persist_path(&directory)).exists(),
             "temporary lock file must not remain after persist"
         );
+    }
+
+    #[test]
+    fn archived_locks_keep_both_closures_and_reject_modified_archive_bytes() {
+        let directory = TestDirectory::create();
+        let catalog = persist_path(&directory).with_file_name("catalog");
+        let (old, _) = sealed_lock(None);
+        let old_path = succeeded(archive_product_lock(&catalog, &old));
+        let (mut replacement, _) = sealed_lock(None);
+        replacement.composition.evaluation_policy_receipt_hash =
+            CanonicalHash::digest(b"next-default");
+        replacement.product_lock_hash = succeeded(replacement.recompute_product_lock_hash());
+        let new_path = succeeded(archive_product_lock(&catalog, &replacement));
+        assert_ne!(old_path, new_path);
+        assert_eq!(succeeded(reopen_product_lock(&old_path)), old);
+        assert_eq!(succeeded(reopen_product_lock(&new_path)), replacement);
+        assert_eq!(succeeded(archive_product_lock(&catalog, &old)), old_path);
+        succeeded(fs::write(&old_path, b"corrupt archive"));
+        assert!(archive_product_lock(&catalog, &old).is_err());
+        assert_eq!(succeeded(fs::read(&old_path)), b"corrupt archive");
     }
 
     #[test]

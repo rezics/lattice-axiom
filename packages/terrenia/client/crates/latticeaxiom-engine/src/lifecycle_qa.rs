@@ -41,6 +41,7 @@ pub(crate) fn install(app: &mut App, workspace: &std::path::Path) {
 }
 
 #[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments)]
 fn drive(
     mut commands: Commands<'_, '_>,
     frame: Res<'_, FrameCount>,
@@ -49,6 +50,10 @@ fn drive(
     windows: Query<'_, '_, Entity, With<bevy::window::PrimaryWindow>>,
     mut keyboard: MessageWriter<'_, KeyboardInput>,
     mut exits: MessageWriter<'_, AppExit>,
+    world_state: (
+        Option<Res<'_, crate::ProductionSpine>>,
+        Option<Res<'_, crate::VerifiedProductLockHash>>,
+    ),
 ) {
     let (controls, texts) = ui;
     let role = std::env::var(crate::supervisor::ENV_CHILD_ROLE).unwrap_or_default();
@@ -60,6 +65,19 @@ fn drive(
         let lines = texts.iter().map(|text| text.0.as_str()).collect::<Vec<_>>();
         if let Ok(bytes) = serde_json::to_vec_pretty(&lines) {
             let _ = std::fs::write(format!("lifecycle-{role}-{generation}.json"), bytes);
+        }
+        if let (Some(spine), Some(lock)) = world_state {
+            let mode = spine.gameplay_mode().map(|mode| match mode {
+                latticeaxiom_gameplay::GameplayModeV1::Survival => "survival",
+                latticeaxiom_gameplay::GameplayModeV1::Creative => "creative",
+            });
+            let state = serde_json::json!({
+                "world": spine.world_id(), "mode": mode, "lock": lock.get(),
+                "inventory_items": spine.inventory_view().map(|view| view.slots().iter().flatten().map(|stack| u64::from(stack.quantity())).sum::<u64>()),
+            });
+            if let Ok(bytes) = serde_json::to_vec_pretty(&state) {
+                let _ = std::fs::write("lifecycle-world-state.json", bytes);
+            }
         }
     }
     if role == "shell" {

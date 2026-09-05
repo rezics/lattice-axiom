@@ -1,0 +1,96 @@
+schema_version = 1
+maximum_trust = "trusted-native"
+projection = "client-world"
+projection_domains = ["authoritative", "client"]
+evaluation_policy = "latticeaxiom:nickel-evaluation-policy/r0@1"
+realization_policy = ["data"]
+nickel_profile_entry = "profiles/play.ncl"
+
+[roots.terrenia]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[roots."@latticeaxiom/settings"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[roots."@latticeaxiom/input"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[roots."@latticeaxiom/settings-ui"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[roots."@latticeaxiom/observability"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[roots."@latticeaxiom/inspect"]
+version = "=0.1.0"
+realization = { mode = "auto" }
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/settings"
+path = "packages/latticeaxiom/settings"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/input"
+path = "packages/latticeaxiom/input"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/settings-ui"
+path = "packages/latticeaxiom/settings-ui"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/observability"
+path = "packages/latticeaxiom/observability"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/inspect"
+path = "packages/latticeaxiom/inspect"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/front-end"
+path = "packages/latticeaxiom/front-end"
+
+[[sources]]
+kind = "path"
+package = "@latticeaxiom/world-library"
+path = "packages/latticeaxiom/world-library"
+
+[[sources]]
+kind = "path"
+package = "terrenia"
+path = "packages/terrenia/main"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/blocks"
+path = "packages/terrenia/blocks"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/worldgen"
+path = "packages/terrenia/worldgen"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/gameplay"
+path = "packages/terrenia/gameplay"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/tools"
+path = "packages/terrenia/tools"
+
+[[sources]]
+kind = "path"
+package = "@terrenia/presentation"
+path = "packages/terrenia/presentation"

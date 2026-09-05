@@ -12,6 +12,7 @@ bevy = { workspace = true, features = ["std"] }
 latticeaxiom-compose.workspace = true
 latticeaxiom-core.workspace = true
 latticeaxiom-launcher.workspace = true
+latticeaxiom-packages.workspace = true
 latticeaxiom-registration.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

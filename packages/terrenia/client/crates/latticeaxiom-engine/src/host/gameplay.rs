@@ -134,7 +134,9 @@ impl ProductionGameplay {
             last_reject: None,
             bound_workstations: BTreeSet::new(),
         };
-        session.seed_starter_inventory()?;
+        if mode == GameplayModeV1::Creative {
+            session.seed_starter_inventory()?;
+        }
         Ok(session)
     }
 

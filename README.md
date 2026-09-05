@@ -21,15 +21,20 @@ Use the pinned Rust toolchain in `rust-toolchain.toml`:
 ```powershell
 python tools/repository_check.py
 cargo check --workspace --all-targets --locked
+task play
 task dev:plain
 ```
 
-`task dev:plain` prepares gameplay, shell and independent resource locks, freezes
-the selected native package closure, builds it with Cargo and starts the client.
+`task play` creates survival worlds without a debug starter inventory.
+`task dev:plain` selects the explicit developer/creative profile. Both prepare
+gameplay, shell and independent resource locks, freeze
+the selected native package closure, build it with Cargo and start the client.
 `task native:prepare` verifies the frozen source graph without compiling binaries;
 `task native:build PRODUCT=products/terrenia.toml` selects the release build.
 Runtime worlds and caches are local, ignored data. Rebuild delivery and outstanding
 acceptance gates are recorded in [REBUILD_PROGRESS.md](REBUILD_PROGRESS.md).
+Worlds retain their original verified gameplay lock in the local catalog when
+the default profile is relocked; changing defaults does not rewrite old worlds.
 
 Package manifests and executable tests define current behavior. Public APIs
 are documented with rustdoc; implementation details are not duplicated into a

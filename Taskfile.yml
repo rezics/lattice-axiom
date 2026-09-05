@@ -40,7 +40,7 @@ tasks:
     deps:
       - task: lock
         vars:
-          BOOTSTRAP: profiles/dev.toml
+          BOOTSTRAP: profiles/play.toml
           LOCK: latticeaxiom.lock
       - lock:shell
       - lock:resources

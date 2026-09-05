@@ -179,3 +179,21 @@ The latest source snapshot (`bf9bbc2336692f42...`) rebuilt successfully in the
 stable materialized build directory after the final lint fixes. Both binary
 hashes and the compiler/Cargo/lock/input receipts are generated locally. Release,
 portable ABI, broad gameplay and optimized streaming gates remain open.
+
+## Survival defaults and original-lock continuation
+
+`task play` now selects `profiles/play.toml`: ordinary survival rules, empty
+initial inventory and no developer working-set overlay. `task dev:plain` retains
+its explicit creative/developer profile. Advanced crafting no longer binds a
+remote workstation from the keyboard; hand crafting remains available.
+
+Lock transactions retain both the previous and new verified lock in the catalog.
+The shell and supervisor select a saved world's archived lock instead of silently
+reinterpreting it with the latest default. The headless physical acceptance
+changes the default from survival to developer mode between close/reopen and
+verifies the original inventory, pose, handoff hash and survival rules. It passed.
+145 composer library tests, eight source/profile conformance tests and all-feature
+Clippy passed. Native acceptance then performed the same default switch across
+two independent supervisor runs: both retained the same world, original lock,
+`survival` mode and an empty inventory. Local evidence is under
+`.temp/qa-survival-state-20260906/`.

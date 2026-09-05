@@ -1003,9 +1003,13 @@ fn is_interactive_client(profile: Res<'_, EngineProfile>) -> bool {
 
 #[cfg(feature = "client")]
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
-fn spawn_production_hud_if_client(commands: Commands<'_, '_>, profile: Res<'_, EngineProfile>) {
+fn spawn_production_hud_if_client(
+    commands: Commands<'_, '_>,
+    profile: Res<'_, EngineProfile>,
+    images: Option<Res<'_, crate::StructurallyValidatedComposeImages>>,
+) {
     if *profile == EngineProfile::Client {
-        hud::spawn_production_hud(commands);
+        hud::spawn_production_hud(commands, images);
     }
 }
 

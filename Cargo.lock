@@ -4193,6 +4193,7 @@ dependencies = [
  "latticeaxiom-compose",
  "latticeaxiom-core",
  "latticeaxiom-launcher",
+ "latticeaxiom-packages",
  "latticeaxiom-registration",
  "serde_json",
  "thiserror 2.0.20",

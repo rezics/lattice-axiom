@@ -167,6 +167,13 @@ pub fn persist_offline_lock(
         registration_semantic_hash,
         runtime_image,
     })?;
+    if lock_path.exists() {
+        latticeaxiom_compose::archive_product_lock(
+            &catalog_root,
+            &reopen_product_lock(&lock_path)?,
+        )?;
+    }
+    latticeaxiom_compose::archive_product_lock(&catalog_root, &lock)?;
     persist_product_lock(&lock_path, &lock, LockActionMode::Offline)?;
 
     let host = ProductLockHostReceipts {

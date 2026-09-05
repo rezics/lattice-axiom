@@ -307,7 +307,17 @@ pub(super) struct ProductionItemBrowserGrid;
 ///
 /// Overlay nodes ignore picking except the inventory grid, which is display-only
 /// in v1 and still passes focus through to close-on-key handling.
-pub(super) fn spawn_production_hud(mut commands: Commands<'_, '_>) {
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn spawn_production_hud(
+    mut commands: Commands<'_, '_>,
+    images: Option<Res<'_, crate::StructurallyValidatedComposeImages>>,
+) {
+    let developer_overlay = images.as_ref().is_some_and(|images| {
+        super::capability_present(
+            &images.graph().capability_providers,
+            super::DEBUG_WORKBENCH_CAPABILITY,
+        )
+    });
     commands
         .spawn((
             Name::new("Production HUD"),
@@ -326,7 +336,9 @@ pub(super) fn spawn_production_hud(mut commands: Commands<'_, '_>) {
             spawn_crosshair(hud);
             spawn_inspect_readout(hud);
             spawn_status_readout(hud);
-            spawn_working_set_readout(hud);
+            if developer_overlay {
+                spawn_working_set_readout(hud);
+            }
             spawn_hotbar(hud);
             spawn_inventory_overlay(hud);
             spawn_workbench_overlay(hud);
@@ -779,7 +791,7 @@ fn spawn_item_browser(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_
                 });
             browser.spawn((
                 ProductionItemBrowserModeHint,
-                Text::new("Creative: click an item to fill the selected hotbar slot"),
+                Text::new("Items follow this world's gameplay rules"),
                 ui_text_font(11.0),
                 TextColor(Color::srgb(0.63, 0.68, 0.61)),
                 Node {
@@ -1009,11 +1021,13 @@ fn spawn_item_slot<M: Component>(
 /// Does not consume [`PlayerActionV1::PlaceBlock`].
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 pub(super) fn activate_workbench_from_target(
-    pause: Res<'_, ProductionSessionPause>,
+    mut pause: ResMut<'_, ProductionSessionPause>,
     ownership: Res<'_, ClientInputOwnership>,
     action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
     spine: Res<'_, ProductionSpine>,
     mut surfaces: ResMut<'_, ProductionHudSurfaces>,
+    mut router: ResMut<'_, super::ProductionSurfaceRouter>,
+    mut suppressed: ResMut<'_, latticeaxiom_player::GameplaySuppressed>,
 ) {
     if pause.is_paused() || !ownership.owns_gameplay_input() {
         return;
@@ -1034,7 +1048,9 @@ pub(super) fn activate_workbench_from_target(
         return;
     }
     bind_host_workbench(&spine);
-    surfaces.set_workbench_open(true);
+    if let Ok(receipt) = router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::OpenWorkbench) {
+        super::surface::sync_derived_state(&receipt, &mut pause, &mut surfaces, &mut suppressed);
+    }
 }
 
 fn bind_host_workbench(spine: &ProductionSpine) {

@@ -31,6 +31,8 @@ def main() -> None:
     parser.add_argument('--binary', type=Path, required=True, help='built development latticeaxiom-play executable')
     parser.add_argument('--runtime', type=Path, required=True, help='prepared locks and catalog/CAS')
     parser.add_argument('--output', type=Path, required=True, help='new, non-existing QA output directory')
+    parser.add_argument('--replacement-lock', type=Path, help='replace the default after the first session; its original archive/CAS must be in runtime')
+    parser.add_argument('--expected-mode', choices=('survival', 'creative'))
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     runtime = args.runtime.resolve(strict=True)
@@ -51,7 +53,10 @@ def main() -> None:
         rust_lib = subprocess.check_output(['rustc', '--print', 'target-libdir'], text=True).strip()
         environment['PATH'] = os.pathsep.join((rust_lib, str(binary.parent / 'deps'), environment['PATH']))
     previous = None
+    previous_state = None
     for number in (1, 2):
+        if number == 2 and args.replacement_lock:
+            shutil.copy2(args.replacement_lock.resolve(strict=True), output / 'latticeaxiom.lock')
         with (output / f'lifecycle-{number}.log').open('w', encoding='utf-8') as log:
             process = subprocess.Popen([str(binary)], cwd=output, env=environment, stdout=log,
                                        stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
@@ -71,6 +76,16 @@ def main() -> None:
         report = json.loads(report_path.read_text(encoding='utf-8'))
         shutil.copy2(report_path, output / f'lifecycle-{number}.json')
         previous = verify_report(report, previous)
+        state_path = output / 'lifecycle-world-state.json'
+        state = json.loads(state_path.read_text(encoding='utf-8'))
+        shutil.copy2(state_path, output / f'lifecycle-world-state-{number}.json')
+        if args.expected_mode and state['mode'] != args.expected_mode:
+            raise RuntimeError(f'world mode differs from expected {args.expected_mode}: {state}')
+        if previous_state and (state['world'], state['lock'], state['mode']) != (previous_state['world'], previous_state['lock'], previous_state['mode']):
+            raise RuntimeError('Continue changed the original world identity, lock or rules')
+        if number == 1 and args.expected_mode == 'survival' and state['inventory_items'] != 0:
+            raise RuntimeError('new survival world contains an unearned starter inventory')
+        previous_state = state
         if (output / 'run/launcher').exists():
             raise RuntimeError('completed launcher control state was not retired')
     print(f'Two native sessions passed; evidence: {output}')

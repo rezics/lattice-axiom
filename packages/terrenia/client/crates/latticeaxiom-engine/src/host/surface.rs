@@ -99,9 +99,24 @@ pub(super) fn apply_surface_actions(
             action,
             gameplay_pause_started,
         );
-        let Some(command) = command else {
+        let Some(mut command) = command else {
             continue;
         };
+        if command == SurfaceCommandV1::OpenWorkbench {
+            let creative =
+                spine.gameplay_mode() == Some(latticeaxiom_gameplay::GameplayModeV1::Creative);
+            let aimed_workbench = spine.current_target().is_some_and(|target| {
+                spine
+                    .block_workstation(&target.block_id)
+                    .is_some_and(|workstation| {
+                        workstation.as_str() == "latticeaxiom:workstation/crafting@1"
+                    })
+            });
+            if !creative && !aimed_workbench {
+                // Hand crafting remains available without granting a remote station.
+                command = SurfaceCommandV1::ToggleInventory;
+            }
+        }
         if let Ok(receipt) = router.apply(&command) {
             if receipt.route.overlay() == GameOverlayV1::Workbench {
                 let Ok(workstation) = latticeaxiom_gameplay::WorkstationId::parse(
@@ -144,7 +159,7 @@ fn surface_command(
 }
 
 #[cfg(feature = "client")]
-fn sync_derived_state(
+pub(super) fn sync_derived_state(
     receipt: &latticeaxiom_client_ui::GameApplyReceipt,
     pause: &mut ProductionSessionPause,
     surfaces: &mut ProductionHudSurfaces,

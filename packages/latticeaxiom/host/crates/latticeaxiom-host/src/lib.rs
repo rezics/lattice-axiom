@@ -1,5 +1,8 @@
 //! Receipt verification and runtime binding before Bevy host construction.
 
+mod lock_library;
+pub use lock_library::{FrozenImageLoadError, load_archived_product_images};
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,

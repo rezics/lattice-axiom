@@ -405,6 +405,10 @@ pub fn lock_workspace(request: &LockRequest) -> Result<(LockV1, CliLockReport), 
     let selected = select_closure(&bootstrap, &packed)?;
     let realized = realize_selected_packages(request, &bootstrap, &selected, &catalog_root)?;
     let lock = seal_path_lock(request, &bootstrap, &selected, &realized)?;
+    if lock_path.exists() {
+        crate::archive_product_lock(&catalog_root, &crate::reopen_product_lock(&lock_path)?)?;
+    }
+    crate::archive_product_lock(&catalog_root, &lock)?;
     persist_product_lock(&lock_path, &lock, LockActionMode::Offline)?;
     let reopened = verify_lock_at(&lock_path, &catalog_root)?;
     Ok((

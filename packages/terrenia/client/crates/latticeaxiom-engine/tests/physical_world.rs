@@ -55,7 +55,7 @@ fn disk_world_reopens_after_the_original_engine_and_store_are_dropped() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../..");
     let directory = tempfile::tempdir().expect("isolated acceptance workspace");
     let root = directory.path();
-    prepare(&workspace, root, "profiles/dev.toml", "latticeaxiom.lock");
+    prepare(&workspace, root, "profiles/play.toml", "latticeaxiom.lock");
     prepare(&workspace, root, "profiles/shell.toml", "shell.lock");
     let game =
         load_lock_verified_images_from(root, &root.join("latticeaxiom.lock")).expect("game lock");
@@ -77,6 +77,18 @@ fn disk_world_reopens_after_the_original_engine_and_store_are_dropped() {
         .play_headless(world, 2, Duration::from_secs_f64(1.0 / 60.0))
         .expect("named world");
     let spine = instance.app().world().resource::<ProductionSpine>().clone();
+    assert_eq!(
+        spine.gameplay_mode(),
+        Some(latticeaxiom_gameplay::GameplayModeV1::Survival)
+    );
+    assert!(
+        spine
+            .inventory_view()
+            .expect("new player inventory")
+            .slots()
+            .iter()
+            .all(Option::is_none)
+    );
     let item: ItemId = "terrenia:item/copper-ore".parse().expect("item identity");
     let stack = ItemStackV1::plain(item.clone(), 7).expect("test stack");
     spine
@@ -94,16 +106,42 @@ fn disk_world_reopens_after_the_original_engine_and_store_are_dropped() {
     disk.publish(&storage, &entry)
         .expect("physical Immediate commit");
     drop((spine, instance, start, writer, storage, disk));
+    // Changing the default product must not reinterpret an existing world's rules.
+    prepare(&workspace, root, "profiles/dev.toml", "latticeaxiom.lock");
+    let replacement_game = load_lock_verified_images_from(root, &root.join("latticeaxiom.lock"))
+        .expect("replacement default game");
+    assert_ne!(
+        replacement_game.product_lock_hash(),
+        game.product_lock_hash()
+    );
     let reopened_disk = DiskWorldStore::open(&path).expect("independent physical reopen");
     let entries = reopened_disk.entries().expect("persisted catalog");
     assert_eq!(entries[0].world, world);
     assert!(entries[0].durable_revision > 0);
-    let mut reopened = ProductionMemoryStart::from_disk_images(&shell, game, reopened_disk)
-        .expect("restored library");
+    let mut reopened =
+        ProductionMemoryStart::from_disk_images(&shell, replacement_game, reopened_disk)
+            .expect("restored library")
+            .with_frozen_lock_catalog(root.join("catalog"))
+            .expect("original game lock library");
+    let handoff = reopened
+        .launch_handoff_for_ready_exact(
+            world,
+            3,
+            latticeaxiom_launcher::SettingTransactionRevision::new(0),
+        )
+        .expect("shell selects the original world closure");
+    assert_eq!(
+        handoff.intent.world_lock_hash(),
+        Some(game.product_lock_hash())
+    );
     let host = reopened
         .play_reopened_headless(world, 3, Duration::from_secs_f64(1.0 / 60.0))
         .expect("restore persisted world");
     let restored = host.app().world().resource::<ProductionSpine>();
+    assert_eq!(
+        restored.gameplay_mode(),
+        Some(latticeaxiom_gameplay::GameplayModeV1::Survival)
+    );
     assert_eq!(restored.world_id(), Some(world));
     assert_eq!(
         restored

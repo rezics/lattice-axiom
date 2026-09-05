@@ -244,7 +244,8 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
             })?;
     let (mut instance, _proof) = if selects_shell {
         let game = load_lock_verified_images(workspace)?;
-        let start = ProductionMemoryStart::from_disk_images(&images, game, disk)?;
+        let start = ProductionMemoryStart::from_disk_images(&images, game, disk)?
+            .with_frozen_lock_catalog(workspace.join("catalog"))?;
         EngineInstance::new_client_shell_with_start(
             images,
             lease,

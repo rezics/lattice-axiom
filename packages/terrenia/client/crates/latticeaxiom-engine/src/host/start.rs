@@ -130,6 +130,7 @@ pub struct ProductionMemoryStart {
     disk: Option<latticeaxiom_world_db::DiskWorldStore>,
     saved_worlds: BTreeMap<WorldId, latticeaxiom_world_db::DiskWorldEntryV1>,
     shell_lock_hash: Option<CanonicalHash>,
+    frozen_lock_catalog: Option<std::path::PathBuf>,
 }
 
 impl ProductionMemoryStart {
@@ -145,6 +146,7 @@ impl ProductionMemoryStart {
             disk: None,
             saved_worlds: BTreeMap::new(),
             shell_lock_hash: None,
+            frozen_lock_catalog: None,
         }
     }
 
@@ -169,6 +171,51 @@ impl ProductionMemoryStart {
         }
         start.disk = Some(disk);
         Ok(start)
+    }
+
+    /// Makes archived gameplay locks available to existing worlds without loading voxels.
+    ///
+    /// # Errors
+    /// Returns a catalog projection error if an existing row cannot be refreshed.
+    pub fn with_frozen_lock_catalog(
+        mut self,
+        catalog: std::path::PathBuf,
+    ) -> Result<Self, ProductionMemoryStartError> {
+        for entry in self.saved_worlds.values() {
+            let path = latticeaxiom_compose::archived_product_lock_path(&catalog, entry.game_lock);
+            if latticeaxiom_compose::reopen_product_lock(path)
+                .is_ok_and(|lock| lock.product_lock_hash == entry.game_lock)
+            {
+                self.flow
+                    .replace_record(super::persistent::catalog_record(entry, entry.game_lock)?)?;
+            }
+        }
+        self.frozen_lock_catalog = Some(catalog);
+        Ok(self)
+    }
+
+    fn world_game_lock(&self, world: WorldId) -> CanonicalHash {
+        self.saved_worlds
+            .get(&world)
+            .map_or(self.images.product_lock_hash(), |entry| entry.game_lock)
+    }
+
+    fn images_for_world(
+        &self,
+        world: WorldId,
+    ) -> Result<LockVerifiedComposeImages, ProductionMemoryStartError> {
+        let hash = self.world_game_lock(world);
+        if hash == self.images.product_lock_hash() {
+            return Ok(self.images.clone());
+        }
+        let catalog = self
+            .frozen_lock_catalog
+            .as_ref()
+            .ok_or(ProductionMemoryStartError::SavedWorldLockMismatch { world })?;
+        latticeaxiom_host::load_archived_product_images(catalog, hash, self.images.target())
+            .map_err(|error| ProductionMemoryStartError::FrozenGameLock {
+                reason: error.to_string(),
+            })
     }
 
     /// Shares a deterministic world store used to bind create plans from preflight.
@@ -258,9 +305,8 @@ impl ProductionMemoryStart {
                 .saved_worlds
                 .get(&world_id)
                 .ok_or(WorldShellError::MissingLiveWorld)?;
-            if entry.game_lock != self.images.product_lock_hash() {
-                return Err(ProductionMemoryStartError::SavedWorldLockMismatch { world: world_id });
-            }
+            // Verify the exact original lock/CAS only when the user selects the world.
+            let _images = self.images_for_world(entry.world)?;
             let storage = super::persistent::load_disk_world(disk, world_id)?;
             let preflight = storage.preflight(world_id)?;
             let permit = preflight.activation_permit().ok_or(
@@ -278,7 +324,7 @@ impl ProductionMemoryStart {
             record,
             self.shell_lock_hash
                 .unwrap_or(self.images.product_lock_hash()),
-            self.images.product_lock_hash(),
+            self.world_game_lock(world_id),
             now_ms,
             confirmed_setting_transaction_revision,
         )
@@ -471,7 +517,7 @@ impl ProductionMemoryStart {
         self.flow.mark_played(world_id, played_at_ms)?;
         let worlds = ProductionWorldList::new(self.flow.worlds().clone());
         let mut instance = EngineInstance::new_headless_host_from_lock_with_spine(
-            self.images.clone(),
+            self.images_for_world(world_id)?,
             fixed_timestep,
             spine,
         )?;
@@ -820,8 +866,10 @@ impl ProductionMemoryStart {
             confirmed_setting_transaction_revision,
             last_written_world: Some(durable),
             last_durable_world: Some(durable),
-            shell_lock_hash: self.images.product_lock_hash(),
-            world_lock_hash: Some(self.images.product_lock_hash()),
+            shell_lock_hash: self
+                .shell_lock_hash
+                .unwrap_or(self.images.product_lock_hash()),
+            world_lock_hash: Some(self.world_game_lock(world_id)),
             world_open_plan_hash: Some(plan_hash),
             diagnostic_ref: None,
         })?;
@@ -856,7 +904,9 @@ impl ProductionMemoryStart {
             issued_at_ms: now_ms,
             expires_at_ms: now_ms.saturating_add(MAX_LAUNCH_INTENT_LIFETIME_MS),
             target: LaunchTargetV1::Shell,
-            shell_lock_hash: self.images.product_lock_hash(),
+            shell_lock_hash: self
+                .shell_lock_hash
+                .unwrap_or(self.images.product_lock_hash()),
             world_lock_hash: None,
             world_open_plan_hash: None,
             confirmed_setting_transaction_revision,
@@ -873,8 +923,10 @@ impl ProductionMemoryStart {
             confirmed_setting_transaction_revision,
             last_written_world: Some(durable),
             last_durable_world: Some(durable),
-            shell_lock_hash: self.images.product_lock_hash(),
-            world_lock_hash: Some(self.images.product_lock_hash()),
+            shell_lock_hash: self
+                .shell_lock_hash
+                .unwrap_or(self.images.product_lock_hash()),
+            world_lock_hash: Some(self.world_game_lock(world_id)),
             world_open_plan_hash: Some(plan_hash),
             diagnostic_ref: None,
         })?;
@@ -917,23 +969,18 @@ impl ProductionMemoryStart {
             return Ok(spine.clone());
         }
         if let Some(disk) = &self.disk {
-            let entry = self
-                .saved_worlds
-                .get(&world_id)
-                .ok_or(WorldShellError::MissingLiveWorld)?;
-            if entry.game_lock != self.images.product_lock_hash() {
-                return Err(ProductionMemoryStartError::SavedWorldLockMismatch { world: world_id });
+            if !self.saved_worlds.contains_key(&world_id) {
+                return Err(WorldShellError::MissingLiveWorld.into());
             }
             self.set_storage(super::persistent::load_disk_world(disk, world_id)?);
         }
+        let images = self.images_for_world(world_id)?;
         let spine = match &self.storage {
-            Some(storage) => ProductionSpine::materialize_world_from_storage(
-                &self.images,
-                world_id,
-                storage.clone(),
-            )?,
+            Some(storage) => {
+                ProductionSpine::materialize_world_from_storage(&images, world_id, storage.clone())?
+            }
             None => ProductionSpine::materialize_world_with_terrain(
-                &self.images,
+                &images,
                 world_id,
                 self.terrain_configs
                     .get(&world_id)
@@ -1011,6 +1058,12 @@ impl EngineInstance {
 /// Failure to drive the in-memory production start surface.
 #[derive(Debug, Error)]
 pub enum ProductionMemoryStartError {
+    /// A world's archived gameplay closure could not be verified.
+    #[error("saved gameplay lock failed: {reason}")]
+    FrozenGameLock {
+        /// The underlying verification failure.
+        reason: String,
+    },
     /// Physical world publication or catalog read failed.
     #[error(transparent)]
     Disk(#[from] latticeaxiom_world_db::DiskWorldError),

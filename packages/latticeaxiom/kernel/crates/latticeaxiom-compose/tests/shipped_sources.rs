@@ -42,9 +42,10 @@ const MAX_SHIPPED_NAMESPACES: usize = 16;
 const MAX_PACKAGES_PER_NAMESPACE: usize = 64;
 const MAX_WORKSPACE_MEMBERS: usize = 128;
 
-const PROFILE_SOURCES: [(&str, ProfileKind); 4] = [
+const PROFILE_SOURCES: [(&str, ProfileKind); 5] = [
     ("shell.ncl", ProfileKind::ClientShell),
     ("dev.ncl", ProfileKind::ClientWorld),
+    ("play.ncl", ProfileKind::ClientWorld),
     ("headless.ncl", ProfileKind::DedicatedServer),
     ("test.ncl", ProfileKind::HeadlessTest),
 ];
@@ -233,6 +234,11 @@ fn shipped_profiles_bind_whole_root_and_raw_file_receipts_separately() {
         authoritative_by_profile.insert(entry, authoritative);
     }
 
+    assert_eq!(
+        authoritative_by_profile.get("dev.ncl"),
+        authoritative_by_profile.get("play.ncl"),
+        "play and dev share content candidates without sharing debug authority"
+    );
     assert_eq!(
         authoritative_by_profile.get("dev.ncl"),
         authoritative_by_profile.get("headless.ncl"),

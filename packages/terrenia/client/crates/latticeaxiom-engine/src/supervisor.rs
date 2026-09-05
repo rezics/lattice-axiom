@@ -269,7 +269,23 @@ impl ProcessControl for OsProcessControl {
                 LaunchTargetV1::World { world_id } => {
                     let epoch = ProcessEpoch::new(intent.generation().get())
                         .map_err(|_| SpawnFailureV1::PolicyDenied)?;
-                    let lock = self.game_lock.clone();
+                    let expected = intent
+                        .world_lock_hash()
+                        .ok_or(SpawnFailureV1::PolicyDenied)?;
+                    let archived = latticeaxiom_compose::archived_product_lock_path(
+                        &self.workspace.join("catalog"),
+                        expected,
+                    );
+                    let lock = if archived.is_file() {
+                        archived
+                    } else {
+                        self.game_lock.clone()
+                    };
+                    if !latticeaxiom_compose::reopen_product_lock(&lock)
+                        .is_ok_and(|lock| lock.product_lock_hash == expected)
+                    {
+                        return Err(SpawnFailureV1::PolicyDenied);
+                    }
                     self.spawn_role(
                         "world",
                         &lock,
