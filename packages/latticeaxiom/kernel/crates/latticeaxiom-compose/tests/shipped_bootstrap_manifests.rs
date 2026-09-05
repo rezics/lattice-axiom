@@ -44,10 +44,17 @@ fn shipped_bootstrap_and_package_manifests_parse() {
     let package_manifests = shipped_package_manifests(workspace);
     let bootstraps = shipped_bootstraps(workspace);
 
+    assert!(!package_manifests.is_empty(), "expected shipped packages");
+    let mut discovered_manifests = Vec::new();
+    collect_named_files(
+        &workspace.join("packages"),
+        PACKAGE_SOURCE_MANIFEST_FILE_NAME,
+        &mut discovered_manifests,
+    );
+    discovered_manifests.sort();
     assert_eq!(
-        package_manifests.len(),
-        21,
-        "every shipped package.ncl must have a sibling {PACKAGE_SOURCE_MANIFEST_FILE_NAME}"
+        package_manifests, discovered_manifests,
+        "package entries and source manifests must have matching owners"
     );
     assert!(
         !bootstraps.is_empty(),
@@ -241,13 +248,11 @@ fn front_end_colocates_its_rust_source_contract() {
 
     assert_eq!(manifest.name.as_str(), "@latticeaxiom/front-end");
     for expected in [
-        "Cargo.toml",
+        "crates",
         "README.md",
         "data",
         "latticeaxiom-package.toml",
         "package.ncl",
-        "src",
-        "tests",
     ] {
         assert!(
             manifest
@@ -263,7 +268,7 @@ fn front_end_colocates_its_rust_source_contract() {
         );
     }
 
-    let cargo_path = package_root.join("Cargo.toml");
+    let cargo_path = package_root.join("crates/latticeaxiom-start-ui/Cargo.toml");
     let cargo_text = read_manifest(&cargo_path);
     let cargo: toml::Value = toml::from_str(&cargo_text).unwrap_or_else(|error| {
         panic!("{} must parse as Cargo TOML: {error}", cargo_path.display())
@@ -311,13 +316,11 @@ fn input_colocates_its_rust_and_data_source_contract() {
 
     assert_eq!(manifest.name.as_str(), "@latticeaxiom/input");
     for expected in [
-        "Cargo.toml",
+        "crates",
         "README.md",
         "data",
         "latticeaxiom-package.toml",
         "package.ncl",
-        "src",
-        "tests",
     ] {
         assert!(
             manifest
@@ -333,7 +336,7 @@ fn input_colocates_its_rust_and_data_source_contract() {
         );
     }
 
-    let cargo_path = package_root.join("Cargo.toml");
+    let cargo_path = package_root.join("crates/latticeaxiom-input/Cargo.toml");
     let cargo_text = read_manifest(&cargo_path);
     let cargo: toml::Value = toml::from_str(&cargo_text).unwrap_or_else(|error| {
         panic!("{} must parse as Cargo TOML: {error}", cargo_path.display())
@@ -374,13 +377,11 @@ fn settings_ui_colocates_its_rust_and_data_source_contract() {
 
     assert_eq!(manifest.name.as_str(), "@latticeaxiom/settings-ui");
     for expected in [
-        "Cargo.toml",
+        "crates",
         "README.md",
         "data",
         "latticeaxiom-package.toml",
         "package.ncl",
-        "src",
-        "tests",
     ] {
         assert!(
             manifest
@@ -396,7 +397,7 @@ fn settings_ui_colocates_its_rust_and_data_source_contract() {
         );
     }
 
-    let cargo_path = package_root.join("Cargo.toml");
+    let cargo_path = package_root.join("crates/latticeaxiom-settings-ui/Cargo.toml");
     let cargo_text = read_manifest(&cargo_path);
     let cargo: toml::Value = toml::from_str(&cargo_text).unwrap_or_else(|error| {
         panic!("{} must parse as Cargo TOML: {error}", cargo_path.display())
@@ -427,7 +428,7 @@ fn settings_ui_colocates_its_rust_and_data_source_contract() {
 }
 
 #[test]
-fn dual_gameplay_colocates_code_but_ships_only_frozen_data() {
+fn dual_gameplay_declares_separate_data_and_native_realizations() {
     let workspace = Path::new(WORKSPACE_ROOT);
     let package_root = workspace.join("packages/example/dual-gameplay");
     let manifest_path = package_root.join(PACKAGE_SOURCE_MANIFEST_FILE_NAME);
@@ -440,17 +441,13 @@ fn dual_gameplay_colocates_code_but_ships_only_frozen_data() {
         });
 
     assert_eq!(manifest.name.as_str(), "@example/dual-gameplay");
-    assert_eq!(manifest.trust, TrustClass::DataOnly);
-    assert_eq!(
-        manifest.realizations.len(),
-        1,
-        "the shipped fixture must not claim unrealizable native alternatives"
-    );
+    assert_eq!(manifest.trust, TrustClass::TrustedNative);
+    assert_eq!(manifest.realizations.len(), 2);
     let realization = manifest
         .realizations
         .values()
-        .next()
-        .expect("the shipped fixture has exactly one realization");
+        .find(|realization| realization.kind == RealizationKind::Data)
+        .expect("the shipped fixture offers a data-only realization");
     assert_eq!(realization.id.as_str(), "data");
     assert_eq!(realization.kind, RealizationKind::Data);
     assert_eq!(realization.trust, TrustClass::DataOnly);
@@ -458,23 +455,31 @@ fn dual_gameplay_colocates_code_but_ships_only_frozen_data() {
     assert!(realization.interfaces.is_empty());
     assert!(realization.required_features.is_empty());
     match &realization.artifact {
-        ArtifactIntent::DataRoot { path } => assert_eq!(path.as_str(), "tests/fixtures"),
-        ArtifactIntent::SourceBuild => panic!(
-            "the shipped fixture cannot claim SourceBuild before lock activation can consume it"
-        ),
+        ArtifactIntent::DataRoot { path } => {
+            assert_eq!(
+                path.as_str(),
+                "crates/latticeaxiom-dual-fixture/tests/fixtures"
+            );
+        }
+        ArtifactIntent::SourceBuild => panic!("data realization must not invoke a source build"),
         artifact @ ArtifactIntent::LocalPrebuilt { .. } => {
             panic!("the shipped fixture must use its frozen data root, got {artifact:?}")
         }
     }
 
+    let native = manifest
+        .realizations
+        .values()
+        .find(|realization| realization.kind == RealizationKind::NativeStatic)
+        .expect("the shipped fixture offers a native-static realization");
+    assert_eq!(native.trust, TrustClass::TrustedNative);
+    assert!(matches!(native.artifact, ArtifactIntent::SourceBuild));
+
     for expected in [
-        "Cargo.toml",
+        "crates",
         "README.md",
-        "benches",
         "latticeaxiom-package.toml",
         "package.ncl",
-        "src",
-        "tests",
     ] {
         assert!(
             manifest
@@ -490,7 +495,7 @@ fn dual_gameplay_colocates_code_but_ships_only_frozen_data() {
         );
     }
 
-    let cargo_path = package_root.join("Cargo.toml");
+    let cargo_path = package_root.join("crates/latticeaxiom-dual-fixture/Cargo.toml");
     let cargo_text = read_manifest(&cargo_path);
     let cargo: toml::Value = toml::from_str(&cargo_text).unwrap_or_else(|error| {
         panic!("{} must parse as Cargo TOML: {error}", cargo_path.display())
