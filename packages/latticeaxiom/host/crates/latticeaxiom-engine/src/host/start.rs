@@ -1,4 +1,4 @@
-//! In-memory start-ui create/list/pause/save/exit/continue for the production host.
+//! World-library create/list/pause/save/exit/continue for the production host.
 //!
 //! Worlds published here live in [`crate::MemoryTransactionKernel`] as the
 //! session cache. Pause opens the start-ui overlay and does not mutate the
@@ -111,14 +111,15 @@ impl ProductionWorldList {
     }
 }
 
-/// Production-client create/list/continue over an in-memory world list.
+/// Production-client create/list/continue over a metadata-only world list.
 ///
 /// Each created world materializes a [`ProductionSpine`] on first play. The
 /// spine and list stay in process memory so Continue observes the same
 /// [`WorldId`]. An optional shared [`DeterministicWorldStorage`] fills
 /// [`latticeaxiom_world_catalog::WorldOpenPlan::activation_binding`] from
-/// storage preflight; create still publishes the identity to the in-memory
-/// list. When storage is absent, create stays memory-only.
+/// storage preflight. [`Self::from_disk_images`] additionally restores the
+/// catalog and publishes new worlds physically before showing them in the list.
+/// When storage is absent, the explicit memory fixture stays memory-only.
 #[derive(Debug)]
 pub struct ProductionMemoryStart {
     images: LockVerifiedComposeImages,
@@ -126,6 +127,9 @@ pub struct ProductionMemoryStart {
     spines: BTreeMap<WorldId, ProductionSpine>,
     terrain_configs: BTreeMap<WorldId, TerrainConfigV2>,
     storage: Option<DeterministicWorldStorage>,
+    disk: Option<latticeaxiom_world_db::DiskWorldStore>,
+    saved_worlds: BTreeMap<WorldId, latticeaxiom_world_db::DiskWorldEntryV1>,
+    shell_lock_hash: Option<CanonicalHash>,
 }
 
 impl ProductionMemoryStart {
@@ -138,7 +142,33 @@ impl ProductionMemoryStart {
             spines: BTreeMap::new(),
             terrain_configs: BTreeMap::new(),
             storage: None,
+            disk: None,
+            saved_worlds: BTreeMap::new(),
+            shell_lock_hash: None,
         }
+    }
+
+    /// Opens a metadata-only disk library while keeping shell and gameplay locks distinct.
+    ///
+    /// # Errors
+    /// Returns [`ProductionMemoryStartError`] for invalid locks or saved catalog records.
+    pub fn from_disk_images(
+        shell: &LockVerifiedComposeImages,
+        game: LockVerifiedComposeImages,
+        disk: latticeaxiom_world_db::DiskWorldStore,
+    ) -> Result<Self, ProductionMemoryStartError> {
+        let graph = shell_graph_from_lock(shell.images().graph())?;
+        let mut start = Self::new(game, graph);
+        start.shell_lock_hash = Some(shell.product_lock_hash());
+        start.install_worldgen_profiles()?;
+        for entry in disk.entries()? {
+            let record =
+                super::persistent::catalog_record(&entry, start.images.product_lock_hash())?;
+            start.flow.restore_record(record)?;
+            start.saved_worlds.insert(entry.world, entry);
+        }
+        start.disk = Some(disk);
+        Ok(start)
     }
 
     /// Shares a deterministic world store used to bind create plans from preflight.
@@ -218,11 +248,27 @@ impl ProductionMemoryStart {
     /// Returns [`ProductionMemoryStartError`] when the world is absent or is
     /// not exact-ready, or when launcher intent validation fails.
     pub fn launch_handoff_for_ready_exact(
-        &self,
+        &mut self,
         world_id: WorldId,
         now_ms: u64,
         confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<LaunchHandoff, ProductionMemoryStartError> {
+        if let Some(disk) = &self.disk {
+            let entry = self
+                .saved_worlds
+                .get(&world_id)
+                .ok_or(WorldShellError::MissingLiveWorld)?;
+            if entry.game_lock != self.images.product_lock_hash() {
+                return Err(ProductionMemoryStartError::SavedWorldLockMismatch { world: world_id });
+            }
+            let storage = super::persistent::load_disk_world(disk, world_id)?;
+            let preflight = storage.preflight(world_id)?;
+            let permit = preflight.activation_permit().ok_or(
+                ProductionMemoryStartError::StorageActivationUnavailable { world: world_id },
+            )?;
+            self.flow
+                .attach_open_plan(world_id, writable_open_plan(world_id, permit))?;
+        }
         let record = self
             .flow
             .worlds()
@@ -230,7 +276,8 @@ impl ProductionMemoryStart {
             .ok_or(WorldShellError::MissingLiveWorld)?;
         sealed_ready_exact_handoff(
             record,
-            self.images.product_lock_hash(),
+            self.shell_lock_hash
+                .unwrap_or(self.images.product_lock_hash()),
             self.images.product_lock_hash(),
             now_ms,
             confirmed_setting_transaction_revision,
@@ -274,7 +321,18 @@ impl ProductionMemoryStart {
             .graph()
             .roots
             .iter()
-            .next()
+            .find(|name| {
+                self.images
+                    .images()
+                    .graph()
+                    .packages
+                    .get(*name)
+                    .is_some_and(|package| {
+                        package
+                            .domains
+                            .contains(&latticeaxiom_compose::PackageDomain::Authoritative)
+                    })
+            })
             .cloned()
             .ok_or(ProductionMemoryStartError::NoGraphRoot)?;
         let mut intent = QuickCreateIntent::new(
@@ -306,12 +364,13 @@ impl ProductionMemoryStart {
             .with_generation_profile(preset.profile_id_str().parse::<StableId>()?))
     }
 
-    /// Publishes an in-memory world without opening a catalog writer.
+    /// Creates a world and publishes its identity after storage succeeds.
     ///
     /// When shared storage is attached, the world is provisioned and the open
     /// plan's activation binding is filled from storage preflight. The
-    /// [`WorldId`] is still published to the in-memory list. When storage is
-    /// [`None`], create stays memory-only.
+    /// disk-backed constructor also commits the image and catalog atomically
+    /// before publishing the [`WorldId`] to the process-local list. When storage
+    /// is [`None`], create stays memory-only.
     ///
     /// # Errors
     ///
@@ -323,11 +382,34 @@ impl ProductionMemoryStart {
         intent: &QuickCreateIntent,
         now_ms: u64,
     ) -> Result<WorldId, ProductionMemoryStartError> {
+        if self.disk.is_some() {
+            self.set_storage(super::persistent::new_working_store()?);
+        }
         let preset = terrain_preset_for_intent(intent)?;
         let terrain = preset.resolve();
         let world_id = WorldId::new_v4();
         self.provision_created_world(world_id, intent, preset, &terrain)?;
+        if let (Some(disk), Some(storage)) = (&self.disk, &self.storage) {
+            let entry = latticeaxiom_world_db::DiskWorldEntryV1 {
+                world: world_id,
+                display_name: intent.display_name.clone(),
+                created_at_ms: now_ms,
+                last_played_at_ms: now_ms,
+                game_lock: self.images.product_lock_hash(),
+                generation_profile: intent.generation_profile.clone(),
+                metadata_epoch: 1,
+                durable_revision: 0,
+            };
+            disk.publish(storage, &entry)?;
+            self.saved_worlds.insert(world_id, entry);
+        }
         let world_id = self.flow.create(intent, world_id, now_ms)?;
+        if let Some(entry) = self.saved_worlds.get(&world_id) {
+            self.flow.replace_record(super::persistent::catalog_record(
+                entry,
+                self.images.product_lock_hash(),
+            )?)?;
+        }
         self.terrain_configs.insert(world_id, terrain);
         Ok(world_id)
     }
@@ -820,7 +902,7 @@ impl ProductionMemoryStart {
         played_at_ms: u64,
         fixed_timestep: Duration,
     ) -> Result<EngineInstance, ProductionMemoryStartError> {
-        if self.storage.is_none() {
+        if self.storage.is_none() && self.disk.is_none() {
             return Err(ProductionMemoryStartError::StorageRequired);
         }
         self.spines.remove(&world_id);
@@ -833,6 +915,16 @@ impl ProductionMemoryStart {
     ) -> Result<ProductionSpine, ProductionMemoryStartError> {
         if let Some(spine) = self.spines.get(&world_id) {
             return Ok(spine.clone());
+        }
+        if let Some(disk) = &self.disk {
+            let entry = self
+                .saved_worlds
+                .get(&world_id)
+                .ok_or(WorldShellError::MissingLiveWorld)?;
+            if entry.game_lock != self.images.product_lock_hash() {
+                return Err(ProductionMemoryStartError::SavedWorldLockMismatch { world: world_id });
+            }
+            self.set_storage(super::persistent::load_disk_world(disk, world_id)?);
         }
         let spine = match &self.storage {
             Some(storage) => ProductionSpine::materialize_world_from_storage(
@@ -919,6 +1011,15 @@ impl EngineInstance {
 /// Failure to drive the in-memory production start surface.
 #[derive(Debug, Error)]
 pub enum ProductionMemoryStartError {
+    /// Physical world publication or catalog read failed.
+    #[error(transparent)]
+    Disk(#[from] latticeaxiom_world_db::DiskWorldError),
+    /// The current gameplay closure is not the world's frozen closure.
+    #[error("saved world {world} requires its original gameplay lock")]
+    SavedWorldLockMismatch {
+        /// Saved world requiring an exact compatible build.
+        world: WorldId,
+    },
     /// Start-ui semantic flow or session list failed.
     #[error(transparent)]
     Start(#[from] MemoryStartError),
@@ -1124,7 +1225,7 @@ fn set_session_paused(instance: &mut EngineInstance, paused: bool) {
         .insert_resource(ProductionSessionPause::new(paused));
 }
 
-fn writable_open_plan(world_id: WorldId, permit: &ActivationPermitV1) -> WorldOpenPlan {
+pub(super) fn writable_open_plan(world_id: WorldId, permit: &ActivationPermitV1) -> WorldOpenPlan {
     let action = WorldOpenAction::UseFrozenLock;
     WorldOpenPlan {
         world_id,

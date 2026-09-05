@@ -613,7 +613,7 @@ impl ProductionSettingsState {
             match self.draft_chunks() {
                 Ok(_) => {
                     fragments.push(if self.publication == SettingsPublicationState::Confirmed {
-                        "Unsaved changes Â· Apply to save".to_owned()
+                        "Unsaved changes · Apply to save".to_owned()
                     } else {
                         "Unconfirmed changes retained".to_owned()
                     });
@@ -627,9 +627,9 @@ impl ProductionSettingsState {
             fragments.push(diagnostic.clone());
         }
         if fragments.is_empty() {
-            "Select a setting for details Â· Apply saves changes".to_owned()
+            "Select a setting for details · Apply saves changes".to_owned()
         } else {
-            fragments.join(" Â· ")
+            fragments.join(" · ")
         }
     }
 }
@@ -958,11 +958,11 @@ fn spawn_pause_overlay(
             spawn_pause_button(overlay, PauseMenuAction::Resume, "Resume");
             spawn_pause_button(overlay, PauseMenuAction::Settings, "Settings");
             super::settings_view::spawn_settings_page(overlay);
-            spawn_pause_button(overlay, PauseMenuAction::Quit, "Quit Game");
+            spawn_pause_button(overlay, PauseMenuAction::Quit, "Save & Quit");
             overlay.spawn((
                 PauseSettingsHint,
                 Name::new("Pause hint"),
-                Text::new("Esc resumes Â· Settings opens the full catalog"),
+                Text::new("Esc resumes · Settings opens the full catalog"),
                 ui_text_font(16.0),
                 TextColor(style::MUTED),
                 Node {
@@ -1093,7 +1093,14 @@ pub(super) fn toggle_pause(
     ownership: Res<'_, ClientInputOwnership>,
     mut pause: ResMut<'_, ProductionSessionPause>,
     mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
+    persistent: Option<Res<'_, super::persistent::PersistentGameSession>>,
 ) {
+    if persistent
+        .as_ref()
+        .is_some_and(|session| session.shutdown_requested())
+    {
+        return;
+    }
     if *ownership == ClientInputOwnership::Released {
         return;
     }
@@ -1487,7 +1494,14 @@ pub(super) fn pause_menu_activated(
     mut tick_requests: MessageWriter<'_, SimulationTickRateRequest>,
     mut router: Option<ResMut<'_, super::ProductionSurfaceRouter>>,
     mut exits: MessageWriter<'_, AppExit>,
+    persistent: Option<Res<'_, super::persistent::PersistentGameSession>>,
 ) {
+    if persistent
+        .as_ref()
+        .is_some_and(|session| session.shutdown_requested())
+    {
+        return;
+    }
     let Ok(action) = actions.get(activate.entity) else {
         return;
     };
@@ -1538,7 +1552,11 @@ pub(super) fn pause_menu_activated(
                 let _ = router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::RequestSaveQuit);
                 let _ = router.apply(&latticeaxiom_client_ui::SurfaceCommandV1::Confirm);
             }
-            exits.write(AppExit::Success);
+            if let Some(session) = persistent.as_ref() {
+                session.request_save();
+            } else {
+                exits.write(AppExit::Success);
+            }
         }
     }
 }
@@ -1669,7 +1687,7 @@ pub(super) fn sync_pause_menu_page(
                 |settings| settings.status_text(),
             )
         } else {
-            "Esc resumes Â· Settings opens the full catalog".to_owned()
+            "Esc resumes · Settings opens the full catalog".to_owned()
         };
         if text.0 != label {
             *text = Text::new(label);

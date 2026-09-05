@@ -22,9 +22,81 @@ use crate::{
 /// Directory beside `latticeaxiom.lock` that holds the local catalog and CAS.
 const CLIENT_CATALOG_DIRECTORY: &str = "catalog";
 
+#[derive(Clone, Debug, bevy::prelude::Resource)]
+pub(crate) struct ShellExitContext {
+    workspace: PathBuf,
+    shell_lock: latticeaxiom_core::CanonicalHash,
+    handoff: crate::host::ShellHandoffState,
+}
+
+impl ShellExitContext {
+    pub(crate) fn finish(&self, clean: bool) -> Result<(), String> {
+        if std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").is_some()
+            || self.handoff.0.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(());
+        }
+        let Some(root) = std::env::var_os(crate::supervisor::ENV_LAUNCH_ROOT).map(PathBuf::from)
+        else {
+            return Ok(());
+        };
+        let generation = std::env::var(crate::supervisor::ENV_GENERATION)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .and_then(|value| latticeaxiom_launcher::LaunchGeneration::new(value).ok())
+            .unwrap_or(latticeaxiom_launcher::LaunchGeneration::FIRST);
+        let epoch = std::env::var(crate::supervisor::ENV_PROCESS_EPOCH)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .and_then(|value| ProcessEpoch::new(value).ok())
+            .unwrap_or(ProcessEpoch::FIRST);
+        let settings = crate::settings::HostUserSettings::load(self.workspace.join("run/user"))
+            .map_err(|error| error.to_string())?;
+        let report = latticeaxiom_launcher::ChildExitReportV1::seal(
+            latticeaxiom_launcher::ChildExitReportDraftV1 {
+                child_generation: generation,
+                process_epoch: epoch,
+                role: if std::env::var(crate::supervisor::ENV_CHILD_ROLE).as_deref()
+                    == Ok("recovery")
+                {
+                    latticeaxiom_launcher::ChildRoleV1::Recovery
+                } else {
+                    latticeaxiom_launcher::ChildRoleV1::Shell
+                },
+                exit_kind: if clean {
+                    latticeaxiom_launcher::ChildExitKindV1::ShellQuit
+                } else {
+                    latticeaxiom_launcher::ChildExitKindV1::Crash
+                },
+                intent_generation: None,
+                intent_checksum: None,
+                confirmed_setting_transaction_revision:
+                    latticeaxiom_launcher::SettingTransactionRevision::new(
+                        settings.transaction_revision(),
+                    ),
+                last_written_world: None,
+                last_durable_world: None,
+                shell_lock_hash: self.shell_lock,
+                world_lock_hash: None,
+                world_open_plan_hash: None,
+                diagnostic_ref: None,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        crate::supervisor::publish_child_exit(&root, &report, None)
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Failure to boot the production `DefaultPlugins` client from a reopened lock.
 #[derive(Debug, Error)]
 pub enum ProductionClientError {
+    /// Physical world selection, loading or shutdown failed.
+    #[error("world persistence failed: {reason}")]
+    Persistence {
+        /// Actionable persistence diagnostic.
+        reason: String,
+    },
     /// A selected client resource pack failed validation.
     #[error("client resource pack failed: {reason}")]
     ResourcePack {
@@ -158,7 +230,6 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
         .and_then(|value| ProcessEpoch::new(value).ok())
         .unwrap_or(ProcessEpoch::FIRST);
     let lease = claim_fresh_client_app_lease(epoch)?;
-    write_bootstrap_ack(workspace, epoch);
     let settings_root = workspace.join("run").join("user");
     let settings = crate::settings::HostUserSettings::load(&settings_root)?;
     let profile = settings.binding_profile().clone();
@@ -166,11 +237,19 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
     let active_lock = images.product_lock_hash();
     let compiled = crate::input::compile_lock_selected_input(&images, &profile)?;
     let selects_shell = ProductionMemoryStart::lock_graph_selects_shell(images.images().graph())?;
+    let disk =
+        latticeaxiom_world_db::DiskWorldStore::open(&workspace.join("run/worlds/worlds.redb"))
+            .map_err(|error| ProductionClientError::Persistence {
+                reason: error.to_string(),
+            })?;
     let (mut instance, _proof) = if selects_shell {
-        EngineInstance::new_client_shell_from_lock(
+        let game = load_lock_verified_images(workspace)?;
+        let start = ProductionMemoryStart::from_disk_images(&images, game, disk)?;
+        EngineInstance::new_client_shell_with_start(
             images,
             lease,
             latticeaxiom_launcher::SettingTransactionRevision::new(settings.transaction_revision()),
+            start,
         )?
     } else {
         let catalog = settings_catalog.ok_or_else(|| {
@@ -181,13 +260,34 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
         let maps = compiled
             .as_ref()
             .map(latticeaxiom_player::leafwing_maps_from_catalog);
-        let (mut instance, proof) =
-            EngineInstance::new_client_host_from_lock_with_maps(images, lease, maps)?;
+        let (world, entry, storage, shell_lock) =
+            selected_disk_world(workspace, &disk, active_lock)?;
+        let (mut instance, proof) = EngineInstance::new_client_host_from_world(
+            images,
+            lease,
+            maps,
+            world,
+            storage.clone(),
+        )?;
+        crate::host::persistent::install_disk_session(
+            &mut instance,
+            workspace,
+            disk,
+            storage,
+            entry,
+            shell_lock,
+        )?;
         instance.install_user_settings(settings_root, settings, catalog, active_lock)?;
         (instance, proof)
     };
     crate::resource_packs::install_client_resource_packs(&mut instance, workspace)?;
+    if selects_shell {
+        install_shell_exit_context(&mut instance, workspace, active_lock)?;
+    }
     crate::visual_capture::install(&mut instance.app);
+    #[cfg(feature = "development")]
+    crate::lifecycle_qa::install(&mut instance.app, workspace);
+    write_bootstrap_ack(workspace, epoch);
     let role = if selects_shell { "shell" } else { "world" };
     bevy::log::info!(
         target: "latticeaxiom::lifecycle",
@@ -208,7 +308,78 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
         ?exit,
         "client event loop stopped"
     );
+    if exit != bevy::app::AppExit::Success {
+        return Err(ProductionClientError::Persistence {
+            reason:
+                "the client did not finish a clean shutdown; inspect the saved-world recovery state"
+                    .to_owned(),
+        });
+    }
     Ok(())
+}
+
+fn install_shell_exit_context(
+    instance: &mut EngineInstance,
+    workspace: &Path,
+    active_lock: latticeaxiom_core::CanonicalHash,
+) -> Result<(), ProductionClientError> {
+    let handoff = instance
+        .app
+        .world()
+        .get_resource::<crate::host::ShellHandoffState>()
+        .cloned()
+        .ok_or_else(|| ProductionClientError::Persistence {
+            reason: "shell shutdown state is missing".to_owned(),
+        })?;
+    instance.app.insert_resource(ShellExitContext {
+        workspace: workspace.to_owned(),
+        shell_lock: active_lock,
+        handoff,
+    });
+    Ok(())
+}
+
+fn selected_disk_world(
+    workspace: &Path,
+    disk: &latticeaxiom_world_db::DiskWorldStore,
+    active_lock: latticeaxiom_core::CanonicalHash,
+) -> Result<
+    (
+        latticeaxiom_core::WorldId,
+        latticeaxiom_world_db::DiskWorldEntryV1,
+        latticeaxiom_world_db::DeterministicWorldStorage,
+        latticeaxiom_core::CanonicalHash,
+    ),
+    ProductionClientError,
+> {
+    let world = std::env::var(crate::supervisor::ENV_WORLD_ID)
+        .map_err(|_| ProductionClientError::Persistence {
+            reason: "select a saved world through task play before starting a world process"
+                .to_owned(),
+        })?
+        .parse::<latticeaxiom_core::WorldId>()
+        .map_err(|error| ProductionClientError::Persistence {
+            reason: error.to_string(),
+        })?;
+    let entry = disk
+        .entries()
+        .map_err(|error| ProductionClientError::Persistence {
+            reason: error.to_string(),
+        })?
+        .into_iter()
+        .find(|entry| entry.world == world)
+        .ok_or_else(|| ProductionClientError::Persistence {
+            reason: format!("saved world {world} was not found"),
+        })?;
+    if entry.game_lock != active_lock {
+        return Err(ProductionClientError::Persistence {
+            reason: "the saved world requires its original gameplay lock".to_owned(),
+        });
+    }
+    let storage = crate::host::persistent::load_disk_world(disk, world)?;
+    let shell =
+        load_lock_verified_images_from(workspace, &workspace.join("run/shell/latticeaxiom.lock"))?;
+    Ok((world, entry, storage, shell.product_lock_hash()))
 }
 
 fn write_bootstrap_ack(workspace: &Path, epoch: ProcessEpoch) {

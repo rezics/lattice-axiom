@@ -179,6 +179,56 @@ pub struct MemoryStartFlow {
 }
 
 impl MemoryStartFlow {
+    /// Restores a catalog projection without reading voxel payloads or opening a writer.
+    ///
+    /// # Errors
+    /// Returns [`WorldShellError`] if this identity is already in the list.
+    pub fn restore_record(&mut self, record: WorldShellRecord) -> Result<(), WorldShellError> {
+        let world = record.world_id();
+        if self.worlds.records.contains_key(&world) {
+            return Err(WorldShellError::DuplicateWorldId);
+        }
+        self.worlds.records.insert(world, record);
+        self.sync_worlds();
+        Ok(())
+    }
+
+    /// Refreshes a known catalog projection while retaining its world identity.
+    ///
+    /// # Errors
+    /// Returns [`WorldShellError`] when the world is not already listed.
+    pub fn replace_record(&mut self, record: WorldShellRecord) -> Result<(), WorldShellError> {
+        let world = record.world_id();
+        if !self.worlds.records.contains_key(&world) {
+            return Err(WorldShellError::MissingLiveWorld);
+        }
+        self.worlds.records.insert(world, record);
+        self.sync_worlds();
+        Ok(())
+    }
+
+    /// Attaches a fresh read-only preflight to an existing catalog record.
+    ///
+    /// # Errors
+    /// Returns [`WorldShellError`] for a missing or mismatched world.
+    pub fn attach_open_plan(
+        &mut self,
+        world: WorldId,
+        plan: WorldOpenPlan,
+    ) -> Result<(), WorldShellError> {
+        if plan.world_id != world {
+            return Err(WorldShellError::PlanIdentityMismatch);
+        }
+        let record = self
+            .worlds
+            .records
+            .get_mut(&world)
+            .ok_or(WorldShellError::MissingLiveWorld)?;
+        record.open_plan = Some(plan);
+        self.sync_worlds();
+        Ok(())
+    }
+
     /// Builds an empty home shell over a validated package graph.
     #[must_use]
     pub fn new(graph: crate::ClientShellGraph) -> Self {

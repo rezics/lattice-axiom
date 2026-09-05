@@ -48,6 +48,9 @@ use crate::{
 #[allow(dead_code)] // Held on the world until AppExit; persistence is the supervisor gap.
 pub(crate) struct SealedLaunchHandoff(pub LaunchHandoff);
 
+#[derive(Clone, Debug, Default, Resource)]
+pub(crate) struct ShellHandoffState(pub std::sync::Arc<std::sync::atomic::AtomicBool>);
+
 #[derive(Debug, Resource)]
 struct ClientShellSession {
     start: ProductionMemoryStart,
@@ -59,6 +62,7 @@ struct ClientShellSession {
     editing_name: bool,
     select_name: bool,
     composition: String,
+    handoff: ShellHandoffState,
 }
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
@@ -122,8 +126,26 @@ impl EngineInstance {
         lease: FreshClientAppLeaseToken,
         confirmed_setting_transaction_revision: SettingTransactionRevision,
     ) -> Result<(Self, FreshClientAppLeaseProof), crate::ProductionMemoryStartError> {
+        let start = ProductionMemoryStart::from_lock_images(images.clone())?;
+        Self::new_client_shell_with_start(
+            images,
+            lease,
+            confirmed_setting_transaction_revision,
+            start,
+        )
+    }
+
+    /// Builds the shell around a host-supplied persistent world library.
+    ///
+    /// # Errors
+    /// Returns a start error when the client App cannot be created.
+    pub fn new_client_shell_with_start(
+        images: LockVerifiedComposeImages,
+        lease: FreshClientAppLeaseToken,
+        confirmed_setting_transaction_revision: SettingTransactionRevision,
+        mut start: ProductionMemoryStart,
+    ) -> Result<(Self, FreshClientAppLeaseProof), crate::ProductionMemoryStartError> {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
-        let mut start = ProductionMemoryStart::from_lock_images(images.clone())?;
         start.set_now_ms(unix_now_ms());
         if let Ok(intent) = start.quick_create_intent("New World") {
             start.set_draft(intent);
@@ -170,7 +192,9 @@ fn install_client_shell(
         }
     }
     let focused = first_focusable(&start);
-    app.insert_resource(product_lock_hash)
+    let handoff = ShellHandoffState::default();
+    app.insert_resource(handoff.clone())
+        .insert_resource(product_lock_hash)
         .insert_resource(ClearColor(style::CANVAS))
         .insert_resource(ClientShellSession {
             start,
@@ -182,6 +206,7 @@ fn install_client_shell(
             editing_name: false,
             select_name: false,
             composition: String::new(),
+            handoff,
         })
         .add_plugins(ClientShellPlugin);
 }
@@ -768,10 +793,18 @@ fn apply_shell_command(
         }
     }
     session.start.set_now_ms(unix_now_ms());
-    let Ok(effect) = session.start.inject(command) else {
-        return;
+    let effect = match session.start.inject(command) {
+        Ok(effect) => effect,
+        Err(error) => {
+            session.message = Some(error.to_string());
+            session.tree_epoch = session.tree_epoch.saturating_add(1);
+            return;
+        }
     };
     match effect {
+        MemoryStartEffect::Shell(ShellEffect::RequestQuitProduct) => {
+            exits.write(AppExit::Success);
+        }
         MemoryStartEffect::Shell(ShellEffect::RequestExactWorldLaunch(world_id)) => {
             exit_with_ready_exact_handoff(commands, session, exits, world_id);
         }
@@ -822,16 +855,21 @@ fn traverse_focus(session: &mut ClientShellSession, reverse: bool) {
 
 fn exit_with_ready_exact_handoff(
     commands: &mut Commands<'_, '_>,
-    session: &ClientShellSession,
+    session: &mut ClientShellSession,
     exits: &mut MessageWriter<'_, AppExit>,
     world_id: WorldId,
 ) -> bool {
-    let Ok(handoff) = session.start.launch_handoff_for_ready_exact(
+    let handoff = match session.start.launch_handoff_for_ready_exact(
         world_id,
         unix_now_ms(),
         session.confirmed_setting_transaction_revision,
-    ) else {
-        return false;
+    ) {
+        Ok(handoff) => handoff,
+        Err(error) => {
+            session.message = Some(error.to_string());
+            session.tree_epoch = session.tree_epoch.saturating_add(1);
+            return false;
+        }
     };
     if let Some(root) = std::env::var_os(crate::supervisor::ENV_LAUNCH_ROOT) {
         let root = std::path::PathBuf::from(root);
@@ -845,7 +883,7 @@ fn exit_with_ready_exact_handoff(
             .and_then(|value| value.parse().ok())
             .and_then(|value| latticeaxiom_launcher::LaunchGeneration::new(value).ok())
             .unwrap_or(latticeaxiom_launcher::LaunchGeneration::FIRST);
-        if let Ok(report) = latticeaxiom_launcher::ChildExitReportV1::seal(
+        let report = match latticeaxiom_launcher::ChildExitReportV1::seal(
             latticeaxiom_launcher::ChildExitReportDraftV1 {
                 child_generation: generation,
                 process_epoch: epoch,
@@ -859,14 +897,30 @@ fn exit_with_ready_exact_handoff(
                 last_written_world: None,
                 last_durable_world: None,
                 shell_lock_hash: handoff.intent.shell_lock_hash(),
-                world_lock_hash: handoff.intent.world_lock_hash(),
-                world_open_plan_hash: handoff.intent.world_open_plan_hash(),
+                world_lock_hash: None,
+                world_open_plan_hash: None,
                 diagnostic_ref: None,
             },
         ) {
-            let _ = crate::supervisor::publish_child_exit(&root, &report, Some(&handoff.intent));
+            Ok(report) => report,
+            Err(error) => {
+                session.message = Some(error.to_string());
+                session.tree_epoch = session.tree_epoch.saturating_add(1);
+                return false;
+            }
+        };
+        if let Err(error) =
+            crate::supervisor::publish_child_exit(&root, &report, Some(&handoff.intent))
+        {
+            session.message = Some(error.to_string());
+            session.tree_epoch = session.tree_epoch.saturating_add(1);
+            return false;
         }
     }
+    session
+        .handoff
+        .0
+        .store(true, std::sync::atomic::Ordering::Release);
     commands.insert_resource(SealedLaunchHandoff(handoff));
     exits.write(AppExit::Success);
     true

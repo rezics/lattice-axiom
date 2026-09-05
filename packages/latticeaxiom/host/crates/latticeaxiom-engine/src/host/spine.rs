@@ -63,9 +63,11 @@ use latticeaxiom_world_db::{
     AuthoritativeMetadataInputV1, CommitDurabilityV1, DeterministicWorldStorage, PersistedChunkV1,
     StorageDurabilityCapabilityV1, WorldCommitOutcomeV1, WorldCommitRequestV1, WorldStorage,
 };
+#[cfg(feature = "client")]
+use latticeaxiom_worldgen::D4MaterialRoleV1;
 use latticeaxiom_worldgen::{
-    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, D4MaterialRoleV1, FarTerrainTileV1,
-    GenerationPlanV1, HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
+    AuthoredWorldgenBindingsV1, CaveOccupancyArbitrationV1, FarTerrainTileV1, GenerationPlanV1,
+    HydrologyFlowV1, HydrologyOccupancyCandidateV1, HydrologyOccupancyKindV1,
     MAX_BOUNDED_REGION_CHUNKS, SpawnLocationV1, TerrainConfigV2, WorldSeedV1,
 };
 

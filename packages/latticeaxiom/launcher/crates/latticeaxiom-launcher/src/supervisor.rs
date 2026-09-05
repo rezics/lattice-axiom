@@ -277,12 +277,19 @@ impl SupervisorMachine {
                 LaunchFailureCodeV1::RecoveryLoopSuppressed,
             );
         }
+        self.refresh_clock(process);
         match self.state {
             SupervisorStateV1::Idle => self.boot_or_resume(intent_store, exit_store, process),
             SupervisorStateV1::Supervising { .. } => {
                 self.reap_child(intent_store, exit_store, process)
             }
             SupervisorStateV1::ProductExited | SupervisorStateV1::Halted => self.report(),
+        }
+    }
+
+    fn refresh_clock(&mut self, process: &impl ProcessControl) {
+        if let Some(now_ms) = process.current_time_ms() {
+            self.config.now_ms = self.config.now_ms.max(now_ms);
         }
     }
 
@@ -573,7 +580,10 @@ impl SupervisorMachine {
         else {
             return self.report();
         };
-        match process.await_exit(child, MAX_CHILD_SHUTDOWN_WAIT_MS) {
+        let observation = process.await_exit(child, MAX_CHILD_SHUTDOWN_WAIT_MS);
+        self.refresh_clock(process);
+        match observation {
+            ChildObservationV1::Running => self.report(),
             ChildObservationV1::Unknown => self.halt(
                 Some(generation),
                 Some(role_target(role)),
@@ -1261,6 +1271,8 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct FakeProcess {
+        now_ms: Option<u64>,
+        exit_time_ms: Option<u64>,
         reconciliations: VecDeque<PriorChildStatusV1>,
         spawn_failures: VecDeque<Option<SpawnFailureV1>>,
         observations: VecDeque<BootObservationV1>,
@@ -1272,6 +1284,10 @@ mod tests {
     }
 
     impl ProcessControl for FakeProcess {
+        fn current_time_ms(&self) -> Option<u64> {
+            self.now_ms
+        }
+
         fn supervisor_identity(&self) -> ProcessSupervisorIdentityV1 {
             ProcessSupervisorIdentityV1::new(CanonicalHash::digest(b"test process supervisor"))
         }
@@ -1344,6 +1360,9 @@ mod tests {
 
         fn await_exit(&mut self, _process: SpawnedProcess, deadline_ms: u64) -> ChildObservationV1 {
             assert_eq!(deadline_ms, MAX_CHILD_SHUTDOWN_WAIT_MS);
+            if let Some(now_ms) = self.exit_time_ms.take() {
+                self.now_ms = Some(now_ms);
+            }
             self.exits
                 .pop_front()
                 .unwrap_or(ChildObservationV1::TimedOut)
@@ -1392,6 +1411,14 @@ mod tests {
         intent_store: &mut FileLaunchIntentStore,
         world_id: WorldId,
     ) -> LaunchIntentV1 {
+        publish_world_intent_at(intent_store, world_id, 1_000)
+    }
+
+    fn publish_world_intent_at(
+        intent_store: &mut FileLaunchIntentStore,
+        world_id: WorldId,
+        issued_at_ms: u64,
+    ) -> LaunchIntentV1 {
         let mut machine = ClientTransitionMachine::from_active(initial_shell_state())
             .unwrap_or_else(|error| panic!("active state was rejected: {error}"));
         let mut barrier = FixedBarrier(Ok(ShutdownBarrierReceiptV1::complete(
@@ -1403,8 +1430,8 @@ mod tests {
                 LaunchIntentDraftV1 {
                     generation: generation(2),
                     attempt: LaunchAttempt::FIRST,
-                    issued_at_ms: 1_000,
-                    expires_at_ms: 2_000,
+                    issued_at_ms,
+                    expires_at_ms: issued_at_ms + 1_000,
                     target: LaunchTargetV1::World { world_id },
                     shell_lock_hash: CanonicalHash::digest(b"shell"),
                     world_lock_hash: Some(CanonicalHash::digest(b"world")),
@@ -1587,6 +1614,48 @@ mod tests {
             supervisor.state(),
             SupervisorStateV1::Supervising {
                 role: ChildRoleV1::Shell,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn active_interaction_survives_multiple_observation_windows() {
+        let directory = TestDirectory::create();
+        let (mut intents, mut exits) = open_stores(&directory);
+        let mut supervisor = SupervisorMachine::new(config());
+        let mut process = FakeProcess::default();
+        boot_initial_shell(&mut supervisor, &mut intents, &mut exits, &mut process);
+        for _ in 0..3 {
+            process.exits.push_back(ChildObservationV1::Running);
+            let report = supervisor.advance(&mut intents, &mut exits, &mut process);
+            assert!(matches!(report.outcome(), SupervisorOutcomeV1::Running));
+            assert!(report.failures().is_empty());
+        }
+        assert_eq!(process.spawn_count, 1);
+        assert_eq!(process.terminated, 0);
+    }
+
+    #[test]
+    fn handoff_after_long_interaction_uses_the_clock_after_child_exit() {
+        let directory = TestDirectory::create();
+        let (mut intents, mut exits) = open_stores(&directory);
+        let mut supervisor = SupervisorMachine::new(config());
+        let mut process = FakeProcess {
+            now_ms: Some(1_500),
+            ..FakeProcess::default()
+        };
+        boot_initial_shell(&mut supervisor, &mut intents, &mut exits, &mut process);
+        let intent = publish_world_intent_at(&mut intents, WorldId::new_v4(), 100_000);
+        publish_report(&mut exits, &shell_handoff_report(&intent));
+        process.exit_time_ms = Some(100_100);
+        queue_exit_and_ack(&mut process, &intent, epoch(2));
+        let report = supervisor.advance(&mut intents, &mut exits, &mut process);
+        assert!(report.failures().is_empty());
+        assert!(matches!(
+            supervisor.state(),
+            SupervisorStateV1::Supervising {
+                role: ChildRoleV1::World { .. },
                 ..
             }
         ));

@@ -94,6 +94,8 @@ pub enum PriorChildStatusV1 {
 /// Result observed while waiting for a supervised child to exit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChildObservationV1 {
+    /// The exact child is healthy and still running; no shutdown was requested.
+    Running,
     /// The adapter proved the exact child exited.
     Exited {
         /// Platform exit code when one was supplied.
@@ -123,10 +125,20 @@ pub enum RecoveryChildStatusV1 {
 /// launcher adapter.
 ///
 /// The trait does not create a task runtime. Implementations may block only for
-/// the explicit `deadline_ms` passed to [`Self::await_bootstrap`]. Tests use a
+/// the explicit `deadline_ms` passed to [`Self::await_bootstrap`] or
+/// [`Self::await_exit`]. Tests use a
 /// deterministic fake; production code can adapt the operating system's
 /// existing process supervisor.
 pub trait ProcessControl {
+    /// Samples the adapter's wall clock at a protocol validation boundary.
+    ///
+    /// Deterministic adapters may return `None` to retain the configured clock.
+    /// Native adapters refresh this after blocking process observations so a
+    /// long-running session does not validate new intents against startup time.
+    fn current_time_ms(&self) -> Option<u64> {
+        None
+    }
+
     /// Returns the stable identity of the durable process supervisor.
     ///
     /// The identity must remain stable across launcher restarts for the same
@@ -192,5 +204,7 @@ pub trait ProcessControl {
     ///
     /// Implementations must not kill an unknown owner. [`ChildObservationV1::Unknown`]
     /// suppresses another window App. A timeout is not proof of crash.
+    /// Return [`ChildObservationV1::Running`] when normal interaction continues;
+    /// reserve [`ChildObservationV1::TimedOut`] for a requested shutdown deadline.
     fn await_exit(&mut self, process: SpawnedProcess, deadline_ms: u64) -> ChildObservationV1;
 }

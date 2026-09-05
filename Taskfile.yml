@@ -44,6 +44,7 @@ tasks:
       - lock:shell
       - lock:resources
     cmds:
+      - cargo build -p latticeaxiom-engine --bin latticeaxiom-engine --bin latticeaxiom-play
       - cargo run -p latticeaxiom-engine --bin latticeaxiom-play
 
   dev:client:
@@ -71,7 +72,7 @@ tasks:
   logs:web:
     desc: Launch the client with a localhost Logdy Web viewer
     cmds:
-      - python scripts/development/logdy_dev.py run -- cargo run -p latticeaxiom-engine
+      - python scripts/development/logdy_dev.py run -- cargo run -p latticeaxiom-engine --bin latticeaxiom-play
 
   audit:upstream:
     desc: Recheck upstream adapters, compatibility evidence, and advisories
@@ -92,20 +93,24 @@ tasks:
     desc: Relock and launch the client without the Web log viewer
     deps:
       - lock:resources
+      - lock:shell
       - task: lock
         vars:
           BOOTSTRAP: profiles/dev.toml
           LOCK: latticeaxiom.lock
     cmds:
-      - task: dev:client
+      - cargo build -p latticeaxiom-engine --bin latticeaxiom-engine --bin latticeaxiom-play
+      - cargo run -p latticeaxiom-engine --bin latticeaxiom-play
 
   dev:
     desc: Relock and launch the client with a localhost Web log viewer
     deps:
       - lock:resources
+      - lock:shell
       - task: lock
         vars:
           BOOTSTRAP: profiles/dev.toml
           LOCK: latticeaxiom.lock
     cmds:
+      - cargo build -p latticeaxiom-engine --bin latticeaxiom-engine --bin latticeaxiom-play
       - task: logs:web

@@ -3,7 +3,10 @@
 //! The contract oracle does not claim physical durability on its own. This
 //! adapter acknowledges it only after a redb Immediate transaction commits.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use latticeaxiom_core::{CanonicalHash, StableId, WorldId};
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, TableDefinition};
@@ -45,6 +48,12 @@ pub struct DiskWorldEntryV1 {
     pub game_lock: CanonicalHash,
     /// Creation profile supplied by the gameplay package.
     pub generation_profile: Option<StableId>,
+    /// Metadata epoch from the atomically published image.
+    #[serde(default)]
+    pub metadata_epoch: u64,
+    /// Last physically published world revision.
+    #[serde(default)]
+    pub durable_revision: u64,
 }
 
 /// Failure to open, read or atomically publish a physical world store.
@@ -77,7 +86,8 @@ fn database_error(error: impl std::fmt::Display) -> DiskWorldError {
 /// Process-exclusive physical repository with atomic catalog/image publication.
 #[derive(Clone, Debug)]
 pub struct DiskWorldStore {
-    database: Arc<Database>,
+    database: Arc<Mutex<Option<Database>>>,
+    path: PathBuf,
 }
 
 impl DiskWorldStore {
@@ -89,18 +99,38 @@ impl DiskWorldStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let database = Database::create(path).map_err(database_error)?;
-        let mut transaction = database.begin_write().map_err(database_error)?;
-        transaction
-            .set_durability(Durability::Immediate)
-            .map_err(database_error)?;
-        transaction.open_table(CATALOG).map_err(database_error)?;
-        transaction.open_table(IMAGES).map_err(database_error)?;
-        transaction.open_table(PREVIOUS).map_err(database_error)?;
-        transaction.commit().map_err(database_error)?;
+        let existing = path.exists();
+        let database = if existing {
+            Database::open(path)
+        } else {
+            Database::create(path)
+        }
+        .map_err(database_error)?;
+        if !existing {
+            let mut transaction = database.begin_write().map_err(database_error)?;
+            transaction
+                .set_durability(Durability::Immediate)
+                .map_err(database_error)?;
+            transaction.open_table(CATALOG).map_err(database_error)?;
+            transaction.open_table(IMAGES).map_err(database_error)?;
+            transaction.open_table(PREVIOUS).map_err(database_error)?;
+            transaction.commit().map_err(database_error)?;
+        }
         Ok(Self {
-            database: Arc::new(database),
+            database: Arc::new(Mutex::new(Some(database))),
+            path: path.to_owned(),
         })
+    }
+
+    /// Reopens a connection after a failed commit without discarding the in-memory world.
+    ///
+    /// # Errors
+    /// Returns a database error if the connection cannot be safely reopened.
+    pub fn reopen(&self) -> Result<(), DiskWorldError> {
+        let mut guard = self.database.lock().map_err(database_error)?;
+        drop(guard.take());
+        *guard = Some(Database::open(&self.path).map_err(database_error)?);
+        Ok(())
     }
 
     /// Lists catalog metadata without decoding any world's voxel payload.
@@ -108,7 +138,11 @@ impl DiskWorldStore {
     /// # Errors
     /// Returns [`DiskWorldError`] for corrupt catalog records or database errors.
     pub fn entries(&self) -> Result<Vec<DiskWorldEntryV1>, DiskWorldError> {
-        let transaction = self.database.begin_read().map_err(database_error)?;
+        let guard = self.database.lock().map_err(database_error)?;
+        let database = guard
+            .as_ref()
+            .ok_or_else(|| database_error("database must be reopened"))?;
+        let transaction = database.begin_read().map_err(database_error)?;
         let table = transaction.open_table(CATALOG).map_err(database_error)?;
         table
             .iter()
@@ -125,7 +159,11 @@ impl DiskWorldStore {
     /// # Errors
     /// Returns [`DiskWorldError`] when the world is absent or its envelope is invalid.
     pub fn load(&self, world: WorldId) -> Result<DurableWorldImageV1, DiskWorldError> {
-        let transaction = self.database.begin_read().map_err(database_error)?;
+        let guard = self.database.lock().map_err(database_error)?;
+        let database = guard
+            .as_ref()
+            .ok_or_else(|| database_error("database must be reopened"))?;
+        let transaction = database.begin_read().map_err(database_error)?;
         let table = transaction.open_table(IMAGES).map_err(database_error)?;
         let key = world.to_string();
         let value = table
@@ -158,9 +196,17 @@ impl DiskWorldStore {
             return Err(DiskWorldError::Identity);
         }
         let encoded = postcard::to_allocvec(&image).map_err(database_error)?;
-        let metadata = serde_json::to_vec(entry)?;
+        let root = crate::durable::DurableRootImageV1::decode(&image.bytes, image.digest)?;
+        let mut published = entry.clone();
+        published.metadata_epoch = root.world().metadata_epoch().get();
+        published.durable_revision = root.world().frontier().durable().get();
+        let metadata = serde_json::to_vec(&published)?;
         let key = entry.world.to_string();
-        let mut transaction = self.database.begin_write().map_err(database_error)?;
+        let guard = self.database.lock().map_err(database_error)?;
+        let database = guard
+            .as_ref()
+            .ok_or_else(|| database_error("database must be reopened"))?;
+        let mut transaction = database.begin_write().map_err(database_error)?;
         transaction
             .set_durability(Durability::Immediate)
             .map_err(database_error)?;
@@ -209,6 +255,8 @@ mod tests {
             last_played_at_ms: 2,
             game_lock: CanonicalHash::digest(b"world-lock"),
             generation_profile: None,
+            metadata_epoch: 1,
+            durable_revision: 0,
         };
         {
             let disk = DiskWorldStore::open(&path).expect("physical repository");
@@ -226,7 +274,12 @@ mod tests {
         let path = directory.path().join("worlds.redb");
         let disk = DiskWorldStore::open(&path).expect("repository");
         {
-            let transaction = disk.database.begin_write().expect("transaction");
+            let guard = disk.database.lock().expect("database lock");
+            let transaction = guard
+                .as_ref()
+                .expect("open database")
+                .begin_write()
+                .expect("transaction");
             transaction
                 .open_table(CATALOG)
                 .expect("catalog")

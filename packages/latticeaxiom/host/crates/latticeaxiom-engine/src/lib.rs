@@ -26,6 +26,8 @@ mod cursor_capture;
 mod host;
 mod input;
 mod instance;
+#[cfg(feature = "development")]
+mod lifecycle_qa;
 #[cfg(feature = "client")]
 mod observability;
 #[cfg(feature = "client")]

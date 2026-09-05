@@ -24,7 +24,8 @@ the original proposal's asset delivery and future asset-management suggestions.
 - [x] Independently selectable texture/shader resource graph and runtime consumers.
 - [x] Code-designed shell/settings style, native focus, editable name, and initial GPU captures.
 - [ ] Streaming measurements, corrective changes, and acceptance.
-- [ ] Complete gameplay journey and durable re-entry.
+- [x] Physical world creation, save, process replacement and independent reopen.
+- [ ] Complete gameplay journey and compatibility/recovery acceptance.
 - [ ] Documentation consolidation, release checks, and history convergence.
 
 ## UI research decision
@@ -83,14 +84,50 @@ All 18 client-ui and 177 engine library tests passed, including contrast and
 Unicode editing checks. Clippy passed for both crates with all features/targets.
 Screenshots remain ignored under `.temp/qa/`, never committed.
 
-## Newly verified integration gaps still to close
+## Physical world and process lifecycle validation
 
-The interactive shell constructs ProductionMemoryStart without attached storage;
-world IDs from the supervisor are not consumed by the game spine. The current
-world-db durable mode is an in-memory recovery oracle, not filesystem persistence.
-These are production integration gaps despite the component test results and must
-be closed before claiming the full playable proposal complete.
+The interactive shell now opens `DiskWorldStore`, lists only catalog metadata,
+creates a physically published world, and hands off the exact selected world ID.
+The game reads that world's image, flushes player/chunk state through the sealed
+writer, closes its lease, and commits to disk before reporting Save & Quit.
+Errors stay visible for retry; a failed event loop preserves the last good image.
+Shell and gameplay hashes remain distinct. Normal exits retire only completed
+launcher control files; existing worlds are never removed by the acceptance tools.
 
-The optimized old traversal harness failed twice in rustc (access violation,
-then illegal instruction with one build job). Its development smoke succeeded.
-No optimized or reference-host performance certification is claimed.
+Validation completed on 2026-09-05:
+
+- The fresh `physical_world` acceptance composes isolated locks, closes all original
+  engine/store handles, and independently reopens the file with the same world,
+  inventory count and player position. Passed with no ignored cases.
+- The native driver created a world from an empty library and completed two
+  separate shell/world/shell/quit runs. Both remained in the world for 35 seconds,
+  exceeded the supervisor's observation window, and returned three hops with zero
+  failures. The same world advanced from durable revision 1 to 2. Two completed
+  control directories were archived; no manual cleanup occurred between runs.
+- Local logs and JSON reports are ignored under
+  `.temp/qa-native-lifecycle-20260905-2/`; no media or local world data is committed.
+- All 178 engine, 63 launcher, 30 world-db and 7 start-ui library tests passed.
+  Default-feature Clippy passed for all four crates and their targets.
+- The real native run exposed and corrected invalid shell report fields,
+  consumed-intent rollover, startup-time clock reuse, and treating ordinary
+  continued play as a shutdown timeout. Regression tests cover these boundaries.
+
+The optional engine `acceptance` feature enables fresh Nickel fixture composition;
+ordinary client tests do not link the evaluator. No engine dependency was upgraded.
+
+## Remaining acceptance limits
+
+The older `v1_complete_journey` suite contains an ignored D10 test and hard-coded
+gap reports. Its three passing metadata tests are not full gameplay acceptance.
+The physical test deliberately seeds an inventory fixture; it does not prove
+natural gathering, crafting, building, machines, or progression.
+
+The old optimized traversal harness failed inside rustc (access violation, then
+illegal instruction). Further development compiles also faulted inside
+`rustc_driver`. For this functional acceptance only, command-line overrides set
+`profile.dev.package.latticeaxiom-engine.opt-level=0` and, for fresh lock tests,
+`profile.dev.package.nickel-lang-parser.opt-level=0`; dependencies otherwise kept
+their normal profiles. These local overrides are not project profile changes.
+Functional tests and native lifecycle passed, but no optimized or reference-host
+performance certification is claimed. The physical backend still publishes
+complete snapshots and has not passed large-world save/streaming budgets.

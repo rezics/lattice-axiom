@@ -27,12 +27,15 @@ mod layers;
 mod mining_ring;
 #[cfg(feature = "client")]
 mod pause;
+pub(crate) mod persistent;
 mod profile;
 mod session;
 #[cfg(feature = "client")]
 mod settings_view;
 #[cfg(feature = "client")]
 mod shell_view;
+#[cfg(feature = "client")]
+pub(crate) use shell_view::ShellHandoffState;
 mod spine;
 mod start;
 mod stream;
@@ -635,12 +638,48 @@ impl EngineInstance {
         lease: latticeaxiom_launcher::FreshClientAppLeaseToken,
         maps: Option<latticeaxiom_player::CompiledClientInputMaps>,
     ) -> Result<(Self, latticeaxiom_launcher::FreshClientAppLeaseProof), ProductionHostError> {
+        Self::new_client_host_with_source(images, lease, maps, None)
+    }
+
+    /// Reopens a specific disk-backed world in the sole client App.
+    ///
+    /// # Errors
+    /// Returns a host error for invalid stored state or client initialization.
+    #[cfg(feature = "client")]
+    pub fn new_client_host_from_world(
+        images: LockVerifiedComposeImages,
+        lease: latticeaxiom_launcher::FreshClientAppLeaseToken,
+        maps: Option<latticeaxiom_player::CompiledClientInputMaps>,
+        world: latticeaxiom_core::WorldId,
+        storage: latticeaxiom_world_db::DeterministicWorldStorage,
+    ) -> Result<(Self, latticeaxiom_launcher::FreshClientAppLeaseProof), ProductionHostError> {
+        Self::new_client_host_with_source(images, lease, maps, Some((world, storage)))
+    }
+
+    #[cfg(feature = "client")]
+    fn new_client_host_with_source(
+        images: LockVerifiedComposeImages,
+        lease: latticeaxiom_launcher::FreshClientAppLeaseToken,
+        maps: Option<latticeaxiom_player::CompiledClientInputMaps>,
+        source: Option<(
+            latticeaxiom_core::WorldId,
+            latticeaxiom_world_db::DeterministicWorldStorage,
+        )>,
+    ) -> Result<(Self, latticeaxiom_launcher::FreshClientAppLeaseProof), ProductionHostError> {
         let product_lock_hash = VerifiedProductLockHash::new(images.product_lock_hash());
         let inspect_surface = ProductionInspectSurface::from_lock_images(&images);
         let images_for_spine = images.clone();
         let mut setup_error = None;
         let instance = Self::new_client_with_setup(images.into_images(), |app| {
-            match ProductionSpine::materialize(&images_for_spine) {
+            let spine = match source {
+                Some((world, storage)) => ProductionSpine::materialize_world_from_storage(
+                    &images_for_spine,
+                    world,
+                    storage,
+                ),
+                None => ProductionSpine::materialize(&images_for_spine),
+            };
+            match spine {
                 Ok(spine) => install_production_host(
                     app,
                     product_lock_hash,

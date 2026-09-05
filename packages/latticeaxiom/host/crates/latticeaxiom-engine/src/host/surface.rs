@@ -56,6 +56,7 @@ impl ProductionSurfaceRouter {
 
 #[cfg(feature = "client")]
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[allow(clippy::too_many_arguments)] // One transition updates the router and its derived state.
 pub(super) fn apply_surface_actions(
     action_states: Query<'_, '_, &ActionState<LeafwingPlayerAction>, With<LocalPlayerInput>>,
     mut router: ResMut<'_, ProductionSurfaceRouter>,
@@ -64,7 +65,15 @@ pub(super) fn apply_surface_actions(
     mut suppressed: ResMut<'_, GameplaySuppressed>,
     mut frame: ResMut<'_, SurfaceActionFrame>,
     spine: Res<'_, super::ProductionSpine>,
+    persistent: Option<Res<'_, super::persistent::PersistentGameSession>>,
 ) {
+    if persistent
+        .as_ref()
+        .is_some_and(|session| session.shutdown_requested())
+    {
+        frame.clear();
+        return;
+    }
     let gameplay_pause_started = action_states
         .iter()
         .any(|state| state.just_pressed(&LeafwingPlayerAction::Pause));
@@ -196,6 +205,7 @@ pub(super) fn select_hotbar_from_surface(
     let _ = spine.select_hotbar_slot(cycled_hotbar_slot(current, direction));
 }
 
+#[cfg(any(feature = "client", test))]
 const fn cycled_hotbar_slot(current: u16, direction: i8) -> u16 {
     match direction {
         1 => (current + 1) % super::HOTBAR_SLOTS,

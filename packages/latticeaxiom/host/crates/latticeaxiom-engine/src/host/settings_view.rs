@@ -277,7 +277,7 @@ fn spawn_content(
                     content,
                     SettingsPageAction::Binding(binding.action.clone()),
                     &format!(
-                        "{}  Â·  {}",
+                        "{}  ·  {}",
                         setting_display_name(&binding.action),
                         binding.effective_label
                     ),
@@ -671,7 +671,7 @@ fn format_value(value: &Value) -> String {
 
 fn setting_value_label(id: &StableId, value: &Value) -> String {
     format!(
-        "{}  Â·  {}",
+        "{}  ·  {}",
         setting_display_name(id),
         setting_value_text(id, value)
     )
@@ -882,7 +882,7 @@ mod tests {
         let render = render_distance_setting_id();
         assert_eq!(
             setting_value_label(&render, &json!(21)),
-            "Render Distance  Â·  21 chunks radius (672 m)"
+            "Render Distance  ·  21 chunks radius (672 m)"
         );
         let render_help = setting_help_text(&render, &json!(21));
         assert!(render_help.contains("One chunk is 32 m"), "{render_help}");

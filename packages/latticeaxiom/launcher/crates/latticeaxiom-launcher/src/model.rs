@@ -417,7 +417,11 @@ impl LaunchIntentV1 {
         Ok(intent)
     }
 
-    pub(crate) fn authenticate_at_rest(bytes: &[u8]) -> Result<Self, LaunchIntentError> {
+    /// Authenticates a stored predecessor without applying a new launch-time expiry policy.
+    ///
+    /// # Errors
+    /// Returns [`LaunchIntentError`] for malformed, non-canonical or corrupt envelopes.
+    pub fn authenticate_at_rest(bytes: &[u8]) -> Result<Self, LaunchIntentError> {
         if bytes.len() > MAX_LAUNCH_INTENT_BYTES {
             return Err(LaunchIntentError::InputTooLarge {
                 actual_bytes: bytes.len(),

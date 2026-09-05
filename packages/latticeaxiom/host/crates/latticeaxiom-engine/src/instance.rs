@@ -275,7 +275,37 @@ impl EngineInstance {
     /// observes [`bevy::app::PluginsState::Cleaned`] and does not finish again.
     #[cfg(feature = "client")]
     pub fn run(mut self) -> bevy::app::AppExit {
-        self.app.run()
+        let persistent = self
+            .app
+            .world()
+            .get_resource::<crate::host::persistent::PersistentGameSession>()
+            .cloned();
+        let shell = self
+            .app
+            .world()
+            .get_resource::<crate::client::ShellExitContext>()
+            .cloned();
+        let exit = self.app.run();
+        // A failed event loop must not publish an OsClose success receipt or
+        // overwrite the last good snapshot with possibly inconsistent state.
+        let completion = if exit == bevy::app::AppExit::Success {
+            persistent.as_ref().map_or(
+                Ok(()),
+                crate::host::persistent::PersistentGameSession::finish,
+            )
+        } else {
+            Ok(())
+        }
+        .and_then(|()| {
+            shell.as_ref().map_or(Ok(()), |shell| {
+                shell.finish(exit == bevy::app::AppExit::Success)
+            })
+        });
+        if let Err(error) = completion {
+            bevy::log::error!(%error, "client shutdown was not durably completed");
+            return bevy::app::AppExit::Error(std::num::NonZeroU8::MIN);
+        }
+        exit
     }
 
     /// Returns the number of completed fixed-schedule iterations.

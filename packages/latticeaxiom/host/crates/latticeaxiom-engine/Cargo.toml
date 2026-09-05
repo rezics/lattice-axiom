@@ -31,6 +31,13 @@ client = [
 ]
 development = ["client", "bevy/dynamic_linking"]
 performance-evidence = []
+# Opt-in acceptance composes fresh fixture locks; ordinary client tests do not
+# need to link a Nickel compiler into their dependency graph.
+acceptance = ["latticeaxiom-compose/nickel-evaluator"]
+
+[[test]]
+name = "physical_world"
+required-features = ["acceptance"]
 
 [[bin]]
 name = "latticeaxiom-engine"

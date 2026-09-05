@@ -22,6 +22,9 @@ use thiserror::Error;
 
 use crate::client::{ProductionClientError, load_lock_verified_images};
 
+#[cfg(test)]
+mod publication_tests;
+
 /// Environment variable selecting the supervised child role.
 pub const ENV_CHILD_ROLE: &str = "LATTICEAXIOM_CHILD_ROLE";
 /// Environment variable naming the lock the child reopens.
@@ -92,7 +95,34 @@ pub fn run_product_supervisor_from_workspace(
         settings_revision,
     ));
     let mut process = OsProcessControl::new(workspace, &launch_root, &shell_lock, &game_lock)?;
-    Ok(supervisor.run(&mut intent_store, &mut exit_store, &mut process))
+    let report = supervisor.run(&mut intent_store, &mut exit_store, &mut process);
+    drop((intent_store, exit_store, process));
+    retire_completed_run(workspace, &launch_root, &report)?;
+    Ok(report)
+}
+
+fn retire_completed_run(
+    workspace: &Path,
+    root: &Path,
+    report: &SupervisorReportV1,
+) -> Result<(), ProductSupervisorError> {
+    if !matches!(
+        report.outcome(),
+        latticeaxiom_launcher::SupervisorOutcomeV1::ProductExited { .. }
+    ) {
+        return Ok(());
+    }
+    let history = workspace.join("run/launcher-history");
+    fs::create_dir_all(&history).map_err(|source| ProductSupervisorError::Workspace { source })?;
+    let bytes = serde_json::to_vec_pretty(report).map_err(|error| {
+        ProductSupervisorError::Client(ProductionClientError::ChildHandoff {
+            reason: error.to_string(),
+        })
+    })?;
+    fs::write(root.join("supervisor-result.json"), bytes)
+        .map_err(|source| ProductSupervisorError::Workspace { source })?;
+    fs::rename(root, history.join(WorldId::new_v4().to_string()))
+        .map_err(|source| ProductSupervisorError::Workspace { source })
 }
 
 fn load_confirmed_settings_revision(
@@ -208,6 +238,10 @@ impl OsProcessControl {
 }
 
 impl ProcessControl for OsProcessControl {
+    fn current_time_ms(&self) -> Option<u64> {
+        Some(unix_now_ms())
+    }
+
     fn supervisor_identity(&self) -> ProcessSupervisorIdentityV1 {
         self.identity
     }
@@ -245,9 +279,15 @@ impl ProcessControl for OsProcessControl {
                     )
                 }
             },
-            ProcessLaunchRequestV1::RecoveryShell(_) => {
+            ProcessLaunchRequestV1::RecoveryShell(request) => {
                 let lock = self.shell_lock.clone();
-                self.spawn_role("recovery", &lock, ProcessEpoch::FIRST, 1, None)
+                self.spawn_role(
+                    "recovery",
+                    &lock,
+                    ProcessEpoch::FIRST,
+                    request.recovery_generation().get(),
+                    None,
+                )
             }
         }
     }
@@ -325,7 +365,7 @@ impl ProcessControl for OsProcessControl {
                             exit_code: status.code(),
                         };
                     }
-                    Ok(None) if Instant::now() >= deadline => return ChildObservationV1::TimedOut,
+                    Ok(None) if Instant::now() >= deadline => return ChildObservationV1::Running,
                     Ok(None) => thread::sleep(Duration::from_millis(50)),
                     Err(_) => return ChildObservationV1::Unknown,
                 },
@@ -379,9 +419,36 @@ pub fn publish_child_exit(
                 reason: error.to_string(),
             })
         })?;
-        intent_store
-            .publish(&bytes)
-            .map_err(ProductSupervisorError::Store)?;
+        let slot = intent_store.read()?;
+        match slot {
+            latticeaxiom_launcher::IntentSlot::Occupied {
+                disposition,
+                bytes: previous_bytes,
+                blob_hash,
+                ..
+            } if disposition.is_terminal() && previous_bytes != bytes => {
+                let previous =
+                    LaunchIntentV1::authenticate_at_rest(&previous_bytes).map_err(|error| {
+                        ProductSupervisorError::Client(ProductionClientError::ChildHandoff {
+                            reason: error.to_string(),
+                        })
+                    })?;
+                if previous.generation() != report.child_generation()
+                    || previous.shell_lock_hash() != report.shell_lock_hash()
+                {
+                    return Err(ProductSupervisorError::Client(
+                        ProductionClientError::ChildHandoff {
+                            reason: "terminal intent does not belong to the exiting child"
+                                .to_owned(),
+                        },
+                    ));
+                }
+                intent_store.publish_replacing_terminal(blob_hash, &bytes)?;
+            }
+            _ => {
+                intent_store.publish(&bytes)?;
+            }
+        }
     }
     let mut exit_store = FileChildExitStore::open(launch_root)?;
     let bytes = report.canonical_bytes().map_err(|error| {
