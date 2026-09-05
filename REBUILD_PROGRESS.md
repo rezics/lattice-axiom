@@ -26,7 +26,8 @@ the original proposal's asset delivery and future asset-management suggestions.
 - [ ] Streaming measurements, corrective changes, and acceptance.
 - [x] Physical world creation, save, process replacement and independent reopen.
 - [ ] Complete gameplay journey and compatibility/recovery acceptance.
-- [ ] Documentation consolidation, release checks, and history convergence.
+- [x] Both original Git histories converge without restoring the old tree.
+- [ ] Final documentation consolidation and release checks.
 
 ## UI research decision
 
@@ -223,3 +224,13 @@ Local observations are `.temp/performance-optimized-traversal-final.json` and
 physics substep duration, cold-load latency or durable-save latency. The six
 broader headless failures listed above and the complete gameplay/recovery gates
 remain open. No old failed or partial run was relabeled as a pass.
+
+## History convergence
+
+Commit `5953aee` joins the already imported demo history as a second parent.
+Both original baseline commits are verified ancestors. The merge used the
+already rebuilt tree, and its tree ID was checked to be identical before and
+after the join. Historical source commits remain available for review/recovery;
+no old directory or binary asset was restored to the current source tree.
+This local branch has not been pushed and does not claim the open gameplay,
+GPU, recovery, or release gates are complete.
