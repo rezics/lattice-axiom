@@ -80,7 +80,7 @@ pub const MAX_BOOTSTRAP_ACK_WAIT_MS: u64 = 30_000;
 /// Maximum wait for a supervised child to exit after the product requests shutdown.
 pub const MAX_CHILD_SHUTDOWN_WAIT_MS: u64 = 30_000;
 
-/// Maximum replacement-process hops in one supervisor product loop.
+/// Maximum retained hop records; healthy product interaction has no hop limit.
 pub const MAX_SUPERVISOR_HOPS: usize = 8;
 
 /// Maximum consecutive child, spawn, or recovery failures before the product halts.

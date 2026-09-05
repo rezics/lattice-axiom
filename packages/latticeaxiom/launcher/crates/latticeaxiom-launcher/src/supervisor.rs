@@ -268,15 +268,6 @@ impl SupervisorMachine {
         E: AtomicChildExitStore,
         P: ProcessControl,
     {
-        if self.hops.len() >= MAX_SUPERVISOR_HOPS {
-            return self.halt(
-                None,
-                None,
-                RecoveryReasonV1::RecoveryFailure,
-                LaunchPhaseV1::RecoverySpawn,
-                LaunchFailureCodeV1::RecoveryLoopSuppressed,
-            );
-        }
         self.refresh_clock(process);
         match self.state {
             SupervisorStateV1::Idle => self.boot_or_resume(intent_store, exit_store, process),
@@ -1081,9 +1072,10 @@ impl SupervisorMachine {
     }
 
     fn push_hop(&mut self, hop: SupervisorHopV1) {
-        if self.hops.len() < MAX_SUPERVISOR_HOPS {
-            self.hops.push(hop);
+        if self.hops.len() == MAX_SUPERVISOR_HOPS {
+            self.hops.remove(0);
         }
+        self.hops.push(hop);
     }
 
     fn report(&self) -> SupervisorReportV1 {
@@ -1659,6 +1651,94 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines, clippy::expect_used)]
+    fn healthy_world_switches_outlive_the_bounded_report_window() {
+        let directory = TestDirectory::create();
+        let (mut intents, mut exits) = open_stores(&directory);
+        let mut supervisor = SupervisorMachine::new(config());
+        let mut process = FakeProcess::default();
+        boot_initial_shell(&mut supervisor, &mut intents, &mut exits, &mut process);
+        let world_id = WorldId::new_v4();
+        for next in 2..=11 {
+            let SupervisorStateV1::Supervising {
+                role,
+                generation: current,
+                process_epoch,
+                ..
+            } = supervisor.state()
+            else {
+                panic!("healthy interaction must keep its current child");
+            };
+            let opening_world = next % 2 == 0;
+            let intent = LaunchIntentV1::seal(LaunchIntentDraftV1 {
+                generation: generation(next),
+                attempt: LaunchAttempt::FIRST,
+                issued_at_ms: 1_000,
+                expires_at_ms: 2_000,
+                target: if opening_world {
+                    LaunchTargetV1::World { world_id }
+                } else {
+                    LaunchTargetV1::Shell
+                },
+                shell_lock_hash: CanonicalHash::digest(b"shell"),
+                world_lock_hash: opening_world.then(|| CanonicalHash::digest(b"world")),
+                world_open_plan_hash: opening_world.then(|| CanonicalHash::digest(b"plan")),
+                confirmed_setting_transaction_revision: setting_revision(9),
+            })
+            .expect("next healthy intent");
+            let bytes = intent.canonical_bytes().expect("canonical intent");
+            if let Some(previous) = intents.read().expect("previous slot").blob_hash() {
+                intents
+                    .publish_replacing_terminal(previous, &bytes)
+                    .expect("next terminal handoff");
+            } else {
+                intents.publish(&bytes).expect("first handoff");
+            }
+            let saving_world = role.world_id().is_some();
+            let durable =
+                saving_world.then(|| DurableWorldRevisionV1::new(world_id, WorldRevision::new(4)));
+            let report = ChildExitReportV1::seal(ChildExitReportDraftV1 {
+                child_generation: current,
+                process_epoch,
+                role,
+                exit_kind: if saving_world {
+                    ChildExitKindV1::SaveAndQuit
+                } else {
+                    ChildExitKindV1::Handoff
+                },
+                intent_generation: Some(intent.generation()),
+                intent_checksum: Some(intent.checksum()),
+                confirmed_setting_transaction_revision: setting_revision(9),
+                last_written_world: durable,
+                last_durable_world: durable,
+                shell_lock_hash: CanonicalHash::digest(b"shell"),
+                world_lock_hash: saving_world.then(|| CanonicalHash::digest(b"world")),
+                world_open_plan_hash: saving_world.then(|| CanonicalHash::digest(b"plan")),
+                diagnostic_ref: None,
+            })
+            .expect("matching child report");
+            publish_report(&mut exits, &report);
+            queue_exit_and_ack(&mut process, &intent, epoch(next));
+            let report = supervisor.advance(&mut intents, &mut exits, &mut process);
+            assert!(matches!(report.outcome(), SupervisorOutcomeV1::Running));
+            assert!(report.failures().is_empty());
+            assert!(report.hops().len() <= MAX_SUPERVISOR_HOPS);
+        }
+        publish_report(&mut exits, &later_shell_quit(generation(11), epoch(11)));
+        process
+            .exits
+            .push_back(ChildObservationV1::Exited { exit_code: Some(0) });
+        let report = supervisor.advance(&mut intents, &mut exits, &mut process);
+        assert!(matches!(
+            report.outcome(),
+            SupervisorOutcomeV1::ProductExited { .. }
+        ));
+        assert_eq!(report.hops().len(), MAX_SUPERVISOR_HOPS);
+        assert_eq!(process.spawn_count, 11);
+        assert_eq!(process.terminated, 0);
     }
 
     #[test]
