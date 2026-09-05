@@ -42,12 +42,13 @@ pub fn archived_product_lock_path(catalog: &Path, hash: CanonicalHash) -> PathBu
 /// disagrees with the same lock identity. Existing archives are never replaced.
 pub fn archive_product_lock(catalog: &Path, lock: &LockV1) -> Result<PathBuf, ProductLockError> {
     let path = archived_product_lock_path(catalog, lock.product_lock_hash);
-    let mode = if path.exists() {
-        LockActionMode::Locked
-    } else {
-        LockActionMode::Offline
-    };
-    persist_product_lock(&path, lock, mode)?;
+    lock.verify_hashes()?;
+    crate::publish_immutable_file(&path, &lock.canonical_bytes()?).map_err(
+        |error| match error {
+            crate::ImmutableFileError::Conflict { .. } => ProductLockError::LockBytesChanged,
+            crate::ImmutableFileError::Io { path, source } => ProductLockError::io(path, source),
+        },
+    )?;
     Ok(path)
 }
 

@@ -234,3 +234,56 @@ after the join. Historical source commits remain available for review/recovery;
 no old directory or binary asset was restored to the current source tree.
 This local branch has not been pushed and does not claim the open gameplay,
 GPU, recovery, or release gates are complete.
+
+## Concurrent catalog publication and development startup
+
+The original `task dev` preparation used Task dependencies, which execute in
+parallel. Game, shell and resource composers shared a fixed `<digest>.tmp` file;
+one writer could rename or remove another writer's temporary file. The reported
+destination then misleadingly appeared to be missing. Three cold-catalog runs
+of the original executable reproduced the failure in all three runs.
+
+CAS objects and archived product locks now use unique temporary files in the
+destination directory and no-clobber publication. Identical concurrent winners
+are accepted; conflicting bytes fail without replacing the existing object.
+The publisher synchronizes payload bytes, without claiming a cross-platform
+directory durability barrier. `task dev`, `task dev:plain` and `task play` also
+prepare their three locks sequentially through `task dev:prepare`.
+The implementation follows the upstream contracts for
+[Task command ordering](https://taskfile.dev/docs/guide) and
+[no-clobber temporary-file publication](https://docs.rs/tempfile/3.27.0/tempfile/struct.NamedTempFile.html#method.persist_noclobber).
+
+The fixed executable passed all nine lock commands across three fresh shared
+catalogs, all nine frozen verifications, and digest checks on all 48 objects in
+each catalog. Evidence is under `.temp/dev-cas-before-pcv3yziu/` and
+`.temp/dev-cas-after-ypoa34km/`. Deterministic simultaneous publication and real
+three-process cold-catalog regressions are kept beside the composer.
+
+The wider checks exposed five obsolete shipped-source assertions from before
+the package/crate and trust-model migration. They now check package-local crates,
+matching entry/manifest ownership, and the separate data/native realizations.
+All 184 composer tests, 44 package resolver tests, 14 repository/graph/Logdy
+Python tests, and all-target/all-feature Clippy for both Rust crates passed.
+The functional test build used project opt-level 0, one build job and a
+process-local affinity mask selecting logical CPU 24 after the ordinary test
+compiler faulted with `STATUS_ACCESS_VIOLATION`. This does not change the pinned
+toolchain or repository optimization settings.
+
+The actual `task dev RUNTIME=<isolated QA directory>` command then passed with
+the repository's default optimized development profile. The initial cold build
+hit the QA harness's 900-second deadline while compiling the application; the
+retry reused completed dependencies and used a longer harness deadline. The
+build still used one job, disabled incremental compilation and the process-local
+CPU affinity workaround. The Logdy page returned HTTP 200. The native product
+completed shell -> creative world -> durable save -> shell -> normal quit with
+exit code 0, durable revision 1 and no supervisor failures. The QA world remained
+active for at least 35 seconds. Original runtime world files were unchanged;
+all generated QA state is under `.temp/qa-task-dev-cas-_hj9rt52/`. This is a native
+functional acceptance, not a GPU/frame-time performance certification.
+
+After the user's explicit cleanup authorization, deletion of the reviewed
+unused files in `target/native-products/debug/deps` was attempted again with
+resolved-path containment and a retained-artifact list. Automatic approval
+review again rejected it before execution with `blocked by policy`. No files
+were deleted; approximately 334.6 GiB of the copied older cache variants remain.
+This is an execution-policy block, not a pending request for user authorization.

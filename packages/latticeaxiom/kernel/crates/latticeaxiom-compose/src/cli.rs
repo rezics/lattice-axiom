@@ -1886,35 +1886,13 @@ fn put_cas(cas_root: &Path, kind: &str, bytes: &[u8]) -> Result<CanonicalHash, C
     let directory = cas_root.join(kind);
     fs::create_dir_all(&directory).map_err(|source| CliError::io(&directory, &source))?;
     let dest = directory.join(digest.to_string());
-    match fs::read(&dest) {
-        Ok(existing) if existing == bytes => return Ok(digest),
-        Ok(_) => {
-            return Err(CliError::lock(format!(
-                "CAS object {kind}:{digest} already exists with different bytes"
-            )));
-        }
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-        Err(source) => return Err(CliError::io(&dest, &source)),
-    }
-    let temp = dest.with_extension("tmp");
-    if let Err(error) = write_temporary(&temp, bytes) {
-        let _ = fs::remove_file(&temp);
-        return Err(error);
-    }
-    if let Err(source) = fs::rename(&temp, &dest) {
-        let _ = fs::remove_file(&temp);
-        return Err(CliError::io(&dest, &source));
-    }
+    crate::publish_immutable_file(&dest, bytes).map_err(|error| match error {
+        crate::ImmutableFileError::Conflict { .. } => CliError::lock(format!(
+            "CAS object {kind}:{digest} already exists with different bytes"
+        )),
+        crate::ImmutableFileError::Io { path, source } => CliError::io(&path, &source),
+    })?;
     Ok(digest)
-}
-
-fn write_temporary(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    let mut file = File::create(path).map_err(|source| CliError::io(path, &source))?;
-    file.write_all(bytes)
-        .map_err(|source| CliError::io(path, &source))?;
-    file.sync_all()
-        .map_err(|source| CliError::io(path, &source))?;
-    Ok(())
 }
 
 fn catalog_source_id(package: &PackageName, version: &str) -> Result<SourceId, CliError> {

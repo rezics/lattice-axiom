@@ -14,6 +14,7 @@ mod diagnostics;
 mod evaluation;
 mod evaluator_protocol;
 mod graph;
+mod immutable_file;
 mod imports;
 #[cfg(feature = "nickel-evaluator")]
 mod native_static_product;
@@ -44,6 +45,7 @@ pub use diagnostics::*;
 pub use evaluation::*;
 pub use evaluator_protocol::*;
 pub use graph::*;
+pub use immutable_file::{ImmutableFileError, publish_immutable_file};
 pub use imports::*;
 #[cfg(feature = "nickel-evaluator")]
 pub use native_static_product::*;

@@ -4,6 +4,7 @@ vars:
   BOOTSTRAP: profiles/dev.toml
   LOCK: latticeaxiom.lock
   PRODUCT: products/terrenia-dev.toml
+  RUNTIME: .
 
 tasks:
   default:
@@ -37,15 +38,21 @@ tasks:
 
   play:
     desc: Product supervisor — shell → world → shell from reopened locks
-    deps:
-      - task: lock
+    cmds:
+      - task: dev:prepare
         vars:
           BOOTSTRAP: profiles/play.toml
-          LOCK: latticeaxiom.lock
-      - lock:shell
-      - lock:resources
+      - python tools/native_product.py --profile "{{.PRODUCT}}" --runtime "{{.RUNTIME}}" --run
+
+  dev:prepare:
+    desc: Prepare game, shell and resource locks sequentially in the shared catalog
     cmds:
-      - python tools/native_product.py --profile "{{.PRODUCT}}" --run
+      - task: lock
+        vars:
+          BOOTSTRAP: "{{.BOOTSTRAP}}"
+          LOCK: latticeaxiom.lock
+      - task: lock:shell
+      - task: lock:resources
 
   native:prepare:
     desc: Freeze the manifest-selected native closure and verify Cargo source containment
@@ -82,7 +89,7 @@ tasks:
   logs:web:
     desc: Launch the client with a localhost Logdy Web viewer
     cmds:
-      - python scripts/development/logdy_dev.py run -- python tools/native_product.py --profile "{{.PRODUCT}}" --run
+      - python scripts/development/logdy_dev.py run -- python tools/native_product.py --profile "{{.PRODUCT}}" --runtime "{{.RUNTIME}}" --run
 
   audit:upstream:
     desc: Recheck upstream adapters, compatibility evidence, and advisories
@@ -101,24 +108,12 @@ tasks:
 
   dev:plain:
     desc: Relock and launch the client without the Web log viewer
-    deps:
-      - lock:resources
-      - lock:shell
-      - task: lock
-        vars:
-          BOOTSTRAP: profiles/dev.toml
-          LOCK: latticeaxiom.lock
     cmds:
-      - python tools/native_product.py --profile "{{.PRODUCT}}" --run
+      - task: dev:prepare
+      - python tools/native_product.py --profile "{{.PRODUCT}}" --runtime "{{.RUNTIME}}" --run
 
   dev:
     desc: Relock and launch the client with a localhost Web log viewer
-    deps:
-      - lock:resources
-      - lock:shell
-      - task: lock
-        vars:
-          BOOTSTRAP: profiles/dev.toml
-          LOCK: latticeaxiom.lock
     cmds:
+      - task: dev:prepare
       - task: logs:web

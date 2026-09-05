@@ -29,6 +29,11 @@ task dev:plain
 `task dev:plain` selects the explicit developer/creative profile. Both prepare
 gameplay, shell and independent resource locks, freeze
 the selected native package closure, build it with Cargo and start the client.
+`task dev` uses the same developer profile with the local Logdy Web viewer.
+`task dev:prepare` only generates the three locks, in sequence. Independent
+composer processes can also safely publish identical objects to the shared CAS.
+For isolated acceptance, `RUNTIME=<directory>` selects an existing runtime
+containing copies of the locks and catalog; the default is the repository root.
 `task native:prepare` verifies the frozen source graph without compiling binaries;
 `task native:build PRODUCT=products/terrenia.toml` selects the release build.
 Runtime worlds and caches are local, ignored data. Rebuild delivery and outstanding

@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use latticeaxiom_core::CanonicalHash;
@@ -206,51 +206,14 @@ impl FilesystemCas {
 
     fn publish(&self, id: &CasObjectId, bytes: &[u8]) -> Result<(), CasError> {
         let dest = self.object_path(id);
-        match fs::read(&dest) {
-            Ok(existing) => return compare_existing(id, &existing, bytes),
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-            Err(source) => return Err(CasError::io(&dest, source)),
-        }
-
-        let Some(directory) = dest.parent() else {
-            return Err(CasError::io(
-                &dest,
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "CAS object path missing parent directory",
-                ),
-            ));
-        };
-        fs::create_dir_all(directory).map_err(|source| CasError::io(directory, source))?;
-
-        let temp = dest.with_extension("tmp");
-        if let Err(source) = write_temporary(&temp, bytes) {
-            let _ = fs::remove_file(&temp);
-            return Err(source);
-        }
-
-        match fs::read(&dest) {
-            Ok(existing) => {
-                let _ = fs::remove_file(&temp);
-                return compare_existing(id, &existing, bytes);
+        latticeaxiom_compose::publish_immutable_file(&dest, bytes).map_err(|error| match error {
+            latticeaxiom_compose::ImmutableFileError::Conflict { .. } => {
+                CasError::DigestCollision { id: *id }
             }
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-            Err(source) => {
-                let _ = fs::remove_file(&temp);
-                return Err(CasError::io(&dest, source));
+            latticeaxiom_compose::ImmutableFileError::Io { path, source } => {
+                CasError::io(path, source)
             }
-        }
-
-        match fs::rename(&temp, &dest) {
-            Ok(()) => Ok(()),
-            Err(source) => {
-                let _ = fs::remove_file(&temp);
-                match fs::read(&dest) {
-                    Ok(existing) => compare_existing(id, &existing, bytes),
-                    Err(_) => Err(CasError::io(&dest, source)),
-                }
-            }
-        }
+        })
     }
 }
 
@@ -273,23 +236,6 @@ fn verified_payload(id: &CasObjectId, bytes: Vec<u8>) -> Result<Vec<u8>, CasErro
     } else {
         Err(CasError::DigestMismatch { id: *id, actual })
     }
-}
-
-fn compare_existing(id: &CasObjectId, existing: &[u8], bytes: &[u8]) -> Result<(), CasError> {
-    if existing == bytes {
-        Ok(())
-    } else {
-        Err(CasError::DigestCollision { id: *id })
-    }
-}
-
-fn write_temporary(path: &Path, bytes: &[u8]) -> Result<(), CasError> {
-    let mut file = File::create(path).map_err(|source| CasError::io(path, source))?;
-    file.write_all(bytes)
-        .map_err(|source| CasError::io(path, source))?;
-    file.sync_all()
-        .map_err(|source| CasError::io(path, source))?;
-    Ok(())
 }
 
 #[cfg(test)]
