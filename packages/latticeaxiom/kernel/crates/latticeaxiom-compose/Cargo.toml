@@ -1,0 +1,44 @@
+[package]
+name = "latticeaxiom-compose"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "latticeaxiom-compose"
+path = "src/bin/latticeaxiom-compose.rs"
+required-features = ["nickel-evaluator"]
+
+[[bin]]
+name = "latticeaxiom-compose-worker"
+path = "src/bin/latticeaxiom-compose-worker.rs"
+required-features = ["nickel-evaluator"]
+
+[features]
+default = []
+nickel-evaluator = ["dep:malachite-base", "dep:nickel-lang-core"]
+
+[dependencies]
+cargo_metadata.workspace = true
+clap.workspace = true
+latticeaxiom-core = { path = "../../../kernel/crates/latticeaxiom-core" }
+malachite-base = { workspace = true, optional = true }
+nickel-lang-core = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+unicode-casefold.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.latticeaxiom]
+owner = "@latticeaxiom/kernel"

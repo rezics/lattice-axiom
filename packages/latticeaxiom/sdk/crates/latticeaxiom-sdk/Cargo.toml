@@ -1,0 +1,27 @@
+[package]
+name = "latticeaxiom-sdk"
+description = "Typed registration IR and generated artifact contracts for Lattice Axiom packages"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-compose = { path = "../../../kernel/crates/latticeaxiom-compose" }
+latticeaxiom-core = { path = "../../../kernel/crates/latticeaxiom-core" }
+latticeaxiom-registration = { path = "../../../kernel/crates/latticeaxiom-registration" }
+latticeaxiom-sdk-macros = { path = "../latticeaxiom-sdk-macros" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.latticeaxiom]
+owner = "@latticeaxiom/sdk"

@@ -1,0 +1,192 @@
+{
+  "schema_id": "latticeaxiom.v1-fault-corpus.v1",
+  "document_id": "delivery.v1-fault-corpus",
+  "invariants": {
+    "recoverable_world": "Every failure preserves the latest durable recoverable world.",
+    "world_hash": "Presentation or device failures never change world state or the materialized-chunk world hash.",
+    "fail_closed": "Package, schema, ABI, lock, and header faults refuse before a world writer opens."
+  },
+  "missing_hooks": [],
+  "cases": [
+    {
+      "id": "package.missing-lock",
+      "class": "package",
+      "description": "A missing product lock fails closed before native loading or writer activation.",
+      "public_boundary": "latticeaxiom_compose::reopen_product_lock",
+      "input": "inputs/missing.lock",
+      "expected": "ProductLockError::MissingLock",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "package.tampered-engine-coupled",
+      "class": "package",
+      "description": "An engine-coupled package receipt without EngineBuildId fails closed before activation.",
+      "public_boundary": "latticeaxiom_world_db::FrozenPackageReceiptV1::new",
+      "input": null,
+      "expected": "WorldDbError::MissingEngineBuildId",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "package.corrupt-lock",
+      "class": "package",
+      "description": "Truncated or malformed latticeaxiom.lock bytes are rejected; only a complete lock is accepted.",
+      "public_boundary": "latticeaxiom_compose::reopen_product_lock",
+      "input": "inputs/corrupt-lock.json",
+      "expected": "ProductLockError",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "schema.unknown-fluid-palette",
+      "class": "schema",
+      "description": "Unknown fluid palette schema is read-only recovery and never becomes writable.",
+      "public_boundary": "latticeaxiom_world_wire::classify_fluid_palette_open",
+      "input": "inputs/unknown-fluid-schema.txt",
+      "expected": "FluidPaletteOpenDispositionV1::ReadOnlyRecovery",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "schema.invalid-version-range",
+      "class": "schema",
+      "description": "Reserved schema version zero and inverted ranges fail before a writer opens.",
+      "public_boundary": "latticeaxiom_world_db::SchemaRequirementV1::new",
+      "input": null,
+      "expected": "WorldDbError::InvalidSchemaVersionRange",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "abi.wrong-magic",
+      "class": "abi",
+      "description": "A portable ABI header with the wrong magic fails closed before payload dereference.",
+      "public_boundary": "latticeaxiom_abi::validate_header",
+      "input": null,
+      "expected": "AbiContractError::WrongMagic",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "abi.panic-or-exception",
+      "class": "abi",
+      "description": "A native callback panic discards staged output and fails the instance without publishing the tick.",
+      "public_boundary": "latticeaxiom_abi::decide_recovery",
+      "input": null,
+      "expected": "RecoveryAction::FailInstanceAndDiscardStaging",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "abi.process-fault",
+      "class": "abi",
+      "description": "A native process fault requires process termination; in-process recovery is not promised.",
+      "public_boundary": "latticeaxiom_abi::decide_recovery",
+      "input": null,
+      "expected": "RecoveryAction::TerminateProcess",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "storage.low-disk",
+      "class": "storage",
+      "description": "Low disk pauses new mutation; recoverable read-only never opens a writer; the latest durable chunk remains readable.",
+      "public_boundary": "latticeaxiom_engine::SealedWorldWriterHost::observe_disk",
+      "input": "inputs/low-disk.json",
+      "expected": "WorldDbError::LowDiskMutationPaused | WorldDbError::RecoverableReadOnly",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "storage.crash-before-publication",
+      "class": "storage",
+      "description": "A crash after staging and before publication leaves the previous durable frontier recoverable.",
+      "public_boundary": "latticeaxiom_engine::SealedWorldWriterHost::inject_database_fault_once",
+      "input": null,
+      "expected": "WorldDbError::InjectedDatabaseFault",
+      "writer_must_not_open": false,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "storage.corrupt-header",
+      "class": "storage",
+      "description": "A malformed world-header sidecar is rejected and does not become writer authority.",
+      "public_boundary": "latticeaxiom_world_catalog::WorldHeaderV1::decode_canonical",
+      "input": "inputs/corrupt-header.json",
+      "expected": "HeaderCodecError",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "async.stale-fluid-completion",
+      "class": "async",
+      "description": "A stale fluid completion cannot overwrite a newer chunk revision.",
+      "public_boundary": "latticeaxiom_engine::admit_fluid_completion",
+      "input": null,
+      "expected": "FluidRuntimeError::Stale",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "async.executor-panic",
+      "class": "async",
+      "description": "A derived-work executor panic releases reservations and does not apply into authoritative state.",
+      "public_boundary": "latticeaxiom_voxel_runtime::VoxelRuntime::complete_executor",
+      "input": null,
+      "expected": "WorkerAbortOutcome::Panicked",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "device.render-loss-fallback",
+      "class": "device",
+      "description": "Unsupported GPU capabilities take the presentation-optional Disabled fallback and must not change world hash.",
+      "public_boundary": "latticeaxiom_render_contracts::select_provider",
+      "input": "inputs/unsupported-gpu.json",
+      "expected": "ProviderSelection.disabled == true",
+      "writer_must_not_open": true,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    },
+    {
+      "id": "shutdown.timeout",
+      "class": "shutdown",
+      "description": "A shutdown-timeout child exit cannot masquerade as durable Save & Quit and must recover the latest durable world.",
+      "public_boundary": "latticeaxiom_launcher::ChildExitReportV1::seal",
+      "input": null,
+      "expected": "ChildExitKindV1::ShutdownTimeout",
+      "writer_must_not_open": false,
+      "world_hash_must_be_unchanged": true,
+      "recoverable_world_must_survive": true,
+      "missing_hook": null
+    }
+  ]
+}

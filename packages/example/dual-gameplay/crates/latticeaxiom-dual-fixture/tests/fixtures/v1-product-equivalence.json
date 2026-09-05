@@ -1,0 +1,19 @@
+{
+  "schema_id": "latticeaxiom.v1-product-equivalence.v1",
+  "compared": [
+    "authoritative_receipts",
+    "state_hash",
+    "semantic_report",
+    "normative_save_bytes",
+    "final_lock"
+  ],
+  "hosts": ["client", "headless"],
+  "static_portable": {
+    "ticks": 8,
+    "entities": 37,
+    "golden_ticks": 5,
+    "golden_entities": 4,
+    "static_must_not_use_abi_repack": true
+  },
+  "generic_dimension_catalog": "generic-dimension-catalog-v1.json"
+}

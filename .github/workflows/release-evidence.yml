@@ -1,0 +1,129 @@
+name: Release dependency evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release-evidence.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "packages/**"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - "scripts/supply-chain/**"
+      - "supply-chain/**"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  smoke:
+    name: Fixture and locked-input smoke
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up exact Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12.12"
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Install exact supply-chain tools
+        timeout-minutes: 15
+        run: |
+          cargo install --locked cargo-cyclonedx --version 0.5.9
+          cargo install --locked cargo-about --version 0.9.1 --features cli
+          cargo install --locked cargo-deny --version 0.20.2
+      - name: Run fixture and fault corpus
+        run: python scripts/supply-chain/test_release_evidence.py
+      - name: Validate exact tools and locked closures
+        run: python scripts/supply-chain/release_evidence.py smoke
+      - name: Prove smoke did not write the source tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  generate:
+    name: Generate ${{ matrix.identifier }}
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - identifier: linux-x86_64-release
+            target: x86_64-unknown-linux-gnu
+          - identifier: windows-x86_64-release
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up exact Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12.12"
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Install exact supply-chain tools
+        timeout-minutes: 15
+        run: |
+          cargo install --locked cargo-cyclonedx --version 0.5.9
+          cargo install --locked cargo-about --version 0.9.1 --features cli
+          cargo install --locked cargo-deny --version 0.20.2
+      - name: Run fixture and fault corpus
+        run: python scripts/supply-chain/test_release_evidence.py
+      - name: Fetch exact lock package set for offline metadata
+        run: cargo fetch --locked
+      - name: Generate and verify normalized evidence
+        run: >-
+          python scripts/supply-chain/release_evidence.py generate
+          --configuration ${{ matrix.identifier }}
+          --output-dir "${RUNNER_TEMP}/release-evidence/${{ matrix.identifier }}"
+      - name: Upload immutable workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: latticeaxiom-release-evidence-${{ matrix.identifier }}
+          path: ${{ runner.temp }}/release-evidence/${{ matrix.identifier }}/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-release:
+    name: Attach evidence to GitHub Release
+    if: github.event_name == 'release'
+    needs: generate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download generated evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: latticeaxiom-release-evidence-*
+          path: release-evidence
+      - name: Attach immutable evidence files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload "${{ github.event.release.tag_name }}"
+          release-evidence/*/* --clobber

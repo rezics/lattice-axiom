@@ -1,0 +1,32 @@
+{
+  "authoring_schema": "terrenia:schema/metallurgy-materials@1",
+  "owner_package": "@terrenia/metallurgy",
+  "materials": [
+    {
+      "id": "terrenia:material/copper",
+      "tags": [
+        "terrenia:tag/conductive",
+        "terrenia:tag/thermal"
+      ]
+    },
+    {
+      "id": "terrenia:material/annealed-copper",
+      "tags": [
+        "terrenia:tag/conductive"
+      ]
+    },
+    {
+      "id": "terrenia:material/bronze",
+      "tags": [
+        "terrenia:tag/thermal"
+      ]
+    },
+    {
+      "id": "terrenia:material/brass",
+      "tags": [
+        "terrenia:tag/conductive",
+        "terrenia:tag/thermal"
+      ]
+    }
+  ]
+}

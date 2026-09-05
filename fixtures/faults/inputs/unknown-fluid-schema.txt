@@ -1,0 +1,1 @@
+latticeaxiom:schema/solid-fluid-palette@2

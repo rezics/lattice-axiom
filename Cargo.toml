@@ -1,0 +1,131 @@
+[workspace]
+resolver = "3"
+members = [
+  "packages/latticeaxiom/sdk/crates/latticeaxiom-abi",
+  "packages/latticeaxiom/client-ui/crates/latticeaxiom-client-ui",
+  "packages/latticeaxiom/kernel/crates/latticeaxiom-compose",
+  "packages/latticeaxiom/gameplay/crates/latticeaxiom-content",
+  "packages/latticeaxiom/kernel/crates/latticeaxiom-core",
+  "packages/example/dual-gameplay/crates/latticeaxiom-dual-fixture",
+  "packages/terrenia/worldgen/crates/latticeaxiom-terrenia-worldgen",
+  "packages/latticeaxiom/host/crates/latticeaxiom-engine",
+  "packages/latticeaxiom/gameplay/crates/latticeaxiom-gameplay",
+  "packages/latticeaxiom/input/crates/latticeaxiom-input",
+  "packages/latticeaxiom/launcher/crates/latticeaxiom-launcher",
+  "packages/latticeaxiom/kernel/crates/latticeaxiom-packages",
+  "packages/latticeaxiom/gameplay/crates/latticeaxiom-player",
+  "packages/latticeaxiom/kernel/crates/latticeaxiom-registration",
+  "packages/latticeaxiom/sdk/crates/latticeaxiom-render-contracts",
+  "packages/latticeaxiom/sdk/crates/latticeaxiom-runtime-contracts",
+  "packages/latticeaxiom/sdk/crates/latticeaxiom-sdk",
+  "packages/latticeaxiom/sdk/crates/latticeaxiom-sdk-macros",
+  "packages/latticeaxiom/settings-ui/crates/latticeaxiom-settings-ui",
+  "packages/latticeaxiom/front-end/crates/latticeaxiom-start-ui",
+  "packages/latticeaxiom/world/crates/latticeaxiom-storage",
+  "packages/latticeaxiom/world/crates/latticeaxiom-territory",
+  "packages/latticeaxiom/voxel/crates/latticeaxiom-voxel-mesh",
+  "packages/latticeaxiom/voxel/crates/latticeaxiom-voxel-playground",
+  "packages/latticeaxiom/voxel/crates/latticeaxiom-voxel-runtime",
+  "packages/latticeaxiom/world-library/crates/latticeaxiom-world-catalog",
+  "packages/latticeaxiom/world/crates/latticeaxiom-world-db",
+  "packages/latticeaxiom/world/crates/latticeaxiom-world-wire",
+  "packages/latticeaxiom/world/crates/latticeaxiom-worldgen",
+]
+default-members = ["packages/latticeaxiom/host/crates/latticeaxiom-engine"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+license = "AGPL-3.0-only"
+repository = "https://github.com/rezics/lattice-axiom"
+
+[workspace.dependencies]
+# ADR 0014 fixes the implementation baseline at Bevy 0.19.x. Cargo.lock is
+# the authoritative dependency record, so upgrades are deliberate migrations.
+accesskit = "=0.24.1"
+avian3d = { version = "=0.7.0", default-features = false }
+bevy = { version = "=0.19.1", default-features = false }
+bevy_framepace = { version = "=0.22.0", default-features = false }
+bevy_winit = { version = "=0.19.1", default-features = false }
+bevy_voxel_world = "=0.17.0"
+block-mesh = "0.2.0"
+cargo_metadata = "0.23.1"
+clap = { version = "4.6.6", default-features = false, features = ["derive", "std"] }
+criterion = "0.8"
+hex = "0.4.3"
+leafwing-input-manager = { version = "=0.21.0", default-features = false }
+latticeaxiom-abi = { path = "packages/latticeaxiom/sdk/crates/latticeaxiom-abi" }
+latticeaxiom-client-ui = { path = "packages/latticeaxiom/client-ui/crates/latticeaxiom-client-ui" }
+latticeaxiom-compose = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-compose" }
+latticeaxiom-core = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-core" }
+latticeaxiom-engine = { path = "packages/latticeaxiom/host/crates/latticeaxiom-engine", default-features = false }
+latticeaxiom-gameplay = { path = "packages/latticeaxiom/gameplay/crates/latticeaxiom-gameplay" }
+latticeaxiom-input = { path = "packages/latticeaxiom/input/crates/latticeaxiom-input" }
+latticeaxiom-launcher = { path = "packages/latticeaxiom/launcher/crates/latticeaxiom-launcher" }
+latticeaxiom-packages = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-packages" }
+latticeaxiom-registration = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-registration" }
+latticeaxiom-runtime-contracts = { path = "packages/latticeaxiom/sdk/crates/latticeaxiom-runtime-contracts" }
+latticeaxiom-sdk = { path = "packages/latticeaxiom/sdk/crates/latticeaxiom-sdk" }
+latticeaxiom-settings-ui = { path = "packages/latticeaxiom/settings-ui/crates/latticeaxiom-settings-ui" }
+latticeaxiom-start-ui = { path = "packages/latticeaxiom/front-end/crates/latticeaxiom-start-ui" }
+latticeaxiom-terrenia-worldgen = { path = "packages/terrenia/worldgen/crates/latticeaxiom-terrenia-worldgen" }
+latticeaxiom-storage = { path = "packages/latticeaxiom/world/crates/latticeaxiom-storage" }
+latticeaxiom-world-catalog = { path = "packages/latticeaxiom/world-library/crates/latticeaxiom-world-catalog" }
+latticeaxiom-world-db = { path = "packages/latticeaxiom/world/crates/latticeaxiom-world-db" }
+latticeaxiom-worldgen = { path = "packages/latticeaxiom/world/crates/latticeaxiom-worldgen" }
+malachite-base = "=0.9.2"
+nickel-lang-core = { version = "=0.18.0", default-features = false }
+postcard = { version = "=1.1.3", default-features = false, features = ["alloc"] }
+proc-macro2 = "1.0.107"
+proptest = "1.9"
+quote = "1.0.47"
+semver = "1.0.28"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
+sha2 = "0.10.9"
+syn = { version = "2.0.119", features = ["full", "parsing"] }
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+toml = { version = "=1.1.4", default-features = false, features = ["parse", "serde"] }
+unicode-casefold = "0.2.0"
+unicode-normalization = "0.1.25"
+uuid = { version = "1.24.1", features = ["v4"] }
+winit = { version = "=0.30.13", default-features = false }
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+expect_used = "warn"
+print_stdout = "deny"
+todo = "warn"
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+
+[patch.crates-io]
+# Windows `CursorGrabMode::Locked` uses a one-pixel `ClipCursor` rectangle.
+# The pinned upstream release does not clear that rectangle synchronously on
+# focus loss, so native screenshot and task-switching surfaces inherit a
+# globally clipped pointer. Keep the minimal audited patch local until it is
+# available in an upstream release compatible with Bevy 0.19.1.
+winit = { path = "third_party/winit" }
+
+# Bevy's official development profile: optimize project code lightly and
+# dependencies heavily so the debug build remains playable.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

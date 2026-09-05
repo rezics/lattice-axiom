@@ -1,0 +1,42 @@
+schema_version = 1
+name = "@terrenia/science"
+version = "0.1.0"
+domains = ["authoritative"]
+trust = "data-only"
+
+[features.metallurgy]
+default = true
+domains = ["authoritative"]
+
+[dependencies.metallurgy]
+package = "@terrenia/metallurgy"
+version = "~0.1.0"
+optional = true
+when_features = ["metallurgy"]
+domains = ["authoritative"]
+
+[requires."terrenia:capability/metallurgy@1"]
+capability = "terrenia:capability/metallurgy@1"
+version = "^1.0.0"
+provider = "@terrenia/metallurgy"
+cardinality = "zero-or-more"
+domains = ["authoritative"]
+
+[provides."terrenia:capability/science-processing@1"]
+capability = "terrenia:capability/science-processing@1"
+version = "1.0.0"
+cardinality = "exactly-one"
+domains = ["authoritative"]
+
+[realizations.data]
+id = "data"
+kind = "data"
+domains = ["authoritative"]
+artifact = { kind = "data-root", path = "data" }
+trust = "data-only"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = ["package.ncl", "latticeaxiom-package.toml", "data"]

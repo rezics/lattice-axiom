@@ -1,0 +1,101 @@
+{
+  "schema_id": "latticeaxiom.generic-dimension-catalog.v1",
+  "dimension": "other:dimension/sandbox",
+  "forbidden_namespaces": ["terrenia"],
+  "items": [
+    {
+      "id": "example:item/log",
+      "stack_limit": 64,
+      "placement_block": "example:block/log"
+    },
+    {
+      "id": "example:item/plank",
+      "stack_limit": 64,
+      "placement_block": "example:block/plank"
+    },
+    {
+      "id": "example:item/stick",
+      "stack_limit": 64
+    },
+    {
+      "id": "example:item/pickaxe",
+      "stack_limit": 1,
+      "durability": 10
+    },
+    {
+      "id": "example:item/copper-ore",
+      "stack_limit": 64
+    }
+  ],
+  "blocks": [
+    {
+      "id": "example:block/log",
+      "hardness": 1,
+      "drop": { "item": "example:item/log", "quantity": 1 }
+    },
+    {
+      "id": "example:block/plank",
+      "hardness": 1,
+      "drop": { "item": "example:item/plank", "quantity": 1 }
+    },
+    {
+      "id": "example:block/copper-ore",
+      "hardness": 6,
+      "tool": {
+        "class": "latticeaxiom:tool-class/pickaxe@1",
+        "minimum_tier": 1
+      },
+      "drop": { "item": "example:item/copper-ore", "quantity": 1 }
+    }
+  ],
+  "tools": [
+    {
+      "item": "example:item/pickaxe",
+      "class": "latticeaxiom:tool-class/pickaxe@1",
+      "tier": 1,
+      "work_per_step": 3,
+      "maximum_durability": 10
+    }
+  ],
+  "tags": [
+    {
+      "id": "latticeaxiom:item-tag/logs@1",
+      "members": ["example:item/log"]
+    }
+  ],
+  "roles": [
+    {
+      "id": "latticeaxiom:item-role/plank-output@1",
+      "item": "example:item/plank"
+    },
+    {
+      "id": "latticeaxiom:item-role/pickaxe-output@1",
+      "item": "example:item/pickaxe"
+    }
+  ],
+  "recipes": [
+    {
+      "id": "example:recipe/planks@1",
+      "shapeless": [
+        { "tag": "latticeaxiom:item-tag/logs@1", "quantity": 1 }
+      ],
+      "output_role": "latticeaxiom:item-role/plank-output@1",
+      "output_quantity": 4
+    },
+    {
+      "id": "example:recipe/pickaxe@1",
+      "workstation": "latticeaxiom:workstation/crafting@1",
+      "shaped": {
+        "width": 2,
+        "height": 1,
+        "cells": [
+          { "item": "example:item/plank", "quantity": 3 },
+          { "item": "example:item/stick", "quantity": 2 }
+        ]
+      },
+      "output_role": "latticeaxiom:item-role/pickaxe-output@1",
+      "output_quantity": 1
+    }
+  ],
+  "workstations": ["latticeaxiom:workstation/crafting@1"]
+}

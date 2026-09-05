@@ -1,0 +1,1 @@
+auto realization preferences must omit kind

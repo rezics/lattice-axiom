@@ -18,7 +18,7 @@ the original proposal's asset delivery and future asset-management suggestions.
 ## Delivery gates
 
 - [x] Recovery bundles and runtime-data backup.
-- [ ] Package-owned workspace and text-only repository checks.
+- [x] Package-owned workspace and text-only repository checks.
 - [ ] Multi-crate source realization and generated product assembly.
 - [ ] Independently selectable resource packs.
 - [ ] Code-designed client UI and interaction verification.
@@ -42,3 +42,13 @@ React runtime, or raster UI skins are introduced.
 Use at least 4.5:1 contrast for ordinary essential text, a visible focus shape
 in addition to color, scalable layout/text, and mouse/keyboard parity. Test the
 actual native UI; headless widget tests do not claim visual acceptance.
+
+## Package-owned workspace validation
+
+All 29 members compile with `cargo check --workspace --all-targets --offline`.
+The composer library passed 106 existing tests and two new Rust source-owner
+validation tests. Repository boundary tests reject disguised binary content and
+media extensions. The import excludes all 201 tracked PNG files.
+
+The old smoke artifact is saved in the recovery directory; it is a development
+headless smoke result, not an optimized or GPU performance certification.

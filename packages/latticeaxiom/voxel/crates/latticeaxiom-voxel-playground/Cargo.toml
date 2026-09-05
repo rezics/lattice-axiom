@@ -1,0 +1,38 @@
+[package]
+name = "latticeaxiom-voxel-playground"
+description = "D2 upstream voxel presentation-adapter adoption spike for Lattice Axiom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# `bevy_voxel_world` has no feature flags and unconditionally enables Bevy's
+# render/PBR/asset stack. Keep that closure out of headless and default builds.
+presentation-adapter = ["dep:bevy", "dep:bevy_voxel_world"]
+
+[dependencies]
+bevy = { workspace = true, optional = true, features = ["std"] }
+bevy_voxel_world = { workspace = true, optional = true }
+latticeaxiom-gameplay = { path = "../../../gameplay/crates/latticeaxiom-gameplay" }
+latticeaxiom-player = { path = "../../../gameplay/crates/latticeaxiom-player" }
+latticeaxiom-storage = { path = "../../../world/crates/latticeaxiom-storage" }
+latticeaxiom-voxel-runtime = { path = "../latticeaxiom-voxel-runtime" }
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "projection"
+harness = false
+required-features = ["presentation-adapter"]
+
+[package.metadata.latticeaxiom]
+owner = "@latticeaxiom/voxel"

@@ -1,0 +1,49 @@
+schema_version = 1
+name = "@latticeaxiom/input"
+version = "0.1.0"
+domains = ["client", "server", "tool"]
+trust = "data-only"
+
+[dependencies.settings]
+package = "@latticeaxiom/settings"
+version = "~0.1.0"
+optional = false
+domains = ["client", "server", "tool"]
+
+[requires."latticeaxiom:capability/settings-registry@1"]
+capability = "latticeaxiom:capability/settings-registry@1"
+version = "^1.0.0"
+provider = "@latticeaxiom/settings"
+cardinality = "exactly-one"
+domains = ["client", "server", "tool"]
+
+[provides."latticeaxiom:capability/input-actions@1"]
+capability = "latticeaxiom:capability/input-actions@1"
+version = "1.0.0"
+cardinality = "exactly-one"
+domains = ["client", "server", "tool"]
+
+[realizations.data]
+id = "data"
+kind = "data"
+domains = ["client", "server", "tool"]
+artifact = { kind = "data-root", path = "data" }
+trust = "data-only"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = [
+  "crates",
+  "README.md",
+  "data",
+  "latticeaxiom-package.toml",
+  "package.ncl",
+
+
+]
+
+[rust]
+entry = "crates/latticeaxiom-input/Cargo.toml"
+members = ["crates/latticeaxiom-input/Cargo.toml"]

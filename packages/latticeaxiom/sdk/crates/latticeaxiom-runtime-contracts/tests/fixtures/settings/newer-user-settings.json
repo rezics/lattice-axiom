@@ -1,0 +1,19 @@
+{
+  "schema": "latticeaxiom:schema/local-settings@1",
+  "schema_version": 2,
+  "store_revision": 1,
+  "transaction_revision": 1,
+  "writer": "local-user",
+  "device": {},
+  "user": {
+    "latticeaxiom:setting/ui-scale": {
+      "schema_version": 1,
+      "value": 2.0
+    }
+  },
+  "binding_profile": {
+    "schema_version": 1,
+    "overrides": {}
+  },
+  "pending_restart": null
+}

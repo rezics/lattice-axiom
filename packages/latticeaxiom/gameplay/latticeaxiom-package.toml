@@ -1,0 +1,22 @@
+schema_version = 1
+name = "@latticeaxiom/gameplay"
+version = "0.1.0"
+domains = ["authoritative", "client", "server", "tool"]
+trust = "trusted-native"
+
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["authoritative", "client", "server", "tool"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = ["latticeaxiom-package.toml", "package.ncl", "crates"]
+
+[rust]
+entry = "crates/latticeaxiom-gameplay/Cargo.toml"
+members = ["crates/latticeaxiom-content/Cargo.toml", "crates/latticeaxiom-gameplay/Cargo.toml", "crates/latticeaxiom-player/Cargo.toml"]

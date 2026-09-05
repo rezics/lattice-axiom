@@ -1,0 +1,4 @@
+# `unwrap`/`expect` are denied in library and binary code (see workspace lints)
+# but remain ergonomic inside test code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

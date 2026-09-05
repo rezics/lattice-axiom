@@ -1,0 +1,103 @@
+version: "3"
+
+vars:
+  BOOTSTRAP: profiles/dev.toml
+  LOCK: latticeaxiom.lock
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  lock:
+    desc: Write latticeaxiom.lock and catalog/cas from a composition bootstrap
+    cmds:
+      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- lock --offline --bootstrap {{.BOOTSTRAP}} --lock {{.LOCK}}
+
+  verify:
+    desc: Freeze-verify latticeaxiom.lock against catalog/cas
+    cmds:
+      - cargo run -p latticeaxiom-compose --bin latticeaxiom-compose --features nickel-evaluator -- verify --offline --frozen --lock {{.LOCK}}
+
+  lock:shell:
+    desc: Write the client-shell product lock beside the shared catalog CAS
+    cmds:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/shell.toml
+          LOCK: run/shell/latticeaxiom.lock
+
+  play:
+    desc: Product supervisor — shell → world → shell from reopened locks
+    deps:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/dev.toml
+          LOCK: latticeaxiom.lock
+      - lock:shell
+    cmds:
+      - cargo run -p latticeaxiom-engine --bin latticeaxiom-play
+
+  dev:client:
+    internal: true
+    cmds:
+      - cargo run -p latticeaxiom-engine
+
+  logs:install:
+    desc: Install and verify the pinned local Logdy Web viewer
+    cmds:
+      - python scripts/development/logdy_dev.py install
+
+  logs:open:
+    desc: Open the local Logdy Web viewer in the default browser
+    cmds:
+      - python scripts/development/logdy_dev.py open
+
+  logs:test:
+    desc: Test the pinned Logdy launcher and manifest contracts
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    cmds:
+      - python -m unittest discover -s scripts/development -p "test_logdy_dev.py" -v
+
+  logs:web:
+    desc: Launch the client with a localhost Logdy Web viewer
+    cmds:
+      - python scripts/development/logdy_dev.py run -- cargo run -p latticeaxiom-engine
+
+  audit:upstream:
+    desc: Recheck upstream adapters, compatibility evidence, and advisories
+    cmds:
+      - cargo deny check advisories
+      - cargo test -p latticeaxiom-abi --all-features
+      - cargo test -p latticeaxiom-compose --all-features
+      - cargo test -p latticeaxiom-voxel-mesh --test block_mesh_audit
+      - cargo bench -p latticeaxiom-voxel-mesh --bench meshing --no-run
+      - task: logs:test
+
+  audit:upstream:bench:
+    desc: Compare the local and upstream opaque greedy meshers
+    cmds:
+      - cargo bench -p latticeaxiom-voxel-mesh --bench meshing -- greedy_meshing
+
+  dev:plain:
+    desc: Relock and launch the client without the Web log viewer
+    deps:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/dev.toml
+          LOCK: latticeaxiom.lock
+    cmds:
+      - task: dev:client
+
+  dev:
+    desc: Relock and launch the client with a localhost Web log viewer
+    deps:
+      - task: lock
+        vars:
+          BOOTSTRAP: profiles/dev.toml
+          LOCK: latticeaxiom.lock
+    cmds:
+      - task: logs:web

@@ -1,0 +1,8 @@
+{
+  "authoring_schema": "latticeaxiom:schema/progress-graph@1",
+  "owner_package": "@latticeaxiom/progress",
+  "schema_comment": "Chapter/Quest/Task DAG. Directed edges, exclusivity, and ContentPredicate inputs are package data. Discovery order must not change the graph hash.",
+  "cycle_policy": "compile-fail",
+  "cycle_policy_comment": "Dependency loops fail at compile. Runtime must not use a global quest-file singleton.",
+  "chapters": []
+}

@@ -1,0 +1,1773 @@
+{
+  "authoring_schema": "terrenia:schema/authored-presentation-assets@1",
+  "assets_revision": 2,
+  "owner_package": "@terrenia/presentation",
+  "authoritative": false,
+  "headless_removable": true,
+  "missing_source_policy": "stable-fallback",
+  "visual_qa": "not-claimed",
+  "material_groups": [
+    "opaque",
+    "cutout",
+    "translucent",
+    "emissive"
+  ],
+  "face_map_kinds": [
+    "uniform",
+    "cube-column",
+    "six-face"
+  ],
+  "sampler": {
+    "filter": "nearest",
+    "address": "clamp-to-edge",
+    "mipmaps": "none",
+    "color-space": "srgb"
+  },
+  "fallback_sources": {
+    "block-material-set": "assets/fallback/terrain-layer.png",
+    "fluid-material-set": "assets/fallback/terrain-layer.png",
+    "texture-layer": "assets/fallback/terrain-layer.png",
+    "content-icon": "assets/fallback/content-icon.png"
+  },
+  "assets": [
+    {
+      "id": "terrenia:asset/block-air",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/air.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/air",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-basalt",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/basalt.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/basalt",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-basalt-tiles",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/basalt-tiles.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/basalt-tiles",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-bricks",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/bricks.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/bricks",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-brown-mushroom",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/brown-mushroom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/brown-mushroom",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-cactus",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/cactus.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/cactus",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-calcite",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/calcite.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/calcite",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-chest",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/chest.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/chest",
+      "material_group": "opaque",
+      "face_policy": "six-face"
+    },
+    {
+      "id": "terrenia:asset/block-clay",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/clay.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/clay",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-coal-block",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/coal-block.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/coal-block",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-coal-ore",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/coal-ore.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/coal-ore",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-coarse-dirt",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/coarse-dirt.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/coarse-dirt",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-cobblestone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/cobblestone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/cobblestone",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-copper-block",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/copper-block.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/copper-block",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-copper-grating",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/copper-grating.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/copper-grating",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-copper-ore",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/copper-ore.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/copper-ore",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-crystal-cluster",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/crystal-cluster.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/crystal-cluster",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-deepstone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/deepstone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/deepstone",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-dirt",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/dirt.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/dirt",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-dripstone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/dripstone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/dripstone",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-fern",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/fern.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/fern",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-furnace",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/furnace.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/furnace",
+      "material_group": "opaque",
+      "face_policy": "six-face"
+    },
+    {
+      "id": "terrenia:asset/block-glass",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/glass.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/glass",
+      "material_group": "translucent",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-glow-moss",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/glow-moss.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/glow-moss",
+      "material_group": "emissive",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-gold-block",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/gold-block.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/gold-block",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-gold-ore",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/gold-ore.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/gold-ore",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-granite",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/granite.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/granite",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-grass",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/grass.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/grass",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-gravel",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/gravel.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/gravel",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-ice",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/ice.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/ice",
+      "material_group": "translucent",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-iron-block",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/iron-block.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/iron-block",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-iron-ore",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/iron-ore.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/iron-ore",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-limestone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/limestone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/limestone",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-marble",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/marble.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/marble",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-moss",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/moss.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/moss",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-mossy-stone-bricks",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/mossy-stone-bricks.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/mossy-stone-bricks",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-mud",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/mud.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/mud",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-oak-leaves",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/oak-leaves.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/oak-leaves",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-oak-log",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/oak-log.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/oak-log",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-oak-planks",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/oak-planks.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/oak-planks",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-obsidian",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/obsidian.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/obsidian",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-peat",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/peat.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/peat",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-pine-leaves",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/pine-leaves.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/pine-leaves",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-pine-log",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/pine-log.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/pine-log",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-pine-planks",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/pine-planks.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/pine-planks",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-polished-granite",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/polished-granite.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/polished-granite",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-polished-slate",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/polished-slate.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/polished-slate",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-polished-stone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/polished-stone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/polished-stone",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-red-mushroom",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/red-mushroom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/red-mushroom",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-red-sand",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/red-sand.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/red-sand",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-red-sandstone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/red-sandstone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/red-sandstone",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-reed",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/reed.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/reed",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-roof-tiles",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/roof-tiles.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/roof-tiles",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-rooted-dirt",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/rooted-dirt.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/rooted-dirt",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-sand",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/sand.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/sand",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-sandstone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/sandstone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/sandstone",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-silt",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/silt.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/silt",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-slate",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/slate.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/slate",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-snow",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/snow.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/snow",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-stone",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/stone.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/stone",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-stone-bricks",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/stone-bricks.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/stone-bricks",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-stripped-oak-log",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/stripped-oak-log.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/stripped-oak-log",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-stripped-pine-log",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/stripped-pine-log.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/stripped-pine-log",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/block-sulfur-ore",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/sulfur-ore.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/sulfur-ore",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-tall-grass",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/tall-grass.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/tall-grass",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-tin-block",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/tin-block.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/tin-block",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-tin-ore",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/tin-ore.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/tin-ore",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-torch",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/torch.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/torch",
+      "material_group": "emissive",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-tuff",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/tuff.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/tuff",
+      "material_group": "opaque",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-vine",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/vine.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/vine",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-wildflowers",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/wildflowers.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/wildflowers",
+      "material_group": "cutout",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/block-workbench",
+      "asset_kind": "block-material-set",
+      "status": "package-authored",
+      "source": "assets/blocks/workbench.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:block/workbench",
+      "material_group": "opaque",
+      "face_policy": "cube-column"
+    },
+    {
+      "id": "terrenia:asset/fluid-lava",
+      "asset_kind": "fluid-material-set",
+      "status": "package-authored",
+      "source": "assets/fluids/lava.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:fluid/lava",
+      "material_group": "emissive",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/fluid-water",
+      "asset_kind": "fluid-material-set",
+      "status": "package-authored",
+      "source": "assets/fluids/water.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "content": "terrenia:fluid/water",
+      "material_group": "translucent",
+      "face_policy": "uniform"
+    },
+    {
+      "id": "terrenia:asset/icon-block-air",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/air.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/air"
+    },
+    {
+      "id": "terrenia:asset/icon-block-basalt",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/basalt.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/basalt"
+    },
+    {
+      "id": "terrenia:asset/icon-block-basalt-tiles",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/basalt-tiles.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/basalt-tiles"
+    },
+    {
+      "id": "terrenia:asset/icon-block-bricks",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/bricks.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/bricks"
+    },
+    {
+      "id": "terrenia:asset/icon-block-brown-mushroom",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/brown-mushroom.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/brown-mushroom"
+    },
+    {
+      "id": "terrenia:asset/icon-block-cactus",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/cactus.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/cactus"
+    },
+    {
+      "id": "terrenia:asset/icon-block-calcite",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/calcite.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/calcite"
+    },
+    {
+      "id": "terrenia:asset/icon-block-chest",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/chest.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/chest"
+    },
+    {
+      "id": "terrenia:asset/icon-block-clay",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/clay.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/clay"
+    },
+    {
+      "id": "terrenia:asset/icon-block-coal-block",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/coal-block.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/coal-block"
+    },
+    {
+      "id": "terrenia:asset/icon-block-coal-ore",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/coal-ore.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/coal-ore"
+    },
+    {
+      "id": "terrenia:asset/icon-block-coarse-dirt",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/coarse-dirt.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/coarse-dirt"
+    },
+    {
+      "id": "terrenia:asset/icon-block-cobblestone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/cobblestone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/cobblestone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-copper-block",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/copper-block.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/copper-block"
+    },
+    {
+      "id": "terrenia:asset/icon-block-copper-grating",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/copper-grating.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/copper-grating"
+    },
+    {
+      "id": "terrenia:asset/icon-block-copper-ore",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/copper-ore.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/copper-ore"
+    },
+    {
+      "id": "terrenia:asset/icon-block-crystal-cluster",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/crystal-cluster.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/crystal-cluster"
+    },
+    {
+      "id": "terrenia:asset/icon-block-deepstone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/deepstone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/deepstone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-dirt",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/dirt.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/dirt"
+    },
+    {
+      "id": "terrenia:asset/icon-block-dripstone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/dripstone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/dripstone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-fern",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/fern.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/fern"
+    },
+    {
+      "id": "terrenia:asset/icon-block-furnace",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/furnace.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/furnace"
+    },
+    {
+      "id": "terrenia:asset/icon-block-glass",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/glass.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/glass"
+    },
+    {
+      "id": "terrenia:asset/icon-block-glow-moss",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/glow-moss.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/glow-moss"
+    },
+    {
+      "id": "terrenia:asset/icon-block-gold-block",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/gold-block.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/gold-block"
+    },
+    {
+      "id": "terrenia:asset/icon-block-gold-ore",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/gold-ore.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/gold-ore"
+    },
+    {
+      "id": "terrenia:asset/icon-block-granite",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/granite.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/granite"
+    },
+    {
+      "id": "terrenia:asset/icon-block-grass",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/grass.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/grass"
+    },
+    {
+      "id": "terrenia:asset/icon-block-gravel",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/gravel.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/gravel"
+    },
+    {
+      "id": "terrenia:asset/icon-block-ice",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/ice.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/ice"
+    },
+    {
+      "id": "terrenia:asset/icon-block-iron-block",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/iron-block.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/iron-block"
+    },
+    {
+      "id": "terrenia:asset/icon-block-iron-ore",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/iron-ore.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/iron-ore"
+    },
+    {
+      "id": "terrenia:asset/icon-block-limestone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/limestone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/limestone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-marble",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/marble.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/marble"
+    },
+    {
+      "id": "terrenia:asset/icon-block-moss",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/moss.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/moss"
+    },
+    {
+      "id": "terrenia:asset/icon-block-mossy-stone-bricks",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/mossy-stone-bricks.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/mossy-stone-bricks"
+    },
+    {
+      "id": "terrenia:asset/icon-block-mud",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/mud.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/mud"
+    },
+    {
+      "id": "terrenia:asset/icon-block-oak-leaves",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/oak-leaves.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/oak-leaves"
+    },
+    {
+      "id": "terrenia:asset/icon-block-oak-log",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/oak-log.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/oak-log"
+    },
+    {
+      "id": "terrenia:asset/icon-block-oak-planks",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/oak-planks.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/oak-planks"
+    },
+    {
+      "id": "terrenia:asset/icon-block-obsidian",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/obsidian.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/obsidian"
+    },
+    {
+      "id": "terrenia:asset/icon-block-peat",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/peat.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/peat"
+    },
+    {
+      "id": "terrenia:asset/icon-block-pine-leaves",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/pine-leaves.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/pine-leaves"
+    },
+    {
+      "id": "terrenia:asset/icon-block-pine-log",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/pine-log.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/pine-log"
+    },
+    {
+      "id": "terrenia:asset/icon-block-pine-planks",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/pine-planks.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/pine-planks"
+    },
+    {
+      "id": "terrenia:asset/icon-block-polished-granite",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/polished-granite.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/polished-granite"
+    },
+    {
+      "id": "terrenia:asset/icon-block-polished-slate",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/polished-slate.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/polished-slate"
+    },
+    {
+      "id": "terrenia:asset/icon-block-polished-stone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/polished-stone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/polished-stone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-red-mushroom",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/red-mushroom.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/red-mushroom"
+    },
+    {
+      "id": "terrenia:asset/icon-block-red-sand",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/red-sand.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/red-sand"
+    },
+    {
+      "id": "terrenia:asset/icon-block-red-sandstone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/red-sandstone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/red-sandstone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-reed",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/reed.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/reed"
+    },
+    {
+      "id": "terrenia:asset/icon-block-roof-tiles",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/roof-tiles.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/roof-tiles"
+    },
+    {
+      "id": "terrenia:asset/icon-block-rooted-dirt",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/rooted-dirt.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/rooted-dirt"
+    },
+    {
+      "id": "terrenia:asset/icon-block-sand",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/sand.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/sand"
+    },
+    {
+      "id": "terrenia:asset/icon-block-sandstone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/sandstone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/sandstone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-silt",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/silt.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/silt"
+    },
+    {
+      "id": "terrenia:asset/icon-block-slate",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/slate.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/slate"
+    },
+    {
+      "id": "terrenia:asset/icon-block-snow",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/snow.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/snow"
+    },
+    {
+      "id": "terrenia:asset/icon-block-stone",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/stone.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/stone"
+    },
+    {
+      "id": "terrenia:asset/icon-block-stone-bricks",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/stone-bricks.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/stone-bricks"
+    },
+    {
+      "id": "terrenia:asset/icon-block-stripped-oak-log",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/stripped-oak-log.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/stripped-oak-log"
+    },
+    {
+      "id": "terrenia:asset/icon-block-stripped-pine-log",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/stripped-pine-log.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/stripped-pine-log"
+    },
+    {
+      "id": "terrenia:asset/icon-block-sulfur-ore",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/sulfur-ore.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/sulfur-ore"
+    },
+    {
+      "id": "terrenia:asset/icon-block-tall-grass",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/tall-grass.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/tall-grass"
+    },
+    {
+      "id": "terrenia:asset/icon-block-tin-block",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/tin-block.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/tin-block"
+    },
+    {
+      "id": "terrenia:asset/icon-block-tin-ore",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/tin-ore.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/tin-ore"
+    },
+    {
+      "id": "terrenia:asset/icon-block-torch",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/torch.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/torch"
+    },
+    {
+      "id": "terrenia:asset/icon-block-tuff",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/tuff.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/tuff"
+    },
+    {
+      "id": "terrenia:asset/icon-block-vine",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/vine.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/vine"
+    },
+    {
+      "id": "terrenia:asset/icon-block-wildflowers",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/wildflowers.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/wildflowers"
+    },
+    {
+      "id": "terrenia:asset/icon-block-workbench",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/blocks/workbench.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:block/workbench"
+    },
+    {
+      "id": "terrenia:asset/icon-fluid-lava",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/fluids/lava.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:fluid/lava"
+    },
+    {
+      "id": "terrenia:asset/icon-fluid-water",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/fluids/water.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:fluid/water"
+    },
+    {
+      "id": "terrenia:asset/icon-item-stick",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/items/stick.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:item/stick"
+    },
+    {
+      "id": "terrenia:asset/icon-item-stone-axe",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/items/stone-axe.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:item/stone-axe"
+    },
+    {
+      "id": "terrenia:asset/icon-item-stone-pickaxe",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/items/stone-pickaxe.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:item/stone-pickaxe"
+    },
+    {
+      "id": "terrenia:asset/icon-item-stone-shovel",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/items/stone-shovel.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:item/stone-shovel"
+    },
+    {
+      "id": "terrenia:asset/icon-item-wooden-axe",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/items/wooden-axe.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:item/wooden-axe"
+    },
+    {
+      "id": "terrenia:asset/icon-item-wooden-pickaxe",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/items/wooden-pickaxe.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:item/wooden-pickaxe"
+    },
+    {
+      "id": "terrenia:asset/icon-item-wooden-shovel",
+      "asset_kind": "content-icon",
+      "status": "package-authored",
+      "source": "assets/icons/items/wooden-shovel.png",
+      "fallback": "assets/fallback/content-icon.png",
+      "content": "terrenia:item/wooden-shovel"
+    },
+    {
+      "id": "terrenia:asset/layer-cactus-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/cactus-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-cactus-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/cactus-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-cactus-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/cactus-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-down",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/chest-down.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "down",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-east",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/chest-east.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "east",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-north",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/chest-north.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "north",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-south",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/chest-south.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "south",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-up",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/chest-up.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "up",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-chest-west",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/chest-west.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "west",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-down",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/furnace-down.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "down",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-east",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/furnace-east.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "east",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-north",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/furnace-north.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "north",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-south",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/furnace-south.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "south",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-up",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/furnace-up.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "up",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-furnace-west",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/furnace-west.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "west",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-grass-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/grass-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-grass-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/grass-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-grass-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/grass-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-oak-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/oak-log-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-oak-log-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/oak-log-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-oak-log-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/oak-log-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-pine-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/pine-log-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-pine-log-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/pine-log-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-pine-log-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/pine-log-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-red-sandstone-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/red-sandstone-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-red-sandstone-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/red-sandstone-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-red-sandstone-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/red-sandstone-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-sandstone-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/sandstone-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-sandstone-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/sandstone-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-sandstone-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/sandstone-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-oak-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/stripped-oak-log-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-oak-log-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/stripped-oak-log-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-oak-log-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/stripped-oak-log-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-pine-log-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/stripped-pine-log-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-pine-log-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/stripped-pine-log-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-stripped-pine-log-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/stripped-pine-log-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-workbench-bottom",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/workbench-bottom.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "bottom",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-workbench-side",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/workbench-side.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "side",
+      "material_group": "opaque"
+    },
+    {
+      "id": "terrenia:asset/layer-workbench-top",
+      "asset_kind": "texture-layer",
+      "status": "package-authored",
+      "source": "assets/layers/workbench-top.png",
+      "fallback": "assets/fallback/terrain-layer.png",
+      "face": "top",
+      "material_group": "opaque"
+    }
+  ]
+}

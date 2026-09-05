@@ -1,0 +1,47 @@
+schema_version = 1
+name = "@terrenia/worldgen"
+version = "0.1.0"
+domains = ["authoritative"]
+trust = "data-only"
+
+[dependencies.blocks]
+package = "@terrenia/blocks"
+version = "~0.1.0"
+optional = false
+domains = ["authoritative"]
+
+[requires."latticeaxiom:capability/content-blocks@1"]
+capability = "latticeaxiom:capability/content-blocks@1"
+version = "^1.0.0"
+provider = "@terrenia/blocks"
+cardinality = "exactly-one"
+domains = ["authoritative"]
+
+[provides."latticeaxiom:capability/worldgen-terrain-provider@2"]
+capability = "latticeaxiom:capability/worldgen-terrain-provider@2"
+version = "2.0.0"
+cardinality = "exactly-one"
+domains = ["authoritative"]
+
+[realizations.data]
+id = "data"
+kind = "data"
+domains = ["authoritative"]
+artifact = { kind = "data-root", path = "data" }
+trust = "data-only"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = [
+  "crates",
+  "data",
+  "latticeaxiom-package.toml",
+  "package.ncl",
+
+]
+
+[rust]
+entry = "crates/latticeaxiom-terrenia-worldgen/Cargo.toml"
+members = ["crates/latticeaxiom-terrenia-worldgen/Cargo.toml"]

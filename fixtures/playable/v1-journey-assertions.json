@@ -1,0 +1,138 @@
+{
+  "schema_id": "latticeaxiom.v1-journey-assertions.v1",
+  "steps": [
+    {
+      "id": "create",
+      "description": "Create a Terrenia world from the shipped local package closure and a chosen or generated seed. Frozen-lock preflight must complete before any world writer is opened. The current finite -8..8 playable fixture is a non-production smoke only; V0 does not claim a production lock and does not claim a durable writer.",
+      "client_expectation": "The launcher world library creates the world from the frozen local package closure after successful frozen-lock preflight and does not open a writer on preflight failure. The windowed DefaultPlugins playable fixture is a non-production smoke only.",
+      "headless_expectation": "The same create sequence runs through command injection in a GPU-free headless Bevy App and refuses to open a writer until frozen-lock preflight succeeds. No production lock or durable writer is claimed for V0.",
+      "authoritative_assertions": [
+        "Create completes frozen lock preflight before any world writer is opened.",
+        "Create uses the shipped local package closure and seed rather than a host-hidden Terrenia fallback.",
+        "V0 does not claim a production lock and does not claim a durable writer; the current finite -8..8 playable fixture is a non-production smoke only."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "spawn",
+      "description": "Spawn at a validated, safe surface location in a Y-up world. The current finite -8..8 playable fixture is a non-production smoke only and is not a production spawn contract.",
+      "client_expectation": "The client presents the local player at the validated surface spawn using Bevy right-handed Y-up world coordinates. The finite fixture spawn is a non-production smoke only.",
+      "headless_expectation": "Headless command injection spawns the same validated player pose without a window or GPU and does not treat the finite fixture as production spawn.",
+      "authoritative_assertions": [
+        "Spawn occurs at a validated safe surface location in a Y-up world (+X right, +Y up, conventional forward -Z).",
+        "Spawn clearance, footing, hazard, fluid, cave, and active-chunk readiness checks pass before the player is placed.",
+        "Distances are meters and angles are radians."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "explore",
+      "description": "Walk, look, jump, inspect the targeted block, and traverse continuously as chunks stream around the player. The current finite -8..8 playable fixture is a non-production smoke only and does not provide production chunk streaming.",
+      "client_expectation": "Client input walks, looks, jumps, and inspects the targeted block while chunks stream around the player with a bounded resident set. The finite fixture walk is a non-production smoke only.",
+      "headless_expectation": "Headless command injection performs the same move, look, jump, and inspect sequence without a window or GPU and does not accept the finite fixture as production exploration.",
+      "authoritative_assertions": [
+        "Exploration keeps a bounded resident set through chunk streaming around the player.",
+        "Negative X/Z coordinates are first-class; normal play exposes no authored world edge.",
+        "Inspection reports the authoritative targeted block without mutating world state."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "enter-cave",
+      "description": "Explore multiple surface territories, find a cave entrance, and enter a traversable underground region.",
+      "client_expectation": "The client can reach a required cave entrance from the surface and continue into a traversable underground region without falling into an unready collider void.",
+      "headless_expectation": "Headless command injection reaches the same cave entrance and underground region with identical occupancy and clearance receipts.",
+      "authoritative_assertions": [
+        "A required cave entrance is reachable from the surface and leads into a traversable underground region.",
+        "Portal position, tangent, clearance, and fluid state at the cave entrance satisfy the frozen cave plan.",
+        "No entrance opens into an unready collider void, unsafe spawn, or unexplained fluid discontinuity."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "gather",
+      "description": "Gather wood, soil, stone, and at least one ore without duplication or loss.",
+      "client_expectation": "Client gathering places wood, soil, stone, and at least one ore into inventory without duplicating or losing stacks.",
+      "headless_expectation": "Headless command injection gathers the same wood, soil, stone, and ore with identical inventory receipts and no conservation loss.",
+      "authoritative_assertions": [
+        "Gathering yields wood, soil, stone, and at least one ore without duplication or loss.",
+        "Drop and pickup conservation holds for every gathered stack.",
+        "Full-inventory gathering does not destroy the source drop or the existing inventory."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "craft",
+      "description": "Craft a workbench and basic wooden and stone tools from package-authored definitions.",
+      "client_expectation": "The client crafts a workbench and then wooden and stone tools from package-authored recipes without host-embedded Terrenia defaults.",
+      "headless_expectation": "Headless command injection crafts the same workbench and wooden and stone tools with identical recipe receipts.",
+      "authoritative_assertions": [
+        "Crafting produces a workbench and wooden and stone tools from package-authored definitions.",
+        "Removing the tools package fails required-dependency preflight before any writer opens.",
+        "Recipe output is independent of source discovery order."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "mine",
+      "description": "Use the correct tool to mine faster, consume durability, receive drops, and fail explicitly when the required tool class or tier is absent.",
+      "client_expectation": "Client mining with the selected hotbar tool applies the correct mining multiplier, consumes durability on success, and receives predicate-matching drops.",
+      "headless_expectation": "Headless command injection mines the same blocks with identical speed, durability, and drop receipts and without a window or GPU.",
+      "authoritative_assertions": [
+        "The correct tool mines faster than the hand or an incompatible tool.",
+        "Successful mining consumes durability atomically with the authoritative action.",
+        "Correct-tool drop predicates are independent from mining-speed predicates.",
+        "A block that requires a missing tool class or tier fails explicitly without a drop."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "place",
+      "description": "Place blocks from the hotbar and build a small recognizable structure. The current finite -8..8 playable fixture is a non-production smoke only; in-memory break/place is not a durable writer.",
+      "client_expectation": "Client placement consumes the selected hotbar item, writes the block through authoritative receipts, and advances the owning chunk revision. The finite fixture place path is a non-production smoke only.",
+      "headless_expectation": "Headless command injection places the same blocks with identical receipts and chunk revisions and does not treat the finite fixture as production placement.",
+      "authoritative_assertions": [
+        "Placement from the hotbar conserves items and advances only the edited chunk revision.",
+        "Placed and broken blocks remain authoritative independent of mesh or collider rebuilds.",
+        "The current finite -8..8 playable fixture is a non-production smoke only and does not claim a durable writer."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "checkpoint",
+      "description": "Checkpoint player position, inventory, tool durability, placed and broken blocks, and included v1 containers or scheduled work.",
+      "client_expectation": "The client can request a checkpoint that persists the latest durable player and world revision without presenting derived mesh state as authoritative.",
+      "headless_expectation": "Headless command injection writes the same checkpoint bytes and refuses a checkpoint that would open an unauthorized writer.",
+      "authoritative_assertions": [
+        "A checkpoint captures player position, inventory, tool durability, and placed or broken blocks.",
+        "Checkpoint persistence uses atomic transactions and does not regenerate materialized chunks.",
+        "Recoverable read-only mode never opens a writer."
+      ],
+      "implemented": false
+    },
+    {
+      "id": "exit",
+      "description": "Exit the world after flushing dirty chunks through the sealed writer as Written commits. This is not a RocksDB checkpoint or flush_durable claim.",
+      "client_expectation": "The client leaves the world after a sealed-writer save/close. Pause does not change the world hash. This is not a physical durable checkpoint.",
+      "headless_expectation": "Headless pause/save/exit/continue reopens the same WorldId from DeterministicWorldStorage without a window or GPU. Missing receipts still fail closed.",
+      "authoritative_assertions": [
+        "Exit preserves the latest durable player and world state before the session ends.",
+        "A clean-shutdown marker is written only after durable state is committed.",
+        "Low-disk and shutdown-timeout paths still preserve the latest durable state."
+      ],
+      "implemented": true
+    },
+    {
+      "id": "reopen",
+      "description": "Reopen the world and recover player position, inventory, tool durability, placed and broken blocks, included v1 containers or scheduled work, and the exact generation epoch without regenerating materialized chunks.",
+      "client_expectation": "The client continues the same world from durable storage and resumes at the recovered pose and inventory without re-resolving the frozen lock.",
+      "headless_expectation": "Headless command injection reopens the same world and asserts identical recovered state without a window or GPU.",
+      "authoritative_assertions": [
+        "Reopen recovers player position, inventory, tool durability, and placed or broken blocks from durable storage.",
+        "Reopen restores the exact generation epoch without regenerating materialized chunks.",
+        "Stale async work cannot overwrite a newer revision after reopen."
+      ],
+      "implemented": true
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+feature domains must be a subset of package domains

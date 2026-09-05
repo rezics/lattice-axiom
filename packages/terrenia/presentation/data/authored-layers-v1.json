@@ -1,0 +1,634 @@
+{
+  "authoring_schema": "terrenia:schema/authored-terrain-layers@1",
+  "layers_revision": 1,
+  "owner_package": "@terrenia/presentation",
+  "authoritative": false,
+  "sampler": {
+    "filter": "nearest",
+    "address": "clamp-to-edge",
+    "mipmaps": "none",
+    "color-space": "srgb"
+  },
+  "layers": [
+    {
+      "content": "terrenia:block/air",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-air"
+      }
+    },
+    {
+      "content": "terrenia:block/basalt",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-basalt"
+      }
+    },
+    {
+      "content": "terrenia:block/basalt-tiles",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-basalt-tiles"
+      }
+    },
+    {
+      "content": "terrenia:block/bricks",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-bricks"
+      }
+    },
+    {
+      "content": "terrenia:block/brown-mushroom",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-brown-mushroom"
+      }
+    },
+    {
+      "content": "terrenia:block/cactus",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-cactus-top",
+        "side": "terrenia:asset/layer-cactus-side",
+        "bottom": "terrenia:asset/layer-cactus-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/calcite",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-calcite"
+      }
+    },
+    {
+      "content": "terrenia:block/chest",
+      "policy": "opaque",
+      "faces": {
+        "kind": "six-face",
+        "east": "terrenia:asset/layer-chest-east",
+        "west": "terrenia:asset/layer-chest-west",
+        "up": "terrenia:asset/layer-chest-up",
+        "down": "terrenia:asset/layer-chest-down",
+        "south": "terrenia:asset/layer-chest-south",
+        "north": "terrenia:asset/layer-chest-north"
+      }
+    },
+    {
+      "content": "terrenia:block/clay",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-clay"
+      }
+    },
+    {
+      "content": "terrenia:block/coal-block",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-coal-block"
+      }
+    },
+    {
+      "content": "terrenia:block/coal-ore",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-coal-ore"
+      }
+    },
+    {
+      "content": "terrenia:block/coarse-dirt",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-coarse-dirt"
+      }
+    },
+    {
+      "content": "terrenia:block/cobblestone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-cobblestone"
+      }
+    },
+    {
+      "content": "terrenia:block/copper-block",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-copper-block"
+      }
+    },
+    {
+      "content": "terrenia:block/copper-grating",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-copper-grating"
+      }
+    },
+    {
+      "content": "terrenia:block/copper-ore",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-copper-ore"
+      }
+    },
+    {
+      "content": "terrenia:block/crystal-cluster",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-crystal-cluster"
+      }
+    },
+    {
+      "content": "terrenia:block/deepstone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-deepstone"
+      }
+    },
+    {
+      "content": "terrenia:block/dirt",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-dirt"
+      }
+    },
+    {
+      "content": "terrenia:block/dripstone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-dripstone"
+      }
+    },
+    {
+      "content": "terrenia:block/fern",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-fern"
+      }
+    },
+    {
+      "content": "terrenia:block/furnace",
+      "policy": "opaque",
+      "faces": {
+        "kind": "six-face",
+        "east": "terrenia:asset/layer-furnace-east",
+        "west": "terrenia:asset/layer-furnace-west",
+        "up": "terrenia:asset/layer-furnace-up",
+        "down": "terrenia:asset/layer-furnace-down",
+        "south": "terrenia:asset/layer-furnace-south",
+        "north": "terrenia:asset/layer-furnace-north"
+      }
+    },
+    {
+      "content": "terrenia:block/glass",
+      "policy": "translucent",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-glass"
+      }
+    },
+    {
+      "content": "terrenia:block/glow-moss",
+      "policy": "emissive",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-glow-moss"
+      }
+    },
+    {
+      "content": "terrenia:block/gold-block",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-gold-block"
+      }
+    },
+    {
+      "content": "terrenia:block/gold-ore",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-gold-ore"
+      }
+    },
+    {
+      "content": "terrenia:block/granite",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-granite"
+      }
+    },
+    {
+      "content": "terrenia:block/grass",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-grass-top",
+        "side": "terrenia:asset/layer-grass-side",
+        "bottom": "terrenia:asset/layer-grass-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/gravel",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-gravel"
+      }
+    },
+    {
+      "content": "terrenia:block/ice",
+      "policy": "translucent",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-ice"
+      }
+    },
+    {
+      "content": "terrenia:block/iron-block",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-iron-block"
+      }
+    },
+    {
+      "content": "terrenia:block/iron-ore",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-iron-ore"
+      }
+    },
+    {
+      "content": "terrenia:block/limestone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-limestone"
+      }
+    },
+    {
+      "content": "terrenia:block/marble",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-marble"
+      }
+    },
+    {
+      "content": "terrenia:block/moss",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-moss"
+      }
+    },
+    {
+      "content": "terrenia:block/mossy-stone-bricks",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-mossy-stone-bricks"
+      }
+    },
+    {
+      "content": "terrenia:block/mud",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-mud"
+      }
+    },
+    {
+      "content": "terrenia:block/oak-leaves",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-oak-leaves"
+      }
+    },
+    {
+      "content": "terrenia:block/oak-log",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-oak-log-top",
+        "side": "terrenia:asset/layer-oak-log-side",
+        "bottom": "terrenia:asset/layer-oak-log-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/oak-planks",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-oak-planks"
+      }
+    },
+    {
+      "content": "terrenia:block/obsidian",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-obsidian"
+      }
+    },
+    {
+      "content": "terrenia:block/peat",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-peat"
+      }
+    },
+    {
+      "content": "terrenia:block/pine-leaves",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-pine-leaves"
+      }
+    },
+    {
+      "content": "terrenia:block/pine-log",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-pine-log-top",
+        "side": "terrenia:asset/layer-pine-log-side",
+        "bottom": "terrenia:asset/layer-pine-log-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/pine-planks",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-pine-planks"
+      }
+    },
+    {
+      "content": "terrenia:block/polished-granite",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-polished-granite"
+      }
+    },
+    {
+      "content": "terrenia:block/polished-slate",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-polished-slate"
+      }
+    },
+    {
+      "content": "terrenia:block/polished-stone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-polished-stone"
+      }
+    },
+    {
+      "content": "terrenia:block/red-mushroom",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-red-mushroom"
+      }
+    },
+    {
+      "content": "terrenia:block/red-sand",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-red-sand"
+      }
+    },
+    {
+      "content": "terrenia:block/red-sandstone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-red-sandstone-top",
+        "side": "terrenia:asset/layer-red-sandstone-side",
+        "bottom": "terrenia:asset/layer-red-sandstone-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/reed",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-reed"
+      }
+    },
+    {
+      "content": "terrenia:block/roof-tiles",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-roof-tiles"
+      }
+    },
+    {
+      "content": "terrenia:block/rooted-dirt",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-rooted-dirt"
+      }
+    },
+    {
+      "content": "terrenia:block/sand",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-sand"
+      }
+    },
+    {
+      "content": "terrenia:block/sandstone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-sandstone-top",
+        "side": "terrenia:asset/layer-sandstone-side",
+        "bottom": "terrenia:asset/layer-sandstone-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/silt",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-silt"
+      }
+    },
+    {
+      "content": "terrenia:block/slate",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-slate"
+      }
+    },
+    {
+      "content": "terrenia:block/snow",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-snow"
+      }
+    },
+    {
+      "content": "terrenia:block/stone",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-stone"
+      }
+    },
+    {
+      "content": "terrenia:block/stone-bricks",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-stone-bricks"
+      }
+    },
+    {
+      "content": "terrenia:block/stripped-oak-log",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-stripped-oak-log-top",
+        "side": "terrenia:asset/layer-stripped-oak-log-side",
+        "bottom": "terrenia:asset/layer-stripped-oak-log-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/stripped-pine-log",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-stripped-pine-log-top",
+        "side": "terrenia:asset/layer-stripped-pine-log-side",
+        "bottom": "terrenia:asset/layer-stripped-pine-log-bottom"
+      }
+    },
+    {
+      "content": "terrenia:block/sulfur-ore",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-sulfur-ore"
+      }
+    },
+    {
+      "content": "terrenia:block/tall-grass",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-tall-grass"
+      }
+    },
+    {
+      "content": "terrenia:block/tin-block",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-tin-block"
+      }
+    },
+    {
+      "content": "terrenia:block/tin-ore",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-tin-ore"
+      }
+    },
+    {
+      "content": "terrenia:block/torch",
+      "policy": "emissive",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-torch"
+      }
+    },
+    {
+      "content": "terrenia:block/tuff",
+      "policy": "opaque",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-tuff"
+      }
+    },
+    {
+      "content": "terrenia:block/vine",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-vine"
+      }
+    },
+    {
+      "content": "terrenia:block/wildflowers",
+      "policy": "cutout",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/block-wildflowers"
+      }
+    },
+    {
+      "content": "terrenia:block/workbench",
+      "policy": "opaque",
+      "faces": {
+        "kind": "cube-column",
+        "top": "terrenia:asset/layer-workbench-top",
+        "side": "terrenia:asset/layer-workbench-side",
+        "bottom": "terrenia:asset/layer-workbench-bottom"
+      }
+    },
+    {
+      "content": "terrenia:fluid/lava",
+      "policy": "emissive",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/fluid-lava"
+      }
+    },
+    {
+      "content": "terrenia:fluid/water",
+      "policy": "translucent",
+      "faces": {
+        "kind": "uniform",
+        "layer": "terrenia:asset/fluid-water"
+      }
+    }
+  ]
+}

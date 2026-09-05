@@ -1,0 +1,9 @@
+{
+  "authoring_schema": "terrenia:schema/thaumaturgy-mana@1",
+  "owner_package": "@terrenia/thaumaturgy",
+  "note": "Mana is a StatePropertyKey. It is not voltage and must not share science's energy integer.",
+  "mana_property": "terrenia:state/mana",
+  "mana_kind": "StatePropertyKey",
+  "not_voltage_property": "terrenia:state/voltage",
+  "rituals": []
+}

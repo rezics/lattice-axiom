@@ -1,0 +1,4 @@
+# Bevy's recommended faster linker for Windows development builds. The pinned
+# Rust toolchain includes rust-lld.exe.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

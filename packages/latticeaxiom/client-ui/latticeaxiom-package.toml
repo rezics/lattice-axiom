@@ -1,0 +1,22 @@
+schema_version = 1
+name = "@latticeaxiom/client-ui"
+version = "0.1.0"
+domains = ["authoritative", "client", "server", "tool"]
+trust = "trusted-native"
+
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["authoritative", "client", "server", "tool"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = ["latticeaxiom-package.toml", "package.ncl", "crates"]
+
+[rust]
+entry = "crates/latticeaxiom-client-ui/Cargo.toml"
+members = ["crates/latticeaxiom-client-ui/Cargo.toml"]

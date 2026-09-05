@@ -1,0 +1,22 @@
+schema_version = 1
+name = "@latticeaxiom/kernel"
+version = "0.1.0"
+domains = ["authoritative", "client", "server", "tool"]
+trust = "trusted-native"
+
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["authoritative", "client", "server", "tool"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = ["latticeaxiom-package.toml", "package.ncl", "crates"]
+
+[rust]
+entry = "crates/latticeaxiom-compose/Cargo.toml"
+members = ["crates/latticeaxiom-compose/Cargo.toml", "crates/latticeaxiom-core/Cargo.toml", "crates/latticeaxiom-packages/Cargo.toml", "crates/latticeaxiom-registration/Cargo.toml"]

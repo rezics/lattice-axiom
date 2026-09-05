@@ -1,0 +1,48 @@
+{
+  "schema": "latticeaxiom:schema/local-settings@1",
+  "schema_version": 1,
+  "store_revision": 2,
+  "transaction_revision": 2,
+  "writer": "local-user",
+  "device": {},
+  "user": {
+    "latticeaxiom:setting/ui-scale": {
+      "schema_version": 1,
+      "value": 2.0
+    },
+    "latticeaxiom:setting/view-distance": {
+      "schema_version": 1,
+      "value": 12
+    }
+  },
+  "binding_profile": {
+    "schema_version": 1,
+    "overrides": {
+      "latticeaxiom:action/gameplay/pause@1": [
+        {
+          "kind": "keyboard",
+          "usage": "Escape",
+          "modifiers": {
+            "shift": false,
+            "control": false,
+            "alt": false,
+            "super": false
+          }
+        }
+      ],
+      "latticeaxiom:action/gameplay/sprint@1": [
+        {
+          "kind": "keyboard",
+          "usage": "ControlLeft",
+          "modifiers": {
+            "shift": false,
+            "control": false,
+            "alt": false,
+            "super": false
+          }
+        }
+      ]
+    }
+  },
+  "pending_restart": null
+}

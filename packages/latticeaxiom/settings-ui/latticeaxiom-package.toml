@@ -1,0 +1,49 @@
+schema_version = 1
+name = "@latticeaxiom/settings-ui"
+version = "0.1.0"
+domains = ["client", "tool"]
+trust = "data-only"
+
+[dependencies.settings]
+package = "@latticeaxiom/settings"
+version = "~0.1.0"
+optional = false
+domains = ["client", "tool"]
+
+[requires."latticeaxiom:capability/settings-registry@1"]
+capability = "latticeaxiom:capability/settings-registry@1"
+version = "^1.0.0"
+provider = "@latticeaxiom/settings"
+cardinality = "exactly-one"
+domains = ["client", "tool"]
+
+[provides."latticeaxiom:capability/settings-surface@1"]
+capability = "latticeaxiom:capability/settings-surface@1"
+version = "1.0.0"
+cardinality = "exactly-one"
+domains = ["client", "tool"]
+
+[realizations.data]
+id = "data"
+kind = "data"
+domains = ["client", "tool"]
+artifact = { kind = "data-root", path = "data" }
+trust = "data-only"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = [
+  "crates",
+  "README.md",
+  "data",
+  "latticeaxiom-package.toml",
+  "package.ncl",
+
+
+]
+
+[rust]
+entry = "crates/latticeaxiom-settings-ui/Cargo.toml"
+members = ["crates/latticeaxiom-settings-ui/Cargo.toml"]

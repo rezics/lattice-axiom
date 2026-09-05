@@ -1,0 +1,574 @@
+{
+  "schema_id": "latticeaxiom.v1-release-reproduction.v1",
+  "schema_version": 1,
+  "kind": "latticeaxiom.v1-release-reproduction/v1",
+  "product_entry": "task play",
+  "supervisor_bin": "latticeaxiom-play",
+  "engine_bin": "latticeaxiom-engine",
+  "compose_bin": "latticeaxiom-compose",
+  "linux_is_independent_root_gate": true,
+  "windows_rustc_crash_policy": "linux-root-continues",
+  "claims_d10_frozen": false,
+  "claims_d2_working_set_gate": false,
+  "content_assets_included": false,
+  "commit_bound_docs_evidence": false,
+  "forbidden_operations": [
+    "cargo-fetch",
+    "cargo-publish",
+    "git-push",
+    "git-commit",
+    "github-release-publish",
+    "commit-bound-docs-evidence"
+  ],
+  "tools": {
+    "rust": "1.97.1",
+    "python": "3.12.12",
+    "cargo-deny": "0.20.2",
+    "cargo-cyclonedx": "0.5.9",
+    "cargo-about": "0.9.1",
+    "cyclonedx-spec": "1.5"
+  },
+  "actions": {
+    "actions/checkout": {
+      "version": "v4.2.2",
+      "pin": "11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    "Swatinem/rust-cache": {
+      "version": "v2.9.2",
+      "pin": "6323deb102c322ba6fcbdcafc7e3dddab59af2b6"
+    },
+    "actions/setup-python": {
+      "version": "v6.2.0",
+      "pin": "a309ff8b426b58ec0e2a45f0f869d46889d02405"
+    },
+    "actions/upload-artifact": {
+      "version": "v7.0.1",
+      "pin": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    }
+  },
+  "matrix": [
+    {
+      "id": "linux-x86_64-release",
+      "target": "x86_64-unknown-linux-gnu",
+      "os": "linux",
+      "github_runs_on": "ubuntu-24.04",
+      "root_gate": true,
+      "continue_on_error": false
+    },
+    {
+      "id": "windows-x86_64-release",
+      "target": "x86_64-pc-windows-msvc",
+      "os": "windows",
+      "github_runs_on": "windows-2022",
+      "root_gate": false,
+      "continue_on_error": true,
+      "reason": "Linux CI is the independent root gate when the documented Windows Rust compiler crash recurs."
+    }
+  ],
+  "artifact_normalization": {
+    "newline": "lf",
+    "json_sort_keys": true,
+    "strip_absolute_paths": true,
+    "strip_timestamps": true,
+    "posix_paths": true,
+    "sha256_sidecar": true,
+    "source_date_epoch": 0
+  },
+  "budgets": {
+    "profile": "desktop-reference-v1",
+    "status": "d2-provisional",
+    "chunk_edge_voxels": 32,
+    "frame_p95_ms": 16.67,
+    "frame_p99_ms": 25,
+    "long_frame_ms": 50,
+    "long_frame_count_max": 3,
+    "fixed_hz": 60,
+    "fixed_interval_ms": 16.67,
+    "fixed_update_p95_ms": 8,
+    "fixed_update_p99_ms": 12,
+    "catch_up_ticks_max": 2,
+    "physics_p95_ms": 3,
+    "physics_p99_ms": 5,
+    "ram_gib": 4,
+    "vram_gib": 3,
+    "active_chunks": 405,
+    "resident_chunks": 1183,
+    "visible_chunks": 512,
+    "requested_chunks": 1536,
+    "active_radius_chunks": 4,
+    "resident_radius_chunks": 6,
+    "active_vertical_radius_chunks": 2,
+    "resident_vertical_radius_chunks": 3,
+    "active_coverage_m": 128,
+    "resident_coverage_m": 192,
+    "apply_cpu_ms": 2,
+    "apply_bytes_mib": 16,
+    "soft_high_water_percent": 75,
+    "queues": {
+      "world_generation": { "jobs": 128, "bytes_mib": 128 },
+      "mesh": { "jobs": 128, "bytes_mib": 128 },
+      "collider": { "jobs": 64, "bytes_mib": 64 },
+      "persistence": { "jobs": 64, "bytes_mib": 64 },
+      "other_tasks": { "jobs": 128, "bytes_mib": 64 },
+      "combined": { "jobs": 512, "bytes_mib": 384 }
+    },
+    "latencies_ms": {
+      "edit_to_visible": { "p95": 100, "p99": 200 },
+      "collider_rebuild": { "p95": 150, "p99": 300 },
+      "warm_chunk_load": { "p95": 50, "p99": 100 },
+      "cold_chunk_load": { "p95": 250, "p99": 500 },
+      "world_activation": { "p95": 2000, "p99": 3000 },
+      "save_written": { "p95": 250, "p99": 500 },
+      "save_durable": { "p95": 1000, "p99": 2000 },
+      "checkpoint": { "p95": 5000, "p99": 10000 }
+    },
+    "dynamic_tick": {
+      "host_module_callbacks_soft": 64,
+      "host_module_callbacks_hard": 128,
+      "abi_calls_soft": 256,
+      "abi_calls_hard": 512,
+      "command_count_soft": 4096,
+      "command_count_hard": 16384,
+      "command_bytes_soft_kib": 256,
+      "command_bytes_hard_mib": 1,
+      "bridge_p95_ms": 1
+    }
+  },
+  "instructions": {
+    "linux": [
+      "Install the rust-toolchain.toml channel and Python 3.12.12.",
+      "Install g++, pkg-config, libx11-dev, libasound2-dev, libudev-dev, libxkbcommon-x11-0, libwayland-dev, and libxkbcommon-dev.",
+      "Install exact cargo-deny 0.20.2, cargo-cyclonedx 0.5.9, and cargo-about 0.9.1 --features cli.",
+      "From a clean checkout run: python scripts/release/reproduce.py run --profile ci-headless --output-dir target/v1-reproduction/linux-x86_64-release",
+      "Do not cargo fetch, publish, push, or write docs/delivery/evidence.",
+      "Windowed task play and the 10-minute desktop-reference-v1 traversal are designated-runner jobs, not shared CI passes."
+    ],
+    "windows": [
+      "Install the rust-toolchain.toml channel, Python 3.12.12, and the MSVC Build Tools used by x86_64-pc-windows-msvc.",
+      "Install exact cargo-deny 0.20.2, cargo-cyclonedx 0.5.9, and cargo-about 0.9.1 --features cli.",
+      "From a clean checkout run: python scripts/release/reproduce.py run --profile ci-headless --output-dir target/v1-reproduction/windows-x86_64-release",
+      "If the documented Windows Rust compiler crash recurs, treat Linux as the independent root gate; do not relax budgets or skip frozen-lock verification.",
+      "Do not cargo fetch, publish, push, or write docs/delivery/evidence."
+    ]
+  },
+  "jobs": [
+    {
+      "id": "fmt",
+      "kind": "lint",
+      "evidence_class": "lint",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "steps": [
+        { "argv": ["cargo", "fmt", "--all", "--check"] }
+      ]
+    },
+    {
+      "id": "check",
+      "kind": "lint",
+      "evidence_class": "lint",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--locked"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "clippy",
+      "kind": "lint",
+      "evidence_class": "lint",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "environment": { "RUSTFLAGS": "-Dwarnings" },
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--locked"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rustdoc",
+      "kind": "lint",
+      "evidence_class": "lint",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "environment": { "RUSTDOCFLAGS": "-D warnings" },
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "doc",
+            "--workspace",
+            "--all-features",
+            "--locked",
+            "--no-deps"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dependency-license",
+      "kind": "supply-chain",
+      "evidence_class": "supply-chain",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "steps": [
+        {
+          "argv": [
+            "${python}",
+            "scripts/supply-chain/v1_dependency_license.py",
+            "check"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "offline-frozen-lock",
+      "kind": "lock",
+      "evidence_class": "production",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": true,
+      "notes": "Local package lock and frozen reopen from shipped path sources. No package network.",
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "latticeaxiom-compose",
+            "--bin",
+            "latticeaxiom-compose",
+            "--features",
+            "nickel-evaluator"
+          ]
+        },
+        {
+          "argv": [
+            "${compose_bin}",
+            "lock",
+            "--offline",
+            "--bootstrap",
+            "profiles/dev.toml",
+            "--lock",
+            "latticeaxiom.lock"
+          ]
+        },
+        {
+          "argv": [
+            "${compose_bin}",
+            "lock",
+            "--offline",
+            "--bootstrap",
+            "profiles/shell.toml",
+            "--lock",
+            "run/shell/latticeaxiom.lock"
+          ]
+        },
+        {
+          "argv": [
+            "${compose_bin}",
+            "verify",
+            "--offline",
+            "--frozen",
+            "--lock",
+            "latticeaxiom.lock"
+          ]
+        },
+        {
+          "argv": [
+            "${compose_bin}",
+            "verify",
+            "--offline",
+            "--frozen",
+            "--lock",
+            "run/shell/latticeaxiom.lock"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "test",
+      "kind": "test",
+      "evidence_class": "component",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "notes": "Workspace tests are a root gate. They are not by themselves v1 release proof.",
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--locked"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "headless-smoke",
+      "kind": "headless-smoke",
+      "evidence_class": "production",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": true,
+      "notes": "GPU-free D10 production journey from a reopened frozen lock. This is not a windowed task play pass.",
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--locked",
+            "--all-features",
+            "-p",
+            "latticeaxiom-engine",
+            "--test",
+            "v1_complete_journey"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "client-compile",
+      "kind": "client-smoke",
+      "evidence_class": "production",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": true,
+      "notes": "Distributable compile without development dynamic linking. This is not a windowed client pass.",
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "build",
+            "--workspace",
+            "--release",
+            "--no-default-features",
+            "--locked"
+          ]
+        },
+        {
+          "argv": [
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "latticeaxiom-engine",
+            "--bin",
+            "latticeaxiom-play",
+            "--no-default-features",
+            "--features",
+            "client"
+          ]
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--locked",
+            "--all-features",
+            "-p",
+            "latticeaxiom-engine",
+            "--test",
+            "client_process"
+          ]
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--locked",
+            "--all-features",
+            "-p",
+            "latticeaxiom-client-ui",
+            "--test",
+            "regression_corpus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "deterministic-corpus",
+      "kind": "corpus",
+      "evidence_class": "production",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": true,
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--locked",
+            "--all-features",
+            "-p",
+            "latticeaxiom-dual-fixture",
+            "--test",
+            "v1_product_equivalence"
+          ]
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--locked",
+            "--all-features",
+            "-p",
+            "latticeaxiom-compose",
+            "--test",
+            "composition_golden"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fault-corpus",
+      "kind": "corpus",
+      "evidence_class": "production",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": true,
+      "notes": "Faults must preserve the latest durable recoverable world. Presentation failures are not world mutations.",
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--locked",
+            "--all-features",
+            "-p",
+            "latticeaxiom-engine",
+            "--test",
+            "v1_fault_corpus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release-evidence-fixtures",
+      "kind": "release-evidence",
+      "evidence_class": "supply-chain",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "steps": [
+        {
+          "argv": [
+            "${python}",
+            "scripts/supply-chain/test_release_evidence.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release-evidence-smoke",
+      "kind": "release-evidence",
+      "evidence_class": "supply-chain",
+      "profiles": ["ci-headless", "local-release"],
+      "required_in": ["ci-headless", "local-release"],
+      "designated_runner": false,
+      "production": false,
+      "notes": "Validates pins and locked closures. Does not generate, fetch, or publish evidence artifacts.",
+      "steps": [
+        {
+          "argv": [
+            "${python}",
+            "scripts/supply-chain/release_evidence.py",
+            "smoke"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "product-supervisor",
+      "kind": "supervisor",
+      "evidence_class": "production",
+      "profiles": ["local-release"],
+      "required_in": ["local-release"],
+      "designated_runner": true,
+      "production": true,
+      "notes": "Production task play: non-Bevy supervisor, reopened frozen locks, real shell and game replacement processes. Not a shared CI window/GPU job.",
+      "steps": [
+        {
+          "argv": [
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "latticeaxiom-engine",
+            "--bin",
+            "latticeaxiom-engine",
+            "--no-default-features",
+            "--features",
+            "client"
+          ]
+        },
+        {
+          "argv": [
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "latticeaxiom-engine",
+            "--bin",
+            "latticeaxiom-play",
+            "--no-default-features",
+            "--features",
+            "client"
+          ]
+        },
+        { "argv": ["${play_bin}"] }
+      ]
+    },
+    {
+      "id": "performance-traversal",
+      "kind": "performance",
+      "evidence_class": "production",
+      "profiles": ["reference-host"],
+      "required_in": ["reference-host"],
+      "designated_runner": true,
+      "production": true,
+      "notes": "ADR 0026 desktop-reference-v1 10-minute traversal on the designated reference host using scripts/performance/desktop-reference-v1.toml. Shared CI must not claim this pass. Headless smoke observations cannot declare a render-budget pass.",
+      "steps": []
+    }
+  ]
+}

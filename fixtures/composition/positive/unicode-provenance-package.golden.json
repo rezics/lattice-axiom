@@ -1,0 +1,60 @@
+{
+  "dependencies": {},
+  "domains": [
+    "authoritative"
+  ],
+  "features": {},
+  "metadata": {
+    "display_name": "Core empty package",
+    "documentation": null,
+    "license": "MIT OR Apache-2.0"
+  },
+  "model_version": 3,
+  "name": "core",
+  "namespace_delegations": {},
+  "namespace_requests": [],
+  "parameters": {},
+  "provenance": {
+    "content_hash": "4831ca03e2b83abf0378d850adc50d13f55cb6e05e35c6aebfcc03e0401c445d",
+    "generated_fragment": null,
+    "logical_path": "fixtures/composition/support/café.ncl",
+    "origin_chain": [],
+    "producer": null,
+    "source_id": "latticeaxiom:source/composition-fixtures",
+    "span": null,
+    "toolchain": null
+  },
+  "provides": {},
+  "realizations": {
+    "data": {
+      "artifact": {
+        "kind": "data-root",
+        "path": "data"
+      },
+      "domains": [
+        "authoritative"
+      ],
+      "engine_build": null,
+      "id": "data",
+      "interfaces": {},
+      "kind": "data",
+      "registration_fragment": "59915c3d09fa528003f7dfdf0b8fa41875c3038a0637f395711aef516547815c",
+      "required_features": [],
+      "targets": [],
+      "trust": "data-only"
+    }
+  },
+  "registration": {
+    "composition_parameters": [],
+    "info_items": [],
+    "inspect": [],
+    "metrics": [],
+    "registrations": [],
+    "semantics": [],
+    "settings": [],
+    "visualizers": []
+  },
+  "requires": {},
+  "trust": "data-only",
+  "version": "0.1.0"
+}

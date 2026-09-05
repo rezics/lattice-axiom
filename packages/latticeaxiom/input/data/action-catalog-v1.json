@@ -1,0 +1,586 @@
+{
+  "schema": "latticeaxiom:schema/input-action-catalog@1",
+  "owner_package": "@latticeaxiom/input",
+  "capability": "latticeaxiom:capability/input-actions@1",
+  "actions": [
+    {
+      "id": "latticeaxiom:action/gameplay/break-block@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "break-block",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-button",
+          "button": "Left"
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "West"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/inspect@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "inspect",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "KeyF",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/jump@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "jump",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Space",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "South"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/look@1",
+      "kind": "axis2",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "look",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-motion",
+          "sensitivity": 0.002
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-stick",
+          "stick": "right",
+          "deadzone": 0.1,
+          "sensitivity": 2.1
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/move@1",
+      "kind": "axis2",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "move",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard-virtual-dpad",
+          "up": "KeyW",
+          "down": "KeyS",
+          "left": "KeyA",
+          "right": "KeyD",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-stick",
+          "stick": "left",
+          "deadzone": 0.1,
+          "sensitivity": 1.0
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/pause@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "pause",
+      "authoritative_player_action": "pause",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Escape",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "Start"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/pick-block@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "pick-block",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-button",
+          "button": "Middle"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/place-block@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "place-block",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-button",
+          "button": "Right"
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "East"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/sneak@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "sneak",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ShiftLeft",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ShiftRight",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "RightThumb"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/gameplay/sprint@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "authoritative_player_action": "sprint",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ControlLeft",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ControlRight",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "LeftThumb"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-next@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "none",
+      "client_surface_action": "hotbar-next",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-wheel-direction",
+          "direction": "Down"
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "RightTrigger"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-previous@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "none",
+      "client_surface_action": "hotbar-previous",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "mouse-wheel-direction",
+          "direction": "Up"
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "LeftTrigger"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-1@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-1",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit1",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-2@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-2",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit2",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-3@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-3",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit3",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-4@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-4",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit4",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-5@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-5",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit5",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-6@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-6",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit6",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-7@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-7",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit7",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-8@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-8",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit8",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/hotbar-slot-9@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "hotbar-slot-9",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Digit9",
+          "modifiers": []
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/toggle-inventory@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "toggle-inventory",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "KeyE",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "Select"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/hud/toggle-workbench@1",
+      "kind": "button",
+      "context": "gameplay",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "toggle-workbench",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "KeyC",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "North"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/activate@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "activate",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Enter",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "South"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/back@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "back",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Escape",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "East"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/nav-down@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "nav-down",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ArrowDown",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "DPadDown"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/nav-left@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "nav-left",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ArrowLeft",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "DPadLeft"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/nav-next@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "nav-next",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Tab",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "RightShoulder"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/nav-previous@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "nav-previous",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "Tab",
+          "modifiers": ["Shift"]
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "LeftShoulder"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/nav-right@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "nav-right",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ArrowRight",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "DPadRight"
+        }
+      ]
+    },
+    {
+      "id": "latticeaxiom:action/ui/nav-up@1",
+      "kind": "button",
+      "context": "surface",
+      "rebindable": "keyboard-mouse",
+      "client_surface_action": "nav-up",
+      "defaults": [
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "keyboard",
+          "usage": "ArrowUp",
+          "modifiers": []
+        },
+        {
+          "schema": "latticeaxiom:schema/input-binding@1",
+          "kind": "gamepad-button",
+          "button": "DPadUp"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+[package]
+name = "latticeaxiom-terrenia-worldgen"
+description = "Terrenia-owned world-generation profiles and policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+latticeaxiom-core.workspace = true
+latticeaxiom-worldgen.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "semantic_terrain"
+harness = false
+
+[package.metadata.latticeaxiom]
+owner = "@terrenia/worldgen"
