@@ -1,2 +1,0 @@
-terrenia:fluid/lava
-terrenia:fluid/water

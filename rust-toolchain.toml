@@ -1,4 +1,0 @@
-# Pinned toolchain; upgrade deliberately at roadmap milestones and record why.
-[toolchain]
-channel = "1.97.1"
-components = ["rustfmt", "clippy"]

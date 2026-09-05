@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:observability",
+  "requirements": [
+    {
+      "id": "OBSERVABILITY-HOST-001",
+      "document_id": "platform.observability.diagnostics-inspection-and-debug-visualization",
+      "level": "must",
+      "statement": "The host activates bounded typed observability providers and isolates all presentation faults from authoritative execution.",
+      "acceptance": [
+        "No expensive data is collected without a subscription.",
+        "Provider faults, device loss and budget rejection leave world state unchanged."
+      ]
+    }
+  ]
+}

@@ -1,1 +1,0 @@
-source-build artifacts must omit path

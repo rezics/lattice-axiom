@@ -1,7 +1,0 @@
-{
-  "capability": "latticeaxiom:capability/terrain-render-backend@1",
-  "provider": "latticeaxiom:render-provider/terrain-backend@1",
-  "realization": "latticeaxiom:render-realization/compute-terrain@1",
-  "required_feature": "compute-shaders",
-  "presentation_optional": true
-}

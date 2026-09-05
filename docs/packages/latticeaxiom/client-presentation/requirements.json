@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@latticeaxiom/client-presentation",
+  "requirements": [
+    {
+      "id": "CLIENT-PRESENTATION-SETTINGS-001",
+      "document_id": "package.latticeaxiom.client-presentation.index",
+      "level": "must",
+      "statement": "One client-only package owns the complete cross-shell and client-world display, video, audio and presentation-accessibility settings catalog.",
+      "acceptance": [
+        "Shell and client-world locks select the same client-presentation setting IDs and persisted effective values while headless omits the package without authoritative differences.",
+        "Display previews recover from timeout or unsupported modes; audio and video values expose requested, admitted and effective states with provider diagnostics.",
+        "The baseline catalog covers required Accessibility, Audio and Video groups, and optional providers contribute namespaced feature-conditional rows through the shared registry and selected surface."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:launcher",
+  "requirements": [
+    {
+      "id": "LAUNCHER-SUPERVISOR-001",
+      "document_id": "platform.launcher.supervisor-loop",
+      "level": "must",
+      "statement": "A non-Bevy supervisor runs the shell-to-world-to-shell replacement-process product loop using atomic launch intents.",
+      "acceptance": [
+        "The menu-driven product smoke returns to shell after durable world shutdown.",
+        "Stale intents, child crashes and lease conflicts fail into bounded recovery."
+      ]
+    },
+    {
+      "id": "LAUNCHER-RESULT-001",
+      "document_id": "platform.launcher.supervisor-loop",
+      "level": "must",
+      "statement": "Versioned child exit reports and one-shot launch intents distinguish durable transitions from crashes without restart loops.",
+      "acceptance": [
+        "Only a durable game exit with a matching Shell intent returns through the normal shell path; written-only, timeout and crash paths enter recovery.",
+        "Intent generations are atomically acknowledged or quarantined and a failed generation is never automatically replayed."
+      ]
+    }
+  ]
+}

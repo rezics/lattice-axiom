@@ -1,0 +1,47 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:input",
+  "requirements": [
+    {
+      "id": "INPUT-RUNTIME-001",
+      "document_id": "platform.input.input-binding-and-contexts",
+      "level": "must",
+      "statement": "A stable binding profile, action catalog and context stack replace all parallel hard-coded gameplay, HUD and shell input paths.",
+      "acceptance": [
+        "Rebinding persists, conflicts fail deterministically and contexts prevent input leakage.",
+        "Client physical input and headless command input preserve authoritative receipts."
+      ]
+    },
+    {
+      "id": "INPUT-BINDING-001",
+      "document_id": "platform.input.input-binding-and-contexts",
+      "level": "must",
+      "statement": "Versioned package defaults and a user binding profile compile into one deterministic effective action map.",
+      "acceptance": [
+        "Profiles round-trip canonically, preserve unknown actions, persist across restart and reject normalized same-context conflicts.",
+        "Exactly one lock-selected input-actions provider supplies production defaults without host include or fallback catalogs."
+      ]
+    },
+    {
+      "id": "INPUT-CONTEXT-001",
+      "document_id": "platform.input.input-binding-and-contexts",
+      "level": "must",
+      "statement": "One active input context stack owns gameplay suppression, cursor, focus and pressed-state propagation for every client surface.",
+      "acceptance": [
+        "Pause, settings, inventory and workbench prevent gameplay leakage while the documented hotbar allowlist still works.",
+        "Context transitions leave no stuck or replayed input and preserve the native Esc safety path."
+      ]
+    },
+    {
+      "id": "INPUT-ADAPTER-001",
+      "document_id": "platform.input.input-binding-and-contexts",
+      "level": "must",
+      "statement": "Gameplay, HUD and shell consume compiled logical actions rather than private physical-key mappings.",
+      "acceptance": [
+        "Production gameplay, HUD and shell paths contain no business-action ButtonInput or hard-coded fallback maps.",
+        "Keyboard, mouse and standard gamepad logical streams preserve client/headless authoritative receipt parity."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "@terrenia/thaumaturgy",
+  "requirements": [
+    {
+      "id": "TERRENIA-THAUMATURGY-001",
+      "document_id": "package.terrenia.thaumaturgy.index",
+      "level": "must",
+      "statement": "The package provides versioned ritual and mana gameplay independently of science content.",
+      "acceptance": [
+        "Ritual state is deterministic and persistent.",
+        "Removing thaumaturgy leaves science and materialized world state loadable."
+      ]
+    }
+  ]
+}

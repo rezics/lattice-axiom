@@ -1,0 +1,17 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:registration",
+  "requirements": [
+    {
+      "id": "REGISTRATION-001",
+      "document_id": "platform.registration.semantic-registration",
+      "level": "must",
+      "statement": "Closure-wide stable registrations compile into one deterministic semantic image with explicit ownership, roles, predicates and fallbacks.",
+      "acceptance": [
+        "Registration order does not change image hashes or candidate selection.",
+        "Duplicate ownership, missing roles and invalid references fail before code activation."
+      ]
+    }
+  ]
+}

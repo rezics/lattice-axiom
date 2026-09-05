@@ -1,0 +1,640 @@
+{
+  "$schema": "../../meta/schemas/implementation-evidence.schema.json",
+  "schema_version": 1,
+  "implementation": {
+    "repository": "https://github.com/rezics/lattice-axiom-demo",
+    "commit": "653556ba7df5c5993f300bd40c1393c8221abafe"
+  },
+  "evidence": [
+    {
+      "requirement_id": "ASSET-SEMANTICS-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-content/src",
+        "crates/latticeaxiom-render-contracts/src",
+        "packages/terrenia/presentation"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-content",
+        "cargo test -p latticeaxiom-render-contracts"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "CAVE-COMPOSITION-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-worldgen/src",
+        "crates/latticeaxiom-territory/src"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-worldgen"
+      ],
+      "notes": "A playable sparse cave path is reported, but the complete topology, hydrology and connectivity gates are open."
+    },
+    {
+      "requirement_id": "COMPATIBILITY-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-core/src",
+        "crates/latticeaxiom-packages/src",
+        "crates/latticeaxiom-world-wire/src"
+      ],
+      "product_entries": [],
+      "checks": [
+        "cargo test -p latticeaxiom-core",
+        "cargo test -p latticeaxiom-packages",
+        "cargo test -p latticeaxiom-world-wire"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "COMPOSITION-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-compose/src",
+        "nickel/latticeaxiom",
+        "fixtures/composition"
+      ],
+      "product_entries": [
+        "profiles/dev.toml"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-compose --features nickel-evaluator"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "DELIVERY-ENGINE-001",
+      "status": "partial",
+      "production_paths": [
+        "crates",
+        "packages",
+        "supply-chain"
+      ],
+      "product_entries": [],
+      "checks": [
+        "cargo test --workspace --all-targets --all-features --locked",
+        "cargo deny --locked check"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "DELIVERY-FIRST-DEMO-001",
+      "status": "partial",
+      "production_paths": [
+        "crates",
+        "packages",
+        "latticeaxiom.lock"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "DELIVERY-FUTURE-SYSTEMS-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/latticeaxiom/progress",
+        "packages/latticeaxiom/relations",
+        "packages/terrenia/metallurgy",
+        "packages/terrenia/science",
+        "packages/terrenia/thaumaturgy",
+        "packages/terrenia/journey"
+      ],
+      "product_entries": [],
+      "checks": [],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "DELIVERY-PLAYER-SURFACES-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-player/src",
+        "crates/latticeaxiom-gameplay/src",
+        "crates/latticeaxiom-engine/src/host/hud.rs"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-player",
+        "cargo test -p latticeaxiom-gameplay"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "DELIVERY-V1-001",
+      "status": "partial",
+      "production_paths": [
+        "crates",
+        "packages",
+        "profiles/dev.toml",
+        "latticeaxiom.lock"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test --workspace --all-targets --all-features --locked"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "DELIVERY-VOXEL-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-voxel-mesh/src",
+        "crates/latticeaxiom-voxel-runtime/src",
+        "crates/latticeaxiom-engine/src/host"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-voxel-mesh",
+        "cargo test -p latticeaxiom-voxel-runtime"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "DEV-TOOLS-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/latticeaxiom/dev-tools",
+        "crates/latticeaxiom-engine/src/host"
+      ],
+      "product_entries": [
+        "latticeaxiom.lock"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-engine --no-default-features"
+      ],
+      "notes": "Diagnostic rows exist, but a complete F3 workbench and visualizer control surface are not evidenced."
+    },
+    {
+      "requirement_id": "ENTITY-PHYSICS-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-player/src",
+        "crates/latticeaxiom-engine/src/host",
+        "crates/latticeaxiom-voxel-runtime/src"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-player",
+        "cargo test -p latticeaxiom-voxel-runtime"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "FRONTEND-SHELL-001",
+      "status": "partial",
+      "production_paths": [
+        "profiles/shell.toml",
+        "crates/latticeaxiom-start-ui/src",
+        "crates/latticeaxiom-engine/src/host/shell_view.rs",
+        "crates/latticeaxiom-launcher/src"
+      ],
+      "product_entries": [
+        "profiles/shell.toml"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-start-ui",
+        "cargo test -p latticeaxiom-launcher"
+      ],
+      "notes": "Shell and game lock-root boot paths exist, but the report identifies the missing process supervisor loop."
+    },
+    {
+      "requirement_id": "LAUNCHER-SUPERVISOR-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-launcher/src",
+        "crates/latticeaxiom-engine/src/client.rs",
+        "profiles/shell.toml"
+      ],
+      "product_entries": [
+        "profiles/shell.toml"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-launcher"
+      ],
+      "notes": "Intent stores, transition machines and lock-selected shell/game boot exist; the executable child-process loop and task play product entry are absent."
+    },
+    {
+      "requirement_id": "NATIVE-ABI-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-abi/src",
+        "crates/latticeaxiom-sdk/src",
+        "crates/latticeaxiom-dual-fixture/src"
+      ],
+      "product_entries": [],
+      "checks": [
+        "cargo test -p latticeaxiom-abi",
+        "cargo test -p latticeaxiom-dual-fixture"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "OBSERVABILITY-HOST-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-runtime-contracts/src",
+        "crates/latticeaxiom-render-contracts/src",
+        "crates/latticeaxiom-engine/src/host"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-runtime-contracts",
+        "cargo test -p latticeaxiom-render-contracts"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "OBSERVABILITY-REGISTRY-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/latticeaxiom/observability",
+        "crates/latticeaxiom-runtime-contracts/src",
+        "crates/latticeaxiom-engine/src/host"
+      ],
+      "product_entries": [
+        "latticeaxiom.lock"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-runtime-contracts",
+        "cargo test -p latticeaxiom-engine --no-default-features"
+      ],
+      "notes": "Diagnostic DTOs and production HUD metrics exist, but complete subscription and report behavior is not evidenced."
+    },
+    {
+      "requirement_id": "PACKAGE-KERNEL-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-packages/src",
+        "crates/latticeaxiom-compose/src",
+        "catalog",
+        "latticeaxiom.lock"
+      ],
+      "product_entries": [
+        "task lock",
+        "task verify"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-packages",
+        "cargo test -p latticeaxiom-compose --features nickel-evaluator"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "PHYSICAL-AUTHORING-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "crates/latticeaxiom-content/src",
+        "crates/latticeaxiom-runtime-contracts/src"
+      ],
+      "product_entries": [],
+      "checks": [
+        "cargo test -p latticeaxiom-content"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "PLAYER-MECHANICS-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-gameplay/src",
+        "crates/latticeaxiom-player/src",
+        "crates/latticeaxiom-engine/src/host"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-gameplay",
+        "cargo test -p latticeaxiom-player"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "PROGRESS-GRAPH-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/latticeaxiom/progress"
+      ],
+      "product_entries": [],
+      "checks": [],
+      "notes": "A data-only manifest and empty skeleton exist outside the current lock; there is no runtime consumer."
+    },
+    {
+      "requirement_id": "REGISTRATION-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-registration/src",
+        "crates/latticeaxiom-compose/src",
+        "fixtures/composition"
+      ],
+      "product_entries": [],
+      "checks": [
+        "cargo test -p latticeaxiom-registration",
+        "cargo test -p latticeaxiom-compose --features nickel-evaluator"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "RELATIONS-GRAPH-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/latticeaxiom/relations"
+      ],
+      "product_entries": [],
+      "checks": [],
+      "notes": "A data-only manifest and empty skeleton exist outside the current lock; there is no runtime consumer."
+    },
+    {
+      "requirement_id": "RENDERING-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-render-contracts/src",
+        "crates/latticeaxiom-voxel-mesh/src",
+        "crates/latticeaxiom-engine/src/host/chunk_mesh.rs"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-render-contracts",
+        "cargo test -p latticeaxiom-voxel-mesh"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "RUNTIME-HOST-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-engine/src",
+        "crates/latticeaxiom-runtime-contracts/src",
+        "latticeaxiom.lock"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-engine --no-default-features"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    },
+    {
+      "requirement_id": "SETTINGS-REGISTRY-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/latticeaxiom/settings",
+        "crates/latticeaxiom-runtime-contracts/src",
+        "crates/latticeaxiom-start-ui/src/settings.rs"
+      ],
+      "product_entries": [
+        "latticeaxiom.lock"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-runtime-contracts",
+        "cargo test -p latticeaxiom-start-ui"
+      ],
+      "notes": "Typed contracts and a selected data package exist; complete user-scope persistence and product transaction wiring are still missing."
+    },
+    {
+      "requirement_id": "SETTINGS-SURFACE-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/latticeaxiom/settings-ui",
+        "crates/latticeaxiom-start-ui/src"
+      ],
+      "product_entries": [],
+      "checks": [
+        "cargo test -p latticeaxiom-start-ui"
+      ],
+      "notes": "The selected data package and semantic settings contracts exist, but the report records only a minimal View control rather than the full surface."
+    },
+    {
+      "requirement_id": "TARGET-INSPECT-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/latticeaxiom/inspect",
+        "crates/latticeaxiom-player/src",
+        "crates/latticeaxiom-engine/src/host/hud.rs"
+      ],
+      "product_entries": [
+        "cargo run -p latticeaxiom-engine"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-player",
+        "cargo test -p latticeaxiom-engine --no-default-features"
+      ],
+      "notes": "Target and overlay fragment code landed, but the complete typed provider, permission and accessibility contract is not evidenced."
+    },
+    {
+      "requirement_id": "TERRENIA-BLOCKS-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/terrenia/blocks",
+        "crates/latticeaxiom-content/src",
+        "crates/latticeaxiom-engine/src/host/catalog.rs"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-content",
+        "cargo test -p latticeaxiom-engine --no-default-features"
+      ],
+      "notes": "A smaller locked catalog drives the playable slice; the exact 72+2 content baseline is not present."
+    },
+    {
+      "requirement_id": "TERRENIA-GAMEPLAY-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/terrenia/gameplay",
+        "crates/latticeaxiom-gameplay/src",
+        "crates/latticeaxiom-engine/src/host"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-gameplay",
+        "cargo test -p latticeaxiom-engine --no-default-features"
+      ],
+      "notes": "Mining, placement, inventory moves and catalog crafting have production code, but durability, persistence and the full fault journey remain open."
+    },
+    {
+      "requirement_id": "TERRENIA-JOURNEY-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/terrenia/journey"
+      ],
+      "product_entries": [],
+      "checks": [],
+      "notes": "The package is an unlocked data-only skeleton with empty chapters and no runtime consumer."
+    },
+    {
+      "requirement_id": "TERRENIA-METALLURGY-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/terrenia/metallurgy"
+      ],
+      "product_entries": [],
+      "checks": [],
+      "notes": "The package is an unlocked data-only skeleton with no runtime consumer."
+    },
+    {
+      "requirement_id": "TERRENIA-PRESENTATION-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/terrenia/presentation",
+        "crates/latticeaxiom-render-contracts/src",
+        "crates/latticeaxiom-voxel-mesh/src",
+        "crates/latticeaxiom-engine/src/host/chunk_mesh.rs"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-voxel-mesh"
+      ],
+      "notes": "UVs and a nearest color atlas landed; authored layer tables, fluid/tool assets and full reference closure remain open."
+    },
+    {
+      "requirement_id": "TERRENIA-ROOT-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/terrenia/main",
+        "profiles/dev.toml",
+        "latticeaxiom.lock"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-packages",
+        "cargo test -p latticeaxiom-engine --no-default-features"
+      ],
+      "notes": "The root resolves in the audited lock, but replaceability and the complete dimension journey are not verified."
+    },
+    {
+      "requirement_id": "TERRENIA-SCIENCE-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/terrenia/science"
+      ],
+      "product_entries": [],
+      "checks": [],
+      "notes": "The package is an unlocked data-only skeleton with empty recipes and no runtime consumer."
+    },
+    {
+      "requirement_id": "TERRENIA-THAUMATURGY-001",
+      "status": "scaffolded",
+      "production_paths": [
+        "packages/terrenia/thaumaturgy"
+      ],
+      "product_entries": [],
+      "checks": [],
+      "notes": "The package is an unlocked data-only skeleton with empty rituals and no runtime consumer."
+    },
+    {
+      "requirement_id": "TERRENIA-TOOLS-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/terrenia/tools",
+        "crates/latticeaxiom-gameplay/src"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-gameplay"
+      ],
+      "notes": "A locked basic tools package and crafting path exist, but the complete six-tool progression and durability journey are not evidenced."
+    },
+    {
+      "requirement_id": "TERRENIA-WORLDGEN-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/terrenia/worldgen",
+        "crates/latticeaxiom-worldgen/src",
+        "crates/latticeaxiom-territory/src",
+        "crates/latticeaxiom-engine/src/host"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-worldgen",
+        "cargo test -p latticeaxiom-territory"
+      ],
+      "notes": "Sparse production generation and streaming exist; the complete territory, cave and hydrology contract is not closed."
+    },
+    {
+      "requirement_id": "WORLD-LIBRARY-001",
+      "status": "partial",
+      "production_paths": [
+        "packages/latticeaxiom/world-library",
+        "crates/latticeaxiom-world-catalog/src",
+        "crates/latticeaxiom-world-wire/src"
+      ],
+      "product_entries": [],
+      "checks": [
+        "cargo test -p latticeaxiom-world-catalog"
+      ],
+      "notes": "The package source and world-catalog implementation exist, but the package is not selected in the audited product lock and the full shell flow is not closed."
+    },
+    {
+      "requirement_id": "WORLD-STORAGE-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-storage/src",
+        "crates/latticeaxiom-world-db/src",
+        "crates/latticeaxiom-world-wire/src",
+        "crates/latticeaxiom-engine/src/lib.rs"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-storage",
+        "cargo test -p latticeaxiom-world-db"
+      ],
+      "notes": "Storage contracts and world-db exist, but the production engine explicitly uses MemoryTransactionKernel, so durability is not implemented."
+    },
+    {
+      "requirement_id": "WORLDGEN-COORDINATOR-001",
+      "status": "partial",
+      "production_paths": [
+        "crates/latticeaxiom-worldgen/src",
+        "crates/latticeaxiom-voxel-runtime/src",
+        "crates/latticeaxiom-engine/src/host/spine.rs"
+      ],
+      "product_entries": [
+        "task dev"
+      ],
+      "checks": [
+        "cargo test -p latticeaxiom-worldgen",
+        "cargo test -p latticeaxiom-voxel-runtime"
+      ],
+      "notes": "Initial conservative audit; no verified claim is made."
+    }
+  ]
+}

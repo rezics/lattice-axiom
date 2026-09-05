@@ -1,0 +1,27 @@
+{
+  "$schema": "../../meta/schemas/requirements.schema.json",
+  "schema_version": 1,
+  "owner": "platform:runtime",
+  "requirements": [
+    {
+      "id": "RUNTIME-HOST-001",
+      "document_id": "platform.runtime.game-engine-runtime",
+      "level": "must",
+      "statement": "One package-driven Bevy application host activates the reopened runtime image for client and GPU-free headless execution.",
+      "acceptance": [
+        "The same final lock starts client and headless without hidden Terrenia fallbacks.",
+        "Fixed tick, async derived work and shutdown remain bounded under the accepted budgets."
+      ]
+    },
+    {
+      "id": "ENTITY-PHYSICS-001",
+      "document_id": "platform.runtime.entity-physics-presentation",
+      "level": "must",
+      "statement": "Authoritative entity movement, targeting and collision remain equivalent across client and headless while presentation stays derived.",
+      "acceptance": [
+        "Y-up movement, six-face targeting and collider replacement pass at negative coordinates.",
+        "Presentation or device faults cannot change authoritative receipts."
+      ]
+    }
+  ]
+}

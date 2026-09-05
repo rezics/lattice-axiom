@@ -1,1 +1,0 @@
-local-prebuilt and data-root artifacts require path

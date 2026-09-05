@@ -1,4 +1,0 @@
-ore
-soil
-stone
-wood

@@ -1,3 +1,0 @@
-# Stable rustfmt options only; nightly-only options are deliberately avoided.
-style_edition = "2024"
-newline_style = "Unix"
