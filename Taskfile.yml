@@ -3,6 +3,7 @@ version: "3"
 vars:
   BOOTSTRAP: profiles/dev.toml
   LOCK: latticeaxiom.lock
+  PRODUCT: products/terrenia-dev.toml
 
 tasks:
   default:
@@ -44,8 +45,17 @@ tasks:
       - lock:shell
       - lock:resources
     cmds:
-      - cargo build -p latticeaxiom-engine --bin latticeaxiom-engine --bin latticeaxiom-play
-      - cargo run -p latticeaxiom-engine --bin latticeaxiom-play
+      - python tools/native_product.py --profile "{{.PRODUCT}}" --run
+
+  native:prepare:
+    desc: Freeze the manifest-selected native closure and verify Cargo source containment
+    cmds:
+      - python tools/native_product.py --profile "{{.PRODUCT}}" --prepare-only
+
+  native:build:
+    desc: Build both product processes from frozen package sources
+    cmds:
+      - python tools/native_product.py --profile "{{.PRODUCT}}"
 
   dev:client:
     internal: true
@@ -72,7 +82,7 @@ tasks:
   logs:web:
     desc: Launch the client with a localhost Logdy Web viewer
     cmds:
-      - python scripts/development/logdy_dev.py run -- cargo run -p latticeaxiom-engine --bin latticeaxiom-play
+      - python scripts/development/logdy_dev.py run -- python tools/native_product.py --profile "{{.PRODUCT}}" --run
 
   audit:upstream:
     desc: Recheck upstream adapters, compatibility evidence, and advisories
@@ -99,8 +109,7 @@ tasks:
           BOOTSTRAP: profiles/dev.toml
           LOCK: latticeaxiom.lock
     cmds:
-      - cargo build -p latticeaxiom-engine --bin latticeaxiom-engine --bin latticeaxiom-play
-      - cargo run -p latticeaxiom-engine --bin latticeaxiom-play
+      - python tools/native_product.py --profile "{{.PRODUCT}}" --run
 
   dev:
     desc: Relock and launch the client with a localhost Web log viewer
@@ -112,5 +121,4 @@ tasks:
           BOOTSTRAP: profiles/dev.toml
           LOCK: latticeaxiom.lock
     cmds:
-      - cargo build -p latticeaxiom-engine --bin latticeaxiom-engine --bin latticeaxiom-play
       - task: logs:web

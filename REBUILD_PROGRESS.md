@@ -20,7 +20,7 @@ the original proposal's asset delivery and future asset-management suggestions.
 - [x] Recovery bundles and runtime-data backup.
 - [x] Package-owned workspace and text-only repository checks.
 - [x] Multi-crate source realization and frozen-source link conformance.
-- [ ] Generated product assembly used by the actual client.
+- [x] Frozen manifest-selected product assembly used by the actual client.
 - [x] Independently selectable texture/shader resource graph and runtime consumers.
 - [x] Code-designed shell/settings style, native focus, editable name, and initial GPU captures.
 - [ ] Streaming measurements, corrective changes, and acceptance.
@@ -173,3 +173,9 @@ unused files copied into `target/native-products/debug/deps`, reporting only
 `blocked by policy`. No deletion was executed. Approximately 334.6 GiB of copied
 older cache variants remain, in addition to about 7.1 GiB selected by the build.
 The original demo cache and saved worlds were not deleted or moved.
+
+The frozen product path is now the normal `task play` / `task dev:plain` path.
+The latest source snapshot (`bf9bbc2336692f42...`) rebuilt successfully in the
+stable materialized build directory after the final lint fixes. Both binary
+hashes and the compiler/Cargo/lock/input receipts are generated locally. Release,
+portable ABI, broad gameplay and optimized streaming gates remain open.

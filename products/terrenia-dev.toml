@@ -1,0 +1,6 @@
+schema_version = 1
+name = "terrenia-dev"
+root = "@terrenia/client"
+features = ["client", "development"]
+launch = "latticeaxiom-play"
+build_profile = "dev"

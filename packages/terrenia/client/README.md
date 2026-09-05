@@ -13,4 +13,4 @@ resolved client presentation inputs.
 
 The package manifest defines its implementation entry and owned crates. Tests
 and public rustdoc live with the implementation. `task play` launches the current
-supervisor; generated frozen product assembly is tracked in the rebuild gates.
+supervisor after building the manifest-selected frozen native product.
