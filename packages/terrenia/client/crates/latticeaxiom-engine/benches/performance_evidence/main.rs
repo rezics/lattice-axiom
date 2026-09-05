@@ -23,6 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bevy::math::Vec3Swizzles;
 use boot::{BootedLock, boot_from_workspace};
 use histogram::SampleSeries;
 use latticeaxiom_compose::ProductLockError;
@@ -117,7 +118,7 @@ fn capture(args: &Args, booted: BootedLock) -> Result<PerformanceObservationV1, 
     generation = enqueue_walk(
         &mut instance,
         generation,
-        1.0,
+        0.0,
         plan.warmup_ticks.min(ACTION_BATCH),
     )?;
     while completed_warmup < plan.warmup_ticks {
@@ -129,8 +130,15 @@ fn capture(args: &Args, booted: BootedLock) -> Result<PerformanceObservationV1, 
         let step = remaining.min(WARMUP_ADVANCE_BATCH);
         instance.advance_fixed_ticks(step)?;
         completed_warmup = completed_warmup.saturating_add(step);
-        if completed_warmup.is_multiple_of(ACTION_BATCH) {
-            generation = enqueue_walk(&mut instance, generation, 1.0, ACTION_BATCH)?;
+        if completed_warmup.is_multiple_of(ACTION_BATCH) && completed_warmup < plan.warmup_ticks {
+            generation = enqueue_walk(
+                &mut instance,
+                generation,
+                0.0,
+                plan.warmup_ticks
+                    .saturating_sub(completed_warmup)
+                    .min(ACTION_BATCH),
+            )?;
         }
     }
 
@@ -146,6 +154,7 @@ fn capture(args: &Args, booted: BootedLock) -> Result<PerformanceObservationV1, 
     let mut turn_180 = false;
     let mut edit_attempts = 0_u64;
     let mut returned = false;
+    let mut return_start_distance = None;
     let mut max_displacement_mm = 0_i64;
 
     if !truncated {
@@ -175,8 +184,14 @@ fn capture(args: &Args, booted: BootedLock) -> Result<PerformanceObservationV1, 
                 }
                 PathPhase::Return => {
                     generation =
-                        enqueue_walk(&mut instance, generation, -1.0, ticks.min(ACTION_BATCH))?;
-                    returned = true;
+                        enqueue_walk(&mut instance, generation, 1.0, ticks.min(ACTION_BATCH))?;
+                    return_start_distance = Some(
+                        spine
+                            .player_pose()
+                            .translation
+                            .xz()
+                            .distance(start_pose.xz()),
+                    );
                 }
             }
             let mut remaining = ticks;
@@ -188,6 +203,19 @@ fn capture(args: &Args, booted: BootedLock) -> Result<PerformanceObservationV1, 
                 }
                 let tick_started = Instant::now();
                 instance.advance_fixed_ticks(1)?;
+                if phase == PathPhase::Return
+                    && return_start_distance.is_some_and(|distance| {
+                        spine
+                            .player_pose()
+                            .translation
+                            .xz()
+                            .distance(start_pose.xz())
+                            + 0.25
+                            < distance
+                    })
+                {
+                    returned = true;
+                }
                 let elapsed_ns =
                     u64::try_from(tick_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
                 cpu.push(elapsed_ns);
@@ -210,7 +238,7 @@ fn capture(args: &Args, booted: BootedLock) -> Result<PerformanceObservationV1, 
                     let batch = remaining.min(ACTION_BATCH);
                     generation = match phase {
                         PathPhase::EditBurst => enqueue_edits(&mut instance, generation, batch)?,
-                        PathPhase::Return => enqueue_walk(&mut instance, generation, -1.0, batch)?,
+                        PathPhase::Return => enqueue_walk(&mut instance, generation, 1.0, batch)?,
                         PathPhase::WalkForward | PathPhase::Turn180 => {
                             enqueue_walk(&mut instance, generation, 1.0, batch)?
                         }
@@ -270,7 +298,7 @@ fn capture(args: &Args, booted: BootedLock) -> Result<PerformanceObservationV1, 
             lock_file_sha256: lock_file_sha256.to_string(),
             shell_lock_file_sha256: shell_lock_file_sha256.map(|value| value.to_string()),
             realization_target: target.to_string(),
-            world_seed: 42,
+            world_seed: spine.world_seed()?.to_string(),
         },
         streaming_profile: streaming,
         histograms: ObservationHistogramsV1 {
@@ -368,7 +396,7 @@ fn enqueue_walk(
     }
     let frames = (0..ticks).map(|offset| {
         let mut started = PlayerActionButtonsV1::empty();
-        if offset.is_multiple_of(18) {
+        if forward != 0.0 && offset.is_multiple_of(18) {
             started.insert(PlayerActionV1::Jump);
         }
         PlayerActionFrameV1 {
@@ -469,17 +497,20 @@ impl HighWater {
     }
 
     fn observe_queues(&mut self, queues: &DerivedQueueSnapshotV1) {
-        let mesh = u64::try_from(queues.mesh_pending.saturating_add(queues.mesh_in_flight))
-            .unwrap_or(u64::MAX);
-        let collider = u64::try_from(
+        // Per-lane job caps govern queued work; execution has separate slot/byte caps.
+        let mesh = u64::try_from(queues.mesh_pending).unwrap_or(u64::MAX);
+        let collider = u64::try_from(queues.collider_pending).unwrap_or(u64::MAX);
+        self.mesh_jobs = self.mesh_jobs.max(mesh);
+        self.collider_jobs = self.collider_jobs.max(collider);
+        let executing = u64::try_from(
             queues
-                .collider_pending
+                .mesh_in_flight
                 .saturating_add(queues.collider_in_flight),
         )
         .unwrap_or(u64::MAX);
-        self.mesh_jobs = self.mesh_jobs.max(mesh);
-        self.collider_jobs = self.collider_jobs.max(collider);
-        self.combined_jobs = self.combined_jobs.max(mesh.saturating_add(collider));
+        self.combined_jobs = self
+            .combined_jobs
+            .max(mesh.saturating_add(collider).saturating_add(executing));
         self.reserved_bytes = self.reserved_bytes.max(queues.reserved_bytes);
     }
 }

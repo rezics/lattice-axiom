@@ -270,7 +270,7 @@ def capture_fingerprints(
         "cargo_profile": cargo_profile,
         "lto": lto,
         "codegen_units": codegen_units,
-        "cargo_features": [],
+        "cargo_features": ["performance-evidence"],
         "development_dynamic_linking": False,
         "os": platform.system(),
         "arch": platform.machine(),
@@ -497,7 +497,8 @@ def evaluate_observation(
             budget_p99=None,
             budget_high_water=int(budgets["working_set"]["visible_chunks_max"]),
             required_samples=1,
-            eligible=True,
+            eligible=not headless,
+            unsupported_reason="headless prepared geometry does not measure GPU/frustum visibility" if headless else None,
         ),
         "mesh_queue_jobs": metric_record(
             metric_id="mesh_queue_jobs",
@@ -582,6 +583,8 @@ def evaluate_observation(
     faults = _require_mapping(observation["faults"], "observation faults")
     if faults.get("truncated") or faults.get("incomplete_measure"):
         failing.append("protocol_complete")
+    if observation['mode'] == 'traversal' and observation['path']['unique_player_chunks'] < 2:
+        failing.append('traversal_not_observed')
 
     gate_verdict = "insufficient-evidence"
     reason = (
@@ -590,7 +593,7 @@ def evaluate_observation(
     )
     if failing:
         gate_verdict = "fail"
-        reason = "run exceeded a frozen hard cap or was truncated: " + ", ".join(failing)
+        reason = "run failed a budget, protocol, or traversal check: " + ", ".join(failing)
     elif (
         reference_host_run
         and run_count >= int(protocol_cfg["normative_run_count"])

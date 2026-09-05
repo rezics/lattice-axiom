@@ -197,3 +197,29 @@ Clippy passed. Native acceptance then performed the same default switch across
 two independent supervisor runs: both retained the same world, original lock,
 `survival` mode and an empty inventory. Local evidence is under
 `.temp/qa-survival-state-20260906/`.
+
+## Optimized traversal observation and measurement corrections
+
+The optimized headless bench now builds with the pinned release profile. Build
+process affinity was limited to logical CPU 24 to work around the compiler
+failures; the measurement process itself ran with the normal CPU availability.
+The final run completed 7,200 warmup and 36,000 measured ticks in 106.881 seconds,
+visited nine player chunks, and observed return motion. Fixed-update P95 was
+5.4374 ms, P99 7.8262 ms and maximum 33.3293 ms. Resident occupancy reached 1,183;
+queued mesh jobs peaked at 128, combined jobs at 142 and reserved derived bytes
+at 184,417,912. The evaluator reports no failing measured metric and an overall
+`insufficient-evidence` result, not a release/GPU certification.
+
+The harness previously double-reversed movement after the 180-degree turn,
+carried excess warmup input into measurement, reported a constant seed of 42,
+and compared queued-plus-running jobs against a pending-only cap. These are
+corrected. Empty mesh buffers no longer count as prepared geometry. Headless
+prepared geometry is explicitly unsupported as GPU/frustum visibility evidence;
+the GPU-visible budget remains unchanged at 512. A stationary run now fails the
+traversal check. Twelve performance-runner tests and engine Clippy passed.
+
+Local observations are `.temp/performance-optimized-traversal-final.json` and
+`.temp/performance-optimized-evidence-final.json`. They do not measure GPU frames,
+physics substep duration, cold-load latency or durable-save latency. The six
+broader headless failures listed above and the complete gameplay/recovery gates
+remain open. No old failed or partial run was relabeled as a pass.

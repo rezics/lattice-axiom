@@ -187,6 +187,27 @@ class PerformanceEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["overall"]["gate_verdict"], "fail")
         performance_evidence.validate_evidence(evidence)
 
+    def test_stationary_measurement_cannot_claim_a_traversal_run(self) -> None:
+        observed = observation_fixture()
+        observed['mode'] = 'traversal'
+        observed['path']['unique_player_chunks'] = 1
+        evidence = performance_evidence.evaluate_observation(
+            self.profile, observed, fingerprints(), ram_bytes=None,
+            observation_sha256='f' * 64, reference_host_run=False, run_count=1,
+        )
+        self.assertEqual(evidence['overall']['gate_verdict'], 'fail')
+        self.assertIn('traversal_not_observed', evidence['overall']['reason'])
+
+    def test_prepared_headless_meshes_are_not_gpu_visibility_evidence(self) -> None:
+        observed = observation_fixture()
+        observed['high_waters']['visible_chunks'] = 1183
+        evidence = performance_evidence.evaluate_observation(
+            self.profile, observed, fingerprints(), ram_bytes=None,
+            observation_sha256='f' * 64, reference_host_run=False, run_count=1,
+        )
+        self.assertEqual(evidence['metrics']['visible_chunks']['run_verdict'], 'unsupported')
+        self.assertEqual(self.profile['budgets']['working_set']['visible_chunks_max'], 512)
+
     def test_hard_cap_exactly_at_budget_passes_run_metric(self) -> None:
         observed = observation_fixture()
         high = dict(observed["high_waters"])

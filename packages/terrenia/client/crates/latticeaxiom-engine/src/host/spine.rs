@@ -180,7 +180,8 @@ impl WorkingSetDiagnosticsV1 {
                     inner
                         .derived
                         .get(coordinate)
-                        .is_some_and(|derived| derived.geometry.is_some())
+                        .and_then(|derived| derived.geometry.as_ref())
+                        .is_some_and(|geometry| !geometry.is_empty())
                 })
                 .count(),
         );

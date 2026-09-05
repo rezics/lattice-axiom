@@ -115,8 +115,8 @@ pub struct ObservationFingerprintsV1 {
     pub shell_lock_file_sha256: Option<String>,
     /// Selected realization target triple.
     pub realization_target: String,
-    /// Host world seed used by the production spine.
-    pub world_seed: u64,
+    /// Exact hexadecimal 32-byte seed used by the production spine.
+    pub world_seed: String,
 }
 
 /// Histogram set required by ADR 0026 section 10.
