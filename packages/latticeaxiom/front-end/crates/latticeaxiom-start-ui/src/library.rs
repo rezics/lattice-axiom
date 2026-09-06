@@ -252,6 +252,9 @@ impl WorldLibraryFlow {
     ///
     /// Returns [`WorldLibraryError`] when the world is not exact-ready or the
     /// host has not supplied launch-handoff context.
+    ///
+    /// This catalog API still seals [`LaunchHandoff`]. Ordinary client Continue
+    /// does not call it; a future settings-restart interface may.
     pub fn prepare_launch(
         &mut self,
         world_id: WorldId,

@@ -30,6 +30,10 @@ pub(crate) struct ShellExitContext {
 }
 
 impl ShellExitContext {
+    pub(crate) fn workspace_path(&self) -> PathBuf {
+        self.workspace.clone()
+    }
+
     pub(crate) fn finish(&self, clean: bool) -> Result<(), String> {
         if std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").is_some()
             || self.handoff.0.load(std::sync::atomic::Ordering::Acquire)
@@ -182,17 +186,16 @@ impl ProductionClientError {
 ///
 /// - Exactly one `latticeaxiom:capability/client-shell@1` provider starts one
 ///   [`bevy::prelude::DefaultPlugins`] shell App from the start-ui semantic
-///   tree. Continue/Play of a `ReadyExact` world seals
-///   [`latticeaxiom_start_ui::LaunchHandoff::for_ready_exact`] and exits. An
-///   external supervisor must spawn the replacement game process; this process
-///   does not.
+///   tree. Continue/Play of a `ReadyExact` world enters Loading and then binds
+///   the production host in this same window. [`latticeaxiom_start_ui::LaunchHandoff`]
+///   remains for a future settings-restart interface and is not invoked here.
 /// - Absence of that capability starts one production game App through
 ///   [`EngineInstance::new_client_host_from_lock`].
 /// - Present evidence with zero or multiple providers fails closed.
 ///
-/// Start-shell and Playing never share one `DefaultPlugins` App. Missing lock
-/// or CAS fails closed. This path does not load native modules or open a
-/// world writer.
+/// Start-shell and Playing share this `DefaultPlugins` App: Continue loads in
+/// process after the Loading route. Missing lock or CAS fails closed. This
+/// path does not load native modules or open a world writer.
 ///
 /// # Errors
 ///

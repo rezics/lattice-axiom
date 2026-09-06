@@ -926,6 +926,7 @@ fn spawn_pause_overlay(
     commands
         .spawn((
             PauseOverlay,
+            super::InProcessPlayEntity,
             Name::new("Pause overlay"),
             Node {
                 position_type: PositionType::Absolute,

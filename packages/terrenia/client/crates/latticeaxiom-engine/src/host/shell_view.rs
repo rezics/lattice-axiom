@@ -1,10 +1,8 @@
 //! Bevy `ui_widgets` adapter for the package-driven start shell.
 //!
-//! This process hosts only the start-ui semantic tree. Continue/Play of a
-//! `ReadyExact` world seals [`LaunchHandoff::for_ready_exact`] and requests
-//! [`AppExit`]. An external supervisor must persist that intent and spawn the
-//! replacement game process. This App does not install
-//! [`super::ProductionSpine`] and does not enter Playing.
+//! Continue/Play enter the Loading route in this `DefaultPlugins` App and then
+//! bind [`super::ProductionSpine`] in the same window. [`LaunchHandoff`] remains
+//! for a future settings-restart interface and is not invoked on Continue.
 
 use bevy::{
     app::{App, AppExit, Plugin, Startup, Update},
@@ -20,7 +18,7 @@ use bevy::{
     prelude::{
         AlignItems, BackgroundColor, BorderColor, BorderRadius, Camera2d, ClearColor, Color,
         Commands, Component, Entity, FlexDirection, JustifyContent, MessageWriter, Name, Node,
-        Overflow, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With,
+        Overflow, Query, Res, ResMut, Resource, Text, TextColor, UiRect, Val, With, World,
     },
     ui::Pressed,
     ui_widgets::{Activate, Button, ScrollArea},
@@ -31,21 +29,26 @@ use latticeaxiom_launcher::{
     FreshClientAppLeaseProof, FreshClientAppLeaseToken, SettingTransactionRevision,
 };
 use latticeaxiom_start_ui::{
-    InputSource, LaunchHandoff, MemoryStartEffect, SemanticActionId, SemanticCommand, SemanticNode,
-    SemanticNodeId, SemanticRole, ShellEffect,
+    InputSource, LaunchHandoff, LoadingProgress, LoadingStage, MemoryStartEffect, SemanticActionId,
+    SemanticCommand, SemanticNode, SemanticNodeId, SemanticRole, ShellEffect,
 };
 
-use super::{ProductionHostError, ProductionMemoryStart, start::unix_now_ms};
+use super::persistent::{
+    InProcessShellPlay, ReturnToShell, insert_disk_session_on_world, load_disk_world,
+};
+use super::{
+    ProductionHostError, ProductionInspectSurface, ProductionMemoryStart, ProductionSpine,
+    ProductionWorldList, bind_production_world, start::unix_now_ms,
+};
 use crate::{
     EngineInstance, LockVerifiedComposeImages, VerifiedProductLockHash, ui_font::ui_text_font,
 };
 
-/// Sealed replacement-process handoff published immediately before [`AppExit`].
+/// Sealed replacement-process handoff for a future settings-restart interface.
 ///
-/// Persistence and spawning the game process remain the external supervisor's
-/// responsibility.
+/// Ordinary Continue/Play do not publish this envelope.
 #[derive(Clone, Debug, Resource)]
-#[allow(dead_code)] // Held on the world until AppExit; persistence is the supervisor gap.
+#[allow(dead_code)] // Reserved for a future settings-restart interface.
 pub(crate) struct SealedLaunchHandoff(pub LaunchHandoff);
 
 #[derive(Clone, Debug, Default, Resource)]
@@ -63,6 +66,7 @@ struct ClientShellSession {
     select_name: bool,
     composition: String,
     handoff: ShellHandoffState,
+    pending_world: Option<WorldId>,
 }
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
@@ -98,6 +102,12 @@ impl Plugin for ClientShellPlugin {
                     .chain(),
             )
             .add_systems(
+                Update,
+                (poll_in_process_play, apply_return_to_shell)
+                    .chain()
+                    .after(rebuild_shell_view),
+            )
+            .add_systems(
                 bevy::app::PostUpdate,
                 reveal_shell_focus.after(bevy::ui::UiSystems::Layout),
             );
@@ -108,13 +118,8 @@ impl EngineInstance {
     /// Builds the process's sole interactive client as a package-driven start shell.
     ///
     /// The App renders [`latticeaxiom_start_ui::StartShellModel::semantic_tree`]
-    /// with Bevy `ui_widgets` nodes. Continue/Play of a `ReadyExact` world seals
-    /// [`LaunchHandoff::for_ready_exact`] and exits. This constructor does not
-    /// spawn [`super::ProductionSpine`] and does not enter Playing in this App.
-    ///
-    /// An external supervisor must persist the sealed intent and spawn the
-    /// replacement game process (a lock whose roots include `terrenia`). This
-    /// host does not spawn that process.
+    /// with Bevy `ui_widgets` nodes. Continue/Play of a `ReadyExact` world
+    /// enters Loading and then binds [`super::ProductionSpine`] in this window.
     ///
     /// # Errors
     ///
@@ -193,6 +198,13 @@ fn install_client_shell(
     }
     let focused = first_focusable(&start);
     let handoff = ShellHandoffState::default();
+    let input_maps = crate::input::compile_lock_selected_input(
+        start.images(),
+        &latticeaxiom_input::BindingProfileV1::default(),
+    )
+    .ok()
+    .flatten()
+    .map(|catalog| latticeaxiom_player::leafwing_maps_from_catalog(&catalog));
     app.insert_resource(handoff.clone())
         .insert_resource(product_lock_hash)
         .insert_resource(ClearColor(style::CANVAS))
@@ -207,21 +219,34 @@ fn install_client_shell(
             select_name: false,
             composition: String::new(),
             handoff,
+            pending_world: None,
         })
-        .add_plugins(ClientShellPlugin);
+        .add_plugins(ClientShellPlugin)
+        .insert_resource(InProcessShellPlay);
+    super::install_production_schedule(app, false, input_maps);
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
+#[derive(Component, Debug)]
+struct ShellCamera;
+
 fn spawn_shell_camera(mut commands: Commands<'_, '_>) {
-    commands.spawn((Name::new("Shell Camera"), Camera2d));
+    commands.spawn((Name::new("Shell Camera"), ShellCamera, Camera2d));
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
 fn rebuild_shell_view(
     mut commands: Commands<'_, '_>,
     session: Res<'_, ClientShellSession>,
+    spine: Option<Res<'_, super::ProductionSpine>>,
     roots: Query<'_, '_, (Entity, &ShellViewRoot)>,
 ) {
+    if spine.is_some() {
+        if let Ok((entity, _)) = roots.single() {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
     match roots.single() {
         Ok((_, root)) if root.epoch == session.tree_epoch => {}
         Ok((entity, _)) => {
@@ -618,7 +643,11 @@ fn shell_keyboard(
     mut session: ResMut<'_, ClientShellSession>,
     mut exits: MessageWriter<'_, AppExit>,
     keyboard: Res<'_, ButtonInput<KeyCode>>,
+    spine: Option<Res<'_, super::ProductionSpine>>,
 ) {
+    if spine.is_some() {
+        return;
+    }
     if keyboard.just_pressed(KeyCode::Escape)
         && let Some(target) = back_target(&session.start.flow().shell().semantic_tree())
     {
@@ -776,7 +805,7 @@ fn append_world_name(name: &mut String, text: &str) {
 }
 
 fn apply_shell_command(
-    commands: &mut Commands<'_, '_>,
+    _commands: &mut Commands<'_, '_>,
     session: &mut ClientShellSession,
     exits: &mut MessageWriter<'_, AppExit>,
     command: &SemanticCommand,
@@ -806,12 +835,11 @@ fn apply_shell_command(
             exits.write(AppExit::Success);
         }
         MemoryStartEffect::Shell(ShellEffect::RequestExactWorldLaunch(world_id)) => {
-            exit_with_ready_exact_handoff(commands, session, exits, world_id);
+            session.pending_world = Some(world_id);
+            session.focused = first_focusable(&session.start);
+            session.tree_epoch = session.tree_epoch.saturating_add(1);
         }
-        MemoryStartEffect::Shell(ShellEffect::ReviewWorld(world_id)) => {
-            if exit_with_ready_exact_handoff(commands, session, exits, world_id) {
-                return;
-            }
+        MemoryStartEffect::Shell(ShellEffect::ReviewWorld(_world_id)) => {
             session.focused = first_focusable(&session.start);
             session.tree_epoch = session.tree_epoch.saturating_add(1);
         }
@@ -853,6 +881,9 @@ fn traverse_focus(session: &mut ClientShellSession, reverse: bool) {
     session.tree_epoch = session.tree_epoch.saturating_add(1);
 }
 
+/// Reserved for a future settings-restart interface. Ordinary Continue/Play
+/// load the world in this window and do not call this function.
+#[allow(dead_code)]
 fn exit_with_ready_exact_handoff(
     commands: &mut Commands<'_, '_>,
     session: &mut ClientShellSession,
@@ -932,6 +963,227 @@ fn exit_with_ready_exact_handoff(
     commands.insert_resource(SealedLaunchHandoff(handoff));
     exits.write(AppExit::Success);
     true
+}
+
+fn poll_in_process_play(world: &mut World) {
+    if world.get_resource::<ProductionSpine>().is_some() {
+        return;
+    }
+    let Some(world_id) = world
+        .get_resource::<ClientShellSession>()
+        .and_then(|session| session.pending_world)
+    else {
+        return;
+    };
+    let stage = world
+        .get_resource::<ClientShellSession>()
+        .and_then(|session| session.start.flow().shell().loading.as_ref())
+        .map(|loading| loading.stage);
+    let next = match stage {
+        None => {
+            let mut session = world.resource_mut::<ClientShellSession>();
+            session.start.flow_mut().enter_loading();
+            session.tree_epoch = session.tree_epoch.saturating_add(1);
+            return;
+        }
+        Some(LoadingStage::CheckingWorld) => (LoadingStage::ResolvingPackages, "packages"),
+        Some(LoadingStage::ResolvingPackages) => {
+            (LoadingStage::BuildingOrLoading, "world artifacts")
+        }
+        Some(LoadingStage::BuildingOrLoading) => (LoadingStage::ValidatingContent, "content"),
+        Some(LoadingStage::ValidatingContent) => (LoadingStage::LoadingSpawn, "spawn"),
+        Some(LoadingStage::LoadingSpawn) => {
+            activate_pending_world(world, world_id);
+            return;
+        }
+        Some(LoadingStage::Playing) => return,
+    };
+    let mut session = world.resource_mut::<ClientShellSession>();
+    if let Err(error) = session.start.flow_mut().advance_loading(
+        next.0,
+        LoadingProgress::Indeterminate,
+        Some(next.1.to_owned()),
+    ) {
+        session.message = Some(error.to_string());
+        session.pending_world = None;
+        session.start.flow_mut().enter_home();
+    }
+    session.tree_epoch = session.tree_epoch.saturating_add(1);
+}
+
+fn activate_pending_world(world: &mut World, world_id: latticeaxiom_core::WorldId) {
+    let prepared = {
+        let mut session = world.resource_mut::<ClientShellSession>();
+        session.start.set_now_ms(unix_now_ms());
+        match session.start.materialize_play_spine(world_id) {
+            Ok(spine) => {
+                if let Err(error) = session
+                    .start
+                    .flow_mut()
+                    .mark_played(world_id, unix_now_ms())
+                {
+                    session.message = Some(error.to_string());
+                    session.pending_world = None;
+                    session.start.flow_mut().enter_home();
+                    session.tree_epoch = session.tree_epoch.saturating_add(1);
+                    return;
+                }
+                let images = session.start.images().clone();
+                let entry = session.start.saved_entry(world_id).cloned();
+                let disk = session.start.disk_store().cloned();
+                let shell_lock = session.start.shell_lock_hash();
+                let worlds = session.start.flow().worlds().clone();
+                Ok((spine, images, entry, disk, shell_lock, worlds))
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    };
+    let (spine, images, entry, disk, shell_lock, worlds) = match prepared {
+        Ok(parts) => parts,
+        Err(error) => {
+            let mut session = world.resource_mut::<ClientShellSession>();
+            session.message = Some(error);
+            session.pending_world = None;
+            session.start.flow_mut().enter_home();
+            session.tree_epoch = session.tree_epoch.saturating_add(1);
+            return;
+        }
+    };
+    let inspect = ProductionInspectSurface::from_lock_images(&images);
+    let game_lock = VerifiedProductLockHash::new(images.product_lock_hash());
+    bind_production_world(world, game_lock, spine.clone(), inspect, true);
+    world.insert_resource(ProductionWorldList::new(worlds));
+    if let (Some(disk), Some(entry)) = (disk, entry) {
+        match load_disk_world(&disk, world_id) {
+            Ok(storage) => {
+                let workspace = world
+                    .get_resource::<crate::client::ShellExitContext>()
+                    .map(crate::client::ShellExitContext::workspace_path);
+                if let Some(workspace) = workspace
+                    && let Err(error) = insert_disk_session_on_world(
+                        world,
+                        &workspace,
+                        disk,
+                        storage,
+                        entry,
+                        shell_lock,
+                        spine.clone(),
+                        true,
+                    )
+                {
+                    let mut session = world.resource_mut::<ClientShellSession>();
+                    session.message = Some(error.to_string());
+                }
+            }
+            Err(error) => {
+                let mut session = world.resource_mut::<ClientShellSession>();
+                session.message = Some(error.to_string());
+            }
+        }
+    }
+    install_play_settings(world, &images);
+    despawn_named::<ShellCamera>(world);
+    despawn_named::<ShellViewRoot>(world);
+    super::spawn_play_presentation(world);
+    let mut session = world.resource_mut::<ClientShellSession>();
+    session.start.flow_mut().enter_playing();
+    session.pending_world = None;
+    session.tree_epoch = session.tree_epoch.saturating_add(1);
+}
+
+fn install_play_settings(world: &mut World, images: &LockVerifiedComposeImages) {
+    let Some(workspace) = world
+        .get_resource::<crate::client::ShellExitContext>()
+        .map(crate::client::ShellExitContext::workspace_path)
+    else {
+        return;
+    };
+    let Ok(user) = crate::settings::HostUserSettings::load(workspace.join("run/user")) else {
+        return;
+    };
+    let Ok(Some(catalog)) = crate::settings::compile_lock_selected_settings(images) else {
+        return;
+    };
+    let Some(spine) = world.get_resource::<ProductionSpine>().cloned() else {
+        return;
+    };
+    let Ok(state) = super::pause::ProductionSettingsState::new(
+        workspace.join("run/user"),
+        user,
+        catalog,
+        images.product_lock_hash(),
+    ) else {
+        return;
+    };
+    let _ = spine.set_terrain_presentation(
+        state.applied_terrain_distances(),
+        state.applied_far_terrain_quality(),
+    );
+    if let Some(mut video) = world.get_resource_mut::<crate::VideoRuntimeSettings>() {
+        let requested = state.applied_video();
+        video.replace(
+            requested.vsync(),
+            requested.foreground_limit(),
+            requested.background_limit(),
+        );
+    }
+    let tick_rate = state.applied_tick_rate();
+    world.insert_resource(latticeaxiom_player::SimulationClock::new(tick_rate));
+    if let Some(mut fixed) = world.get_resource_mut::<bevy::time::Time<bevy::time::Fixed>>() {
+        fixed.set_timestep(tick_rate.timestep());
+    }
+    world.insert_resource(state);
+}
+
+fn apply_return_to_shell(world: &mut World) {
+    if world.get_resource::<ReturnToShell>().is_none() {
+        return;
+    }
+    world.remove_resource::<ReturnToShell>();
+    let entities = world
+        .iter_entities()
+        .filter(|entity| {
+            entity.contains::<super::InProcessPlayEntity>()
+                || entity.contains::<super::ChunkPresentation>()
+        })
+        .map(|entity| entity.id())
+        .collect::<Vec<_>>();
+    for entity in entities {
+        world.despawn(entity);
+    }
+    world.remove_resource::<ProductionSpine>();
+    world.remove_resource::<super::persistent::PersistentGameSession>();
+    world.remove_resource::<super::pause::ProductionSettingsState>();
+    world.remove_resource::<latticeaxiom_player::BlockEditAuthorityResource>();
+    world.remove_resource::<super::ProductionWorldStorage>();
+    world.remove_resource::<super::WorkingSetDiagnosticsV1>();
+    world.remove_resource::<ProductionWorldList>();
+    #[cfg(feature = "client")]
+    {
+        world.remove_resource::<super::chunk_mesh::ProductionTerrainPalette>();
+        world.remove_resource::<super::chunk_mesh::ProductionTerrainMaterials>();
+        world.remove_resource::<super::far_mesh::FarTerrainRolePalette>();
+    }
+    if let Some(mut pause) = world.get_resource_mut::<super::ProductionSessionPause>() {
+        pause.set(false);
+    }
+    world.insert_resource(ClearColor(style::CANVAS));
+    world.spawn((Name::new("Shell Camera"), ShellCamera, Camera2d));
+    let mut session = world.resource_mut::<ClientShellSession>();
+    session.pending_world = None;
+    session.start.flow_mut().enter_home();
+    session.focused = first_focusable(&session.start);
+    session.tree_epoch = session.tree_epoch.saturating_add(1);
+}
+
+fn despawn_named<T: Component>(world: &mut World) {
+    let entities = world
+        .query_filtered::<Entity, With<T>>()
+        .iter(world)
+        .collect::<Vec<_>>();
+    for entity in entities {
+        world.despawn(entity);
+    }
 }
 
 fn first_focusable(start: &ProductionMemoryStart) -> Option<SemanticNodeId> {

@@ -3,8 +3,9 @@
 //! The crate owns presentation-neutral state, commands, layout evidence, and
 //! accessibility semantics. It does not create a Bevy application. A client
 //! adapter must render the same tree inside the one current `DefaultPlugins`
-//! application and use [`LaunchHandoff`] to enter a world in a replacement
-//! process.
+//! application. Continue/Play enter the Loading route in this process;
+//! [`LaunchHandoff`] remains for a future settings-restart interface and is
+//! not the ordinary play path.
 
 mod capability;
 mod library;

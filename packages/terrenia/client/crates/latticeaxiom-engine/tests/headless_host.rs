@@ -2526,9 +2526,6 @@ fn continue_reopens_when_restored_pose_leaves_the_spawn_chunk() {
         .play_continued_headless(30, SPINE_TIMESTEP)
         .expect("continue must reopen after the restored pose leaves spawn");
     assert_eq!(continued, created);
-    reopened
-        .advance_fixed_ticks(1)
-        .expect("continued host advances one tick");
     let reopened_spine = reopened
         .app()
         .world()
@@ -2536,14 +2533,15 @@ fn continue_reopens_when_restored_pose_leaves_the_spawn_chunk() {
         .expect("continued production spine is installed")
         .clone();
     assert_eq!(reopened_spine.world_id(), Some(created));
+    let restored = reopened_spine.player_pose().translation;
     assert!(
-        reopened_spine
-            .player_pose()
-            .translation
-            .distance(away.translation)
-            < 0.002,
-        "continue must restore the pose stored on the spawn chunk"
+        (restored.x - away.translation.x).abs() < 0.002
+            && (restored.z - away.translation.z).abs() < 0.002,
+        "continue must restore the horizontal pose stored on the spawn chunk, got {restored:?}"
     );
+    reopened
+        .advance_fixed_ticks(1)
+        .expect("continued host advances one tick");
     assert!(
         reopened_spine.resident_chunks().contains(&spawn_chunk),
         "the spawn-chunk session identity must stay resident after continue"

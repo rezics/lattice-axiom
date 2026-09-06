@@ -156,6 +156,9 @@ fn validate_progress(progress: LoadingProgress) -> Result<(), LoadingStateError>
 /// Invalid loading-state update.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum LoadingStateError {
+    /// Continue/Play loading has not started.
+    #[error("loading command has no loading state")]
+    MissingLoadingState,
     /// Loading stages may only stay in place or advance by one.
     #[error("invalid loading-stage transition from {from:?} to {to:?}")]
     InvalidStageTransition {

@@ -6,6 +6,7 @@ use std::{
 };
 
 use bevy::{
+    ecs::schedule::{IntoScheduleConfigs, common_conditions::resource_exists},
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, block_on},
     ui_widgets::{Activate, Button},
@@ -33,6 +34,7 @@ struct SaveContext {
     shell_lock: CanonicalHash,
     open_plan: CanonicalHash,
     spine: ProductionSpine,
+    in_process_shell: bool,
 }
 
 #[derive(Debug, Default)]
@@ -50,6 +52,14 @@ pub(crate) struct PersistentGameSession {
     context: SaveContext,
     state: Arc<Mutex<SaveState>>,
 }
+
+/// Requests returning to the in-process start shell after Save & Quit.
+#[derive(Clone, Copy, Debug, Default, Resource)]
+pub(crate) struct ReturnToShell;
+
+/// Marks that this App owns the start shell and must not spawn a replacement window.
+#[derive(Clone, Copy, Debug, Default, Resource)]
+pub(crate) struct InProcessShellPlay;
 
 impl PersistentGameSession {
     pub(crate) fn shutdown_requested(&self) -> bool {
@@ -90,6 +100,14 @@ impl PersistentGameSession {
     }
 }
 
+pub(in crate::host::persistent) fn add_save_systems(app: &mut bevy::prelude::App) {
+    app.add_systems(
+        bevy::prelude::Update,
+        (poll_save, show_save_status).run_if(resource_exists::<PersistentGameSession>),
+    )
+    .add_observer(retry_save);
+}
+
 pub(crate) fn install_disk_session(
     instance: &mut EngineInstance,
     workspace: &Path,
@@ -98,34 +116,59 @@ pub(crate) fn install_disk_session(
     entry: DiskWorldEntryV1,
     shell_lock: CanonicalHash,
 ) -> Result<(), ProductionClientError> {
-    let preflight = storage.preflight(entry.world).map_err(persistence_error)?;
-    let permit = preflight
-        .activation_permit()
-        .ok_or_else(|| persistence_error("saved world is not ready for writer activation"))?;
-    let plan = writable_open_plan(entry.world, permit);
-    let open_plan = canonical_json_hash(&plan).map_err(persistence_error)?;
     let spine = instance
         .app
         .world()
         .get_resource::<ProductionSpine>()
         .cloned()
         .ok_or_else(|| persistence_error("world spine was not installed"))?;
-    instance
+    let in_process_shell = instance
         .app
-        .insert_resource(PersistentGameSession {
-            context: SaveContext {
-                disk,
-                storage,
-                entry,
-                workspace: workspace.to_owned(),
-                shell_lock,
-                open_plan,
-                spine,
-            },
-            state: Arc::new(Mutex::new(SaveState::default())),
-        })
-        .add_systems(Update, (poll_save, show_save_status))
-        .add_observer(retry_save);
+        .world()
+        .get_resource::<InProcessShellPlay>()
+        .is_some();
+    insert_disk_session_on_world(
+        instance.app.world_mut(),
+        workspace,
+        disk,
+        storage,
+        entry,
+        shell_lock,
+        spine,
+        in_process_shell,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_disk_session_on_world(
+    world: &mut World,
+    workspace: &Path,
+    disk: DiskWorldStore,
+    storage: DeterministicWorldStorage,
+    entry: DiskWorldEntryV1,
+    shell_lock: CanonicalHash,
+    spine: crate::ProductionSpine,
+    in_process_shell: bool,
+) -> Result<(), ProductionClientError> {
+    let preflight = storage.preflight(entry.world).map_err(persistence_error)?;
+    let permit = preflight
+        .activation_permit()
+        .ok_or_else(|| persistence_error("saved world is not ready for writer activation"))?;
+    let plan = writable_open_plan(entry.world, permit);
+    let open_plan = canonical_json_hash(&plan).map_err(persistence_error)?;
+    world.insert_resource(PersistentGameSession {
+        context: SaveContext {
+            disk,
+            storage,
+            entry,
+            workspace: workspace.to_owned(),
+            shell_lock,
+            open_plan,
+            spine,
+            in_process_shell,
+        },
+        state: Arc::new(Mutex::new(SaveState::default())),
+    });
     Ok(())
 }
 
@@ -167,7 +210,9 @@ fn save_inner(context: &SaveContext, return_to_shell: bool) -> Result<(), Produc
         .disk
         .publish(&context.storage, &entry)
         .map_err(persistence_error)?;
-    publish_exit(context, frontier.durable().get(), return_to_shell)?;
+    if !context.in_process_shell {
+        publish_exit(context, frontier.durable().get(), return_to_shell)?;
+    }
     Ok(())
 }
 
@@ -244,6 +289,7 @@ fn poll_save(
     session: Res<'_, PersistentGameSession>,
     mut pause: ResMut<'_, crate::ProductionSessionPause>,
     mut exits: MessageWriter<'_, AppExit>,
+    mut commands: Commands<'_, '_>,
 ) {
     let Ok(mut state) = session.state.lock() else {
         return;
@@ -267,7 +313,11 @@ fn poll_save(
         match block_on(task) {
             Ok(()) => {
                 state.saved = true;
-                exits.write(AppExit::Success);
+                if session.context.in_process_shell {
+                    commands.insert_resource(ReturnToShell);
+                } else {
+                    exits.write(AppExit::Success);
+                }
             }
             Err(error) => {
                 bevy::log::error!(%error, "world save failed");

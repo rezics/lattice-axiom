@@ -19,7 +19,14 @@ use super::ProductionMemoryStartError;
 #[cfg(feature = "client")]
 mod client;
 #[cfg(feature = "client")]
-pub(crate) use client::{PersistentGameSession, install_disk_session};
+pub(crate) use client::{
+    InProcessShellPlay, PersistentGameSession, ReturnToShell, insert_disk_session_on_world,
+    install_disk_session,
+};
+#[cfg(feature = "client")]
+pub(super) fn add_save_systems(app: &mut bevy::prelude::App) {
+    client::add_save_systems(app);
+}
 
 pub(super) fn new_working_store() -> Result<DeterministicWorldStorage, ProductionMemoryStartError> {
     Ok(DeterministicWorldStorage::durable(

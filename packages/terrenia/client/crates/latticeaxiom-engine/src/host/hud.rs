@@ -321,6 +321,7 @@ pub(super) fn spawn_production_hud(
     commands
         .spawn((
             Name::new("Production HUD"),
+            super::InProcessPlayEntity,
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),

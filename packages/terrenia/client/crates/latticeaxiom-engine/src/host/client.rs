@@ -112,6 +112,7 @@ pub(super) fn spawn_production_client_view(
     ));
     commands.spawn((
         Name::new("Production Camera"),
+        super::InProcessPlayEntity,
         ProductionCamera,
         CameraMediumV1::Air,
         ProductionCameraViewRangeV1::default(),
@@ -128,6 +129,7 @@ pub(super) fn spawn_production_client_view(
     ));
     commands.spawn((
         Name::new("Production Sun"),
+        super::InProcessPlayEntity,
         DirectionalLight {
             illuminance: 12_000.0,
             shadow_maps_enabled: true,

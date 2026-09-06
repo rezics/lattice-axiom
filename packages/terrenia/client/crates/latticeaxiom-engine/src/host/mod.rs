@@ -60,7 +60,7 @@ use avian3d::{
 };
 use bevy::{
     app::{App, Plugin},
-    ecs::schedule::IntoScheduleConfigs,
+    ecs::schedule::{IntoScheduleConfigs, common_conditions::resource_exists},
     prelude::{
         Commands, Component, Entity, FixedPostUpdate, FixedUpdate, MessageWriter, Query, Res,
         ResMut, Resource, Transform, Update, With, Without,
@@ -390,7 +390,10 @@ impl Plugin for ProductionHostPlugin {
     #[allow(clippy::too_many_lines)] // This method declares the host scheduler contract in one place.
     fn build(&self, app: &mut App) {
         app.add_message::<TargetInspectReceiptV1>()
-            .add_systems(Update, pump_chunk_background)
+            .add_systems(
+                Update,
+                pump_chunk_background.run_if(resource_exists::<ProductionSpine>),
+            )
             .add_systems(
                 FixedUpdate,
                 (
@@ -400,7 +403,8 @@ impl Plugin for ProductionHostPlugin {
                         .after(PlayerSystemSet::PrepareMovement)
                         .before(PlayerSystemSet::MoveCapsule),
                     evaluate_pick_block,
-                ),
+                )
+                    .run_if(resource_exists::<ProductionSpine>),
             )
             .add_systems(
                 FixedPostUpdate,
@@ -413,7 +417,8 @@ impl Plugin for ProductionHostPlugin {
                     refresh_crosshair_target
                         .after(sync_player_pose)
                         .after(evaluate_target_inspect),
-                ),
+                )
+                    .run_if(resource_exists::<ProductionSpine>),
             );
         #[cfg(feature = "client")]
         app.init_resource::<far_mesh::FarTerrainPresentationStatusV1>()
@@ -433,7 +438,8 @@ impl Plugin for ProductionHostPlugin {
                     pause::spawn_pause_overlay_if_client,
                     attach_initial_chunk_meshes.after(client::spawn_production_client_view),
                 )
-                    .run_if(is_interactive_client),
+                    .run_if(is_interactive_client)
+                    .run_if(resource_exists::<ProductionSpine>),
             )
             .add_systems(
                 PreUpdate,
@@ -451,7 +457,8 @@ impl Plugin for ProductionHostPlugin {
                 far_mesh::sync_far_terrain_presentation
                     .after(pump_chunk_background)
                     .before(client::sync_production_camera)
-                    .run_if(is_interactive_client),
+                    .run_if(is_interactive_client)
+                    .run_if(resource_exists::<ProductionSpine>),
             )
             .add_systems(
                 Update,
@@ -478,7 +485,8 @@ impl Plugin for ProductionHostPlugin {
                     hud::sync_item_browser,
                 )
                     .chain()
-                    .run_if(is_interactive_client),
+                    .run_if(is_interactive_client)
+                    .run_if(resource_exists::<ProductionSpine>),
             )
             .add_systems(
                 Update,
@@ -492,7 +500,8 @@ impl Plugin for ProductionHostPlugin {
                 )
                     .chain()
                     .after(hud::sync_item_browser)
-                    .run_if(is_interactive_client),
+                    .run_if(is_interactive_client)
+                    .run_if(resource_exists::<ProductionSpine>),
             )
             .add_systems(
                 FixedFirst,
@@ -781,23 +790,37 @@ pub(super) fn install_production_host(
     include_transform: bool,
     #[cfg(feature = "client")] input_maps: Option<latticeaxiom_player::CompiledClientInputMaps>,
 ) {
+    #[cfg(feature = "client")]
+    let client_palette = !include_transform;
+    install_production_schedule(
+        app,
+        include_transform,
+        #[cfg(feature = "client")]
+        input_maps,
+    );
+    bind_production_world(
+        app.world_mut(),
+        product_lock_hash,
+        spine,
+        inspect_surface,
+        #[cfg(feature = "client")]
+        client_palette,
+    );
+}
+
+/// Registers play systems without materializing a world.
+///
+/// The shell constructs these plugins once so Continue can bind a world in the
+/// same window. Systems stay idle until [`ProductionSpine`] exists.
+pub(super) fn install_production_schedule(
+    app: &mut App,
+    include_transform: bool,
+    #[cfg(feature = "client")] input_maps: Option<latticeaxiom_player::CompiledClientInputMaps>,
+) {
     if include_transform {
         app.add_plugins(TransformPlugin);
     }
-    let working_set = spine.working_set_diagnostics();
-    #[cfg(feature = "client")]
-    let terrain_palette = (!include_transform).then(|| {
-        spine.terrain_layer_table().map_or_else(
-            || chunk_mesh::ProductionTerrainPalette::from_ids(&spine.palette_ids()),
-            chunk_mesh::ProductionTerrainPalette::from_layer_table,
-        )
-    });
-    app.insert_resource(product_lock_hash)
-        .insert_resource(inspect_surface)
-        .insert_resource(spine.storage())
-        .insert_resource(BlockEditAuthorityResource::new(spine.clone()))
-        .insert_resource(working_set)
-        .insert_resource(ProductionSessionPause::default())
+    app.insert_resource(ProductionSessionPause::default())
         .insert_resource(PlayerColliderSafetyGate::default())
         // Player shape casts run before PhysicsSchedule. Inline optimization
         // prevents Avian's end-of-step join from queueing behind worldgen and
@@ -807,7 +830,6 @@ pub(super) fn install_production_host(
             use_async_tasks: false,
             ..Default::default()
         })
-        .insert_resource(spine)
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(PlayerPlugin)
         .add_plugins(ProductionHostPlugin);
@@ -825,28 +847,73 @@ pub(super) fn install_production_host(
             .init_resource::<crate::cursor_capture::ConfirmedPrimaryWindowFocus>()
             .init_resource::<crate::cursor_capture::CursorCaptureState>()
             .init_resource::<ClientInputOwnership>();
+        persistent::add_save_systems(app);
+        if !include_transform {
+            water_material::install_water_material(app);
+            app.add_plugins(LeafwingInputAdapterPlugin);
+        }
     }
+}
+
+/// Inserts one materialized world into an already constructed play schedule.
+pub(super) fn bind_production_world(
+    world: &mut bevy::prelude::World,
+    product_lock_hash: VerifiedProductLockHash,
+    spine: ProductionSpine,
+    inspect_surface: ProductionInspectSurface,
+    #[cfg(feature = "client")] client_palette: bool,
+) {
+    let working_set = spine.working_set_diagnostics();
+    world.insert_resource(product_lock_hash);
+    world.insert_resource(inspect_surface);
+    world.insert_resource(spine.storage());
+    world.insert_resource(BlockEditAuthorityResource::new(spine.clone()));
+    world.insert_resource(working_set);
     #[cfg(feature = "client")]
-    if let Some(terrain_palette) = terrain_palette {
-        water_material::install_water_material(app);
-        app.insert_resource(ClearColor(Color::srgb(0.48, 0.70, 0.91)))
-            .insert_resource(terrain_palette)
-            .add_plugins(LeafwingInputAdapterPlugin);
+    if client_palette {
+        let terrain_palette = spine.terrain_layer_table().map_or_else(
+            || chunk_mesh::ProductionTerrainPalette::from_ids(&spine.palette_ids()),
+            chunk_mesh::ProductionTerrainPalette::from_layer_table,
+        );
+        world.insert_resource(ClearColor(Color::srgb(0.48, 0.70, 0.91)));
+        world.insert_resource(terrain_palette);
     }
+    world.insert_resource(spine);
+    spawn_host_entities(world);
+}
+
+/// Marker for entities that belong to an in-process play session.
+#[derive(Component, Debug, Default)]
+pub(super) struct InProcessPlayEntity;
+
+#[cfg(feature = "client")]
+pub(super) fn spawn_play_presentation(world: &mut bevy::prelude::World) {
+    use bevy::ecs::system::RunSystemOnce;
+    let _ = world.run_system_once(voxel_icon::build_production_voxel_icons);
+    let _ = world.run_system_once(spawn_production_hud_if_client);
+    let _ = world.run_system_once(client::spawn_production_client_view);
+    let _ = world.run_system_once(pause::spawn_pause_overlay_if_client);
+    let _ = world.run_system_once(attach_initial_chunk_meshes);
 }
 
 fn spawn_host_entities(world: &mut bevy::prelude::World) {
     let Some(spine) = world.get_resource::<ProductionSpine>().cloned() else {
         return;
     };
+    if world
+        .iter_entities()
+        .any(|entity| entity.contains::<D2Player>())
+    {
+        return;
+    }
     let spawn = spine.restored_spawn_translation();
     #[cfg(feature = "client")]
     {
         let client = world.get_resource::<EngineProfile>() == Some(&EngineProfile::Client);
         let maps = world.get_resource::<CompiledClientInputMaps>().cloned();
-        let mut player = world.spawn(D2PlayerBundle::new(
-            spine::local_player_id(),
-            Transform::from_translation(spawn),
+        let mut player = world.spawn((
+            D2PlayerBundle::new(spine::local_player_id(), Transform::from_translation(spawn)),
+            InProcessPlayEntity,
         ));
         if client {
             if let Some(maps) = maps {
@@ -857,9 +924,9 @@ fn spawn_host_entities(world: &mut bevy::prelude::World) {
         }
     }
     #[cfg(not(feature = "client"))]
-    world.spawn(D2PlayerBundle::new(
-        spine::local_player_id(),
-        Transform::from_translation(spawn),
+    world.spawn((
+        D2PlayerBundle::new(spine::local_player_id(), Transform::from_translation(spawn)),
+        InProcessPlayEntity,
     ));
     if let Ok(delta) = spine.take_presentation() {
         for update in delta.collider_update {

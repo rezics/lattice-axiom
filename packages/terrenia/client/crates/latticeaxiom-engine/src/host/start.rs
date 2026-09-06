@@ -285,10 +285,8 @@ impl ProductionMemoryStart {
 
     /// Seals a replacement-process handoff for an exact-ready session world.
     ///
-    /// This does not create a Bevy game [`bevy::app::App`] and does not spawn
-    /// [`super::ProductionSpine`]. An external supervisor must persist the
-    /// intent and spawn the game process. The caller supplies the exact durable
-    /// settings revision confirmed before the handoff.
+    /// Ordinary Continue/Play do not call this. A future settings-restart
+    /// interface may persist the envelope and spawn a replacement process.
     ///
     /// # Errors
     ///
@@ -331,10 +329,34 @@ impl ProductionMemoryStart {
         .map_err(ProductionMemoryStartError::from)
     }
 
+    /// Returns lock-verified gameplay images used to materialize play.
+    #[must_use]
+    pub const fn images(&self) -> &LockVerifiedComposeImages {
+        &self.images
+    }
+
     /// Returns the presentation-neutral start flow.
     #[must_use]
     pub const fn flow(&self) -> &MemoryStartFlow {
         &self.flow
+    }
+
+    /// Returns the mutable presentation-neutral start flow.
+    pub const fn flow_mut(&mut self) -> &mut MemoryStartFlow {
+        &mut self.flow
+    }
+
+    /// Materializes the play spine for `world_id` in this process.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionMemoryStartError`] when the world is absent or spine
+    /// materialization fails.
+    pub(crate) fn materialize_play_spine(
+        &mut self,
+        world_id: WorldId,
+    ) -> Result<ProductionSpine, ProductionMemoryStartError> {
+        self.ensure_spine(world_id)
     }
 
     /// Stores the typed intent applied by the next quick-create command.
@@ -1018,6 +1040,22 @@ impl ProductionMemoryStart {
             metadata,
         ))?;
         Ok(())
+    }
+
+    pub(crate) fn saved_entry(
+        &self,
+        world_id: WorldId,
+    ) -> Option<&latticeaxiom_world_db::DiskWorldEntryV1> {
+        self.saved_worlds.get(&world_id)
+    }
+
+    pub(crate) fn disk_store(&self) -> Option<&latticeaxiom_world_db::DiskWorldStore> {
+        self.disk.as_ref()
+    }
+
+    pub(crate) fn shell_lock_hash(&self) -> latticeaxiom_core::CanonicalHash {
+        self.shell_lock_hash
+            .unwrap_or_else(|| self.images.product_lock_hash())
     }
 
     fn install_worldgen_profiles(&mut self) -> Result<(), ProductionMemoryStartError> {

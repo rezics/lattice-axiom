@@ -924,6 +924,7 @@ fn memory_pause_save_exit_continue_semantic_flow_does_not_checkpoint() {
         continued,
         MemoryStartEffect::Shell(ShellEffect::RequestExactWorldLaunch(created))
     );
+    assert_eq!(flow.shell().screen, ShellScreen::Loading);
 }
 
 #[test]

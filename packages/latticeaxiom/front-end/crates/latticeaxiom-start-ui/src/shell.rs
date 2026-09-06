@@ -1,4 +1,4 @@
-//! Shell routing, semantic-tree projection, and replacement-process handoff.
+//! Shell routing, semantic-tree projection, and optional replacement-process handoff.
 
 use std::collections::BTreeSet;
 
@@ -66,6 +66,12 @@ pub struct StartShellModel {
 }
 
 impl StartShellModel {
+    /// Routes Continue/Play through Loading in the current application.
+    pub(crate) fn enter_world_loading(&mut self) {
+        self.loading = Some(LoadingState::new());
+        self.screen = ShellScreen::Loading;
+    }
+
     /// Creates a shell only from a validated package closure.
     #[must_use]
     pub const fn new(graph: ClientShellGraph, worlds: WorldListModel) -> Self {
@@ -222,6 +228,7 @@ impl StartShellModel {
         } else if target == "home/continue" || action == SemanticActionId::ContinueWorld {
             match self.worlds.home_primary_action() {
                 HomePrimaryAction::Continue { world_id, .. } => {
+                    self.enter_world_loading();
                     ShellEffect::RequestExactWorldLaunch(world_id)
                 }
                 _ => return Err(ShellCommandError::NoExactContinue),
@@ -319,7 +326,10 @@ impl StartShellModel {
                 ShellEffect::ReviewWorld(world_id)
             }
             (Some("play"), SemanticActionId::Activate | SemanticActionId::PlayExact)
-            | (None, SemanticActionId::PlayExact) => ShellEffect::RequestExactWorldLaunch(world_id),
+            | (None, SemanticActionId::PlayExact) => {
+                self.enter_world_loading();
+                ShellEffect::RequestExactWorldLaunch(world_id)
+            }
             (Some("preflight" | "prepare" | "compatible" | "repair" | "read-only"), _)
             | (_, SemanticActionId::RunPreflight) => ShellEffect::RequestRunPreflight(world_id),
             (Some("checkpoint"), _) | (_, SemanticActionId::CreateCheckpoint) => {
@@ -828,7 +838,7 @@ pub enum ShellEffect {
     Navigate(ShellScreen),
     /// Input adapter should move focus using current semantic order.
     FocusTraversal(SemanticActionId),
-    /// Exact-ready world is selected for launch handoff.
+    /// Exact-ready world should load in the current application.
     RequestExactWorldLaunch(WorldId),
     /// World is selected for compatibility/recovery review.
     ReviewWorld(WorldId),
@@ -909,7 +919,10 @@ pub struct LaunchHandoffContext {
     pub confirmed_setting_transaction_revision: SettingTransactionRevision,
 }
 
-/// Handoff that must be atomically published before the current process exits.
+/// Optional replacement-process envelope for a future settings-restart interface.
+///
+/// Ordinary Continue/Play stay in the current `DefaultPlugins` application and
+/// do not publish this handoff.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchHandoff {
     /// Authenticated cross-process envelope.
@@ -921,9 +934,8 @@ pub struct LaunchHandoff {
 impl LaunchHandoff {
     /// Builds a world launch only from a `ReadyExact` plan offering the frozen lock.
     ///
-    /// No Bevy `App` is created here. The launcher atomically persists this
-    /// intent after shutdown barriers and starts a replacement process whose
-    /// one fresh application enters the world.
+    /// Ordinary play does not call this. A future settings-restart interface
+    /// may persist the envelope and spawn a replacement process.
     ///
     /// # Errors
     ///

@@ -248,6 +248,11 @@ impl MemoryStartFlow {
         &self.shell
     }
 
+    /// Returns the mutable presentation-neutral shell.
+    pub const fn shell_mut(&mut self) -> &mut StartShellModel {
+        &mut self.shell
+    }
+
     /// Returns the process-local world list.
     #[must_use]
     pub const fn worlds(&self) -> &InMemoryWorldList {
@@ -351,11 +356,37 @@ impl MemoryStartFlow {
         Ok(effect)
     }
 
+    /// Routes Continue/Play onto the Loading surface in this process.
+    pub fn enter_loading(&mut self) {
+        self.shell.enter_world_loading();
+    }
+
     /// Advertises the in-session pause overlay for a live world.
     ///
     /// Pause does not write, flush, or otherwise mutate world state.
     pub fn enter_playing(&mut self) {
+        self.shell.loading = None;
         self.shell.screen = ShellScreen::Playing;
+    }
+
+    /// Advances the Continue/Play loading route by one honest stage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::LoadingStateError`] when no loading state exists or the
+    /// requested stage is not a valid successor.
+    pub fn advance_loading(
+        &mut self,
+        stage: crate::LoadingStage,
+        progress: crate::LoadingProgress,
+        current_item: Option<String>,
+    ) -> Result<(), crate::LoadingStateError> {
+        let loading = self
+            .shell
+            .loading
+            .as_mut()
+            .ok_or(crate::LoadingStateError::MissingLoadingState)?;
+        loading.advance(stage, progress, current_item)
     }
 
     /// Returns the shell to Home without opening a writer.
@@ -410,7 +441,8 @@ impl MemoryStartFlow {
     /// Validates and applies a semantic command against the current tree.
     ///
     /// Quick-create publishes a session world from the current draft. Continue
-    /// still emits [`ShellEffect::RequestExactWorldLaunch`] for the host.
+    /// emits [`ShellEffect::RequestExactWorldLaunch`] so the host can load the
+    /// world in this process after the Loading route.
     ///
     /// # Errors
     ///
