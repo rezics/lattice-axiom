@@ -2377,9 +2377,8 @@ impl GenerationPlanV1 {
                     counters,
                 )
                 .unwrap_or(i64::from(neighbor_column.height));
-            maximum_neighbor_descent = maximum_neighbor_descent.max(
-                u16::try_from(surface_y.saturating_sub(neighbor_surface_y)).unwrap_or(u16::MAX),
-            );
+            maximum_neighbor_descent = maximum_neighbor_descent
+                .max(natural.surface_descent(surface_y, neighbor_surface_y));
             neighbor_height_delta_sum = neighbor_height_delta_sum
                 .saturating_add(neighbor_surface_y.saturating_sub(surface_y));
         }
@@ -2516,10 +2515,8 @@ impl GenerationPlanV1 {
                         self.final_surface_y_for_column(x, z, column, density.as_ref(), counters)
                             .unwrap_or(i64::from(column.height))
                     };
-                    maximum_neighbor_descent = maximum_neighbor_descent.max(
-                        u16::try_from(surface_y.saturating_sub(neighbor_surface_y))
-                            .unwrap_or(u16::MAX),
-                    );
+                    maximum_neighbor_descent = maximum_neighbor_descent
+                        .max(natural.surface_descent(surface_y, neighbor_surface_y));
                     neighbor_height_delta_sum = neighbor_height_delta_sum
                         .saturating_add(neighbor_surface_y.saturating_sub(surface_y));
                 }

@@ -325,6 +325,7 @@ pub(crate) struct NaturalSamplerV1 {
     layer_hash: NaturalLayerHashV1,
     hydrology: ProviderGenerationIdentityV1,
     surface_material_policy: SurfaceMaterialPolicyV1,
+    nonnegative_surface_descent: bool,
     basin_seed: u64,
     geology_seed: u64,
     resource_seed: u64,
@@ -501,6 +502,7 @@ impl NaturalSamplerV1 {
             surface_material_policy: SurfaceMaterialPolicyV1::for_geology_revision(
                 geology.algorithm_revision(),
             ),
+            nonnegative_surface_descent: geology.algorithm_revision() >= 4,
             basin_seed,
             geology_seed,
             resource_seed,
@@ -533,6 +535,12 @@ impl NaturalSamplerV1 {
             self.surface_material_policy,
             SurfaceMaterialPolicyV1::FinalSurfaceAndSlope
         )
+    }
+
+    /// Geology revision 4 treats higher neighbors as zero descent. Earlier
+    /// frozen worlds retain their original signed-conversion behavior.
+    pub(crate) fn surface_descent(&self, surface_y: i64, neighbor_y: i64) -> u16 {
+        surface_descent(surface_y, neighbor_y, self.nonnegative_surface_descent)
     }
 
     /// Resolves one bounded sediment/bedrock profile from coherent geology,
@@ -1148,6 +1156,11 @@ fn resolve_natural_roles(
     Ok(receipts)
 }
 
+fn surface_descent(surface_y: i64, neighbor_y: i64, nonnegative: bool) -> u16 {
+    let delta = surface_y.saturating_sub(neighbor_y);
+    u16::try_from(if nonnegative { delta.max(0) } else { delta }).unwrap_or(u16::MAX)
+}
+
 fn surface_role(style: TerrainStyleV1) -> D4MaterialRoleV1 {
     match style {
         TerrainStyleV1::Marine => D4MaterialRoleV1::TemperateGravel,
@@ -1298,5 +1311,27 @@ mod tests {
         assert_eq!(neutral(1).subsurface_depth_voxels, 1);
         assert_eq!(neutral(2).subsurface_depth_voxels, 0);
         assert_eq!(neutral(3).subsurface_depth_voxels, 0);
+    }
+}
+
+#[cfg(test)]
+mod descent_tests {
+    use super::surface_descent;
+
+    #[test]
+    fn uphill_and_flat_neighbors_are_not_cliffs() {
+        assert_eq!(surface_descent(64, 65, true), 0);
+        assert_eq!(surface_descent(-10, -9, true), 0);
+        assert_eq!(surface_descent(64, 64, true), 0);
+        assert_eq!(surface_descent(64, 63, true), 1);
+        assert_eq!(surface_descent(64, 60, true), 4);
+        assert_eq!(surface_descent(i64::MAX, i64::MIN, true), u16::MAX);
+        assert_eq!(surface_descent(i64::MIN, i64::MAX, true), 0);
+    }
+
+    #[test]
+    fn revision_three_keeps_frozen_world_generation() {
+        assert_eq!(surface_descent(64, 65, false), u16::MAX);
+        assert_eq!(surface_descent(64, 60, false), 4);
     }
 }

@@ -165,6 +165,7 @@ pub(crate) struct TerritorySamplerV1 {
     terrain_programs: ResolvedTerrainProgramsV1,
     temperature_seed: u64,
     humidity_seed: u64,
+    material_transition_seed: u64,
     transition: ProviderGenerationIdentityV1,
 }
 
@@ -186,6 +187,10 @@ impl TerritorySamplerV1 {
             terrain_programs,
             temperature_seed: climate_seed ^ TEMPERATURE_SALT,
             humidity_seed: climate_seed ^ HUMIDITY_SALT,
+            material_transition_seed: hash_u64(
+                TRANSITION_DOMAIN,
+                &[seed_root.as_bytes(), b"coherent-materials-v2"],
+            ),
             transition,
         }
     }
@@ -339,6 +344,15 @@ impl TerritorySamplerV1 {
         if !sample.transition_active {
             return sample.winner;
         }
+        if self.transition.algorithm_revision() >= 9 {
+            return coherent_material_style(
+                self.material_transition_seed,
+                x,
+                z,
+                self.config.transition_width_voxels,
+                sample,
+            );
+        }
         let width = u64::from(self.config.transition_width_voxels);
         let distance = u64::from(sample.boundary_distance_voxels);
         let winner_weight = width.saturating_add(distance);
@@ -418,6 +432,36 @@ impl TerritorySamplerV1 {
             .div_euclid(1_024);
         (temperature, humidity)
     }
+}
+
+/// Move one shared boundary with a continuous field. Canonical style ordering
+/// gives both sides the same displacement sign; per-voxel random selection
+/// would fragment entire transition bands into isolated grass/sand columns.
+fn coherent_material_style(
+    seed: u64,
+    x: i64,
+    z: i64,
+    width: u16,
+    sample: CompactTerritorySampleV1,
+) -> TerrainStyleV1 {
+    let (low, high) = if sample.winner < sample.adjacent_style {
+        (sample.winner, sample.adjacent_style)
+    } else {
+        (sample.adjacent_style, sample.winner)
+    };
+    let distance = i64::from(sample.boundary_distance_voxels)
+        .saturating_mul(2)
+        .saturating_add(1);
+    let signed_distance = if sample.winner == low {
+        distance
+    } else {
+        -distance
+    };
+    let noise = climate_field(seed, x, z, width.clamp(16, 96));
+    let score = signed_distance
+        .saturating_mul(1024)
+        .saturating_add(noise.saturating_mul(i64::from(width)).saturating_mul(2));
+    if score >= 0 { low } else { high }
 }
 
 #[derive(Clone, Copy)]
@@ -527,5 +571,54 @@ const fn side_discriminant(side: BoundarySide) -> u8 {
         BoundarySide::East => 1,
         BoundarySide::North => 2,
         BoundarySide::South => 3,
+    }
+}
+
+#[cfg(test)]
+mod coherent_material_tests {
+    use super::*;
+
+    fn sample(winner: TerrainStyleV1, adjacent_style: TerrainStyleV1) -> CompactTerritorySampleV1 {
+        CompactTerritorySampleV1 {
+            cell_x: -1,
+            cell_z: 0,
+            neighbor_x: 0,
+            neighbor_z: 0,
+            side: BoundarySide::East,
+            winner,
+            adjacent_style,
+            boundary_distance_voxels: 0,
+            transition_active: true,
+        }
+    }
+
+    #[test]
+    fn transition_forms_contiguous_patches_across_signed_coordinates() {
+        let west = sample(
+            TerrainStyleV1::TemperateWoodland,
+            TerrainStyleV1::AridBadlands,
+        );
+        let east = sample(
+            TerrainStyleV1::AridBadlands,
+            TerrainStyleV1::TemperateWoodland,
+        );
+        let line: Vec<_> = (-256..256)
+            .map(|z| coherent_material_style(42, -1, z, 48, west))
+            .collect();
+        let transitions = line.windows(2).filter(|pair| pair[0] != pair[1]).count();
+        assert!(
+            transitions > 0 && transitions < 32,
+            "boundary must meander in broad patches: {transitions}"
+        );
+        let disagreements = (-256..256)
+            .filter(|z| {
+                coherent_material_style(42, -1, *z, 48, west)
+                    != coherent_material_style(42, 0, *z, 48, east)
+            })
+            .count();
+        assert!(
+            disagreements < 64,
+            "both sides must share the displaced boundary: {disagreements}"
+        );
     }
 }

@@ -56,9 +56,18 @@ pub(super) fn compile_plan(
     terrain_config: TerrainConfigV2,
 ) -> Result<GenerationPlanV1, ProductionHostError> {
     let config = spine_config_for(&terrain_config);
-    let natural_offers =
-        provider_offers(catalog.worldgen_package.as_ref(), ProviderSlotV1::NATURAL)?;
-    let mut offers = provider_offers(catalog.worldgen_package.as_ref(), ProviderSlotV1::ALL)?;
+    let natural_offers = provider_offers_with_revisions(
+        catalog.worldgen_package.as_ref(),
+        ProviderSlotV1::NATURAL,
+        catalog.geology_algorithm_revision,
+        catalog.terrain_transition_algorithm_revision,
+    )?;
+    let mut offers = provider_offers_with_revisions(
+        catalog.worldgen_package.as_ref(),
+        ProviderSlotV1::ALL,
+        catalog.geology_algorithm_revision,
+        catalog.terrain_transition_algorithm_revision,
+    )?;
     offers.extend(natural_offers.iter().cloned());
     let input = GenerationPlanInputV1::new(
         catalog.dimension.clone(),
@@ -482,15 +491,40 @@ const fn production_terrain_config() -> TerrainConfigV2 {
     TerrainPresetV2::Balanced.resolve()
 }
 
+#[cfg(test)]
 fn provider_offers<const N: usize>(
     selected: Option<&LockedPackage>,
     slots: [ProviderSlotV1; N],
+) -> Result<Vec<ProviderOfferV1>, ProductionHostError> {
+    provider_offers_with_geology(selected, slots, 3)
+}
+
+#[cfg(test)]
+fn provider_offers_with_geology<const N: usize>(
+    selected: Option<&LockedPackage>,
+    slots: [ProviderSlotV1; N],
+    geology_revision: u32,
+) -> Result<Vec<ProviderOfferV1>, ProductionHostError> {
+    provider_offers_with_revisions(selected, slots, geology_revision, 8)
+}
+
+fn provider_offers_with_revisions<const N: usize>(
+    selected: Option<&LockedPackage>,
+    slots: [ProviderSlotV1; N],
+    geology_revision: u32,
+    transition_revision: u32,
 ) -> Result<Vec<ProviderOfferV1>, ProductionHostError> {
     slots
         .into_iter()
         .map(|slot| {
             let path = provider_path(slot);
-            let revision = provider_revision(slot);
+            let revision = if slot == ProviderSlotV1::Geology {
+                geology_revision
+            } else if slot == ProviderSlotV1::TerrainTransition {
+                transition_revision
+            } else {
+                provider_revision(slot)
+            };
             Ok(ProviderOfferV1::new(
                 slot,
                 ProviderGenerationIdentityV1::new(
@@ -1774,6 +1808,76 @@ mod tests {
     }
 
     #[test]
+    fn gentle_uphill_columns_keep_soil_below_grass_without_changing_relief() {
+        let current = semantic_vegetation_plan_with_geology(0, false, 4);
+        let legacy = semantic_vegetation_plan_with_geology(0, false, 3);
+        let soils = [
+            D4MaterialRoleV1::TemperateSubsurface,
+            D4MaterialRoleV1::CoarseDirt,
+            D4MaterialRoleV1::RootedDirt,
+            D4MaterialRoleV1::TemperateClay,
+        ]
+        .map(|role| current.role_target(role).clone());
+        let edge = i64::from(current.config().chunk_edge_voxels);
+        for z in (-512_i64..512).step_by(8) {
+            for x in (-512_i64..512).step_by(8) {
+                assert_eq!(current.terrain_height(x, z), legacy.terrain_height(x, z));
+                if current.material_style(x, z) != TerrainStyleV1::TemperateWoodland {
+                    continue;
+                }
+                let y = final_surface_y(&current, x, z);
+                if current
+                    .hydrology_occupancy_sample(x, y + 1, z)
+                    .is_some_and(|v| v.is_occupied())
+                    || !current.terrain_materializes_as_solid(x, y - 1, z)
+                {
+                    continue;
+                }
+                let neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                    .map(|(dx, dz)| final_surface_y(&current, x + dx, z + dz));
+                if !neighbors.iter().any(|n| *n > y) || neighbors.iter().any(|n| y - n > 1) {
+                    continue;
+                }
+                let coordinate = ChunkCoordinate::new(
+                    i32::try_from(x.div_euclid(edge)).expect("X"),
+                    i32::try_from((y - 1).div_euclid(edge)).expect("Y"),
+                    i32::try_from(z.div_euclid(edge)).expect("Z"),
+                );
+                let subsurface = |plan: &GenerationPlanV1| {
+                    let ChunkGenerationOutcomeV1::Prepared(candidate) = plan
+                        .generate(
+                            plan.vacant_generation_request(coordinate)
+                                .expect("vacant request"),
+                        )
+                        .expect("generated chunk")
+                    else {
+                        panic!("new chunk");
+                    };
+                    candidate
+                        .draft()
+                        .block_at(
+                            u16::try_from(x.rem_euclid(edge)).expect("local X"),
+                            u16::try_from((y - 1).rem_euclid(edge)).expect("local Y"),
+                            u16::try_from(z.rem_euclid(edge)).expect("local Z"),
+                        )
+                        .expect("cell")
+                        .clone()
+                };
+                assert!(
+                    soils.contains(&subsurface(&current)),
+                    "gentle uphill column ({x},{y},{z}) lost its soil"
+                );
+                assert!(
+                    !soils.contains(&subsurface(&legacy)),
+                    "fixture must reproduce the legacy uphill/cliff bug"
+                );
+                return;
+            }
+        }
+        panic!("fixed corpus must contain a dry gentle uphill column");
+    }
+
+    #[test]
     fn production_hydrology_uses_minecraft_scale_sea_level_with_bounded_memory() {
         let spine = spine_config();
         let config = hydrology_occupancy_config();
@@ -2389,11 +2493,21 @@ mod tests {
     }
 
     fn semantic_vegetation_plan(seed: i64, reverse: bool) -> GenerationPlanV1 {
+        semantic_vegetation_plan_with_geology(seed, reverse, 4)
+    }
+
+    fn semantic_vegetation_plan_with_geology(
+        seed: i64,
+        reverse: bool,
+        revision: u32,
+    ) -> GenerationPlanV1 {
         let bindings = authored_bindings();
         let terrain = production_terrain_config();
         let config = spine_config_for(&terrain);
         let mut d4 = provider_offers(None, ProviderSlotV1::ALL).expect("D4 offers");
-        let mut natural = provider_offers(None, ProviderSlotV1::NATURAL).expect("natural offers");
+        let mut natural =
+            super::provider_offers_with_geology(None, ProviderSlotV1::NATURAL, revision)
+                .expect("natural offers");
         d4.extend(natural.iter().cloned());
         if reverse {
             d4.reverse();

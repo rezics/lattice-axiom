@@ -142,6 +142,8 @@ pub(super) struct HostWorldgenCatalog {
     pub(super) block_catalog: D4BlockCatalogClosureV1,
     pub(super) bindings: AuthoredWorldgenBindingsV1,
     pub(super) worldgen_package: Option<LockedPackage>,
+    pub(super) geology_algorithm_revision: u32,
+    pub(super) terrain_transition_algorithm_revision: u32,
     pub(super) cave: HostCaveBindings,
     pub(super) hydrology: HostHydrologyBindings,
 }
@@ -416,6 +418,7 @@ pub(super) fn host_worldgen_catalog(
         }
     }
 
+    let generation_policy = locked_generation_policy(&worldgen_data)?;
     Ok(HostWorldgenCatalog {
         dimension: resolve_dimension(images)?,
         palette,
@@ -429,7 +432,58 @@ pub(super) fn host_worldgen_catalog(
         hydrology: authored_hydrology_bindings(&bindings, blocks_json)?,
         bindings,
         worldgen_package: Some(worldgen_package),
+        geology_algorithm_revision: generation_policy.geology_algorithm_revision,
+        terrain_transition_algorithm_revision: generation_policy
+            .terrain_transition_algorithm_revision,
     })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenerationPolicy {
+    geology_algorithm_revision: u32,
+    #[serde(default = "legacy_transition_revision")]
+    terrain_transition_algorithm_revision: u32,
+}
+
+const fn legacy_transition_revision() -> u32 {
+    8
+}
+
+fn locked_generation_policy(
+    data: &RealizedDataRootV1,
+) -> Result<GenerationPolicy, ProductionHostError> {
+    let bytes = data
+        .files()
+        .find(|(path, _)| path.as_str() == "data/generation-policy.json")
+        .map(|(_, bytes)| bytes);
+    parse_generation_policy(bytes)
+}
+
+fn parse_generation_policy(bytes: Option<&[u8]>) -> Result<GenerationPolicy, ProductionHostError> {
+    let Some(bytes) = bytes else {
+        return Ok(GenerationPolicy {
+            geology_algorithm_revision: 3,
+            terrain_transition_algorithm_revision: 8,
+        });
+    };
+    let policy: GenerationPolicy = serde_json::from_slice(bytes).map_err(|source| {
+        ProductionHostError::InvalidAuthoredCatalog {
+            name: "generation-policy",
+            source,
+        }
+    })?;
+    if !matches!(policy.geology_algorithm_revision, 3 | 4) {
+        return Err(ProductionHostError::InvalidCatalogField {
+            field: "geology_algorithm_revision",
+        });
+    }
+    if !matches!(policy.terrain_transition_algorithm_revision, 8 | 9) {
+        return Err(ProductionHostError::InvalidCatalogField {
+            field: "terrain_transition_algorithm_revision",
+        });
+    }
+    Ok(policy)
 }
 
 impl HostWorldgenCatalog {
@@ -1734,6 +1788,45 @@ fn compile_lock_selected_gameplay_catalog(
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    #[test]
+    fn slope_policy_is_selected_by_frozen_package_data() {
+        assert_eq!(
+            super::parse_generation_policy(None)
+                .expect("legacy policy")
+                .geology_algorithm_revision,
+            3
+        );
+        assert_eq!(
+            super::parse_generation_policy(Some(br#"{"geology_algorithm_revision":4}"#))
+                .expect("current policy")
+                .geology_algorithm_revision,
+            4
+        );
+        assert!(
+            super::parse_generation_policy(Some(br#"{"geology_algorithm_revision":5}"#)).is_err()
+        );
+        assert!(super::parse_generation_policy(Some(b"{}")).is_err());
+        assert_eq!(
+            super::parse_generation_policy(None)
+                .expect("legacy policy")
+                .terrain_transition_algorithm_revision,
+            8
+        );
+        assert_eq!(
+            super::parse_generation_policy(Some(
+                br#"{"geology_algorithm_revision":4,"terrain_transition_algorithm_revision":9}"#
+            ))
+            .expect("current policy")
+            .terrain_transition_algorithm_revision,
+            9
+        );
+        assert!(
+            super::parse_generation_policy(Some(
+                br#"{"geology_algorithm_revision":4,"terrain_transition_algorithm_revision":10}"#
+            ))
+            .is_err()
+        );
+    }
     use std::collections::{BTreeMap, BTreeSet};
 
     use latticeaxiom_compose::RealizedDataRootV1;
