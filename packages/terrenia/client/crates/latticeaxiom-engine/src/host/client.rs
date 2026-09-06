@@ -193,9 +193,21 @@ pub(super) fn sync_production_camera(
     };
 
     let eye_offset = profile.eye_height_m() - profile.capsule_total_height_m() * 0.5;
-    camera_transform.translation = player_transform.translation + Vec3::Y * eye_offset;
-    camera_transform.rotation =
-        Quat::from_rotation_y(view.yaw_radians()) * Quat::from_rotation_x(view.pitch_radians());
+    let overview = crate::visual_capture::overview_camera_transform(player_transform.translation);
+    let translation = overview.map_or(
+        player_transform.translation + Vec3::Y * eye_offset,
+        |pose| pose.translation,
+    );
+    let rotation = overview.map_or_else(
+        || Quat::from_rotation_y(view.yaw_radians()) * Quat::from_rotation_x(view.pitch_radians()),
+        |pose| pose.rotation,
+    );
+    if camera_transform.translation != translation {
+        camera_transform.translation = translation;
+    }
+    if camera_transform.rotation != rotation {
+        camera_transform.rotation = rotation;
+    }
 
     let next_view_range = spine.terrain_distance_status().map_or_else(
         ProductionCameraViewRangeV1::default,

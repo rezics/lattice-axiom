@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import uuid
 
 
 def verify_report(report: dict, previous: dict | None) -> dict:
@@ -33,6 +34,7 @@ def main() -> None:
     parser.add_argument('--output', type=Path, required=True, help='new, non-existing QA output directory')
     parser.add_argument('--replacement-lock', type=Path, help='replace the default after the first session; its original archive/CAS must be in runtime')
     parser.add_argument('--expected-mode', choices=('survival', 'creative'))
+    parser.add_argument('--world-id', type=uuid.UUID, help='fixed QA-only identity for reproducible terrain seeds')
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     runtime = args.runtime.resolve(strict=True)
@@ -49,6 +51,8 @@ def main() -> None:
     environment['LATTICEAXIOM_LIFECYCLE_QA'] = '1'
     # Remain active past the launcher's 30-second observation window.
     environment['LATTICEAXIOM_LIFECYCLE_HOLD_MS'] = '35000'
+    if args.world_id:
+        environment['LATTICEAXIOM_QA_WORLD_ID'] = str(args.world_id)
     if os.name == 'nt':
         rust_lib = subprocess.check_output(['rustc', '--print', 'target-libdir'], text=True).strip()
         environment['PATH'] = os.pathsep.join((rust_lib, str(binary.parent / 'deps'), environment['PATH']))
@@ -78,6 +82,8 @@ def main() -> None:
         previous = verify_report(report, previous)
         state_path = output / 'lifecycle-world-state.json'
         state = json.loads(state_path.read_text(encoding='utf-8'))
+        if args.world_id and state['world'] != str(args.world_id):
+            raise RuntimeError('client did not use the requested deterministic QA world identity')
         shutil.copy2(state_path, output / f'lifecycle-world-state-{number}.json')
         if args.expected_mode and state['mode'] != args.expected_mode:
             raise RuntimeError(f'world mode differs from expected {args.expected_mode}: {state}')

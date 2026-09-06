@@ -23,6 +23,8 @@
 mod client;
 #[cfg(feature = "client")]
 mod cursor_capture;
+#[cfg(feature = "client")]
+mod frame_monitor;
 mod host;
 mod input;
 mod instance;

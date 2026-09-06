@@ -1,5 +1,6 @@
 //! Development observability built from Bevy's diagnostics and logging runtime.
 
+use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::App;
 
 #[cfg(feature = "development")]
@@ -8,8 +9,8 @@ use std::time::Duration;
 #[cfg(feature = "development")]
 use bevy::{
     diagnostic::{
-        DiagnosticPath, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
-        LogDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
+        DiagnosticPath, EntityCountDiagnosticsPlugin, LogDiagnosticsPlugin,
+        SystemInformationDiagnosticsPlugin,
     },
     log::info,
     prelude::{Plugin, Res, Startup},
@@ -36,6 +37,8 @@ const EARLY_PREPASS_GPU_TIME: DiagnosticPath =
 
 /// Installs bounded client diagnostics for the development feature set.
 pub(crate) fn install_client_observability(app: &mut App) {
+    app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+    crate::frame_monitor::install(app);
     #[cfg(feature = "development")]
     app.add_plugins(DevelopmentObservabilityPlugin);
 
@@ -63,7 +66,6 @@ impl Plugin for DevelopmentObservabilityPlugin {
         .collect();
 
         app.add_plugins((
-            FrameTimeDiagnosticsPlugin::default(),
             EntityCountDiagnosticsPlugin::default(),
             SystemInformationDiagnosticsPlugin,
             RenderDiagnosticsPlugin,

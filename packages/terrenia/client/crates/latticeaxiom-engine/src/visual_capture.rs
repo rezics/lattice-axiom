@@ -60,12 +60,35 @@ pub(crate) fn install(app: &mut App) {
     );
 }
 
+/// A presentation-only camera override applied before medium/fog selection.
+pub(crate) fn overview_camera_transform(
+    center: bevy::prelude::Vec3,
+) -> Option<bevy::prelude::Transform> {
+    if std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").is_none()
+        || std::env::var_os("LATTICEAXIOM_CAPTURE_OVERVIEW").is_none()
+    {
+        return None;
+    }
+    Some(
+        bevy::prelude::Transform::from_translation(
+            center + bevy::prelude::Vec3::new(0.0, 48.0, 32.0),
+        )
+        .looking_at(
+            center + bevy::prelude::Vec3::new(0.0, 0.0, -48.0),
+            bevy::prelude::Vec3::Y,
+        ),
+    )
+}
+
 #[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments)] // Snapshot independent render and timing evidence once.
 fn capture_scene_probe(
     frame: Res<'_, FrameCount>,
     request: Res<'_, CaptureRequest>,
     mut written: bevy::prelude::Local<'_, bool>,
     spine: Option<Res<'_, crate::ProductionSpine>>,
+    monitor: Res<'_, crate::frame_monitor::FrameMonitor>,
+    diagnostics: Res<'_, bevy::diagnostic::DiagnosticsStore>,
     cameras: bevy::prelude::Query<
         '_,
         '_,
@@ -96,7 +119,8 @@ fn capture_scene_probe(
     let mesh_rows = meshes.iter().take(24).map(|(transform, visible)| serde_json::json!({
         "translation": transform.translation().to_array(), "visible": visible.map(|value| value.get())
     })).collect::<Vec<_>>();
-    let report = serde_json::json!({"frame": frame.0, "world": spine.world_id(), "chunk_edge": spine.chunk_edge(), "player": pose.translation.to_array(),
+    let timings = diagnostics.iter().map(|d| serde_json::json!({"path": d.path().as_str(), "mean": d.average(), "smoothed": d.smoothed()})).collect::<Vec<_>>();
+    let report = serde_json::json!({"frame": frame.0, "performance": monitor.report(), "diagnostics": timings, "world": spine.world_id(), "chunk_edge": spine.chunk_edge(), "player": pose.translation.to_array(),
         "resident": format!("{:?}", spine.resident_chunks()), "cameras": camera_rows, "mesh_count": meshes.iter().count(), "meshes": mesh_rows});
     if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
         let _ = std::fs::write(request.path.with_extension("json"), bytes);
@@ -166,7 +190,12 @@ fn capture_once(
     time: Res<'_, bevy::prelude::Time<bevy::time::Real>>,
     mut request: ResMut<'_, CaptureRequest>,
 ) {
-    if frame.0 < 90 || time.elapsed_secs() < 3.0 || request.requested {
+    let delay = std::env::var("LATTICEAXIOM_CAPTURE_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(3.0)
+        .clamp(3.0, 600.0);
+    if frame.0 < 90 || time.elapsed_secs() < delay || request.requested {
         return;
     }
     request.requested = true;

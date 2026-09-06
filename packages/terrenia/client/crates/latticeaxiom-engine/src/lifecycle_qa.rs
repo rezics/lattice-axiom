@@ -22,6 +22,20 @@ type UiQueries<'w, 's> = (
     Query<'w, 's, &'static Text>,
 );
 
+/// A fixed identity gives comparison worlds the same UUID-derived seed.
+/// This hook only operates in explicitly marked development QA directories.
+pub(crate) fn requested_world_id() -> Option<latticeaxiom_core::WorldId> {
+    if std::env::var_os("LATTICEAXIOM_LIFECYCLE_QA").is_none()
+        || !std::env::current_dir()
+            .ok()?
+            .join(".latticeaxiom-qa")
+            .is_file()
+    {
+        return None;
+    }
+    std::env::var("LATTICEAXIOM_QA_WORLD_ID").ok()?.parse().ok()
+}
+
 pub(crate) fn install(app: &mut App, workspace: &std::path::Path) {
     if std::env::var_os("LATTICEAXIOM_LIFECYCLE_QA").is_some()
         && workspace.join(".latticeaxiom-qa").is_file()

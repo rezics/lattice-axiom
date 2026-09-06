@@ -433,6 +433,14 @@ impl ProductionMemoryStart {
         }
         let preset = terrain_preset_for_intent(intent)?;
         let terrain = preset.resolve();
+        #[cfg(feature = "development")]
+        let world_id = self
+            .saved_worlds
+            .is_empty()
+            .then(crate::lifecycle_qa::requested_world_id)
+            .flatten()
+            .unwrap_or_else(WorldId::new_v4);
+        #[cfg(not(feature = "development"))]
         let world_id = WorldId::new_v4();
         self.provision_created_world(world_id, intent, preset, &terrain)?;
         if let (Some(disk), Some(storage)) = (&self.disk, &self.storage) {
