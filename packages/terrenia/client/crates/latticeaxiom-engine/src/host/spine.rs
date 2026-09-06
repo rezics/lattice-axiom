@@ -936,7 +936,7 @@ impl ProductionSpine {
         ];
         let origin = translation_chunk(inner.player_pose.translation, inner.chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
-        prime_startup_working_set(&mut inner, &kernel, origin, FixedTick::new(0))?;
+        prime_startup_working_set(&mut inner, &kernel, origin, spawn_chunk, FixedTick::new(0))?;
         inner.last_success = None;
         bind_gameplay_session(&mut inner, &kernel, catalog, spawn_chunk, gameplay_mode)?;
         if let Some(session) = restored_session {
@@ -2628,6 +2628,17 @@ impl ProductionSpine {
         )
     }
 
+    /// Records the latest local-player pose copied from the authoritative capsule.
+    ///
+    /// Continue persists this pose onto the worldgen spawn chunk. Reopen primes
+    /// that spawn chunk even when the restored pose is outside the startup
+    /// neighborhood around the player.
+    pub fn record_player_pose(&self, pose: ProductionPlayerPose) {
+        if let Ok(mut inner) = self.lock_inner() {
+            inner.player_pose = pose;
+        }
+    }
+
     /// Maps a voxel to its host chunk using the spine edge.
     #[must_use]
     pub fn chunk_of(&self, position: BlockPosition) -> Option<ChunkCoordinate> {
@@ -2689,12 +2700,6 @@ impl ProductionSpine {
             collider_update,
             removals,
         })
-    }
-
-    pub(super) fn record_player_pose(&self, pose: ProductionPlayerPose) {
-        if let Ok(mut inner) = self.lock_inner() {
-            inner.player_pose = pose;
-        }
     }
 
     fn lock_inner(
@@ -2778,6 +2783,18 @@ struct SelectableHit {
 }
 
 impl ProductionSpineInner {
+    fn spawn_chunk(&self) -> Option<ChunkCoordinate> {
+        translation_chunk(self.spawn_center, self.chunk_edge)
+    }
+
+    fn session_pins(&self) -> BTreeSet<ChunkCoordinate> {
+        let mut pins = self.edited.clone();
+        if let Some(spawn) = self.spawn_chunk() {
+            pins.insert(spawn);
+        }
+        pins
+    }
+
     fn insert_edited_chunk(&mut self, coordinate: ChunkCoordinate) {
         if self.edited.insert(coordinate) {
             self.advance_edited_pin_revision();
@@ -3786,11 +3803,15 @@ fn prime_startup_working_set(
     inner: &mut ProductionSpineInner,
     kernel: &MemoryTransactionKernel,
     origin: ChunkCoordinate,
+    spawn_chunk: ChunkCoordinate,
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
     let _ = cached_desired_chunks(inner, origin, [0, 0]);
     let mut required = startup_safety_chunks(inner.player_pose.translation, inner.chunk_edge)?;
     required.insert(origin);
+    // Gameplay inventory and the durable player session live on the worldgen
+    // spawn chunk, which can be outside the restored pose neighborhood.
+    required.insert(spawn_chunk);
     let ordered = prioritize_chunks(&required, origin, [0, 0]);
     admit_desired(
         inner,
@@ -3864,7 +3885,8 @@ fn cached_desired_chunks(
         edited_pin_revision: inner.edited_pin_revision,
     };
     if inner.last_desired_key != Some(key) {
-        let desired = desired_chunks(origin, inner.clamps, look_ahead, &inner.edited);
+        let pins = inner.session_pins();
+        let desired = desired_chunks(origin, inner.clamps, look_ahead, &pins);
         inner.last_prioritized_desired = Arc::from(prioritize_chunks(&desired, origin, look_ahead));
         inner.last_desired = Arc::new(desired);
         inner.desired_admission_cursor = 0;
@@ -3885,9 +3907,10 @@ fn refresh_residency(
     tick: FixedTick,
 ) -> Result<(), ProductionHostError> {
     let now = tick.get();
+    let pins = inner.session_pins();
     let coordinates = inner.lifecycle.keys().copied().collect::<Vec<_>>();
     for coordinate in coordinates {
-        let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &pins);
         let residency = inner.residency.entry(coordinate).or_insert(ChunkResidency {
             admitted_tick: now,
             last_core_tick: None,
@@ -3944,9 +3967,9 @@ fn retry_missing_render_meshes(
     }
 
     let clamps = inner.clamps;
+    let pins = inner.session_pins();
     let render_scope = &inner.render_scope;
     let derived = &inner.derived;
-    let edited = &inner.edited;
     let runtime = &mut inner.runtime;
     for &coordinate in render_scope {
         if !runtime.is_resident(coordinate)
@@ -3956,7 +3979,7 @@ fn retry_missing_render_meshes(
         {
             continue;
         }
-        let class = interest_class(coordinate, origin, clamps, look_ahead, edited);
+        let class = interest_class(coordinate, origin, clamps, look_ahead, &pins);
         let receipt = runtime.request_derived(
             coordinate,
             DerivedKind::Mesh,
@@ -4021,19 +4044,20 @@ fn evict_unwanted(
     force_retain_release: bool,
 ) -> Result<(), ProductionHostError> {
     let now = tick.get();
+    let pins = inner.session_pins();
     let mut victims = inner
         .lifecycle
         .keys()
         .copied()
         .filter(|coordinate| {
             if desired.contains(coordinate)
-                || inner.edited.contains(coordinate)
+                || pins.contains(coordinate)
                 || inner.runtime.is_dirty(*coordinate)
             {
                 return false;
             }
             if matches!(
-                interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited),
+                interest_class(*coordinate, origin, inner.clamps, look_ahead, &pins),
                 InterestClass::Pin | InterestClass::Core
             ) {
                 return false;
@@ -4104,6 +4128,7 @@ fn admit_desired(
         .max(1)
         .saturating_sub(worldgen_work_count(inner));
     let high_water = inner.clamps.prefetch_high_water();
+    let pins = inner.session_pins();
     for coordinate in ordered {
         if inner.runtime.is_resident(*coordinate) || inner.worldgen_tickets.contains_key(coordinate)
         {
@@ -4117,7 +4142,7 @@ fn admit_desired(
             .saturating_add(worldgen_work_count(inner))
             .saturating_add(generate.len())
             .saturating_add(hydrate.len());
-        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &pins);
         let render_scoped = is_render_chunk(*coordinate, origin, inner.clamps);
         if class == InterestClass::Prefetch && upcoming >= high_water {
             skipped_prefix = true;
@@ -4467,6 +4492,7 @@ fn publish_hydrated(
         ))?;
     }
     let published = kernel.reference_snapshot(inner.world)?;
+    let pins = inner.session_pins();
     for (coordinate, _) in chunks {
         let key = ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate);
         let stored = published
@@ -4475,7 +4501,7 @@ fn publish_hydrated(
                 coordinate: *coordinate,
             })?;
         inner.lifecycle.insert(*coordinate, ChunkLifecycle::Load);
-        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let class = interest_class(*coordinate, origin, inner.clamps, look_ahead, &pins);
         let requests = stream_derived_requests(class, *coordinate, origin);
         project_stored(
             &mut inner.runtime,
@@ -4594,9 +4620,10 @@ fn publish_generated_cells(
         mutations,
     ))?;
     inner.next_transaction = inner.next_transaction.saturating_add(1);
+    let pins = inner.session_pins();
     for (coordinate, cells) in committed_cells {
         let key = ChunkKey::new(inner.world, inner.dimension.clone(), coordinate);
-        let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &inner.edited);
+        let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &pins);
         let requests = stream_derived_requests(class, coordinate, origin);
         project_publication_receipt(
             &mut inner.runtime,

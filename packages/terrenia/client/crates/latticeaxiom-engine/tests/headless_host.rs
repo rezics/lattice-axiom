@@ -41,10 +41,11 @@ use latticeaxiom_engine::{
     HOTBAR_SLOTS, HeadlessTargetInspectV1, INVENTORY_SLOTS, ItemId, ItemStackV1,
     LockVerifiedComposeImages, MAX_TICKS_PER_ADVANCE, PlayerActionButtonsV1, PlayerActionFrameV1,
     PlayerActionV1, PreparationError, ProductionInspectSurface, ProductionMemoryStart,
-    ProductionSessionPause, ProductionSpine, ProductionWorldList, ProductionWorldStorage, RecipeId,
-    STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost, SealedWriterHostError, SlotIndex,
-    StructurallyValidatedComposeImages, VerifiedProductLockHash, WorkingSetDiagnosticsV1,
-    WorkstationId, compile_authored_gameplay_catalog, empty_gameplay_catalog,
+    ProductionPlayerPose, ProductionSessionPause, ProductionSpine, ProductionWorldList,
+    ProductionWorldStorage, RecipeId, STREAMING_PROFILE_EVIDENCE_SCHEMA_V1, SealedWorldWriterHost,
+    SealedWriterHostError, SlotIndex, StructurallyValidatedComposeImages, VerifiedProductLockHash,
+    WorkingSetDiagnosticsV1, WorkstationId, compile_authored_gameplay_catalog,
+    empty_gameplay_catalog,
 };
 use latticeaxiom_gameplay::{BlockId, GameplayModeV1, MiningStepCountV1, PlayerId};
 use latticeaxiom_launcher::{
@@ -2463,6 +2464,90 @@ fn start_ui_pause_save_exit_continue_reopens_sealed_world_from_storage() {
         .inspect_occupancy(placed.position)
         .expect("placed cell is resident after storage-first continue");
     assert_eq!(restored_place.solid, occupancy_placed.solid);
+}
+
+#[test]
+fn continue_reopens_when_restored_pose_leaves_the_spawn_chunk() {
+    let _production_host_guard = production_host_test_guard();
+    let images = lock_boot_fixture().prepared();
+    let record_owner = "latticeaxiom:schema/world-db-chunk@1"
+        .parse()
+        .expect("fixture record owner is canonical");
+    let mut writer_host =
+        SealedWorldWriterHost::volatile_reference_with_default_publisher(record_owner);
+    let mut start = ProductionMemoryStart::new(images, start_shell_graph())
+        .with_storage(writer_host.storage().clone());
+    let intent = start
+        .quick_create_intent("Away From Spawn")
+        .expect("quick-create intent binds the lock graph root");
+    let created = start
+        .create(&intent, 10)
+        .expect("create provisions shared storage and publishes the WorldId");
+
+    let mut instance = start
+        .play_headless(created, 20, SPINE_TIMESTEP)
+        .expect("first play materializes the provisioned world");
+    instance
+        .advance_fixed_ticks(1)
+        .expect("one production tick plays");
+    let spine = instance
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("production spine is installed")
+        .clone();
+    let spawn = spine.spawn_center();
+    let edge = f32::from(spine.chunk_edge());
+    let away = ProductionPlayerPose {
+        translation: spawn + bevy::prelude::Vec3::new(edge * 8.0, 0.0, 0.0),
+        yaw_radians: 0.0,
+        grounded: true,
+    };
+    let spawn_chunk = chunk_from_translation(spawn, spine.chunk_edge());
+    let away_chunk = chunk_from_translation(away.translation, spine.chunk_edge());
+    assert_ne!(
+        away_chunk, spawn_chunk,
+        "the restored pose must leave the worldgen spawn chunk"
+    );
+    spine.record_player_pose(away);
+
+    start
+        .pause_session(&mut instance)
+        .expect("pause opens the overlay without writing");
+    start
+        .save_world(created, &mut writer_host)
+        .expect("save captures the away-from-spawn pose onto the spawn chunk");
+    start
+        .exit_world(created, instance)
+        .expect("exit returns to the start shell");
+    assert_eq!(start.continue_world_id(), Some(created));
+
+    let (continued, mut reopened) = start
+        .play_continued_headless(30, SPINE_TIMESTEP)
+        .expect("continue must reopen after the restored pose leaves spawn");
+    assert_eq!(continued, created);
+    reopened
+        .advance_fixed_ticks(1)
+        .expect("continued host advances one tick");
+    let reopened_spine = reopened
+        .app()
+        .world()
+        .get_resource::<ProductionSpine>()
+        .expect("continued production spine is installed")
+        .clone();
+    assert_eq!(reopened_spine.world_id(), Some(created));
+    assert!(
+        reopened_spine
+            .player_pose()
+            .translation
+            .distance(away.translation)
+            < 0.002,
+        "continue must restore the pose stored on the spawn chunk"
+    );
+    assert!(
+        reopened_spine.resident_chunks().contains(&spawn_chunk),
+        "the spawn-chunk session identity must stay resident after continue"
+    );
 }
 
 #[test]
