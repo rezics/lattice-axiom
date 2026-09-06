@@ -12,11 +12,11 @@ use latticeaxiom_core::{CanonicalHash, WorldId};
 use latticeaxiom_launcher::{
     AtomicChildExitStore, AtomicLaunchIntentStore, BOOTSTRAP_ACK_SCHEMA_VERSION, BootObservationV1,
     BootstrapAckV1, BootstrapSafeStateV1, ChildObservationV1, ChildRoleV1, FileChildExitStore,
-    FileLaunchIntentStore, LaunchIntentV1, LaunchTargetV1, PriorChildStatusV1, ProcessControl,
-    ProcessEpoch, ProcessLaunchRequestV1, ProcessSupervisorIdentityV1, RecoveryBootstrapAckV1,
-    RecoveryChildStatusV1, RecoveryLaunchRequestV1, SettingTransactionRevision, SlotDisposition,
-    SpawnFailureV1, SpawnedProcess, SupervisorConfigV1, SupervisorMachine, SupervisorReportV1,
-    TerminationFailureV1,
+    FileLaunchIntentStore, LaunchGeneration, LaunchIntentV1, LaunchTargetV1, PriorChildStatusV1,
+    ProcessControl, ProcessEpoch, ProcessLaunchRequestV1, ProcessSupervisorIdentityV1,
+    RecoveryBootstrapAckV1, RecoveryChildStatusV1, RecoveryLaunchRequestV1,
+    SettingTransactionRevision, SlotDisposition, SpawnFailureV1, SpawnedProcess,
+    SupervisorConfigV1, SupervisorMachine, SupervisorReportV1, TerminationFailureV1,
 };
 use thiserror::Error;
 
@@ -439,24 +439,11 @@ pub fn publish_child_exit(
     intent: Option<&LaunchIntentV1>,
 ) -> Result<(), ProductSupervisorError> {
     if let Some(intent) = intent {
-        let mut intent_store = FileLaunchIntentStore::open(launch_root)?;
-        let bytes = intent
-            .canonical_bytes()
-            .map_err(|error| child_handoff(error.to_string()))?;
-        let slot = intent_store.read()?;
-        match slot {
-            latticeaxiom_launcher::IntentSlot::Occupied {
-                disposition,
-                bytes: previous_bytes,
-                blob_hash,
-                ..
-            } if disposition.is_terminal() && previous_bytes != bytes => {
-                confirm_terminal_predecessor(disposition, &previous_bytes, report)?;
-                intent_store.publish_replacing_terminal(blob_hash, &bytes)?;
-            }
-            _ => {
-                intent_store.publish(&bytes)?;
-            }
+        let durable = persist_supervised_intent(launch_root, intent, report.child_generation())?;
+        if durable.checksum() != intent.checksum() {
+            return Err(child_handoff(
+                "pending launch intent does not match the child-exit report".to_owned(),
+            ));
         }
     }
     let mut exit_store = FileChildExitStore::open(launch_root)?;
@@ -469,34 +456,116 @@ pub fn publish_child_exit(
     Ok(())
 }
 
+/// Persists the next launch intent, reusing a matching pending or claimed blob.
+///
+/// # Errors
+///
+/// Returns [`ProductSupervisorError`] when the confined store rejects the write
+/// or the current terminal payload does not belong to this child.
+pub(crate) fn persist_supervised_intent(
+    launch_root: &Path,
+    intent: &LaunchIntentV1,
+    child_generation: LaunchGeneration,
+) -> Result<LaunchIntentV1, ProductSupervisorError> {
+    let mut intent_store = FileLaunchIntentStore::open(launch_root)?;
+    let bytes = intent
+        .canonical_bytes()
+        .map_err(|error| child_handoff(error.to_string()))?;
+    let slot = intent_store.read()?;
+    match slot {
+        latticeaxiom_launcher::IntentSlot::Empty => {
+            intent_store.publish(&bytes)?;
+            Ok(intent.clone())
+        }
+        latticeaxiom_launcher::IntentSlot::Occupied {
+            disposition,
+            bytes: previous_bytes,
+            blob_hash,
+            ..
+        } => {
+            if previous_bytes == bytes {
+                return Ok(intent.clone());
+            }
+            if disposition.is_terminal() {
+                confirm_terminal_predecessor(
+                    disposition,
+                    &previous_bytes,
+                    child_generation,
+                    intent.shell_lock_hash(),
+                )?;
+                intent_store.publish_replacing_terminal(blob_hash, &bytes)?;
+                return Ok(intent.clone());
+            }
+            confirm_reusable_pending(&previous_bytes, intent)
+        }
+    }
+}
+
 fn confirm_terminal_predecessor(
     disposition: SlotDisposition,
     previous_bytes: &[u8],
-    report: &latticeaxiom_launcher::ChildExitReportV1,
+    child_generation: LaunchGeneration,
+    shell_lock_hash: CanonicalHash,
 ) -> Result<(), ProductSupervisorError> {
-    let (generation, shell_lock_hash) = match disposition {
-        SlotDisposition::RecoveryClaimed => {
-            let request = RecoveryLaunchRequestV1::authenticate_at_rest(previous_bytes)
-                .map_err(|error| child_handoff(error.to_string()))?;
-            (request.recovery_generation(), request.shell_lock_hash())
-        }
-        SlotDisposition::Consumed | SlotDisposition::Quarantined => {
-            let intent = LaunchIntentV1::authenticate_at_rest(previous_bytes)
-                .map_err(|error| child_handoff(error.to_string()))?;
-            (intent.generation(), intent.shell_lock_hash())
-        }
-        SlotDisposition::Pending | SlotDisposition::Claimed => {
-            return Err(child_handoff(
-                "active intent is not a terminal predecessor".to_owned(),
-            ));
-        }
-    };
-    if generation != report.child_generation() || shell_lock_hash != report.shell_lock_hash() {
+    let (generation, previous_shell_lock) =
+        terminal_generation_and_shell_lock(disposition, previous_bytes)?;
+    if generation != child_generation || previous_shell_lock != shell_lock_hash {
         return Err(child_handoff(
             "terminal intent does not belong to the exiting child".to_owned(),
         ));
     }
     Ok(())
+}
+
+fn confirm_reusable_pending(
+    previous_bytes: &[u8],
+    intent: &LaunchIntentV1,
+) -> Result<LaunchIntentV1, ProductSupervisorError> {
+    let previous = LaunchIntentV1::authenticate_at_rest(previous_bytes)
+        .map_err(|error| child_handoff(error.to_string()))?;
+    if previous.generation() == intent.generation()
+        && previous.target() == intent.target()
+        && previous.shell_lock_hash() == intent.shell_lock_hash()
+    {
+        return Ok(previous);
+    }
+    Err(child_handoff(
+        "launch intent slot is occupied by another blob".to_owned(),
+    ))
+}
+
+fn terminal_generation_and_shell_lock(
+    disposition: SlotDisposition,
+    bytes: &[u8],
+) -> Result<(LaunchGeneration, CanonicalHash), ProductSupervisorError> {
+    if !disposition.is_terminal() {
+        return Err(child_handoff(
+            "active intent is not a terminal predecessor".to_owned(),
+        ));
+    }
+    let recovery = RecoveryLaunchRequestV1::authenticate_at_rest(bytes)
+        .ok()
+        .map(|request| (request.recovery_generation(), request.shell_lock_hash()));
+    let intent = LaunchIntentV1::authenticate_at_rest(bytes)
+        .ok()
+        .map(|intent| (intent.generation(), intent.shell_lock_hash()));
+    let identity = if disposition == SlotDisposition::RecoveryClaimed {
+        recovery.or(intent)
+    } else {
+        intent.or(recovery)
+    };
+    identity.ok_or_else(|| {
+        let reason = if disposition == SlotDisposition::RecoveryClaimed {
+            RecoveryLaunchRequestV1::authenticate_at_rest(bytes)
+                .err()
+                .map(|error| error.to_string())
+        } else {
+            LaunchIntentV1::authenticate_at_rest(bytes)
+                .err()
+                .map(|error| error.to_string())
+        };
+        child_handoff(reason.unwrap_or_else(|| "terminal slot is not a launch envelope".to_owned()))
+    })
 }
 
 fn child_handoff(reason: String) -> ProductSupervisorError {

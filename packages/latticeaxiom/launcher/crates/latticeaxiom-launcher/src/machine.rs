@@ -1395,25 +1395,33 @@ fn expected_generation(
             .next()
             .map_err(|_| IntentStoreError::BlobMismatch);
     };
-    let generation = match predecessor.disposition() {
-        SlotDisposition::Consumed => LaunchIntentV1::authenticate_at_rest(predecessor.bytes())
-            .map(|intent| intent.generation())
-            .map_err(|_| IntentStoreError::BlobMismatch)?,
-        SlotDisposition::RecoveryClaimed => {
-            RecoveryLaunchRequestV1::authenticate_at_rest(predecessor.bytes())
-                .map(|request| request.recovery_generation())
-                .map_err(|_| IntentStoreError::BlobMismatch)?
-        }
-        SlotDisposition::Pending | SlotDisposition::Claimed | SlotDisposition::Quarantined => {
-            return Err(IntentStoreError::UnexpectedState {
-                expected: "authenticated consumed or recovery predecessor",
-                actual: predecessor.disposition().as_str(),
-            });
-        }
-    };
-    generation
+    if !predecessor.disposition().is_terminal() {
+        return Err(IntentStoreError::UnexpectedState {
+            expected: "authenticated consumed, quarantined, or recovery predecessor",
+            actual: predecessor.disposition().as_str(),
+        });
+    }
+    terminal_payload_generation(predecessor.disposition(), predecessor.bytes())?
         .next()
         .map_err(|_| IntentStoreError::BlobMismatch)
+}
+
+fn terminal_payload_generation(
+    disposition: SlotDisposition,
+    bytes: &[u8],
+) -> Result<LaunchGeneration, IntentStoreError> {
+    let recovery = RecoveryLaunchRequestV1::authenticate_at_rest(bytes)
+        .ok()
+        .map(|request| request.recovery_generation());
+    let intent = LaunchIntentV1::authenticate_at_rest(bytes)
+        .ok()
+        .map(|intent| intent.generation());
+    match disposition {
+        SlotDisposition::RecoveryClaimed => recovery.or(intent),
+        SlotDisposition::Consumed | SlotDisposition::Quarantined => intent.or(recovery),
+        SlotDisposition::Pending | SlotDisposition::Claimed => None,
+    }
+    .ok_or(IntentStoreError::BlobMismatch)
 }
 
 fn push_recovery_claim_failure(
@@ -3027,6 +3035,60 @@ mod tests {
                 Some(RecoveryChildStatusV1::Acquired(_))
             ));
         }
+    }
+
+    #[test]
+    fn pending_handoff_replacing_quarantined_intent_still_boots() {
+        let world_id = WorldId::new_v4();
+        let mut store = MemoryStore::default();
+        let _first = publish_world(&mut store, world_id);
+        let first_hash = store
+            .slot
+            .blob_hash()
+            .unwrap_or_else(|| panic!("consumed world had no hash"));
+        assert!(store.claim(first_hash).is_ok());
+        assert!(store.consume(first_hash).is_ok());
+        let rejected = LaunchIntentV1::seal(shell_draft(generation(3), setting_revision(9)))
+            .unwrap_or_else(|error| panic!("rejected intent did not seal: {error}"));
+        let rejected_bytes = rejected
+            .canonical_bytes()
+            .unwrap_or_else(|error| panic!("rejected intent did not encode: {error}"));
+        assert!(
+            store
+                .publish_replacing_terminal(first_hash, &rejected_bytes)
+                .is_ok()
+        );
+        let rejected_hash = CanonicalHash::digest(&rejected_bytes);
+        assert!(store.quarantine(rejected_hash).is_ok());
+        let mut next_draft = world_draft(world_id);
+        next_draft.generation = generation(4);
+        let next = LaunchIntentV1::seal(next_draft)
+            .unwrap_or_else(|error| panic!("replacement intent did not seal: {error}"));
+        let next_bytes = next
+            .canonical_bytes()
+            .unwrap_or_else(|error| panic!("replacement intent did not encode: {error}"));
+        assert!(
+            store
+                .publish_replacing_terminal(rejected_hash, &next_bytes)
+                .is_ok()
+        );
+        let mut process = FakeProcess {
+            observations: VecDeque::from([BootObservationV1::Acknowledged(target_ack(
+                &next,
+                epoch(4),
+            ))]),
+            ..FakeProcess::default()
+        };
+        let report =
+            BootstrapMachine::new().activate(&mut store, &world_policy(world_id), &mut process);
+        assert!(matches!(
+            report.outcome(),
+            TransitionOutcomeV1::Activated {
+                target: LaunchTargetV1::World { .. },
+                ..
+            }
+        ));
+        assert_eq!(process.spawn_count, 1);
     }
 
     #[test]

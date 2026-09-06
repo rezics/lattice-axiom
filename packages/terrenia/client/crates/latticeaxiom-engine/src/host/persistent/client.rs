@@ -193,19 +193,21 @@ fn publish_exit(
     let settings_revision = SettingTransactionRevision::new(settings.transaction_revision());
     let now = unix_now_ms();
     let intent = if return_to_shell {
+        let candidate = LaunchIntentV1::seal(LaunchIntentDraftV1 {
+            generation: generation.next().map_err(persistence_error)?,
+            attempt: LaunchAttempt::FIRST,
+            issued_at_ms: now,
+            expires_at_ms: now.saturating_add(60_000),
+            target: LaunchTargetV1::Shell,
+            shell_lock_hash: context.shell_lock,
+            world_lock_hash: None,
+            world_open_plan_hash: None,
+            confirmed_setting_transaction_revision: settings_revision,
+        })
+        .map_err(persistence_error)?;
         Some(
-            LaunchIntentV1::seal(LaunchIntentDraftV1 {
-                generation: generation.next().map_err(persistence_error)?,
-                attempt: LaunchAttempt::FIRST,
-                issued_at_ms: now,
-                expires_at_ms: now.saturating_add(60_000),
-                target: LaunchTargetV1::Shell,
-                shell_lock_hash: context.shell_lock,
-                world_lock_hash: None,
-                world_open_plan_hash: None,
-                confirmed_setting_transaction_revision: settings_revision,
-            })
-            .map_err(persistence_error)?,
+            crate::supervisor::persist_supervised_intent(&root, &candidate, generation)
+                .map_err(persistence_error)?,
         )
     } else {
         None

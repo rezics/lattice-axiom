@@ -859,7 +859,7 @@ fn exit_with_ready_exact_handoff(
     exits: &mut MessageWriter<'_, AppExit>,
     world_id: WorldId,
 ) -> bool {
-    let handoff = match session.start.launch_handoff_for_ready_exact(
+    let mut handoff = match session.start.launch_handoff_for_ready_exact(
         world_id,
         unix_now_ms(),
         session.confirmed_setting_transaction_revision,
@@ -883,6 +883,14 @@ fn exit_with_ready_exact_handoff(
             .and_then(|value| value.parse().ok())
             .and_then(|value| latticeaxiom_launcher::LaunchGeneration::new(value).ok())
             .unwrap_or(latticeaxiom_launcher::LaunchGeneration::FIRST);
+        match crate::supervisor::persist_supervised_intent(&root, &handoff.intent, generation) {
+            Ok(durable) => handoff.intent = durable,
+            Err(error) => {
+                session.message = Some(error.to_string());
+                session.tree_epoch = session.tree_epoch.saturating_add(1);
+                return false;
+            }
+        }
         let report = match latticeaxiom_launcher::ChildExitReportV1::seal(
             latticeaxiom_launcher::ChildExitReportDraftV1 {
                 child_generation: generation,

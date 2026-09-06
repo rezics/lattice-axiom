@@ -94,9 +94,9 @@ fn drive(
             }
         }
     }
-    if role == "shell" {
+    if role == "shell" || role == "recovery" {
         // Start with an empty library on the first run and Continue the same
-        // saved world on the second run. These are actual native UI actions.
+        // saved world on the second run. Recovery uses the same start shell.
         let desired = if generation == 1 {
             ["Continue", "Create World", "New World"]
                 .into_iter()
