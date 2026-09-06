@@ -206,9 +206,19 @@ impl StartShellModel {
             ShellEffect::Navigate(ShellScreen::QuitConfirm)
         } else if target == "modal/quit/confirm" {
             ShellEffect::RequestQuitProduct
-        } else if action == SemanticActionId::Back {
-            self.screen = ShellScreen::Home;
-            ShellEffect::Navigate(ShellScreen::Home)
+        } else if action == SemanticActionId::Back
+            || (action == SemanticActionId::Activate
+                && tree
+                    .find(&command.target)
+                    .is_some_and(|node| node.actions.contains(&SemanticActionId::Back)))
+        {
+            // Widget activation and Escape share the control's return route.
+            self.screen = if target == "trash/back" {
+                ShellScreen::Worlds
+            } else {
+                ShellScreen::Home
+            };
+            ShellEffect::Navigate(self.screen)
         } else if target == "home/continue" || action == SemanticActionId::ContinueWorld {
             match self.worlds.home_primary_action() {
                 HomePrimaryAction::Continue { world_id, .. } => {
@@ -227,9 +237,6 @@ impl StartShellModel {
         } else if target == "worlds/trash" {
             self.screen = ShellScreen::Trash;
             ShellEffect::Navigate(ShellScreen::Trash)
-        } else if target == "trash/back" {
-            self.screen = ShellScreen::Worlds;
-            ShellEffect::Navigate(ShellScreen::Worlds)
         } else if target.starts_with("world:") {
             self.world_command_effect(command)?
         } else if target.starts_with("trash:") {
@@ -408,7 +415,7 @@ impl StartShellModel {
                 "worlds/back",
                 "Back",
                 "Return to home",
-                [SemanticActionId::Back],
+                [SemanticActionId::Activate, SemanticActionId::Back],
             ),
             button(
                 "worlds/trash",
@@ -473,7 +480,7 @@ impl StartShellModel {
             "trash/back",
             "Back",
             "Return to the world library",
-            [SemanticActionId::Back],
+            [SemanticActionId::Activate, SemanticActionId::Back],
         )];
         nodes.extend(self.trash.iter().map(|record| {
             let id = trash_semantic_id(record);
@@ -523,7 +530,7 @@ impl StartShellModel {
                 "new-world/back",
                 "Back",
                 "Return to home",
-                [SemanticActionId::Back],
+                [SemanticActionId::Activate, SemanticActionId::Back],
             ),
             SemanticNode {
                 id: node_id("new-world/name"),
@@ -587,7 +594,7 @@ impl StartShellModel {
             "settings/back",
             "Back",
             "Return to home",
-            [SemanticActionId::Back],
+            [SemanticActionId::Activate, SemanticActionId::Back],
             ),
             SemanticNode {
                 id: node_id("settings/status"),
@@ -679,7 +686,7 @@ impl StartShellModel {
             "packages-profiles/back",
             "Back",
             "Return to home. Composition edits require a candidate lock.",
-            [SemanticActionId::Back],
+            [SemanticActionId::Activate, SemanticActionId::Back],
         )]
     }
 
@@ -688,7 +695,7 @@ impl StartShellModel {
             "diagnostics-about/back",
             "Back",
             "Return to home",
-            [SemanticActionId::Back],
+            [SemanticActionId::Activate, SemanticActionId::Back],
         )]
     }
 

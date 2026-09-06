@@ -494,6 +494,94 @@ fn keyboard_controller_and_headless_use_the_same_semantic_tree() {
 }
 
 #[test]
+fn back_buttons_accept_widget_activation_on_every_shell_route() {
+    for (screen, target, destination) in [
+        (ShellScreen::Worlds, "worlds/back", ShellScreen::Home),
+        (ShellScreen::NewWorld, "new-world/back", ShellScreen::Home),
+        (ShellScreen::Trash, "trash/back", ShellScreen::Worlds),
+        (ShellScreen::Settings, "settings/back", ShellScreen::Home),
+        (
+            ShellScreen::PackagesProfiles,
+            "packages-profiles/back",
+            ShellScreen::Home,
+        ),
+        (
+            ShellScreen::DiagnosticsAbout,
+            "diagnostics-about/back",
+            ShellScreen::Home,
+        ),
+        (
+            ShellScreen::QuitConfirm,
+            "modal/quit/cancel",
+            ShellScreen::Home,
+        ),
+    ] {
+        for action in [SemanticActionId::Activate, SemanticActionId::Back] {
+            let mut shell = StartShellModel::new(
+                shell_graph(),
+                WorldListModel::new(Vec::new(), WorldSort::LastPlayed),
+            );
+            shell.screen = screen;
+            let result = shell.inject(&SemanticCommand {
+                target: SemanticNodeId::new(target)
+                    .unwrap_or_else(|error| panic!("target fixture: {error}")),
+                action,
+                source: InputSource::Keyboard,
+            });
+            assert_eq!(
+                result,
+                Ok(ShellEffect::Navigate(destination)),
+                "{screen:?} {target} {action:?}"
+            );
+            assert_eq!(shell.screen, destination);
+        }
+    }
+}
+
+#[test]
+fn trash_back_retraces_the_world_library_route() {
+    for action in [SemanticActionId::Back, SemanticActionId::Activate] {
+        for source in [
+            InputSource::Keyboard,
+            InputSource::Controller,
+            InputSource::Headless,
+        ] {
+            let mut shell = StartShellModel::new(
+                shell_graph(),
+                WorldListModel::new(Vec::new(), WorldSort::LastPlayed),
+            );
+            for (target, action, destination) in [
+                (
+                    "home/worlds",
+                    SemanticActionId::Activate,
+                    ShellScreen::Worlds,
+                ),
+                (
+                    "worlds/trash",
+                    SemanticActionId::Activate,
+                    ShellScreen::Trash,
+                ),
+                ("trash/back", action, ShellScreen::Worlds),
+                ("worlds/back", action, ShellScreen::Home),
+            ] {
+                let result = shell.inject(&SemanticCommand {
+                    target: SemanticNodeId::new(target)
+                        .unwrap_or_else(|error| panic!("target fixture: {error}")),
+                    action,
+                    source,
+                });
+                assert_eq!(
+                    result,
+                    Ok(ShellEffect::Navigate(destination)),
+                    "{target} {action:?} {source:?}"
+                );
+                assert_eq!(shell.screen, destination);
+            }
+        }
+    }
+}
+
+#[test]
 fn layout_contract_keeps_primary_and_recovery_actions_reachable_at_both_scales() {
     let exact = projected_record(
         world("123e4567-e89b-42d3-a456-426614174000"),
