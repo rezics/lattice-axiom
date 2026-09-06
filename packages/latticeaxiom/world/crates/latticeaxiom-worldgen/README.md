@@ -1,8 +1,11 @@
 # latticeaxiom-worldgen
 
 Deterministic, bounded world-generation contracts and algorithms. The crate is
-pure Rust: it has no Bevy, renderer, task-runtime, package loader, or storage
-writer dependency. The production host owns scheduling and persistence.
+implemented in Rust and uses Bevy task pools for selected bounded parallel
+planners. It has no renderer, package loader or storage writer dependency;
+the production host owns streaming admission and durable publication. The
+planned independently releasable toolkit boundaries are described in
+[the research and extraction direction](../../docs/worldgen-toolkit-research.md).
 
 ## Worldgen V2
 
@@ -18,7 +21,7 @@ salt. A coordinator-only upgrade therefore does not reroll terrain. A real
 algorithm or resolved-config change still changes the generation epoch and is
 an explicit compatibility decision.
 
-The built-in profiles are:
+The profiles supplied by `@terrenia/worldgen` are:
 
 - `balanced`: mixed continents, hills, mountains, lakes, rivers, and caves;
 - `continental`: broad interiors, long ranges, and deeper oceans;

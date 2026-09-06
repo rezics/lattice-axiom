@@ -1,6 +1,9 @@
 # Rebuild execution
 
-The accepted proposal is being implemented on `codex/package-first-rebuild`.
+The accepted package-first implementation is now maintained on `main`.
+The merged `codex/package-first-rebuild` branch and imported `demo/main`
+reference were removed on 2026-09-06 after a verified external Git bundle.
+Historical execution notes below retain the branch names used at the time.
 The user's resource-pack and text-only commit amendments take precedence over
 the original proposal's asset delivery and future asset-management suggestions.
 
@@ -287,3 +290,48 @@ resolved-path containment and a retained-artifact list. Automatic approval
 review again rejected it before execution with `blocked by policy`. No files
 were deleted; approximately 334.6 GiB of the copied older cache variants remain.
 This is an execution-policy block, not a pending request for user authorization.
+
+## Terrain corrections and toolkit research (2026-09-06)
+
+The client now has a bounded native FPS/frame-time/P95/main-CPU monitor, plus
+fixed-identity, copied-world capture tooling. The current host did not reproduce
+the reported severe performance problem; the user also confirmed normal
+performance today. No general performance-regression resolution is claimed.
+
+Inspection found per-column stochastic biome mixing across wide transition
+bands, uphill differences treated as maximum descent, and inconsistent sRGB
+handling between near textures and far vertex colors. New frozen worldgen data
+selects geology revision 4 and transition revision 9. Archived locks without
+that policy retain geology 3 and transition 8. Existing saves were not rewritten.
+Unchanged terrain visibility ranges and hidden UI no longer invalidate Bevy
+state each frame.
+
+Validation: 182 engine and 87 worldgen unit tests passed. Five far-mesh tests
+were rerun after the final fallback-color correction. All-target Clippy for
+engine/worldgen passed with client/development features and warnings denied.
+Optimized native products completed create/save/reopen in two independent
+sessions with the fixed world identity
+`59cf1f69-6774-43a7-8353-0d0c034b7432`. The 21-chunk, 1280x720 overview shows a
+continuous grass/sand boundary instead of scattered columns. The 45-second
+capture observed about 201 FPS after its ten-second warmup; this one case is
+not a general GPU certification. Source QA databases remained byte-identical.
+Evidence is local under `.temp/qa-terrain-fixed-world/`,
+`.temp/qa-terrain-fixed-overview/`, and `.temp/terrain-*-final.log`.
+
+The user confirmed a long-term toolkit direction whose primary consumers are
+Lattice packages, with independent release capability. The research document
+maps academic methods and real engineering practice to current code, identifies
+the storage/territory/worldgen extraction cycle, and proposes staged contracts,
+tooling, algorithm packages and release gates. It does not claim those proposed
+packages have already been extracted or published:
+
+- `packages/latticeaxiom/world/docs/worldgen-toolkit-research.md`
+- `packages/terrenia/client/docs/terrain-debugging.md`
+
+`main` was fast-forwarded without rewriting either imported history. The merged
+rebuild branch and unused `demo/main` reference were removed. A complete verified
+bundle is retained outside the repository at
+`D:/rezics-repos/lattice-axiom-recovery/20260906-worldgen/before-ref-cleanup.bundle`.
+The original demo checkout remains intact. No push or registry publication was
+performed. The older gameplay, recovery and release gates remain separately
+tracked rather than being inferred from this terrain slice.
