@@ -56,13 +56,7 @@ impl ShellExitContext {
             latticeaxiom_launcher::ChildExitReportDraftV1 {
                 child_generation: generation,
                 process_epoch: epoch,
-                role: if std::env::var(crate::supervisor::ENV_CHILD_ROLE).as_deref()
-                    == Ok("recovery")
-                {
-                    latticeaxiom_launcher::ChildRoleV1::Recovery
-                } else {
-                    latticeaxiom_launcher::ChildRoleV1::Shell
-                },
+                role: crate::supervisor::shell_like_child_role(),
                 exit_kind: if clean {
                     latticeaxiom_launcher::ChildExitKindV1::ShellQuit
                 } else {

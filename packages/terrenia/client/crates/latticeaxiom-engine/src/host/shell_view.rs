@@ -887,7 +887,7 @@ fn exit_with_ready_exact_handoff(
             latticeaxiom_launcher::ChildExitReportDraftV1 {
                 child_generation: generation,
                 process_epoch: epoch,
-                role: latticeaxiom_launcher::ChildRoleV1::Shell,
+                role: crate::supervisor::shell_like_child_role(),
                 exit_kind: latticeaxiom_launcher::ChildExitKindV1::Handoff,
                 intent_generation: Some(handoff.intent.generation()),
                 intent_checksum: Some(handoff.intent.checksum()),

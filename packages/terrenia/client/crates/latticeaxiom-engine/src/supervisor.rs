@@ -11,11 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use latticeaxiom_core::{CanonicalHash, WorldId};
 use latticeaxiom_launcher::{
     AtomicChildExitStore, AtomicLaunchIntentStore, BOOTSTRAP_ACK_SCHEMA_VERSION, BootObservationV1,
-    BootstrapAckV1, BootstrapSafeStateV1, ChildObservationV1, FileChildExitStore,
+    BootstrapAckV1, BootstrapSafeStateV1, ChildObservationV1, ChildRoleV1, FileChildExitStore,
     FileLaunchIntentStore, LaunchIntentV1, LaunchTargetV1, PriorChildStatusV1, ProcessControl,
     ProcessEpoch, ProcessLaunchRequestV1, ProcessSupervisorIdentityV1, RecoveryBootstrapAckV1,
-    RecoveryChildStatusV1, RecoveryLaunchRequestV1, SettingTransactionRevision, SpawnFailureV1,
-    SpawnedProcess, SupervisorConfigV1, SupervisorMachine, SupervisorReportV1,
+    RecoveryChildStatusV1, RecoveryLaunchRequestV1, SettingTransactionRevision, SlotDisposition,
+    SpawnFailureV1, SpawnedProcess, SupervisorConfigV1, SupervisorMachine, SupervisorReportV1,
     TerminationFailureV1,
 };
 use thiserror::Error;
@@ -418,6 +418,16 @@ fn intent_ack(intent: &LaunchIntentV1, process_epoch: ProcessEpoch) -> Option<Bo
     serde_json::from_value(wire).ok()
 }
 
+/// Returns the shell-like child role advertised to the product supervisor.
+#[must_use]
+pub(crate) fn shell_like_child_role() -> ChildRoleV1 {
+    if std::env::var(ENV_CHILD_ROLE).as_deref() == Ok("recovery") {
+        ChildRoleV1::Recovery
+    } else {
+        ChildRoleV1::Shell
+    }
+}
+
 /// Publishes a one-shot child-exit report, and optional intent, into the launch root.
 ///
 /// # Errors
@@ -430,11 +440,9 @@ pub fn publish_child_exit(
 ) -> Result<(), ProductSupervisorError> {
     if let Some(intent) = intent {
         let mut intent_store = FileLaunchIntentStore::open(launch_root)?;
-        let bytes = intent.canonical_bytes().map_err(|error| {
-            ProductSupervisorError::Client(ProductionClientError::ChildHandoff {
-                reason: error.to_string(),
-            })
-        })?;
+        let bytes = intent
+            .canonical_bytes()
+            .map_err(|error| child_handoff(error.to_string()))?;
         let slot = intent_store.read()?;
         match slot {
             latticeaxiom_launcher::IntentSlot::Occupied {
@@ -443,22 +451,7 @@ pub fn publish_child_exit(
                 blob_hash,
                 ..
             } if disposition.is_terminal() && previous_bytes != bytes => {
-                let previous =
-                    LaunchIntentV1::authenticate_at_rest(&previous_bytes).map_err(|error| {
-                        ProductSupervisorError::Client(ProductionClientError::ChildHandoff {
-                            reason: error.to_string(),
-                        })
-                    })?;
-                if previous.generation() != report.child_generation()
-                    || previous.shell_lock_hash() != report.shell_lock_hash()
-                {
-                    return Err(ProductSupervisorError::Client(
-                        ProductionClientError::ChildHandoff {
-                            reason: "terminal intent does not belong to the exiting child"
-                                .to_owned(),
-                        },
-                    ));
-                }
+                confirm_terminal_predecessor(disposition, &previous_bytes, report)?;
                 intent_store.publish_replacing_terminal(blob_hash, &bytes)?;
             }
             _ => {
@@ -467,15 +460,47 @@ pub fn publish_child_exit(
         }
     }
     let mut exit_store = FileChildExitStore::open(launch_root)?;
-    let bytes = report.canonical_bytes().map_err(|error| {
-        ProductSupervisorError::Client(ProductionClientError::ChildHandoff {
-            reason: error.to_string(),
-        })
-    })?;
+    let bytes = report
+        .canonical_bytes()
+        .map_err(|error| child_handoff(error.to_string()))?;
     exit_store
         .publish(&bytes)
         .map_err(ProductSupervisorError::Store)?;
     Ok(())
+}
+
+fn confirm_terminal_predecessor(
+    disposition: SlotDisposition,
+    previous_bytes: &[u8],
+    report: &latticeaxiom_launcher::ChildExitReportV1,
+) -> Result<(), ProductSupervisorError> {
+    let (generation, shell_lock_hash) = match disposition {
+        SlotDisposition::RecoveryClaimed => {
+            let request = RecoveryLaunchRequestV1::authenticate_at_rest(previous_bytes)
+                .map_err(|error| child_handoff(error.to_string()))?;
+            (request.recovery_generation(), request.shell_lock_hash())
+        }
+        SlotDisposition::Consumed | SlotDisposition::Quarantined => {
+            let intent = LaunchIntentV1::authenticate_at_rest(previous_bytes)
+                .map_err(|error| child_handoff(error.to_string()))?;
+            (intent.generation(), intent.shell_lock_hash())
+        }
+        SlotDisposition::Pending | SlotDisposition::Claimed => {
+            return Err(child_handoff(
+                "active intent is not a terminal predecessor".to_owned(),
+            ));
+        }
+    };
+    if generation != report.child_generation() || shell_lock_hash != report.shell_lock_hash() {
+        return Err(child_handoff(
+            "terminal intent does not belong to the exiting child".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn child_handoff(reason: String) -> ProductSupervisorError {
+    ProductSupervisorError::Client(ProductionClientError::ChildHandoff { reason })
 }
 
 fn recovery_ack(
