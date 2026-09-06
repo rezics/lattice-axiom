@@ -5,13 +5,13 @@ use std::{collections::BTreeMap, sync::Arc};
 use bevy::{
     asset::{Assets, Handle, RenderAssetUsages},
     camera::visibility::VisibilityRange,
+    color::ColorToComponents,
     mesh::{Indices, Mesh, PrimitiveTopology},
     prelude::{
-        Commands, Component, Entity, Mesh3d, MeshMaterial3d, Query, Res, ResMut, Resource,
-        Transform, Vec3, With,
+        Color, Commands, Component, DetectChangesMut, Entity, Mesh3d, MeshMaterial3d, Query, Res,
+        ResMut, Resource, Transform, Vec3, With,
     },
 };
-use latticeaxiom_core::CanonicalHash;
 use latticeaxiom_gameplay::BlockId;
 use latticeaxiom_player::LocalPlayerInput;
 use latticeaxiom_worldgen::{
@@ -56,13 +56,13 @@ impl FarTerrainRolePalette {
             colors: blocks
                 .iter()
                 .map(|(role, block)| {
-                    (
-                        *role,
-                        resources.material(block.as_str()).map_or_else(
-                            || block_color(block.as_str()),
-                            latticeaxiom_render_contracts::ResourceMaterial::rgba,
-                        ),
-                    )
+                    let [r, g, b, a] = resources.material(block.as_str()).map_or_else(
+                        || block_color(block.as_str()),
+                        latticeaxiom_render_contracts::ResourceMaterial::rgba,
+                    );
+                    // Both authored and fallback near atlases are sampled as
+                    // sRGB; mesh vertex colors must already be linear.
+                    (*role, Color::srgba(r, g, b, a).to_linear().to_f32_array())
                 })
                 .collect(),
         }
@@ -80,7 +80,7 @@ impl FarTerrainRolePalette {
 #[derive(Clone, Component, Debug)]
 pub(super) struct FarTerrainPresentation {
     address: FarTerrainTileAddressV1,
-    cache_hash: CanonicalHash,
+    source: Arc<FarTerrainTileV1>,
     solid_mesh: Handle<Mesh>,
     water_mesh: Option<Handle<Mesh>>,
 }
@@ -426,19 +426,13 @@ pub(super) fn sync_far_terrain_presentation(
     let ready = spine.far_terrain_ready_tiles();
     let desired = ready
         .iter()
-        .filter_map(|tile| {
-            tile.cache_key()
-                .canonical_hash()
-                .ok()
-                .map(|hash| (tile.cache_key().address(), (hash, Arc::clone(tile))))
-        })
+        .map(|tile| (tile.cache_key().address(), Arc::clone(tile)))
         .collect::<BTreeMap<_, _>>();
     let mut presented = BTreeMap::new();
     for (entity, current) in &existing {
-        if desired
-            .get(&current.address)
-            .is_some_and(|(hash, _)| *hash == current.cache_hash)
-            && !presented.contains_key(&current.address)
+        if desired.get(&current.address).is_some_and(|tile| {
+            Arc::ptr_eq(tile, &current.source) || tile.cache_key() == current.source.cache_key()
+        }) && !presented.contains_key(&current.address)
         {
             presented.insert(current.address, entity);
         } else {
@@ -457,17 +451,16 @@ pub(super) fn sync_far_terrain_presentation(
     let mut uploads = desired
         .iter()
         .filter(|(address, _)| !presented.contains_key(address))
-        .map(|(address, (hash, tile))| {
+        .map(|(address, tile)| {
             (
                 tile_minimum_distance_squared_meters(tile, player_xz),
                 *address,
-                *hash,
                 Arc::clone(tile),
             )
         })
         .collect::<Vec<_>>();
     uploads.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
-    for (_, address, cache_hash, tile) in uploads
+    for (_, address, tile) in uploads
         .into_iter()
         .take(FAR_TERRAIN_TILE_UPLOAD_CAP_PER_FRAME)
     {
@@ -477,7 +470,6 @@ pub(super) fn sync_far_terrain_presentation(
             &materials,
             &palette,
             &tile,
-            cache_hash,
             distance_status.presented_render_distance_meters().meters(),
         ) {
             presented.insert(address, entity);
@@ -504,10 +496,14 @@ pub(super) fn sync_far_terrain_presentation(
         let lane_margin = match surface.lane {
             FarTerrainSurfaceLane::Solid | FarTerrainSurfaceLane::Water => span,
         };
-        *range = terrain_visibility_range(gpu_frontier.saturating_add(lane_margin));
+        range.set_if_neq(terrain_visibility_range(
+            gpu_frontier.saturating_add(lane_margin),
+        ));
     }
     for mut range in &mut near_ranges {
-        *range = terrain_visibility_range(gpu_frontier.saturating_add(chunk_edge));
+        range.set_if_neq(terrain_visibility_range(
+            gpu_frontier.saturating_add(chunk_edge),
+        ));
     }
 }
 
@@ -520,8 +516,7 @@ fn spawn_far_tile(
     meshes: &mut Assets<Mesh>,
     materials: &ProductionTerrainMaterials,
     palette: &FarTerrainRolePalette,
-    tile: &FarTerrainTileV1,
-    cache_hash: CanonicalHash,
+    tile: &Arc<FarTerrainTileV1>,
     visibility_meters: u32,
 ) -> Option<Entity> {
     let cpu = FarTerrainCpuMeshes::from_tile(tile, palette);
@@ -537,7 +532,7 @@ fn spawn_far_tile(
     commands.entity(root).insert((
         FarTerrainPresentation {
             address,
-            cache_hash,
+            source: Arc::clone(tile),
             solid_mesh: solid_mesh.clone(),
             water_mesh: water_mesh.clone(),
         },

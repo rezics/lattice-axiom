@@ -10,10 +10,10 @@ use bevy::{
         keyboard::{Key, KeyboardInput},
     },
     prelude::{
-        AlignItems, BackgroundColor, BorderColor, Children, Color, Commands, Component, Display,
-        Entity, FlexDirection, FlexWrap, GlobalZIndex, JustifyContent, MessageReader, Name, Node,
-        Overflow, Pickable, PositionType, Query, Res, ResMut, Resource, Text, TextColor, UiRect,
-        Val, With, Without,
+        AlignItems, BackgroundColor, BorderColor, Children, Color, Commands, Component,
+        DetectChangesMut, Display, Entity, FlexDirection, FlexWrap, GlobalZIndex, JustifyContent,
+        MessageReader, Name, Node, Overflow, Pickable, PositionType, Query, Res, ResMut, Resource,
+        Text, TextColor, UiRect, Val, With, Without,
     },
     ui::FocusPolicy,
     ui::widget::ImageNode,
@@ -1074,11 +1074,14 @@ pub(super) fn sync_inventory_overlay(
     let Ok(mut node) = overlay.single_mut() else {
         return;
     };
-    node.display = if surfaces.inventory_panel_open() {
+    let display = if surfaces.inventory_panel_open() {
         Display::Flex
     } else {
         Display::None
     };
+    if node.display != display {
+        node.display = display;
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
@@ -1089,11 +1092,14 @@ pub(super) fn sync_workbench_overlay(
     let Ok(mut node) = overlay.single_mut() else {
         return;
     };
-    node.display = if surfaces.workbench_open() {
+    let display = if surfaces.workbench_open() {
         Display::Flex
     } else {
         Display::None
     };
+    if node.display != display {
+        node.display = display;
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy systems receive SystemParams by value.
@@ -1140,17 +1146,17 @@ pub(super) fn sync_slot_pickable(
         Pickable::IGNORE
     };
     for mut pickable in &mut inventory_slots {
-        *pickable = slot_pickable;
+        pickable.set_if_neq(slot_pickable);
     }
     for mut pickable in &mut hotbar_slots {
-        *pickable = slot_pickable;
+        pickable.set_if_neq(slot_pickable);
     }
     for mut pickable in &mut recipes {
-        *pickable = if inventory_interactive || workbench_interactive {
+        pickable.set_if_neq(if inventory_interactive || workbench_interactive {
             Pickable::default()
         } else {
             Pickable::IGNORE
-        };
+        });
     }
 }
 
@@ -1815,6 +1821,9 @@ pub(super) fn sync_production_inventory_hud(
     mut labels: Query<'_, '_, &mut Text>,
     mut selectors: Query<'_, '_, (&mut Node, &mut BorderColor), With<ProductionSlotSelector>>,
 ) {
+    if !surfaces.inventory_panel_open() {
+        return;
+    }
     let view = spine.inventory_view();
     let selected = view
         .as_ref()
@@ -1853,12 +1862,18 @@ fn set_slot_selector(
 ) {
     for child in children {
         if let Ok((mut node, mut border)) = selectors.get_mut(*child) {
-            node.display = if visible {
+            let display = if visible {
                 Display::Flex
             } else {
                 Display::None
             };
-            *border = BorderColor::all(if visible { color } else { Color::NONE });
+            if node.display != display {
+                node.display = display;
+            }
+            let desired = BorderColor::all(if visible { color } else { Color::NONE });
+            if *border != desired {
+                *border = desired;
+            }
         }
     }
 }
@@ -1926,6 +1941,41 @@ fn hotbar_key_slot(code: bevy::input::keyboard::KeyCode) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn closed_inventory_does_not_invalidate_layout_each_frame() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        app.init_resource::<super::ProductionHudSurfaces>()
+            .add_systems(Update, super::sync_inventory_overlay);
+        app.world_mut().spawn((
+            super::ProductionInventoryOverlay,
+            Node {
+                display: Display::None,
+                ..default()
+            },
+        ));
+        app.update();
+        app.world_mut().clear_trackers();
+        app.update();
+        let count = app
+            .world_mut()
+            .query_filtered::<Entity, Changed<Node>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            count, 0,
+            "an unchanged closed overlay must not trigger Bevy UI layout"
+        );
+        app.world_mut()
+            .resource_mut::<super::ProductionHudSurfaces>()
+            .set_inventory_open(true);
+        app.update();
+        let mut nodes = app.world_mut().query::<&Node>();
+        assert_eq!(
+            nodes.single(app.world()).expect("one overlay").display,
+            Display::Flex
+        );
+    }
     use super::{
         HOTBAR_SLOTS, ITEM_BROWSER_CAPACITY, ITEM_BROWSER_QUERY_CHARS, ItemBrowserStateV1,
         ItemBrowserTransitionV1, ProductionHudSurfaces, hotbar_key_slot, mining_status_line,

@@ -1375,12 +1375,21 @@ pub(super) fn sync_pause_overlay(
     let Ok((mut node, mut pickable)) = overlay.single_mut() else {
         return;
     };
-    if pause.is_paused() {
-        node.display = Display::Flex;
-        *pickable = Pickable::default();
+    let display = if pause.is_paused() {
+        Display::Flex
     } else {
-        node.display = Display::None;
-        *pickable = Pickable::IGNORE;
+        Display::None
+    };
+    if node.display != display {
+        node.display = display;
+    }
+    let desired = if pause.is_paused() {
+        Pickable::default()
+    } else {
+        Pickable::IGNORE
+    };
+    if *pickable != desired {
+        *pickable = desired;
     }
 }
 
@@ -1622,11 +1631,14 @@ pub(super) fn sync_pause_menu_page(
                 showing_settings
             }
         };
-        node.display = if page_visible {
+        let display = if page_visible {
             Display::Flex
         } else {
             Display::None
         };
+        if node.display != display {
+            node.display = display;
+        }
 
         let desired_tab_index = pause
             .is_paused()
@@ -1646,11 +1658,14 @@ pub(super) fn sync_pause_menu_page(
 
     if let Ok((slider_entity, slider_value, mut slider_node, has_tab_index)) = sliders.single_mut()
     {
-        slider_node.display = if showing_settings {
+        let display = if showing_settings {
             Display::Flex
         } else {
             Display::None
         };
+        if slider_node.display != display {
+            slider_node.display = display;
+        }
         match (showing_settings, has_tab_index) {
             (true, false) => {
                 commands

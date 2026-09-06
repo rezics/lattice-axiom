@@ -840,11 +840,14 @@ pub(super) fn sync_settings_page_visibility(
             router.inner().route().modal() == latticeaxiom_client_ui::GameModalV1::Settings
         });
     for mut node in &mut roots {
-        node.display = if showing {
+        let display = if showing {
             Display::Flex
         } else {
             Display::None
         };
+        if node.display != display {
+            node.display = display;
+        }
     }
 }
 
