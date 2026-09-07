@@ -102,6 +102,45 @@ fn disk_world_reopens_after_the_original_engine_and_store_are_dropped() {
         .expect("sealed writer publication");
     writer.flush_durable().expect("logical durable frontier");
     writer.close().expect("writer closed before publication");
+    assert_eq!(
+        spine.pending_persistence_count(),
+        0,
+        "all generated chunks were saved"
+    );
+    assert_eq!(
+        storage
+            .keyspace_stats()
+            .expect("resident store payloads")
+            .record_entries(),
+        0
+    );
+    let explored = spine.resident_chunks();
+    assert!(
+        explored.len() > 1,
+        "acceptance includes pristine terrain outside the player record"
+    );
+    let view = latticeaxiom_world_db::WorldStorage::begin_read(&storage, world).expect("disk view");
+    for coordinate in &explored {
+        let key = latticeaxiom_storage::ChunkKey::new(
+            world,
+            spine.dimension_id().expect("dimension"),
+            *coordinate,
+        );
+        assert!(
+            view.load_chunk(&key).expect("stored terrain").is_some(),
+            "untouched chunk {coordinate:?} missing"
+        );
+    }
+    drop(view);
+    spine
+        .move_stack(SlotIndex::new(4), SlotIndex::new(5))
+        .expect("gameplay continues after a physical save without stale chunk revisions");
+    let mut next_writer = SealedWorldWriterHost::new(storage.clone());
+    start
+        .flush_dirty_chunks(world, &mut next_writer)
+        .expect("save post-autosave gameplay");
+    next_writer.close().expect("close post-autosave writer");
+    drop(next_writer);
     let entry = disk.entries().expect("catalog").remove(0);
     disk.publish(&storage, &entry)
         .expect("physical Immediate commit");
@@ -151,4 +190,84 @@ fn disk_world_reopens_after_the_original_engine_and_store_are_dropped() {
         7
     );
     assert!(restored.player_pose().translation.distance(expected_pose) < 0.002);
+    assert!(restored.inventory_view().expect("inventory").slots()[4].is_none());
+    assert_eq!(
+        restored.inventory_view().expect("inventory").slots()[5]
+            .as_ref()
+            .expect("moved stack")
+            .quantity(),
+        7
+    );
+    assert_eq!(
+        restored.pending_persistence_count(),
+        0,
+        "stored startup terrain was hydrated without regeneration"
+    );
+    exercise_traversal(restored, &mut reopened, world);
+}
+
+fn exercise_traversal(
+    spine: &ProductionSpine,
+    start: &mut ProductionMemoryStart,
+    world: latticeaxiom_core::WorldId,
+) {
+    use std::collections::BTreeSet;
+    let initial_pose = spine.player_pose();
+    let mut seen = BTreeSet::new();
+    let mut high_cached = 0;
+    let mut tick = 10_000;
+    let maximum = usize::try_from(spine.hard_limits().expect("limits").max_resident_chunks)
+        .expect("count fits");
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    for station in 0..8_u16 {
+        let mut pose = initial_pose;
+        pose.translation.x += f32::from(station) * 256.0;
+        spine.record_player_pose(pose);
+        tick += 1_000;
+        let before = seen.len();
+        for _ in 0..600 {
+            tick += 1;
+            spine.sync_interest(tick).expect("traversal interest");
+            spine
+                .pump_background_work(tick)
+                .expect("bounded background work");
+            seen.extend(spine.resident_chunks());
+            high_cached = high_cached.max(spine.cached_chunk_count());
+            assert!(
+                spine.cached_chunk_count() <= maximum,
+                "kernel must honor the resident ceiling"
+            );
+            assert!(
+                spine.pending_persistence_count() <= maximum,
+                "pending writes cannot retain an unbounded exploration history"
+            );
+            if spine.pending_persistence_count() >= 8 || seen.len() >= before + 8 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "traversal must progress"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut writer = SealedWorldWriterHost::new(start.storage().expect("storage").clone());
+        start
+            .flush_dirty_chunks(world, &mut writer)
+            .expect("incremental traversal save");
+        writer.close().expect("close traversal writer");
+        assert_eq!(spine.pending_persistence_count(), 0);
+        assert!(
+            seen.len() > before,
+            "each distant region must contribute stored terrain"
+        );
+    }
+    assert!(
+        spine.stream_eviction_count() > 0,
+        "traversal exercised eviction"
+    );
+    assert!(
+        seen.len() > spine.cached_chunk_count(),
+        "evicted world data must leave the kernel cache"
+    );
+    assert!(high_cached <= maximum);
 }

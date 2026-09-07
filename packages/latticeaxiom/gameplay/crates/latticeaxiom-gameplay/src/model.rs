@@ -912,6 +912,50 @@ impl ReferenceGameplayState {
         }
     }
 
+    /// Releases loaded observations after the host durably saves and unloads
+    /// a chunk. Live gameplay owners retain their chunks until their own
+    /// entity unload protocol releases them.
+    ///
+    /// # Errors
+    /// Refuses to invalidate an outstanding commit or live gameplay ownership.
+    pub fn release_loaded_chunk(
+        &mut self,
+        chunk: &DimensionChunkKey,
+    ) -> Result<bool, GameplayReject> {
+        if let Some(pending) = &self.pending_receipt {
+            return Err(GameplayReject::StorageCommitPending {
+                transaction_id: *pending.transaction_id.as_bytes(),
+                observed_world_revision: pending.observed_world_revision.get(),
+            });
+        }
+        let edge = self.chunk_edge;
+        if self
+            .inventories
+            .values()
+            .any(|inventory| inventory.target.chunk == *chunk)
+            || self
+                .containers
+                .values()
+                .any(|container| container.owner.chunk_key() == *chunk)
+            || self
+                .drops
+                .values()
+                .any(|drop| drop.location.chunk_in(edge) == *chunk)
+            || self
+                .continuations
+                .values()
+                .any(|continuation| continuation.target.chunk == *chunk)
+        {
+            return Err(GameplayReject::MutationPreconditionFailed {
+                resource: "chunk_owns_live_gameplay_state",
+            });
+        }
+        self.blocks.retain(|key, _| key.chunk_in(edge) != *chunk);
+        self.break_progress
+            .retain(|key, _| key.block.chunk_in(edge) != *chunk);
+        Ok(self.loaded_chunks.remove(chunk).is_some())
+    }
+
     /// Inserts or confirms one occupied block cell before planning a command.
     ///
     /// # Errors
@@ -2374,5 +2418,31 @@ impl GameplayReject {
             Self::MutationPreconditionFailed { .. } => "gameplay.mutation_precondition_failed",
             Self::InjectedFault { .. } => "gameplay.injected_fault",
         }
+    }
+}
+
+#[cfg(test)]
+mod residency_tests {
+    #![allow(clippy::expect_used, reason = "validated residency fixtures")]
+    use super::*;
+    #[test]
+    fn a_durably_unloaded_chunk_can_be_hydrated_into_a_fresh_cache_revision() {
+        let mut state = ReferenceGameplayState::new(GameplayLimits::default()).expect("state");
+        let key = DimensionChunkKey::new(
+            "example:dimension/world".parse().expect("dimension"),
+            latticeaxiom_storage::ChunkCoordinate::new(1, 0, 1),
+        );
+        state
+            .ensure_loaded_chunk(key.clone(), ChunkRevision::new(9))
+            .expect("old observation");
+        assert!(state.release_loaded_chunk(&key).expect("release"));
+        assert!(state.loaded_chunks().is_empty());
+        state
+            .ensure_loaded_chunk(key.clone(), ChunkRevision::new(1))
+            .expect("fresh hydration");
+        assert_eq!(
+            state.loaded_chunk_revision(&key),
+            Some(ChunkRevision::new(1))
+        );
     }
 }

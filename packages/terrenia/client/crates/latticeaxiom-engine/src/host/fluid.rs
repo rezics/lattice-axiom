@@ -155,9 +155,6 @@ pub(super) fn tick_simulated(
     origin: ChunkCoordinate,
     clamps: StreamClamps,
 ) -> Result<Vec<HostFluidTickV1>, BlockEditRejectV1> {
-    let snapshot = kernel
-        .reference_snapshot(inner.world)
-        .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
     let budget = host_fluid_budget(inner);
     let resident = inner
         .runtime
@@ -169,6 +166,19 @@ pub(super) fn tick_simulated(
         .filter(|coordinate| is_simulation_chunk(*coordinate, origin, clamps))
         .collect::<Vec<_>>();
     simulation.sort();
+    if !simulation.iter().any(|coordinate| {
+        kernel
+            .has_continuation(
+                &ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate),
+                FLUID_CONTINUATION_ID,
+            )
+            .unwrap_or(true)
+    }) {
+        return Ok(Vec::new());
+    }
+    let snapshot = kernel
+        .reference_snapshot(inner.world)
+        .map_err(|_| BlockEditRejectV1::StorageUnavailable)?;
 
     let mut input_queue = 0_u32;
     let mut inputs = Vec::new();
@@ -395,6 +405,11 @@ pub(super) fn tick_simulated(
         if !changed.is_empty() {
             replacements.push((coordinate, chunk.revision, changed, replacement));
         }
+    }
+    if !inner.can_stage_physical_edits(replacements.iter().map(|(coordinate, _, _, _)| *coordinate))
+    {
+        // Leave the persisted continuation intact until autosave frees capacity.
+        return Ok(Vec::new());
     }
     inner.commit_fluid_batch(kernel, snapshot.revision(), replacements)?;
 

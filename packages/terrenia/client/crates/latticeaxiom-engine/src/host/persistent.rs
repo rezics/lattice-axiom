@@ -41,14 +41,7 @@ pub(crate) fn load_disk_world(
     disk: &DiskWorldStore,
     world: WorldId,
 ) -> Result<DeterministicWorldStorage, ProductionMemoryStartError> {
-    let image = disk.load(world)?;
-    let storage = DeterministicWorldStorage::from_durable_image(
-        &image,
-        "latticeaxiom:schema/world-db-chunk@1".parse()?,
-        WorldWireLimits::default(),
-        WorldStorageLimitsV1::D3_BOOTSTRAP,
-        Arc::new(DeterministicHeaderPublisher::new()),
-    )?;
+    let storage = disk.load_indexed(world)?;
     let preflight = storage.preflight(world)?;
     if let Some(permit) = preflight.header_repair_permit() {
         storage.repair_header(permit.clone())?;

@@ -8,7 +8,7 @@ use std::{
 use bevy::{
     ecs::schedule::{IntoScheduleConfigs, common_conditions::resource_exists},
     prelude::*,
-    tasks::{AsyncComputeTaskPool, Task, block_on},
+    tasks::{AsyncComputeTaskPool, IoTaskPool, Task, block_on},
 };
 use latticeaxiom_core::{CanonicalHash, canonical_json_hash};
 use latticeaxiom_launcher::{
@@ -36,6 +36,10 @@ struct SaveContext {
 }
 
 #[derive(Debug, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent save, shutdown, retry and background completion flags"
+)]
 struct SaveState {
     requested: bool,
     saved: bool,
@@ -45,6 +49,8 @@ struct SaveState {
     return_to_shell: bool,
     paused_before_save: bool,
     checkpoints: u64,
+    background: bool,
+    last_background: Option<std::time::Instant>,
 }
 
 /// Physical world session retained through window-runner teardown.
@@ -80,7 +86,6 @@ impl PersistentGameSession {
 
     pub(crate) fn request_save(&self) {
         if let Ok(mut state) = self.state.lock()
-            && state.task.is_none()
             && !state.saved
         {
             state.requested = true;
@@ -93,7 +98,6 @@ impl PersistentGameSession {
     /// Save without leaving the active world. A retry retains its original goal.
     pub(crate) fn request_checkpoint(&self) {
         if let Ok(mut state) = self.state.lock()
-            && state.task.is_none()
             && !state.saved
         {
             if !state.requested {
@@ -119,10 +123,10 @@ impl PersistentGameSession {
             }
             (state.task.take(), state.requested)
         };
-        match task {
-            Some(task) => block_on(task),
-            None => save(&self.context, requested),
-        }?;
+        if let Some(task) = task {
+            block_on(task)?;
+        }
+        save(&self.context, requested)?;
         self.state.lock().map_err(|error| error.to_string())?.saved = true;
         Ok(())
     }
@@ -213,6 +217,26 @@ fn persistence_error(error: impl std::fmt::Display) -> ProductionClientError {
 
 fn save(context: &SaveContext, return_to_shell: bool) -> Result<(), String> {
     save_inner(context, return_to_shell, true).map_err(|error| error.to_string())
+}
+
+fn save_background(context: &SaveContext) -> Result<(), String> {
+    let mut writer = SealedWorldWriterHost::new(context.storage.clone());
+    let preflight = writer
+        .preflight(context.entry.world)
+        .map_err(|error| error.to_string())?;
+    let permit = preflight
+        .activation_permit()
+        .cloned()
+        .ok_or("background writer activation unavailable")?;
+    writer
+        .reactivate(&writable_open_plan(context.entry.world, &permit), permit)
+        .map_err(|error| error.to_string())?;
+    context
+        .spine
+        .flush_persistence_batch(&mut writer, preflight.metadata())
+        .map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn save_inner(
@@ -353,8 +377,29 @@ fn poll_save(
     let Ok(mut state) = session.state.lock() else {
         return;
     };
+    if !state.requested
+        && state.task.is_none()
+        && !state.saved
+        && state.error.is_none()
+        && state.last_background.is_none_or(|last| {
+            let interval = if session.context.spine.pending_persistence_count() > 0 {
+                500
+            } else {
+                5_000
+            };
+            last.elapsed() >= std::time::Duration::from_millis(interval)
+        })
+    {
+        state.background = true;
+        state.last_background = Some(std::time::Instant::now());
+        let context = session.context.clone();
+        state.task = Some(IoTaskPool::get().spawn(async move { save_background(&context) }));
+    }
     if state.requested && state.task.is_none() && !state.saved && state.error.is_none() {
-        state.paused_before_save = pause.is_paused();
+        state.background = false;
+        if !state.reopen {
+            state.paused_before_save = pause.is_paused();
+        }
         pause.set(true);
         let context = session.context.clone();
         let reopen = state.reopen;
@@ -363,6 +408,10 @@ fn poll_save(
         state.task = Some(AsyncComputeTaskPool::get().spawn(async move {
             if reopen {
                 context.disk.reopen().map_err(|error| error.to_string())?;
+                context
+                    .storage
+                    .reconcile_indexed()
+                    .map_err(|error| error.to_string())?;
             }
             save_inner(&context, return_to_shell, return_to_shell)
                 .map_err(|error| error.to_string())
@@ -374,6 +423,10 @@ fn poll_save(
         };
         match block_on(task) {
             Ok(()) => {
+                if state.background {
+                    state.background = false;
+                    return;
+                }
                 if state.return_to_shell {
                     state.saved = true;
                     if session.context.in_process_shell {
@@ -389,6 +442,13 @@ fn poll_save(
             }
             Err(error) => {
                 bevy::log::error!(%error, "world save failed");
+                if state.background {
+                    state.background = false;
+                    state.requested = true;
+                    state.return_to_shell = false;
+                    state.paused_before_save = pause.is_paused();
+                    pause.set(true);
+                }
                 state.error = Some(error);
             }
         }

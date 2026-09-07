@@ -374,6 +374,7 @@ pub(super) struct ProductionSpineInner {
     far_terrain: FarTerrainStream,
     pub(super) presentation: Arc<HostPresentationIndex>,
     edited: BTreeSet<ChunkCoordinate>,
+    pending_persistence: BTreeSet<ChunkCoordinate>,
     lifecycle: BTreeMap<ChunkCoordinate, ChunkLifecycle>,
     eviction_lease: u64,
     residency: BTreeMap<ChunkCoordinate, ChunkResidency>,
@@ -901,6 +902,7 @@ impl ProductionSpine {
             far_terrain,
             presentation,
             edited: BTreeSet::new(),
+            pending_persistence: BTreeSet::new(),
             lifecycle: BTreeMap::new(),
             eviction_lease: 0,
             residency: BTreeMap::new(),
@@ -1032,25 +1034,71 @@ impl ProductionSpine {
         writer: &mut SealedWorldWriterHost,
         metadata: &AuthoritativeMetadataInputV1,
     ) -> Result<Option<WorldCommitOutcomeV1>, ProductionHostError> {
-        self.persist_player_session()?;
+        let mut last = None;
+        loop {
+            let (outcome, count) = self.flush_persistence_batch(writer, metadata)?;
+            if outcome.is_some() {
+                last = outcome;
+            }
+            if count == 0
+                || writer.durability_capability()
+                    == StorageDurabilityCapabilityV1::VolatileReference
+            {
+                break;
+            }
+        }
+        Ok(last)
+    }
+
+    /// Persists a bounded generation batch together with the complete current
+    /// edit set. Revision acknowledgements cannot clear concurrent newer edits.
+    pub(super) fn flush_persistence_batch(
+        &self,
+        writer: &mut SealedWorldWriterHost,
+        metadata: &AuthoritativeMetadataInputV1,
+    ) -> Result<(Option<WorldCommitOutcomeV1>, usize), ProductionHostError> {
         let inner = self.lock_inner()?;
         let world = inner.world;
         let dimension = inner.dimension.clone();
-        let edited = inner.edited.clone();
+        let (session_chunk, session_payload) = Self::player_session_payload(&inner)?;
+        let mut selected = inner.edited.clone();
+        selected.insert(session_chunk);
+        let limit = writer.storage().limits().max_chunks_per_commit() as usize;
+        for coordinate in &inner.pending_persistence {
+            if selected.len() >= limit {
+                break;
+            }
+            selected.insert(*coordinate);
+        }
+        let keys = selected
+            .iter()
+            .map(|coordinate| ChunkKey::new(world, dimension.clone(), *coordinate))
+            .collect::<Vec<_>>();
+        let captured = self.storage.kernel().capture_chunks(world, &keys)?;
+        let selected_terrain = selected
+            .iter()
+            .filter(|coordinate| **coordinate != session_chunk)
+            .count();
         drop(inner);
-        let snapshot = self.storage.kernel().reference_snapshot(world)?;
         let view = writer.begin_read(world)?;
         let mut mutations = Vec::new();
-        for coordinate in edited {
-            let key = ChunkKey::new(world, dimension.clone(), coordinate);
-            let Some(stored) = snapshot.chunk(&key) else {
-                continue;
-            };
+        for stored in &captured {
+            let key = stored.key().clone();
             let persisted = view.load_chunk(&key)?;
-            let changed = chunk_changed_domains(
-                persisted.as_ref().map(PersistedChunkV1::data),
-                stored.data(),
-            );
+            let data = if key.coordinate == session_chunk {
+                let mut entities = stored.data().persistent_entities().clone();
+                entities.insert(PLAYER_SESSION_ENTITY, session_payload.clone());
+                ChunkData::new(
+                    stored.data().voxels().clone(),
+                    entities,
+                    stored.data().continuations().clone(),
+                    stored.data().provenance().clone(),
+                )
+            } else {
+                stored.data().clone()
+            };
+            let changed =
+                chunk_changed_domains(persisted.as_ref().map(PersistedChunkV1::data), &data);
             if changed.is_empty() {
                 continue;
             }
@@ -1058,12 +1106,7 @@ impl ProductionSpine {
                 Some(current) => ChunkRevisionExpectation::Exact(current.chunk_revision()),
                 None => ChunkRevisionExpectation::Absent,
             };
-            mutations.push(ChunkMutation::new(
-                key,
-                expectation,
-                changed,
-                stored.data().clone(),
-            ));
+            mutations.push(ChunkMutation::new(key, expectation, changed, data));
         }
         mutations.sort_by(|left, right| left.key().cmp(right.key()));
         let durability = match writer.durability_capability() {
@@ -1079,9 +1122,42 @@ impl ProductionSpine {
             durability,
         )?;
         if durability == CommitDurabilityV1::Durable {
-            self.lock_inner()?.clear_edited_chunks();
+            let mut inner = self.lock_inner()?;
+            for stored in &captured {
+                if self
+                    .storage
+                    .kernel()
+                    .read_chunk(stored.key())?
+                    .is_some_and(|current| current.revision() == stored.revision())
+                {
+                    inner.edited.remove(&stored.key().coordinate);
+                    inner.pending_persistence.remove(&stored.key().coordinate);
+                }
+            }
+            inner.advance_edited_pin_revision();
         }
-        Ok(outcome)
+        Ok((outcome, selected_terrain.max(mutations.len())))
+    }
+
+    /// Resident payload count used to verify that traversal does not retain the world.
+    #[must_use]
+    pub fn cached_chunk_count(&self) -> usize {
+        self.world_id()
+            .map_or(0, |world| self.storage.kernel().resident_chunk_count(world))
+    }
+
+    /// Current authoritative dimension, independent from render residency.
+    #[must_use]
+    pub fn dimension_id(&self) -> Option<DimensionId> {
+        self.lock_inner().ok().map(|inner| inner.dimension.clone())
+    }
+
+    /// Number of generated or changed chunks awaiting physical persistence.
+    #[must_use]
+    pub fn pending_persistence_count(&self) -> usize {
+        self.lock_inner().map_or(0, |inner| {
+            inner.pending_persistence.union(&inner.edited).count()
+        })
     }
 
     /// Returns the pose used to spawn the local player capsule.
@@ -1091,9 +1167,9 @@ impl ProductionSpine {
             .map_or(Vec3::ZERO, |inner| inner.player_pose.translation)
     }
 
-    fn persist_player_session(&self) -> Result<(), ProductionHostError> {
-        let kernel = self.storage.kernel();
-        let mut inner = self.lock_inner()?;
+    fn player_session_payload(
+        inner: &ProductionSpineInner,
+    ) -> Result<(ChunkCoordinate, VersionedPayload), ProductionHostError> {
         let spawn_chunk = translation_chunk(inner.spawn_center, inner.chunk_edge)
             .ok_or(ProductionHostError::InvalidPlayerPose)?;
         let pose = inner.player_pose;
@@ -1132,39 +1208,7 @@ impl ProductionSpine {
                 gameplay.next_drop(),
             )
         };
-        let payload = session.encode_payload()?;
-        let snapshot = kernel.reference_snapshot(inner.world)?;
-        let key = ChunkKey::new(inner.world, inner.dimension.clone(), spawn_chunk);
-        let stored = snapshot
-            .chunk(&key)
-            .ok_or(ProductionHostError::MissingStoredChunk {
-                coordinate: spawn_chunk,
-            })?;
-        let mut entities = stored.data().persistent_entities().clone();
-        entities.insert(PLAYER_SESSION_ENTITY, payload);
-        let replacement = ChunkData::new(
-            stored.data().voxels().clone(),
-            entities,
-            stored.data().continuations().clone(),
-            stored.data().provenance().clone(),
-        );
-        let changed = chunk_changed_domains(Some(stored.data()), &replacement);
-        if changed.is_empty() {
-            return Ok(());
-        }
-        kernel.commit(WorldTransaction::new(
-            next_transaction_id(&mut inner),
-            inner.world,
-            snapshot.revision(),
-            vec![ChunkMutation::new(
-                key,
-                ChunkRevisionExpectation::Exact(stored.revision()),
-                changed,
-                replacement,
-            )],
-        ))?;
-        inner.insert_edited_chunk(spawn_chunk);
-        Ok(())
+        Ok((spawn_chunk, session.encode_payload()?))
     }
 
     /// Returns the local player spawn center in meters.
@@ -1707,7 +1751,7 @@ impl ProductionSpine {
     ///
     /// Returns [`ProductionHostError`] when task polling, budgeted publication,
     /// projection, or task dispatch fails.
-    pub(super) fn pump_background_work(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
+    pub fn pump_background_work(&self, fixed_tick: u64) -> Result<(), ProductionHostError> {
         let result = self.pump_background_work_inner(fixed_tick);
         if result.is_err()
             && let Ok(mut inner) = self.lock_inner()
@@ -2797,12 +2841,46 @@ struct SelectableHit {
 }
 
 impl ProductionSpineInner {
+    fn physical_edit_budget(&self) -> Option<(BTreeSet<DimensionChunkKey>, usize)> {
+        let store = self
+            .world_store
+            .as_ref()
+            .filter(|store| store.is_indexed())?;
+        let mut coordinates = self.edited.clone();
+        if let Some(spawn) = self.spawn_chunk() {
+            coordinates.insert(spawn);
+        }
+        Some((
+            coordinates
+                .into_iter()
+                .map(|coordinate| DimensionChunkKey::new(self.dimension.clone(), coordinate))
+                .collect(),
+            usize::try_from(store.limits().max_chunks_per_commit()).unwrap_or(1),
+        ))
+    }
+
+    pub(super) fn can_stage_physical_edits(
+        &self,
+        coordinates: impl IntoIterator<Item = ChunkCoordinate>,
+    ) -> bool {
+        let Some((mut chunks, maximum)) = self.physical_edit_budget() else {
+            return true;
+        };
+        chunks.extend(
+            coordinates
+                .into_iter()
+                .map(|coordinate| DimensionChunkKey::new(self.dimension.clone(), coordinate)),
+        );
+        chunks.len() <= maximum
+    }
+
     fn spawn_chunk(&self) -> Option<ChunkCoordinate> {
         translation_chunk(self.spawn_center, self.chunk_edge)
     }
 
     fn session_pins(&self) -> BTreeSet<ChunkCoordinate> {
         let mut pins = self.edited.clone();
+        pins.extend(self.pending_persistence.iter().copied());
         if let Some(spawn) = self.spawn_chunk() {
             pins.insert(spawn);
         }
@@ -2810,14 +2888,8 @@ impl ProductionSpineInner {
     }
 
     fn insert_edited_chunk(&mut self, coordinate: ChunkCoordinate) {
+        self.pending_persistence.insert(coordinate);
         if self.edited.insert(coordinate) {
-            self.advance_edited_pin_revision();
-        }
-    }
-
-    fn clear_edited_chunks(&mut self) {
-        if !self.edited.is_empty() {
-            self.edited.clear();
             self.advance_edited_pin_revision();
         }
     }
@@ -3321,7 +3393,9 @@ impl ProductionSpineInner {
                     })
             })
             .collect::<Vec<_>>();
+        let persistence_budget = self.physical_edit_budget();
         if let Some(gameplay) = self.gameplay.as_mut() {
+            gameplay.set_persistence_budget(persistence_budget);
             gameplay.sync_loaded_world(world_revision, loaded)?;
         }
         Ok(())
@@ -3350,6 +3424,9 @@ impl ProductionSpineInner {
         activate_fluid: bool,
     ) -> Result<BlockEditSuccessV1, BlockEditRejectV1> {
         let coordinate = chunk_of(position, self.chunk_edge);
+        if !self.can_stage_physical_edits([coordinate]) {
+            return Err(BlockEditRejectV1::StorageUnavailable);
+        }
         let key = ChunkKey::new(self.world, self.dimension.clone(), coordinate);
         let snapshot = kernel
             .reference_snapshot(self.world)
@@ -3855,7 +3932,15 @@ fn sync_working_set(
     // Retain protection expires with time, even when the desired-set key does
     // not change again. Revisit the bounded resident set every fixed tick so a
     // view-distance shrink actually releases former core chunks after grace.
-    evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, false)?;
+    evict_unwanted(
+        inner,
+        kernel,
+        origin,
+        look_ahead,
+        desired.as_ref(),
+        tick,
+        false,
+    )?;
     let needs_mutate = inner.reconciled_desired_key != Some(desired_key)
         || inner.desired_admission_cursor < prioritized.len();
     if needs_mutate {
@@ -3865,7 +3950,15 @@ fn sync_working_set(
             // Retain is a latency optimization, not permission to deadlock
             // admission at the hard resident cap. Dirty and pinned chunks stay
             // protected; only clean retained chunks may be released here.
-            evict_unwanted(inner, origin, look_ahead, desired.as_ref(), tick, true)?;
+            evict_unwanted(
+                inner,
+                kernel,
+                origin,
+                look_ahead,
+                desired.as_ref(),
+                tick,
+                true,
+            )?;
         }
         let cursor = inner.desired_admission_cursor.min(prioritized.len());
         let inspected_prefix = admit_desired(
@@ -4051,6 +4144,7 @@ fn reconcile_render_scope(
 
 fn evict_unwanted(
     inner: &mut ProductionSpineInner,
+    kernel: &MemoryTransactionKernel,
     origin: ChunkCoordinate,
     look_ahead: [i32; 2],
     desired: &BTreeSet<ChunkCoordinate>,
@@ -4097,8 +4191,29 @@ fn evict_unwanted(
         )
     });
     for coordinate in victims {
+        if inner
+            .world_store
+            .as_ref()
+            .is_some_and(DeterministicWorldStorage::is_indexed)
+            && let Some(gameplay) = inner.gameplay.as_mut()
+            && gameplay
+                .release_loaded_chunk(&DimensionChunkKey::new(inner.dimension.clone(), coordinate))
+                .is_err()
+        {
+            continue;
+        }
         if !inner.runtime.is_resident(coordinate) {
             forget_chunk(inner, coordinate);
+            if inner
+                .world_store
+                .as_ref()
+                .is_some_and(DeterministicWorldStorage::is_indexed)
+            {
+                let key = ChunkKey::new(inner.world, inner.dimension.clone(), coordinate);
+                if let Some(stored) = kernel.read_chunk(&key)? {
+                    kernel.release_persisted_copy(&key, stored.revision())?;
+                }
+            }
             inner.stream_evictions = inner.stream_evictions.saturating_add(1);
             continue;
         }
@@ -4113,6 +4228,16 @@ fn evict_unwanted(
             derived_requests(priority_with_distance(DerivedPriority::RETAIN, 0)),
         )?;
         forget_chunk(inner, coordinate);
+        if inner
+            .world_store
+            .as_ref()
+            .is_some_and(DeterministicWorldStorage::is_indexed)
+        {
+            let key = ChunkKey::new(inner.world, inner.dimension.clone(), coordinate);
+            if let Some(stored) = kernel.read_chunk(&key)? {
+                kernel.release_persisted_copy(&key, stored.revision())?;
+            }
+        }
         inner.stream_evictions = inner.stream_evictions.saturating_add(1);
     }
     Ok(())
@@ -4478,13 +4603,13 @@ fn publish_hydrated(
         .unwrap_or(1)
         .max(1);
     while !remaining.is_empty() {
-        let snapshot = kernel.reference_snapshot(inner.world)?;
+        let base = kernel.world_frontier(inner.world)?;
         let mut mutations = Vec::new();
         let mut take = 0_usize;
         for (coordinate, persisted) in remaining.iter().take(max_chunks) {
             take = take.saturating_add(1);
             let key = ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate);
-            if snapshot.chunk(&key).is_some() {
+            if kernel.read_chunk(&key)?.is_some() {
                 continue;
             }
             mutations.push(ChunkMutation::new(
@@ -4498,19 +4623,18 @@ fn publish_hydrated(
         if mutations.is_empty() {
             continue;
         }
-        kernel.commit(WorldTransaction::new(
+        kernel.publish(WorldTransaction::new(
             next_transaction_id(inner),
             inner.world,
-            snapshot.revision(),
+            base,
             mutations,
         ))?;
     }
-    let published = kernel.reference_snapshot(inner.world)?;
     let pins = inner.session_pins();
     for (coordinate, _) in chunks {
         let key = ChunkKey::new(inner.world, inner.dimension.clone(), *coordinate);
-        let stored = published
-            .chunk(&key)
+        let stored = kernel
+            .read_chunk(&key)?
             .ok_or(ProductionHostError::MissingStoredChunk {
                 coordinate: *coordinate,
             })?;
@@ -4519,7 +4643,7 @@ fn publish_hydrated(
         let requests = stream_derived_requests(class, *coordinate, origin);
         project_stored(
             &mut inner.runtime,
-            stored,
+            &stored,
             inner.chunk_edge,
             tick,
             &inner.presentation,
@@ -4636,6 +4760,10 @@ fn publish_generated_cells(
     inner.next_transaction = inner.next_transaction.saturating_add(1);
     let pins = inner.session_pins();
     for (coordinate, cells) in committed_cells {
+        if inner.world_store.is_some() {
+            inner.pending_persistence.insert(coordinate);
+            inner.advance_edited_pin_revision();
+        }
         let key = ChunkKey::new(inner.world, inner.dimension.clone(), coordinate);
         let class = interest_class(coordinate, origin, inner.clamps, look_ahead, &pins);
         let requests = stream_derived_requests(class, coordinate, origin);
@@ -5975,6 +6103,19 @@ fn commit_mutations(
 ) -> Result<Option<WorldCommitOutcomeV1>, ProductionHostError> {
     if mutations.is_empty() {
         return Ok(None);
+    }
+    if writer.storage().is_indexed() {
+        // Entity transfers and fluid edits must remain one physical transaction.
+        return Ok(Some(writer.commit(WorldCommitRequestV1::new(
+            WorldTransaction::new(
+                TransactionId::from_u128(u128::from(base.get().saturating_add(1))),
+                world,
+                base,
+                mutations.to_vec(),
+            ),
+            metadata.clone(),
+            durability,
+        ))?));
     }
     let max_chunks = usize::try_from(writer.storage().limits().max_chunks_per_commit())
         .unwrap_or(1)

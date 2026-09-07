@@ -39,6 +39,7 @@ pub(super) struct ProductionGameplay {
     last_outcome: Option<CommandOutcomeV1>,
     last_reject: Option<GameplayReject>,
     bound_workstations: BTreeSet<WorkstationId>,
+    persistence_budget: Option<(BTreeSet<DimensionChunkKey>, usize)>,
 }
 
 /// Snapshot of the local inventory and selected hotbar slot.
@@ -133,6 +134,7 @@ impl ProductionGameplay {
             last_outcome: None,
             last_reject: None,
             bound_workstations: BTreeSet::new(),
+            persistence_budget: None,
         };
         if mode == GameplayModeV1::Creative {
             session.seed_starter_inventory()?;
@@ -321,6 +323,13 @@ impl ProductionGameplay {
         state.observe_world_revision(world_revision)
     }
 
+    pub(super) fn release_loaded_chunk(
+        &mut self,
+        chunk: &DimensionChunkKey,
+    ) -> Result<bool, GameplayReject> {
+        self.applier.state_mut().release_loaded_chunk(chunk)
+    }
+
     pub(super) fn prepare_mine(
         &mut self,
         target: BlockPosition,
@@ -401,6 +410,29 @@ impl ProductionGameplay {
             expected_world_revision: self.applier.state().observed_world_revision(),
             command,
         };
+        if let Some((existing, maximum)) = &self.persistence_budget {
+            // Check disk writeback capacity before the gameplay state changes.
+            // The authoritative applier still owns retry and commit validation.
+            let plan = GameplayKernel::with_rules(
+                self.catalog(),
+                GameplayRulesV1 {
+                    player_mode: self.mode,
+                },
+            )
+            .plan(self.applier.state(), &envelope)?;
+            let mut chunks = existing.clone();
+            chunks.extend(plan.edits().iter().filter_map(|edit| {
+                edit.storage_capture_target()
+                    .map(|target| target.chunk.clone())
+            }));
+            if chunks.len() > *maximum {
+                return Err(GameplayReject::LimitExceeded {
+                    resource: "pending_persistence_chunks",
+                    limit: *maximum,
+                    actual: chunks.len(),
+                });
+            }
+        }
         match self.applier.execute(&envelope, FaultInjection::None) {
             Ok(receipt) => {
                 self.last_outcome = Some(receipt.outcome.clone());
@@ -412,6 +444,13 @@ impl ProductionGameplay {
                 Err(error)
             }
         }
+    }
+
+    pub(super) fn set_persistence_budget(
+        &mut self,
+        budget: Option<(BTreeSet<DimensionChunkKey>, usize)>,
+    ) {
+        self.persistence_budget = budget;
     }
 
     pub(super) fn pickup(

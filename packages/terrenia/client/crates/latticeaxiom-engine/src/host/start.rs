@@ -482,6 +482,7 @@ impl ProductionMemoryStart {
                 durable_revision: 0,
             };
             disk.publish(storage, &entry)?;
+            disk.attach_indexed(storage)?;
             self.saved_worlds.insert(world_id, entry);
         }
         let world_id = self.flow.create(intent, world_id, now_ms)?;
