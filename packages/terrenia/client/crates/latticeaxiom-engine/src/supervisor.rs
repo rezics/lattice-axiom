@@ -12,11 +12,12 @@ use latticeaxiom_core::{CanonicalHash, WorldId};
 use latticeaxiom_launcher::{
     AtomicChildExitStore, AtomicLaunchIntentStore, BOOTSTRAP_ACK_SCHEMA_VERSION, BootObservationV1,
     BootstrapAckV1, BootstrapSafeStateV1, ChildObservationV1, ChildRoleV1, FileChildExitStore,
-    FileLaunchIntentStore, LaunchGeneration, LaunchIntentV1, LaunchTargetV1, PriorChildStatusV1,
-    ProcessControl, ProcessEpoch, ProcessLaunchRequestV1, ProcessSupervisorIdentityV1,
-    RecoveryBootstrapAckV1, RecoveryChildStatusV1, RecoveryLaunchRequestV1,
-    SettingTransactionRevision, SlotDisposition, SpawnFailureV1, SpawnedProcess,
-    SupervisorConfigV1, SupervisorMachine, SupervisorReportV1, TerminationFailureV1,
+    FileLaunchIntentStore, IntentSlot, LaunchGeneration, LaunchIntentV1, LaunchTargetV1,
+    PriorChildStatusV1, ProcessControl, ProcessEpoch, ProcessLaunchRequestV1,
+    ProcessSupervisorIdentityV1, RecoveryBootstrapAckV1, RecoveryChildStatusV1,
+    RecoveryLaunchRequestV1, SettingTransactionRevision, SlotDisposition, SpawnFailureV1,
+    SpawnedProcess, SupervisorConfigV1, SupervisorMachine, SupervisorReportV1,
+    TerminationFailureV1,
 };
 use thiserror::Error;
 
@@ -84,11 +85,15 @@ pub fn run_product_supervisor_from_workspace(
     let game_lock = workspace.join("latticeaxiom.lock");
     let shell_images = load_lock_verified_images_at(workspace, &shell_lock)?;
     let _game_images = load_lock_verified_images_at(workspace, &game_lock)?;
-    let launch_root = ensure_launch_root(workspace)?;
+    let settings_revision = load_confirmed_settings_revision(workspace)?;
+    let launch_root = isolate_unresumable_launcher_state(
+        workspace,
+        shell_images.product_lock_hash(),
+        settings_revision,
+    )?;
     let mut intent_store = FileLaunchIntentStore::open(&launch_root)?;
     let mut exit_store = FileChildExitStore::open(&launch_root)?;
     let now_ms = unix_now_ms();
-    let settings_revision = load_confirmed_settings_revision(workspace)?;
     let mut supervisor = SupervisorMachine::new(SupervisorConfigV1::new(
         shell_images.product_lock_hash(),
         now_ms,
@@ -112,8 +117,6 @@ fn retire_completed_run(
     ) {
         return Ok(());
     }
-    let history = workspace.join("run/launcher-history");
-    fs::create_dir_all(&history).map_err(|source| ProductSupervisorError::Workspace { source })?;
     let bytes = serde_json::to_vec_pretty(report).map_err(|error| {
         ProductSupervisorError::Client(ProductionClientError::ChildHandoff {
             reason: error.to_string(),
@@ -121,6 +124,47 @@ fn retire_completed_run(
     })?;
     fs::write(root.join("supervisor-result.json"), bytes)
         .map_err(|source| ProductSupervisorError::Workspace { source })?;
+    archive_launch_root(workspace, root)
+}
+
+/// Archives a leftover recovery claim that cannot validate against the current lock.
+fn isolate_unresumable_launcher_state(
+    workspace: &Path,
+    shell_lock_hash: CanonicalHash,
+    settings_revision: SettingTransactionRevision,
+) -> Result<PathBuf, ProductSupervisorError> {
+    let launch_root = ensure_launch_root(workspace)?;
+    let resumable = recovery_claim_matches_boot(&launch_root, shell_lock_hash, settings_revision)?;
+    if !resumable {
+        archive_launch_root(workspace, &launch_root)?;
+    }
+    ensure_launch_root(workspace)
+}
+
+fn recovery_claim_matches_boot(
+    launch_root: &Path,
+    shell_lock_hash: CanonicalHash,
+    settings_revision: SettingTransactionRevision,
+) -> Result<bool, ProductSupervisorError> {
+    let mut store = FileLaunchIntentStore::open(launch_root)?;
+    Ok(match store.read()? {
+        IntentSlot::Occupied {
+            disposition: SlotDisposition::RecoveryClaimed,
+            bytes,
+            ..
+        } => RecoveryLaunchRequestV1::authenticate_at_rest(&bytes)
+            .ok()
+            .is_some_and(|request| {
+                request.shell_lock_hash() == shell_lock_hash
+                    && request.confirmed_setting_transaction_revision() == settings_revision
+            }),
+        _ => true,
+    })
+}
+
+fn archive_launch_root(workspace: &Path, root: &Path) -> Result<(), ProductSupervisorError> {
+    let history = workspace.join("run/launcher-history");
+    fs::create_dir_all(&history).map_err(|source| ProductSupervisorError::Workspace { source })?;
     fs::rename(root, history.join(WorldId::new_v4().to_string()))
         .map_err(|source| ProductSupervisorError::Workspace { source })
 }
@@ -587,10 +631,16 @@ fn recovery_ack(
 
 #[cfg(test)]
 mod tests {
-    use latticeaxiom_core::StableId;
+    use latticeaxiom_core::{CanonicalHash, StableId, canonical_json_bytes, canonical_json_hash};
     use latticeaxiom_input::BindingProfileV1;
+    use latticeaxiom_launcher::{
+        AtomicLaunchIntentStore, FileLaunchIntentStore, IntentSlot, LaunchFailureCodeV1,
+        LaunchFailureReceiptV1, LaunchGeneration, LaunchPhaseV1, ProcessSupervisorIdentityV1,
+        RECOVERY_REQUEST_SCHEMA_VERSION, RecoveryLaunchRequestV1, RecoveryReasonV1,
+        SettingTransactionRevision, SlotDisposition,
+    };
 
-    use super::load_confirmed_settings_revision;
+    use super::{isolate_unresumable_launcher_state, load_confirmed_settings_revision};
     use crate::settings::HostUserSettings;
 
     #[test]
@@ -612,6 +662,119 @@ mod tests {
             .unwrap_or_else(|error| panic!("supervisor settings reopen: {error}"));
         assert_eq!(loaded.get(), settings.transaction_revision());
         assert_eq!(loaded.get(), 1);
+    }
+
+    #[test]
+    fn stale_recovery_claim_is_archived_after_a_shell_lock_change() {
+        let workspace = TestDirectory::create();
+        let previous = CanonicalHash::digest(b"previous-shell");
+        let current = CanonicalHash::digest(b"current-shell");
+        persist_recovery_claim(
+            workspace.path(),
+            previous,
+            SettingTransactionRevision::new(1),
+        );
+
+        let isolated = isolate_unresumable_launcher_state(
+            workspace.path(),
+            current,
+            SettingTransactionRevision::new(1),
+        )
+        .unwrap_or_else(|error| panic!("stale recovery isolation: {error}"));
+        let mut store = FileLaunchIntentStore::open(&isolated)
+            .unwrap_or_else(|error| panic!("isolated store: {error}"));
+        assert!(matches!(store.read(), Ok(IntentSlot::Empty)));
+        let history = std::fs::read_dir(workspace.path().join("run").join("launcher-history"))
+            .unwrap_or_else(|error| panic!("history directory: {error}"))
+            .count();
+        assert_eq!(history, 1);
+    }
+
+    #[test]
+    fn matching_recovery_claim_is_left_in_place() {
+        let workspace = TestDirectory::create();
+        let shell = CanonicalHash::digest(b"current-shell");
+        persist_recovery_claim(workspace.path(), shell, SettingTransactionRevision::new(1));
+
+        let isolated = isolate_unresumable_launcher_state(
+            workspace.path(),
+            shell,
+            SettingTransactionRevision::new(1),
+        )
+        .unwrap_or_else(|error| panic!("matching recovery isolation: {error}"));
+        let mut store = FileLaunchIntentStore::open(&isolated)
+            .unwrap_or_else(|error| panic!("matching store: {error}"));
+        assert_eq!(
+            store
+                .read()
+                .unwrap_or_else(|error| panic!("matching slot: {error}"))
+                .disposition(),
+            Some(SlotDisposition::RecoveryClaimed)
+        );
+        assert!(
+            !workspace
+                .path()
+                .join("run")
+                .join("launcher-history")
+                .is_dir()
+        );
+    }
+
+    fn persist_recovery_claim(
+        workspace: &std::path::Path,
+        shell_lock_hash: CanonicalHash,
+        settings_revision: SettingTransactionRevision,
+    ) {
+        let launch_root = workspace.join("run").join("launcher");
+        std::fs::create_dir_all(&launch_root)
+            .unwrap_or_else(|error| panic!("launcher directory: {error}"));
+        let root = launch_root
+            .canonicalize()
+            .unwrap_or_else(|error| panic!("canonical launcher: {error}"));
+        let mut store = FileLaunchIntentStore::open(&root)
+            .unwrap_or_else(|error| panic!("intent store: {error}"));
+        store
+            .claim_recovery(
+                None,
+                &sealed_recovery_request_bytes(shell_lock_hash, settings_revision),
+            )
+            .unwrap_or_else(|error| panic!("recovery claim: {error}"));
+    }
+
+    fn sealed_recovery_request_bytes(
+        shell_lock_hash: CanonicalHash,
+        settings_revision: SettingTransactionRevision,
+    ) -> Vec<u8> {
+        let failure = LaunchFailureReceiptV1::new(
+            None,
+            None,
+            None,
+            LaunchPhaseV1::IntentRead,
+            LaunchFailureCodeV1::IntentMissing,
+        );
+        let mut body = serde_json::json!({
+            "schema_version": RECOVERY_REQUEST_SCHEMA_VERSION,
+            "recovery_generation": LaunchGeneration::FIRST,
+            "source_generation": serde_json::Value::Null,
+            "source_blob_hash": serde_json::Value::Null,
+            "reason": RecoveryReasonV1::InvalidIntent,
+            "shell_lock_hash": shell_lock_hash,
+            "confirmed_setting_transaction_revision": settings_revision,
+            "supervisor_identity": ProcessSupervisorIdentityV1::new(CanonicalHash::digest(b"test-supervisor")),
+            "failure": failure,
+        });
+        let checksum = canonical_json_hash(&body).expect("recovery body hash");
+        let Some(object) = body.as_object_mut() else {
+            panic!("recovery body is an object");
+        };
+        object.insert(
+            "checksum".to_owned(),
+            serde_json::to_value(checksum).expect("checksum value"),
+        );
+        let bytes = canonical_json_bytes(&body).expect("canonical recovery bytes");
+        RecoveryLaunchRequestV1::authenticate_at_rest(&bytes)
+            .expect("recovery request authenticates");
+        bytes
     }
 
     struct TestDirectory(tempfile::TempDir);

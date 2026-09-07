@@ -224,6 +224,7 @@ fn update(world: &mut World) {
         }
         models.finished = false;
     }
+    let mut pending_readback = None;
     if let Some((key, _, age)) = &mut models.active {
         *age += 1;
         if *age == 240 {
@@ -231,13 +232,7 @@ fn update(world: &mut World) {
             models.finished = true;
         }
         if *age == 4 {
-            world
-                .spawn((
-                    Readback::texture(models.target.clone()),
-                    PreviewReadback(key.clone()),
-                    super::InProcessPlayEntity,
-                ))
-                .observe(capture);
+            pending_readback = Some((key.clone(), models.target.clone()));
         }
     } else {
         let next = world
@@ -309,6 +304,15 @@ fn update(world: &mut World) {
             ));
     }
     world.insert_resource(models);
+    if let Some((key, target)) = pending_readback {
+        world
+            .spawn((
+                Readback::texture(target),
+                PreviewReadback(key),
+                super::InProcessPlayEntity,
+            ))
+            .observe(capture);
+    }
 }
 
 fn setup_cameras(world: &mut World, models: &mut Models) {
@@ -378,8 +382,13 @@ fn capture(
     mut commands: Commands<'_, '_>,
     pending: Query<'_, '_, &PreviewReadback>,
     images: Res<'_, PreviewImages>,
-    mut models: ResMut<'_, Models>,
+    // GPU readback can complete while `update` has exclusive world access without this resource.
+    models: Option<ResMut<'_, Models>>,
 ) {
+    let Some(mut models) = models else {
+        commands.entity(event.entity).despawn();
+        return;
+    };
     let Ok(request) = pending.get(event.entity) else {
         return;
     };

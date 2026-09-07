@@ -24,8 +24,9 @@ fn main() -> ExitCode {
             }
             let _ = writeln!(
                 io::stderr().lock(),
-                "event=supervisor_stopped component=supervisor outcome={:?}",
-                report.outcome()
+                "event=supervisor_stopped component=supervisor outcome={:?} failures={:?}",
+                report.outcome(),
+                report.failures()
             );
             if matches!(
                 report.outcome(),
