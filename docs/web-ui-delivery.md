@@ -43,3 +43,56 @@ This decision supersedes the native-only UI choice recorded in
 `REBUILD_PROGRESS.md` and `REBUILD_PROPOSAL.md`; historical results remain history.
 Windows is the first native backend acceptance target. Each further platform
 requires its own embedding and input evidence.
+
+## Delivered boundaries
+
+The first-party UI uses the existing semantic shell actions and domain methods,
+including separate checkpoint-save and save-return operations. The bridge
+rejects stale sessions, deduplicates request IDs and checks inventory revisions.
+Package-owned endpoints may be explicitly registered through
+`EngineInstance::register_web_endpoint`; the generic transport registry itself
+does not depend on Bevy. This does not claim portable-native module loading.
+
+Selected packages can declare `data/settings-v1.json`. Catalog compilation
+checks the declaring owner, and the UI projects constraints, predicates and
+authority. User values and input bindings publish in one durable transaction;
+failed publication rolls back reversible runtime effects or requires restart
+when visibility is uncertain. World-scoped authority is never granted by UI.
+
+Inventory names, categories, recipes and resource colors are cached per world.
+Item and recipe pages have row and byte budgets. Known UI theme colors can be
+provided by client resource materials named `latticeaxiom:ui/<token>`; arbitrary
+CSS, URLs and executable resource-pack code are not accepted through this path.
+
+Windows child-WebView composition removes `WS_CLIPCHILDREN` from its parent for
+the view lifetime and restores it on teardown. Native keyboard-focus proof is
+reconciled with the Bevy input state after child focus transfers.
+
+## Verification record
+
+- Browser build and six protocol/extension/theme tests pass.
+- Engine library suite passes 184 tests; repository tooling passes 22 tests.
+- Workspace compilation passes for all targets, and frozen native source
+  preparation validates the selected Web and Rust package closure.
+- Real WebView2 smoke verifies local scripts, IPC, clipping-style lifetime and
+  foreground-focus behavior. Runtime strict Clippy passes.
+- In an isolated copy of the runtime, native mouse navigation, Chinese text
+  entry, world creation, actual inventory movement, module-setting persistence,
+  checkpoint save and durable save-return were exercised.
+- Initial GPU-window testing found white child-window composition and a stale
+  input focus gate. Both have code fixes and require final user window testing.
+- The user requested to take over further native visual/input debugging. Final
+  scene visibility, gameplay capture, Escape, DPI/fullscreen, controller and
+  optimized performance acceptance are therefore not claimed by unit tests.
+  Direct window close also needs manual verification: the shell now tracks the
+  live world session so its teardown saves a world opened after app startup.
+
+The opt-in lifecycle harness uses domain commands rather than removed native
+widgets. Same-window lifecycle verification requires a fresh nonce-bound,
+checksummed receipt emitted after actual durable disk publication; the existing
+launcher shell-role receipt restrictions remain unchanged. Scene captures
+explicitly exclude the WebView and cannot stand in for whole-window inspection.
+
+Incremental rustc code generation crashed once on Windows. Rebuilding with
+`CARGO_INCREMENTAL=0` completed successfully; no compiler/toolchain upgrade was
+made. Original saved-world bytes were unchanged during isolated acceptance.

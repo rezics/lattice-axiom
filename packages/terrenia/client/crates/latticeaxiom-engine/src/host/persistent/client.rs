@@ -9,9 +9,7 @@ use bevy::{
     ecs::schedule::{IntoScheduleConfigs, common_conditions::resource_exists},
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, block_on},
-    ui_widgets::{Activate, Button},
 };
-use latticeaxiom_client_ui::desktop_style as style;
 use latticeaxiom_core::{CanonicalHash, canonical_json_hash};
 use latticeaxiom_launcher::{
     ChildExitKindV1, ChildExitReportDraftV1, ChildExitReportV1, ChildRoleV1,
@@ -44,6 +42,9 @@ struct SaveState {
     error: Option<String>,
     task: Option<Task<Result<(), String>>>,
     reopen: bool,
+    return_to_shell: bool,
+    paused_before_save: bool,
+    checkpoints: u64,
 }
 
 /// Physical world session retained through window-runner teardown.
@@ -62,6 +63,17 @@ pub(crate) struct ReturnToShell;
 pub(crate) struct InProcessShellPlay;
 
 impl PersistentGameSession {
+    pub(crate) fn web_status(&self) -> serde_json::Value {
+        match self.state.lock() {
+            Ok(state) => {
+                serde_json::json!({"requested":state.requested,"saved":state.saved,"error":state.error,"returnToShell":state.return_to_shell,"checkpoints":state.checkpoints})
+            }
+            Err(_) => {
+                serde_json::json!({"requested":true,"saved":false,"error":"Save state unavailable"})
+            }
+        }
+    }
+
     pub(crate) fn shutdown_requested(&self) -> bool {
         self.state.lock().map_or(true, |state| state.requested)
     }
@@ -71,6 +83,22 @@ impl PersistentGameSession {
             && state.task.is_none()
             && !state.saved
         {
+            state.requested = true;
+            state.return_to_shell = true;
+            state.reopen = state.error.is_some();
+            state.error = None;
+        }
+    }
+
+    /// Save without leaving the active world. A retry retains its original goal.
+    pub(crate) fn request_checkpoint(&self) {
+        if let Ok(mut state) = self.state.lock()
+            && state.task.is_none()
+            && !state.saved
+        {
+            if !state.requested {
+                state.return_to_shell = false;
+            }
             state.requested = true;
             state.reopen = state.error.is_some();
             state.error = None;
@@ -103,9 +131,8 @@ impl PersistentGameSession {
 pub(in crate::host::persistent) fn add_save_systems(app: &mut bevy::prelude::App) {
     app.add_systems(
         bevy::prelude::Update,
-        (poll_save, show_save_status).run_if(resource_exists::<PersistentGameSession>),
-    )
-    .add_observer(retry_save);
+        poll_save.run_if(resource_exists::<PersistentGameSession>),
+    );
 }
 
 pub(crate) fn install_disk_session(
@@ -156,7 +183,7 @@ pub(crate) fn insert_disk_session_on_world(
         .ok_or_else(|| persistence_error("saved world is not ready for writer activation"))?;
     let plan = writable_open_plan(entry.world, permit);
     let open_plan = canonical_json_hash(&plan).map_err(persistence_error)?;
-    world.insert_resource(PersistentGameSession {
+    let session = PersistentGameSession {
         context: SaveContext {
             disk,
             storage,
@@ -168,7 +195,13 @@ pub(crate) fn insert_disk_session_on_world(
             in_process_shell,
         },
         state: Arc::new(Mutex::new(SaveState::default())),
-    });
+    };
+    if let Some(shell) = world.get_resource::<crate::client::ShellExitContext>() {
+        shell
+            .set_active_session(Some(session.clone()))
+            .map_err(persistence_error)?;
+    }
+    world.insert_resource(session);
     Ok(())
 }
 
@@ -179,10 +212,14 @@ fn persistence_error(error: impl std::fmt::Display) -> ProductionClientError {
 }
 
 fn save(context: &SaveContext, return_to_shell: bool) -> Result<(), String> {
-    save_inner(context, return_to_shell).map_err(|error| error.to_string())
+    save_inner(context, return_to_shell, true).map_err(|error| error.to_string())
 }
 
-fn save_inner(context: &SaveContext, return_to_shell: bool) -> Result<(), ProductionClientError> {
+fn save_inner(
+    context: &SaveContext,
+    return_to_shell: bool,
+    publish_report: bool,
+) -> Result<(), ProductionClientError> {
     let mut writer = SealedWorldWriterHost::new(context.storage.clone());
     let preflight = writer
         .preflight(context.entry.world)
@@ -210,7 +247,29 @@ fn save_inner(context: &SaveContext, return_to_shell: bool) -> Result<(), Produc
         .disk
         .publish(&context.storage, &entry)
         .map_err(persistence_error)?;
-    if !context.in_process_shell {
+    #[cfg(feature = "development")]
+    if std::env::var_os("LATTICEAXIOM_LIFECYCLE_QA").is_some()
+        && context.workspace.join(".latticeaxiom-qa").is_file()
+    {
+        // This probe is emitted only after the actual disk publication succeeds.
+        // It does not change the launcher's shell-role or world-role contracts.
+        let revision = frontier.durable().get();
+        let mut proof = serde_json::json!({
+            "schema":"latticeaxiom.in-process-durable-world.v1",
+            "world_id":context.entry.world,"revision":revision,"written_revision":frontier.written().get(),
+            "world_lock_hash":context.entry.game_lock,"return_to_shell":return_to_shell,
+            "nonce":std::env::var("LATTICEAXIOM_LIFECYCLE_NONCE").unwrap_or_default()
+        });
+        proof["checksum"] =
+            serde_json::json!(canonical_json_hash(&proof).map_err(persistence_error)?);
+        let bytes = serde_json::to_vec(&proof).map_err(persistence_error)?;
+        std::fs::write(
+            context.workspace.join("lifecycle-durable-world.json"),
+            bytes,
+        )
+        .map_err(persistence_error)?;
+    }
+    if publish_report && !context.in_process_shell {
         publish_exit(context, frontier.durable().get(), return_to_shell)?;
     }
     Ok(())
@@ -295,15 +354,18 @@ fn poll_save(
         return;
     };
     if state.requested && state.task.is_none() && !state.saved && state.error.is_none() {
+        state.paused_before_save = pause.is_paused();
         pause.set(true);
         let context = session.context.clone();
         let reopen = state.reopen;
+        let return_to_shell = state.return_to_shell;
         state.reopen = false;
         state.task = Some(AsyncComputeTaskPool::get().spawn(async move {
             if reopen {
                 context.disk.reopen().map_err(|error| error.to_string())?;
             }
-            save(&context, true)
+            save_inner(&context, return_to_shell, return_to_shell)
+                .map_err(|error| error.to_string())
         }));
     }
     if state.task.as_ref().is_some_and(Task::is_finished) {
@@ -312,11 +374,17 @@ fn poll_save(
         };
         match block_on(task) {
             Ok(()) => {
-                state.saved = true;
-                if session.context.in_process_shell {
-                    commands.insert_resource(ReturnToShell);
+                if state.return_to_shell {
+                    state.saved = true;
+                    if session.context.in_process_shell {
+                        commands.insert_resource(ReturnToShell);
+                    } else {
+                        exits.write(AppExit::Success);
+                    }
                 } else {
-                    exits.write(AppExit::Success);
+                    state.requested = false;
+                    state.checkpoints = state.checkpoints.saturating_add(1);
+                    pause.set(state.paused_before_save);
                 }
             }
             Err(error) => {
@@ -324,115 +392,5 @@ fn poll_save(
                 state.error = Some(error);
             }
         }
-    }
-}
-
-#[derive(Component)]
-struct SaveOverlay;
-#[derive(Component)]
-struct SaveMessage;
-#[derive(Component)]
-struct SaveRetry;
-
-type RetryControls<'w, 's> =
-    Query<'w, 's, (Entity, &'static mut Node, &'static mut BorderColor), With<SaveRetry>>;
-
-#[allow(clippy::needless_pass_by_value)]
-fn show_save_status(
-    mut commands: Commands<'_, '_>,
-    session: Res<'_, PersistentGameSession>,
-    roots: Query<'_, '_, Entity, With<SaveOverlay>>,
-    mut messages: Query<'_, '_, &mut Text, With<SaveMessage>>,
-    mut retries: RetryControls<'_, '_>,
-    mut focus: ResMut<'_, bevy::input_focus::InputFocus>,
-) {
-    let Ok(state) = session.state.lock() else {
-        return;
-    };
-    if !state.requested {
-        return;
-    }
-    let message = state.error.as_ref().map_or_else(
-        || "Saving your world…".to_owned(),
-        |error| format!("Save failed: {error}"),
-    );
-    if roots.is_empty() {
-        commands
-            .spawn((
-                SaveOverlay,
-                bevy::input_focus::tab_navigation::TabGroup::modal(),
-                bevy::ui::FocusPolicy::Block,
-                GlobalZIndex(10000),
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(20.0),
-                    ..default()
-                },
-                BackgroundColor(style::CANVAS),
-            ))
-            .with_children(|root| {
-                root.spawn((
-                    SaveMessage,
-                    Text::new(message.clone()),
-                    crate::ui_font::ui_text_font(24.0),
-                    TextColor(style::TEXT),
-                    Node {
-                        max_width: Val::Percent(80.0),
-                        ..default()
-                    },
-                ));
-                root.spawn((
-                    SaveRetry,
-                    Button,
-                    bevy::input_focus::tab_navigation::TabIndex(0),
-                    Node {
-                        display: Display::None,
-                        ..style::button_node()
-                    },
-                    BackgroundColor(style::RAISED),
-                    BorderColor::all(style::BORDER),
-                ))
-                .with_children(|button| {
-                    button.spawn((
-                        Text::new("Retry save"),
-                        crate::ui_font::ui_text_font(20.0),
-                        TextColor(style::TEXT),
-                    ));
-                });
-            });
-    }
-    for mut text in &mut messages {
-        if text.0 != message {
-            text.0.clone_from(&message);
-        }
-    }
-    for (entity, mut node, mut border) in &mut retries {
-        let display = if state.error.is_some() {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        if node.display != display {
-            node.display = display;
-            if display == Display::Flex {
-                focus.set(entity, bevy::input_focus::FocusCause::Navigated);
-            }
-        }
-        *border = BorderColor::all(style::focus_border(focus.get() == Some(entity)));
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn retry_save(
-    event: On<'_, '_, Activate>,
-    retries: Query<'_, '_, (), With<SaveRetry>>,
-    session: Res<'_, PersistentGameSession>,
-) {
-    if retries.contains(event.entity) {
-        session.request_save();
     }
 }

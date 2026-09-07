@@ -21,6 +21,9 @@ export function Shell({ shell }: { shell: NonNullable<Snapshot["shell"]> }) {
     const home = route === "home";
     const title = titleByRoute[route] || shell.screen || "Terrenia";
     const back = nodes.find((n) => n.actions.includes("back"));
+    const selectedProfile = nodes.find(
+        (n) => n.id === "new-world/profile-status",
+    )?.value;
     return (
         <main className="shell">
             <aside className="sidebar">
@@ -94,6 +97,7 @@ export function Shell({ shell }: { shell: NonNullable<Snapshot["shell"]> }) {
                                 key={n.id}
                                 node={n}
                                 worldName={shell.worldName}
+                                selectedProfile={selectedProfile}
                             />
                         ))}
                     {route === "worlds" &&
@@ -111,19 +115,33 @@ export function Shell({ shell }: { shell: NonNullable<Snapshot["shell"]> }) {
         </main>
     );
 }
-function NodeButton({ node }: { node: SemanticNode }) {
+function NodeButton({
+    node,
+    selected,
+}: {
+    node: SemanticNode;
+    selected?: boolean;
+}) {
     const [busy, setBusy] = useState(false);
+    const primary =
+        [
+            "home/continue",
+            "home/new-world",
+            "new-world/quick-create",
+            "quit/confirm",
+        ].includes(node.id) || node.id.endsWith("/play");
     return (
         <button
             className={
-                /continue|new-world|quick-create|\/play$|quit\/confirm/.test(
-                    node.id,
-                )
+                primary
                     ? "primary"
-                    : ""
+                    : selected === undefined
+                      ? ""
+                      : `profile-option ${selected ? "selected" : ""}`
             }
             disabled={node.state.disabled || busy}
             aria-busy={busy}
+            aria-pressed={selected}
             title={node.description || undefined}
             onClick={async () => {
                 setBusy(true);
@@ -145,9 +163,11 @@ function NodeButton({ node }: { node: SemanticNode }) {
 function Semantic({
     node,
     worldName,
+    selectedProfile,
 }: {
     node: SemanticNode;
     worldName: string;
+    selectedProfile?: string | null;
 }) {
     if (node.role === "text-input")
         return (
@@ -184,13 +204,23 @@ function Semantic({
                             key={child.id}
                             node={child}
                             worldName={worldName}
+                            selectedProfile={selectedProfile}
                         />
                     ))}
                 </div>
             </article>
         );
     if (node.role === "button" || node.actions.length)
-        return <NodeButton node={node} />;
+        return (
+            <NodeButton
+                node={node}
+                selected={
+                    node.id.startsWith("new-world/profile/")
+                        ? node.name === selectedProfile
+                        : undefined
+                }
+            />
+        );
     return (
         <div
             className={node.role === "alert" ? "notice" : "semantic-status"}

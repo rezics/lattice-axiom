@@ -2,6 +2,7 @@
 #![cfg(target_os = "windows")]
 
 use latticeaxiom_webview::{AssetBundle, WebViewHost};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::time::{Duration, Instant};
 use winit::{
     application::ApplicationHandler,
@@ -17,6 +18,7 @@ struct SmokeApp {
     window: Option<Window>,
     assets: AssetBundle,
     failure: Option<String>,
+    original_clip_children: bool,
 }
 
 impl ApplicationHandler for SmokeApp {
@@ -31,7 +33,16 @@ impl ApplicationHandler for SmokeApp {
                     .with_active(false)
                     .with_title("Lattice WebView protocol smoke"),
             )?;
+            self.original_clip_children = check_clipping(&window, false)?;
             let view = WebViewHost::attach(&window, self.assets.clone(), 480, 320)?;
+            assert!(
+                !check_clipping(&window, false)?,
+                "transparent host must retain the GPU parent surface"
+            );
+            assert!(
+                !check_clipping(&window, true)?,
+                "framework style changes must not reintroduce child clipping"
+            );
             self.window = Some(window);
             self.view = Some(view);
             Ok(())
@@ -63,6 +74,7 @@ fn local_assets_and_bidirectional_ipc_reach_the_native_runtime()
         window: None,
         assets: AssetBundle::from_directory(root.path())?,
         failure: None,
+        original_clip_children: false,
     };
     let mut events = EventLoop::builder().with_any_thread(true).build()?;
     let started = Instant::now();
@@ -97,5 +109,39 @@ fn local_assets_and_bidirectional_ipc_reach_the_native_runtime()
         acknowledged,
         "WebView2 did not complete the local protocol/IPC handshake within 15 seconds"
     );
+    drop(app.view.take());
+    let window = app.window.as_ref().ok_or("missing smoke window")?;
+    assert_eq!(
+        check_clipping(window, false)?,
+        app.original_clip_children,
+        "teardown must restore the original parent clipping bit"
+    );
     Ok(())
+}
+
+#[allow(unsafe_code)]
+fn check_clipping(
+    window: &Window,
+    request_clipping: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{
+            GWL_STYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_CLIPCHILDREN,
+        },
+    };
+    let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
+        return Err("not a Windows smoke window".into());
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+    let clipping = isize::try_from(WS_CLIPCHILDREN.0)?;
+    // SAFETY: this test owns a live hidden window on its creating thread. Only
+    // its own clipping bit is modified, simulating winit fullscreen style updates.
+    unsafe {
+        if request_clipping {
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+            SetWindowLongPtrW(hwnd, GWL_STYLE, style | clipping);
+        }
+        Ok(GetWindowLongPtrW(hwnd, GWL_STYLE) & clipping != 0)
+    }
 }

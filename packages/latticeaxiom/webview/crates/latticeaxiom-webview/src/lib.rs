@@ -8,6 +8,8 @@ mod assets;
 mod endpoints;
 #[cfg(target_os = "windows")]
 mod native;
+#[cfg(target_os = "windows")]
+mod parent_composition;
 
 pub use assets::AssetBundle;
 pub use endpoints::{
@@ -24,6 +26,22 @@ pub const MAX_PENDING_COMMANDS: usize = 256;
 pub const MAX_COMMAND_BYTES: usize = 64 * 1024;
 /// Maximum serialized state size for one JavaScript delivery.
 pub const MAX_STATE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Whether this exact native window currently owns foreground keyboard focus.
+///
+/// Call on the window's event-loop thread. Unlike the host's application-focus
+/// query, this returns false when focus belongs to a web child. Products can
+/// reconcile delayed window-framework focus events before capturing game input.
+#[must_use]
+pub fn window_has_focus(window: &impl HasWindowHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    return native::window_has_focus(window);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        false
+    }
+}
 
 /// Native transport, asset validation, or JSON failure.
 #[derive(Debug, thiserror::Error)]

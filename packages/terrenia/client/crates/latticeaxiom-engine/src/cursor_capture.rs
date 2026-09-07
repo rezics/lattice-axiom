@@ -195,7 +195,7 @@ fn capture_native_cursor(window_entity: Entity) -> Result<(), CursorCaptureBacke
         let native = windows
             .get_window(window_entity)
             .ok_or(CursorCaptureBackendError::WindowUnavailable)?;
-        if !native.has_focus() {
+        if !native_window_has_focus(native) {
             return Err(CursorCaptureBackendError::FocusLost);
         }
         let size = native.inner_size();
@@ -207,13 +207,24 @@ fn capture_native_cursor(window_entity: Entity) -> Result<(), CursorCaptureBacke
         native
             .set_cursor_grab(WinitCursorGrabMode::Locked)
             .map_err(CursorCaptureBackendError::Capture)?;
-        if !native.has_focus() {
+        if !native_window_has_focus(native) {
             let _ = native.set_cursor_grab(WinitCursorGrabMode::None);
             return Err(CursorCaptureBackendError::FocusLost);
         }
         native.set_cursor_visible(false);
         Ok(())
     })
+}
+
+fn native_window_has_focus(window: &winit::window::Window) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        latticeaxiom_webview::window_has_focus(window)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.has_focus()
+    }
 }
 
 fn release_native_cursor(window_entity: Entity) -> Result<(), CursorCaptureBackendError> {

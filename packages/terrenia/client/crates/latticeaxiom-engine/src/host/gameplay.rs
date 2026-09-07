@@ -627,6 +627,21 @@ impl ProductionGameplay {
             .collect()
     }
 
+    /// Checks one visible recipe without scanning the entire catalog.
+    pub(super) fn recipe_is_craftable(
+        &self,
+        id: &RecipeId,
+        workstation: Option<&WorkstationId>,
+    ) -> bool {
+        workstation.is_none_or(|required| self.bound_workstations.contains(required))
+            && self
+                .catalog()
+                .recipes()
+                .get(id)
+                .is_some_and(|recipe| recipe.workstation.as_ref() == workstation)
+            && self.recipe_matches(id).is_ok()
+    }
+
     pub(super) fn bind_workstation(
         &mut self,
         workstation: WorkstationId,

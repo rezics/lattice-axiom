@@ -2317,6 +2317,20 @@ impl ProductionSpine {
         )
     }
 
+    /// Checks one presented recipe without enumerating the full recipe catalog.
+    pub(crate) fn recipe_is_craftable(
+        &self,
+        id: &RecipeId,
+        workstation: Option<&WorkstationId>,
+    ) -> bool {
+        self.lock_inner().is_ok_and(|inner| {
+            inner
+                .gameplay
+                .as_ref()
+                .is_some_and(|session| session.recipe_is_craftable(id, workstation))
+        })
+    }
+
     /// Catalog workstation contract realized by `block`, when bound.
     #[must_use]
     pub fn block_workstation(&self, block: &BlockId) -> Option<WorkstationId> {

@@ -1,4 +1,7 @@
-//! Opt-in native GPU capture for visual acceptance. Output is never source content.
+//! Opt-in Bevy scene capture. Embedded WebView content is not captured.
+//!
+//! These images cannot verify Web UI appearance, DOM interaction, or window
+//! composition. Output is never source content.
 
 use std::path::PathBuf;
 
@@ -12,10 +15,6 @@ use bevy::{
 struct CaptureRequest {
     path: PathBuf,
     requested: bool,
-    text: Option<String>,
-    typed: bool,
-    action: Option<String>,
-    acted: bool,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -41,23 +40,19 @@ pub(crate) fn install(app: &mut App) {
         bevy::log::error!(%error, "capture output directory could not be created");
         return;
     }
+    if std::env::var_os("LATTICEAXIOM_CAPTURE_TEXT").is_some()
+        || std::env::var_os("LATTICEAXIOM_CAPTURE_ACTION").is_some()
+    {
+        bevy::log::warn!(
+            "CAPTURE_TEXT and CAPTURE_ACTION no longer inject removed native widgets; use the gated lifecycle domain exercise or test the Web UI directly"
+        );
+    }
+    bevy::log::info!("Capture records the Bevy scene only; embedded WebView content is excluded");
     app.insert_resource(CaptureRequest {
         path,
         requested: false,
-        text: std::env::var("LATTICEAXIOM_CAPTURE_TEXT").ok(),
-        typed: false,
-        action: std::env::var("LATTICEAXIOM_CAPTURE_ACTION").ok(),
-        acted: false,
     })
-    .add_systems(
-        Update,
-        (
-            inject_capture_text,
-            inject_capture_action,
-            capture_once,
-            capture_scene_probe,
-        ),
-    );
+    .add_systems(Update, (capture_once, capture_scene_probe));
 }
 
 /// A presentation-only camera override applied before medium/fog selection.
@@ -120,67 +115,11 @@ fn capture_scene_probe(
         "translation": transform.translation().to_array(), "visible": visible.map(|value| value.get())
     })).collect::<Vec<_>>();
     let timings = diagnostics.iter().map(|d| serde_json::json!({"path": d.path().as_str(), "mean": d.average(), "smoothed": d.smoothed()})).collect::<Vec<_>>();
-    let report = serde_json::json!({"frame": frame.0, "performance": monitor.report(), "diagnostics": timings, "world": spine.world_id(), "chunk_edge": spine.chunk_edge(), "player": pose.translation.to_array(),
+    let report = serde_json::json!({"scope":"bevy-scene-only","webview_captured":false,"frame": frame.0, "performance": monitor.report(), "diagnostics": timings, "world": spine.world_id(), "chunk_edge": spine.chunk_edge(), "player": pose.translation.to_array(),
         "resident": format!("{:?}", spine.resident_chunks()), "cameras": camera_rows, "mesh_count": meshes.iter().count(), "meshes": mesh_rows});
     if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
         let _ = std::fs::write(request.path.with_extension("json"), bytes);
     }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn inject_capture_action(
-    mut commands: Commands<'_, '_>,
-    frame: Res<'_, FrameCount>,
-    mut request: ResMut<'_, CaptureRequest>,
-    controls: bevy::prelude::Query<
-        '_,
-        '_,
-        (bevy::prelude::Entity, &bevy::prelude::Name),
-        bevy::prelude::With<bevy::ui_widgets::Button>,
-    >,
-) {
-    if frame.0 < 65 || request.acted {
-        return;
-    }
-    let Some(action) = &request.action else {
-        return;
-    };
-    if let Some((entity, _)) = controls.iter().find(|(_, name)| name.as_str() == action) {
-        commands.trigger(bevy::ui_widgets::Activate { entity });
-        request.acted = true;
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn inject_capture_text(
-    frame: Res<'_, FrameCount>,
-    mut request: ResMut<'_, CaptureRequest>,
-    windows: bevy::prelude::Query<
-        '_,
-        '_,
-        bevy::prelude::Entity,
-        bevy::prelude::With<bevy::window::PrimaryWindow>,
-    >,
-    mut input: MessageWriter<'_, bevy::input::keyboard::KeyboardInput>,
-) {
-    if frame.0 < 45 || request.typed {
-        return;
-    }
-    let Some(text) = request.text.clone() else {
-        return;
-    };
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    input.write(bevy::input::keyboard::KeyboardInput {
-        key_code: bevy::input::keyboard::KeyCode::KeyA,
-        logical_key: bevy::input::keyboard::Key::Character(text.clone().into()),
-        state: bevy::input::ButtonState::Pressed,
-        text: Some(text.into()),
-        repeat: false,
-        window,
-    });
-    request.typed = true;
 }
 
 #[allow(clippy::needless_pass_by_value)]

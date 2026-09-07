@@ -1,7 +1,8 @@
-"""Exercise two native shell/world/save/quit sessions in a fresh isolated workspace."""
+"""Verify two isolated domain lifecycle runs; this does not prove Web UI rendering."""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,19 +12,79 @@ import subprocess
 import uuid
 
 
-def verify_report(report: dict, previous: dict | None) -> dict:
+def verify_domain_evidence(evidence: dict, durable: dict) -> None:
+    if (evidence.get('schema') != 'latticeaxiom.lifecycle-domain-evidence.v1'
+            or evidence.get('scope') != 'domain-commands-and-state'):
+        raise RuntimeError('missing domain lifecycle evidence schema')
+    events = evidence.get('events', [])
+    if any(event.get('event') == 'failed' for event in events):
+        raise RuntimeError('domain lifecycle reported a failure')
+    entered = next((i for i, event in enumerate(events) if event.get('event') == 'world-entered'), None)
+    saving = next((i for i, event in enumerate(events) if event.get('event') == 'command-accepted'
+                   and event.get('data', {}).get('method') == 'game.exit'), None)
+    returned = next((i for i, event in enumerate(events) if event.get('event') == 'returned-to-shell'), None)
+    completed = next((i for i, event in enumerate(events) if event.get('event') == 'completed'
+                      and event.get('data', {}).get('command') == 'app.quit'), None)
+    if any(index is None for index in (entered, saving, returned, completed)):
+        raise RuntimeError('domain lifecycle lacks world -> save-return -> shell -> quit evidence')
+    if not entered < saving < returned < completed:
+        raise RuntimeError('domain lifecycle transitions occurred out of order')
+    if events[entered]['data'].get('world') != durable['world_id']:
+        raise RuntimeError('domain world differs from the physically durable receipt')
+    if events[entered]['data'].get('mode') != 'game' or events[returned]['data'].get('mode') != 'shell':
+        raise RuntimeError('domain lifecycle did not enter the game and return to the shell')
+
+
+def verify_durable_probe(probe: dict, nonce: str, state: dict) -> dict:
+    keys = {'schema', 'world_id', 'revision', 'written_revision', 'world_lock_hash',
+            'return_to_shell', 'nonce', 'checksum'}
+    if set(probe) != keys or probe['schema'] != 'latticeaxiom.in-process-durable-world.v1':
+        raise RuntimeError('missing in-process durable world probe schema')
+    payload = {key: value for key, value in probe.items() if key != 'checksum'}
+    checksum = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                                         ensure_ascii=False).encode('utf-8')).hexdigest()
+    if probe['checksum'] != checksum:
+        raise RuntimeError('durable world probe checksum does not match')
+    if not nonce or probe['nonce'] != nonce:
+        raise RuntimeError('durable world probe is not from this run')
+    if (type(probe['revision']) is not int or probe['revision'] <= 0
+            or type(probe['written_revision']) is not int
+            or probe['written_revision'] != probe['revision']):
+        raise RuntimeError('probe lacks matching positive physically durable and written revisions')
+    if probe['return_to_shell'] is not True:
+        raise RuntimeError('durable probe does not prove save and return to shell')
+    if state.get('world') != probe['world_id'] or state.get('lock') != probe['world_lock_hash']:
+        raise RuntimeError('durable probe differs from the observed world identity or lock')
+    return {'world_id': probe['world_id'], 'revision': probe['revision']}
+
+
+def verify_report(report: dict, previous: dict | None, domain: dict | None = None,
+                  probe: dict | None = None, nonce: str | None = None,
+                  state: dict | None = None) -> dict:
     outcome = report['outcome']
     if outcome['outcome'] != 'product-exited' or outcome.get('exit_kind') != 'shell-quit' or report['failures']:
         raise RuntimeError(f"native lifecycle failed: {outcome}; {report['failures']}")
-    if [hop['role']['kind'] for hop in report['hops']] != ['shell', 'world', 'shell']:
-        raise RuntimeError('expected shell -> world -> shell, followed by product exit')
-    durable = report['last_durable_world']
-    if not durable or durable['revision'] <= 0 or durable != report['last_written_world']:
-        raise RuntimeError('exit lacks a matching physically durable world receipt')
+    roles = [hop['role']['kind'] for hop in report['hops']]
+    if roles not in (['shell'], ['shell', 'world', 'shell']):
+        raise RuntimeError('expected one same-window shell process or the legacy shell/world/shell process sequence')
+    if roles == ['shell']:
+        if domain is None:
+            raise RuntimeError('a same-window process requires domain transition evidence')
+        if report.get('last_durable_world') or report.get('last_written_world'):
+            raise RuntimeError('a shell report must not claim a world-process durability receipt')
+        if probe is None or nonce is None or state is None:
+            raise RuntimeError('same-window exit lacks a physically durable publication probe')
+        durable = verify_durable_probe(probe, nonce, state)
+    else:
+        durable = report['last_durable_world']
+        if not durable or durable['revision'] <= 0 or durable != report['last_written_world']:
+            raise RuntimeError('exit lacks a matching physically durable world receipt')
     if previous and durable['world_id'] != previous['world_id']:
         raise RuntimeError('second run did not Continue the same saved world')
     if previous and durable['revision'] < previous['revision']:
         raise RuntimeError('second run regressed the durable revision')
+    if domain is not None:
+        verify_domain_evidence(domain, durable)
     return durable
 
 
@@ -59,8 +120,13 @@ def main() -> None:
     previous = None
     previous_state = None
     for number in (1, 2):
+        nonce = str(uuid.uuid4())
+        environment['LATTICEAXIOM_LIFECYCLE_NONCE'] = nonce
         if number == 2 and args.replacement_lock:
             shutil.copy2(args.replacement_lock.resolve(strict=True), output / 'latticeaxiom.lock')
+        # A successful second run must produce fresh evidence, never reuse run one.
+        for name in ('lifecycle-report.json', 'lifecycle-world-state.json', 'lifecycle-domain-evidence.json', 'lifecycle-durable-world.json'):
+            (output / name).unlink(missing_ok=True)
         with (output / f'lifecycle-{number}.log').open('w', encoding='utf-8') as log:
             process = subprocess.Popen([str(binary)], cwd=output, env=environment, stdout=log,
                                        stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
@@ -79,9 +145,18 @@ def main() -> None:
         report_path = output / 'lifecycle-report.json'
         report = json.loads(report_path.read_text(encoding='utf-8'))
         shutil.copy2(report_path, output / f'lifecycle-{number}.json')
-        previous = verify_report(report, previous)
+        domain_path = output / 'lifecycle-domain-evidence.json'
+        domain = json.loads(domain_path.read_text(encoding='utf-8'))
+        shutil.copy2(domain_path, output / f'lifecycle-domain-evidence-{number}.json')
         state_path = output / 'lifecycle-world-state.json'
         state = json.loads(state_path.read_text(encoding='utf-8'))
+        probe_path = output / 'lifecycle-durable-world.json'
+        probe = json.loads(probe_path.read_text(encoding='utf-8')) if probe_path.is_file() else None
+        if probe is not None:
+            shutil.copy2(probe_path, output / f'lifecycle-durable-world-{number}.json')
+        previous = verify_report(report, previous, domain, probe, nonce, state)
+        if state['world'] != previous['world_id']:
+            raise RuntimeError('captured world identity differs from the durable exit receipt')
         if args.world_id and state['world'] != str(args.world_id):
             raise RuntimeError('client did not use the requested deterministic QA world identity')
         shutil.copy2(state_path, output / f'lifecycle-world-state-{number}.json')
@@ -94,7 +169,7 @@ def main() -> None:
         previous_state = state
         if (output / 'run/launcher').exists():
             raise RuntimeError('completed launcher control state was not retired')
-    print(f'Two native sessions passed; evidence: {output}')
+    print(f'Two domain lifecycle sessions passed (no DOM/WebView visual proof); evidence: {output}')
 
 
 if __name__ == '__main__':

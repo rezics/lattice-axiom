@@ -12,6 +12,10 @@ compatibility goals and pending acceptance gates. The
 describes author-owned APIs and supported extension paths. These are architectural
 commitments, not a claim that a general dynamic-mod ecosystem is already delivered.
 
+The Windows desktop uses an embedded WebView2 interface for menus, settings,
+inventory and HUD. Bevy renders the world, crosshair and mining progress.
+See [Web UI delivery](docs/web-ui-delivery.md) for ownership and acceptance.
+
 ## Structure
 
 - `packages/<scope>/<name>/`: Lattice packages. Rust implementation is under each
@@ -46,6 +50,11 @@ For isolated acceptance, `RUNTIME=<directory>` selects an existing runtime
 containing copies of the locks and catalog; the default is the repository root.
 `task native:prepare` verifies the frozen source graph without compiling binaries;
 `task native:build PRODUCT=products/terrenia.toml` selects the release build.
+Native product builds also install the pinned JavaScript dependencies and build
+the selected Web UI in an isolated source copy. Node/npm are build tools only;
+the client loads executable-adjacent `client-ui` assets through a local protocol.
+Windows clients require Microsoft WebView2 Runtime. `task web:build` prepares
+the local developer bundle, and `task web:test` checks the browser protocol.
 Runtime worlds and caches are local, ignored data. Rebuild delivery and outstanding
 acceptance gates are recorded in [REBUILD_PROGRESS.md](REBUILD_PROGRESS.md).
 Worlds retain their original verified gameplay lock in the local catalog when

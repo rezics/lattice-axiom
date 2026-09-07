@@ -8,11 +8,12 @@ fonts without raster skin assets.
 Implementation entry and membership are declared in `latticeaxiom-package.toml`.
 Public APIs and tests are maintained beside the code.
 
-Native widgets and InputFocus own keyboard activation and tab order. Focus has a
-visible outline. Shell creation supports bounded Unicode text and IME commits;
-form actions remain reachable outside the scrolling content region.
+The optional native widget adapter retains its own InputFocus and tab order.
+Terrenia now uses `@latticeaxiom/web-ui` for menus, settings and inventory;
+this package's surface contracts still own gameplay suppression and route state.
 
 Validation: `cargo test -p latticeaxiom-client-ui -p latticeaxiom-engine --lib --all-features`.
-Native captures use `LATTICEAXIOM_CAPTURE_PATH`, optional `LATTICEAXIOM_CAPTURE_ROUTE`,
-`LATTICEAXIOM_CAPTURE_SIZE` and `LATTICEAXIOM_CAPTURE_TEXT`. Captures are local QA
-artifacts and are never committed.
+`LATTICEAXIOM_CAPTURE_PATH` captures the Bevy render target, which excludes the
+OS-composited WebView. It is scene/GPU evidence, not a screenshot of the complete
+desktop UI. Use whole-window inspection for WebView transparency and input.
+Captures are local QA artifacts and are never committed.

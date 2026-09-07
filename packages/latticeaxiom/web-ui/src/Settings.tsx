@@ -119,7 +119,7 @@ export function Settings({ settings }: { settings: SettingsState }) {
                                     }
                                     onClick={() => setCategory(value)}
                                 >
-                                    {humanize(value)}
+                                    {categoryLabel(value)}
                                 </button>
                             ))}
                         </nav>
@@ -272,6 +272,26 @@ function Binding({ row }: { row: BindingRow }) {
 function humanize(text: string) {
     return text.replace(/[-_.]/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
+function categoryLabel(id: string) {
+    const name = (id.split("/").at(-1) ?? id).replace(/@\d+$/, "");
+    return humanize(name);
+}
+function enumChoices(values: string[] | undefined) {
+    if (
+        !values ||
+        !values.every(
+            (value) =>
+                /^\d+(?:\.\d+)?$/.test(value) ||
+                value.toLowerCase() === "unlimited",
+        )
+    )
+        return values ?? [];
+    return [...values].sort((left, right) => {
+        if (left.toLowerCase() === "unlimited") return 1;
+        if (right.toLowerCase() === "unlimited") return -1;
+        return Number(left) - Number(right);
+    });
+}
 function Setting({ row }: { row: SettingRow }) {
     return (
         <div className={`setting-row ${!row.editable ? "read-only" : ""}`}>
@@ -333,7 +353,7 @@ function SettingControl({ row }: { row: SettingRow }) {
                 disabled={!row.editable}
                 onChange={(e) => set(e.target.value)}
             >
-                {schema.values?.map((value) => (
+                {enumChoices(schema.values).map((value) => (
                     <option key={value} value={value}>
                         {humanize(value)}
                     </option>

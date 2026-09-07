@@ -22,6 +22,7 @@ use crate::LockVerifiedComposeImages;
 
 const SETTINGS_REGISTRY_CAPABILITY: &str = "latticeaxiom:capability/settings-registry@1";
 const SETTINGS_CATALOG_PACKAGE_PATH: &str = "data/user-catalog-v1.json";
+const PACKAGE_SETTINGS_PATH: &str = "data/settings-v1.json";
 
 /// Failure to load or persist local user settings.
 #[derive(Debug, Error)]
@@ -99,7 +100,7 @@ pub struct HostSettingsCatalog {
 }
 
 impl HostSettingsCatalog {
-    fn new(catalog: ValidatedSettingsCatalog) -> Result<Self, HostSettingsError> {
+    pub(crate) fn new(catalog: ValidatedSettingsCatalog) -> Result<Self, HostSettingsError> {
         assert_foundation_catalog(&catalog)?;
         Ok(Self { catalog })
     }
@@ -144,9 +145,43 @@ pub fn compile_lock_selected_settings(
             reason: error.to_string(),
         }
     })?;
-    let fragment = SettingsCatalogFragment::from_canonical_json(file)?;
-    let catalog = ValidatedSettingsCatalog::compile([fragment], SettingsCatalogPolicy::default())?;
+    let mut fragments = vec![owned_settings_fragment(&package, file)?];
+    let extension_path = CanonicalLogicalPath::new(PACKAGE_SETTINGS_PATH).map_err(|error| {
+        HostSettingsError::CatalogUnavailable {
+            reason: error.to_string(),
+        }
+    })?;
+    // Only immutable data selected by the lock participates. A package may
+    // contribute settings without becoming another registry provider.
+    for owner in images.locked_artifacts().data_package_names() {
+        let data = images
+            .locked_artifacts()
+            .data_root(owner)
+            .map_err(|error| HostSettingsError::CatalogUnavailable {
+                reason: error.to_string(),
+            })?;
+        if let Some(bytes) = data.file(&extension_path) {
+            fragments.push(owned_settings_fragment(owner, bytes)?);
+        }
+    }
+    let catalog = ValidatedSettingsCatalog::compile(fragments, SettingsCatalogPolicy::default())?;
     Ok(Some(HostSettingsCatalog::new(catalog)?))
+}
+
+fn owned_settings_fragment(
+    package: &PackageName,
+    bytes: &[u8],
+) -> Result<SettingsCatalogFragment, HostSettingsError> {
+    let fragment = SettingsCatalogFragment::from_canonical_json(bytes)?;
+    if fragment.owner() != package {
+        return Err(HostSettingsError::CatalogUnavailable {
+            reason: format!(
+                "settings fragment from `{package}` claims owner `{}`",
+                fragment.owner()
+            ),
+        });
+    }
+    Ok(fragment)
 }
 
 fn settings_provider(
@@ -303,6 +338,22 @@ impl HostUserSettings {
         self.persist_user_values_to_store(&store, catalog, active_lock, proposed)
     }
 
+    /// Atomically persists setting values and the keyboard/mouse binding draft.
+    ///
+    /// # Errors
+    /// Returns an error when validation, binding conversion, or publication fails.
+    pub fn persist_user_draft(
+        &mut self,
+        root: impl AsRef<Path>,
+        catalog: &HostSettingsCatalog,
+        active_lock: CanonicalHash,
+        proposed: &BTreeMap<latticeaxiom_core::StableId, Value>,
+        profile: InputBindingProfile,
+    ) -> Result<SettingChangedBatchV1, HostSettingsError> {
+        let store = FilesystemLocalSettingsStore::open(root)?;
+        self.persist_user_draft_to_store(&store, catalog, active_lock, proposed, profile)
+    }
+
     fn persist_render_distance_to_store(
         &mut self,
         store: &impl LocalSettingsStore,
@@ -322,6 +373,23 @@ impl HostUserSettings {
         active_lock: CanonicalHash,
         proposed: &BTreeMap<latticeaxiom_core::StableId, Value>,
     ) -> Result<SettingChangedBatchV1, HostSettingsError> {
+        self.persist_user_draft_to_store(
+            store,
+            catalog,
+            active_lock,
+            proposed,
+            self.profile.clone(),
+        )
+    }
+
+    fn persist_user_draft_to_store(
+        &mut self,
+        store: &impl LocalSettingsStore,
+        catalog: &HostSettingsCatalog,
+        active_lock: CanonicalHash,
+        proposed: &BTreeMap<latticeaxiom_core::StableId, Value>,
+        profile: InputBindingProfile,
+    ) -> Result<SettingChangedBatchV1, HostSettingsError> {
         let before = resolve_effective_settings(
             catalog.as_validated(),
             [self.envelope.device_overlay(), self.envelope.user_overlay()],
@@ -335,7 +403,7 @@ impl HostUserSettings {
             before.snapshot(),
             &self.envelope,
             proposed,
-            self.envelope.binding_profile().clone(),
+            input_profile_to_stored(&profile)?,
             PreviewPolicyV1::None,
             active_lock,
         )?;
@@ -343,11 +411,13 @@ impl HostUserSettings {
         match transaction.persist(store, &self.envelope, active_lock) {
             Ok((next, batch)) => {
                 self.envelope = next;
+                self.profile = profile;
                 Ok(batch)
             }
             Err(error) => {
                 if let Some(proposed) = error.visible_proposed_envelope() {
                     self.envelope = proposed.clone();
+                    self.profile = profile;
                 }
                 Err(error.into())
             }
@@ -519,6 +589,69 @@ fn input_modifiers(modifiers: &BTreeSet<KeyModifierV1>) -> KeyboardModifiersV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_settings_cannot_spoof_another_artifact_owner() {
+        let bytes = br#"{"schema":"latticeaxiom:schema/settings-catalog-fragment@1","owner":"@latticeaxiom/settings","settings":[]}"#;
+        let owner: PackageName = "@community/example".parse().expect("valid package");
+        let error = owned_settings_fragment(&owner, bytes).expect_err("artifact owner must match");
+        assert!(error.to_string().contains("claims owner"));
+    }
+
+    #[test]
+    fn settings_and_keybindings_publish_in_one_revision() {
+        let directory = tempfile::tempdir().expect("temporary settings store");
+        let catalog = foundation_catalog();
+        let active_lock = CanonicalHash::digest(b"combined-user-draft");
+        let mut user = HostUserSettings::load(directory.path()).expect("store opens");
+        let mut profile = user.binding_profile().clone();
+        let action = "latticeaxiom:action/player/jump"
+            .parse()
+            .expect("action ID");
+        profile.set_override(
+            action,
+            vec![InputBindingV1::Keyboard {
+                usage: "KeyJ".to_owned(),
+                modifiers: BTreeSet::new(),
+            }],
+        );
+        let values = BTreeMap::from([(render_distance_setting_id(), Value::from(12))]);
+        user.persist_user_draft(
+            directory.path(),
+            &catalog,
+            active_lock,
+            &values,
+            profile.clone(),
+        )
+        .expect("combined draft publishes");
+        let reopened = HostUserSettings::load(directory.path()).expect("reopen");
+        assert_eq!(reopened.transaction_revision(), 1);
+        assert_eq!(reopened.binding_profile(), &profile);
+        assert_eq!(
+            reopened
+                .requested_render_distance(&catalog, active_lock)
+                .expect("effective value"),
+            12
+        );
+        let empty_profile = InputBindingProfile::empty();
+        user.persist_user_draft(
+            directory.path(),
+            &catalog,
+            active_lock,
+            &BTreeMap::new(),
+            empty_profile.clone(),
+        )
+        .expect("binding-only reset publishes without a setting-value diff");
+        let reopened = HostUserSettings::load(directory.path()).expect("reopen reset");
+        assert_eq!(reopened.transaction_revision(), 2);
+        assert_eq!(reopened.binding_profile(), &empty_profile);
+        assert_eq!(
+            reopened
+                .requested_render_distance(&catalog, active_lock)
+                .expect("retained value"),
+            12
+        );
+    }
 
     struct FailedVisibleRecoveryStore;
 

@@ -167,6 +167,7 @@ impl EngineInstance {
             .add_systems(Update, limit_client_fixed_catch_up)
             .add_systems(FixedLast, count_fixed_tick);
         host_setup(&mut app);
+        crate::host::web::install(&mut app);
         finalize_plugins(&mut app);
 
         Ok(Self {

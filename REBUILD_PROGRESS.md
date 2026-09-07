@@ -12,6 +12,11 @@ The accepted [ecosystem direction](docs/ecosystem-direction.md) and
 were recorded on 2026-09-07. Their E1-E5 gates are additional pending ecosystem
 acceptance; the historical rebuild checkmarks below do not establish them.
 
+The native-only UI decision below was superseded on 2026-09-07 by the
+[embedded Web UI delivery](docs/web-ui-delivery.md). Desktop menus, inventory,
+settings and diagnostic panels move to WebView; the crosshair and mining
+progress remain native. Historical native-UI checks do not certify the Web UI.
+
 ## Recovery baseline
 
 - Documentation source: `57c37e2334ea019521fcd85237cb8dba47d51d24`.

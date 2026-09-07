@@ -57,6 +57,16 @@ native windows. `set_interactive(true)` enables and focuses the WebView for menu
 and text entry. Call on mode transitions, not every frame or while refocusing an
 inactive application. Physical resize dimensions avoid DPI double scaling.
 
+The parent composition guard clears winit's default `WS_CLIPCHILDREN` for the
+host's lifetime. Otherwise Windows removes the child's whole rectangle from the
+GPU parent surface and transparent HTML reveals a blank area instead of the game.
+A scoped native subclass preserves this policy across fullscreen/style changes;
+teardown restores the original clipping bit without replacing unrelated styles.
+See the upstream GPU-overlay diagnosis in https://github.com/tauri-apps/wry/issues/1212.
+`window_has_focus` checks exact OS keyboard focus separately from application
+foreground ownership, so products can reconcile delayed framework focus events
+when moving between a web panel and captured game input.
+
 ## Verification boundaries
 
 Unit tests cover exact origins, path traversal, snapshot immutability and queue

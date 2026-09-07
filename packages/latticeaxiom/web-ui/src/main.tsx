@@ -79,8 +79,16 @@ function App() {
         };
     }, [JSON.stringify(state?.theme)]);
     useEffect(() => {
-        if (state?.error) setError(state.error);
-    }, [state?.error]);
+        setError(state?.error ?? null);
+    }, [
+        state?.error,
+        state?.mode,
+        state?.shell?.screen,
+        state?.shell?.tree.children[0]?.id,
+        state?.game?.modal,
+        state?.game?.overlay,
+        state?.settings?.open,
+    ]);
     useEffect(() => {
         const fail = (event: Event) =>
             setError((event as CustomEvent<string>).detail);
@@ -138,14 +146,29 @@ function App() {
             const shortcut =
                 matches.find((shortcut) => shortcut.action === "back") ??
                 matches[0];
-            if (event.key === "Escape" || shortcut?.action === "back") {
+            const conventionalEscape =
+                event.key === "Escape" &&
+                (state?.mode !== "game" ||
+                    state.settings?.open ||
+                    !state.shortcuts);
+            const navigateBack =
+                shortcut?.action === "back" ||
+                shortcut?.action === "pause" ||
+                conventionalEscape;
+            if (navigateBack && (!text || event.key === "Escape")) {
                 event.preventDefault();
                 if (state?.settings?.open) act("settings.cancel", {});
                 else if (
                     state?.mode === "game" &&
                     !state.game?.saving?.requested
                 )
-                    act("game.surface", { action: "back" });
+                    act("game.surface", {
+                        action:
+                            state.game?.modal === "none" &&
+                            state.game.overlay === "none"
+                                ? "pause"
+                                : "back",
+                    });
                 else {
                     const back = state?.shell?.tree.children.find((n) =>
                         n.actions.includes("back"),
@@ -168,17 +191,14 @@ function App() {
             ) {
                 if (
                     shortcut.action === "toggle-inventory" ||
-                    shortcut.action === "toggle-workbench" ||
-                    shortcut.action === "pause"
+                    shortcut.action === "toggle-workbench"
                 ) {
                     event.preventDefault();
                     act("game.surface", {
                         action:
                             shortcut.action === "toggle-inventory"
                                 ? "inventory"
-                                : shortcut.action === "toggle-workbench"
-                                  ? "workbench"
-                                  : "pause",
+                                : "workbench",
                     });
                 } else if (shortcut.action.startsWith("hotbar-slot-")) {
                     event.preventDefault();
@@ -199,6 +219,8 @@ function App() {
         state?.shell?.tree,
         state?.shortcuts,
         state?.game?.saving?.requested,
+        state?.game?.modal,
+        state?.game?.overlay,
     ]);
     useEffect(() => {
         const dialog = document.querySelector<HTMLElement>('[role="dialog"]');

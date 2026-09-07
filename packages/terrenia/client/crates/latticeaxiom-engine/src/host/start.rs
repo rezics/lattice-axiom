@@ -200,7 +200,7 @@ impl ProductionMemoryStart {
             .map_or(self.images.product_lock_hash(), |entry| entry.game_lock)
     }
 
-    fn images_for_world(
+    pub(crate) fn images_for_world(
         &self,
         world: WorldId,
     ) -> Result<LockVerifiedComposeImages, ProductionMemoryStartError> {
@@ -357,6 +357,11 @@ impl ProductionMemoryStart {
         world_id: WorldId,
     ) -> Result<ProductionSpine, ProductionMemoryStartError> {
         self.ensure_spine(world_id)
+    }
+
+    /// Drops the in-process cache so a later reopen reads the durable world.
+    pub(crate) fn release_play_spine(&mut self, world_id: WorldId) {
+        self.spines.remove(&world_id);
     }
 
     /// Stores the typed intent applied by the next quick-create command.

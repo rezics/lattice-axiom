@@ -323,6 +323,7 @@ export function installFixture() {
                 if (params.action === "inventory")
                     game.overlay =
                         game.overlay === "none" ? "inventory" : "none";
+                if (params.action === "pause") game.modal = "pause";
                 if (params.action === "back" || params.action === "resume") {
                     game.overlay = "none";
                     game.modal = "none";

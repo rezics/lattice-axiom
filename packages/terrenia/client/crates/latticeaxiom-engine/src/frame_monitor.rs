@@ -1,18 +1,12 @@
-//! Bounded, always-available native frame monitor and opt-in capture evidence.
+//! Bounded frame measurements for the Web diagnostics panel and capture evidence.
 
 use std::{collections::VecDeque, time::Instant};
 
-use bevy::{
-    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
-    prelude::*,
-};
+use bevy::prelude::*;
 use serde::Serialize;
 
 const HISTORY: usize = 240;
 const CAPTURE_LIMIT: usize = 16_384;
-
-#[derive(Component, Debug)]
-struct FrameReadout;
 
 #[derive(Resource, Debug)]
 pub(crate) struct FrameMonitor {
@@ -22,7 +16,6 @@ pub(crate) struct FrameMonitor {
     capture: Option<Vec<f64>>,
     capture_main: Vec<f64>,
     capture_truncated: bool,
-    next_refresh: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +50,17 @@ fn summarize(samples: impl Iterator<Item = f64>) -> Option<FrameSummary> {
 }
 
 impl FrameMonitor {
+    pub(crate) fn web_rows(&self) -> Vec<serde_json::Value> {
+        let Some(summary) = summarize(self.frames.iter().copied()) else {
+            return Vec::new();
+        };
+        vec![
+            serde_json::json!({"label":"FPS","value":format!("{:.0}",summary.fps)}),
+            serde_json::json!({"label":"Frame / P95","value":format!("{:.2} / {:.2} ms",summary.mean_ms,summary.p95_ms)}),
+            serde_json::json!({"label":"Main schedule","value":format!("{:.2} ms",self.main_ms)}),
+        ]
+    }
+
     pub(crate) fn report(&self) -> serde_json::Value {
         serde_json::json!({
             "frame": self.capture.as_ref().and_then(|v| summarize(v.iter().copied())),
@@ -76,39 +80,10 @@ pub(crate) fn install(app: &mut App) {
         capture: std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").map(|_| Vec::new()),
         capture_main: Vec::new(),
         capture_truncated: false,
-        next_refresh: 0.0,
     })
-    .add_systems(Startup, spawn)
     .add_systems(First, begin_frame)
     .add_systems(Update, update)
     .add_systems(Last, end_frame);
-}
-
-fn spawn(mut commands: Commands<'_, '_>) {
-    commands
-        .spawn((
-            Name::new("Frame monitor"),
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(16.0),
-                top: Val::Px(64.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                max_width: Val::Percent(48.0),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.04, 0.055, 0.92)),
-            GlobalZIndex(100),
-            Pickable::IGNORE,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                FrameReadout,
-                Text::new("FPS —   Frame — ms"),
-                crate::ui_font::ui_text_font(14.0),
-                TextColor(Color::srgb(0.92, 0.95, 0.98)),
-                Pickable::IGNORE,
-            ));
-        });
 }
 
 fn begin_frame(mut monitor: ResMut<'_, FrameMonitor>) {
@@ -119,13 +94,7 @@ fn end_frame(mut monitor: ResMut<'_, FrameMonitor>) {
 }
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
-fn update(
-    time: Res<'_, Time<Real>>,
-    diagnostics: Res<'_, DiagnosticsStore>,
-    mut monitor: ResMut<'_, FrameMonitor>,
-    mut readout: Query<'_, '_, &mut Text, With<FrameReadout>>,
-    windows: Query<'_, '_, &Window, With<bevy::window::PrimaryWindow>>,
-) {
+fn update(time: Res<'_, Time<Real>>, mut monitor: ResMut<'_, FrameMonitor>) {
     let ms = time.delta_secs_f64() * 1000.0;
     if ms > 0.0 {
         if monitor.frames.len() == HISTORY {
@@ -143,31 +112,6 @@ fn update(
                 }
             }
         }
-    }
-    if time.elapsed_secs_f64() < monitor.next_refresh {
-        return;
-    }
-    monitor.next_refresh = time.elapsed_secs_f64() + 0.25;
-    let Some(summary) = summarize(monitor.frames.iter().copied()) else {
-        return;
-    };
-    let frame_ms = diagnostics
-        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
-        .and_then(bevy::diagnostic::Diagnostic::smoothed)
-        .unwrap_or(summary.mean_ms);
-    let state = if windows.iter().next().is_some_and(|w| !w.focused) {
-        " · Background"
-    } else {
-        ""
-    };
-    for mut text in &mut readout {
-        text.0 = format!(
-            "{:.0} FPS   {:.1} ms{state}\nP95 {:.1} ms   CPU {:.1} ms",
-            1000.0 / frame_ms,
-            frame_ms,
-            summary.p95_ms,
-            monitor.main_ms
-        );
     }
 }
 

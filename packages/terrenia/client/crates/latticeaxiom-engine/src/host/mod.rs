@@ -31,17 +31,19 @@ pub(crate) mod persistent;
 mod profile;
 mod session;
 #[cfg(feature = "client")]
-mod settings_view;
-#[cfg(feature = "client")]
 mod shell_view;
+#[cfg(feature = "client")]
+pub(crate) mod web;
+#[cfg(feature = "client")]
+mod web_projection;
+#[cfg(feature = "client")]
+mod web_settings;
 #[cfg(feature = "client")]
 pub(crate) use shell_view::ShellHandoffState;
 mod spine;
 mod start;
 mod stream;
 mod surface;
-#[cfg(feature = "client")]
-mod voxel_icon;
 #[cfg(feature = "client")]
 mod water_material;
 #[cfg(feature = "client")]
@@ -422,20 +424,11 @@ impl Plugin for ProductionHostPlugin {
             );
         #[cfg(feature = "client")]
         app.init_resource::<far_mesh::FarTerrainPresentationStatusV1>()
-            .add_observer(pause::render_distance_slider_changed)
-            .add_observer(pause::pause_menu_activated)
-            .add_observer(settings_view::settings_page_activated)
-            .add_observer(settings_view::settings_integer_slider_changed)
-            .add_observer(hud::inventory_slot_activated)
-            .add_observer(hud::recipe_activated)
-            .add_observer(hud::item_browser_activated)
             .add_systems(
                 Startup,
                 (
-                    voxel_icon::build_production_voxel_icons,
-                    spawn_production_hud_if_client.after(voxel_icon::build_production_voxel_icons),
+                    spawn_production_hud_if_client,
                     client::spawn_production_client_view,
-                    pause::spawn_pause_overlay_if_client,
                     attach_initial_chunk_meshes.after(client::spawn_production_client_view),
                 )
                     .run_if(is_interactive_client)
@@ -466,23 +459,9 @@ impl Plugin for ProductionHostPlugin {
                     client::sync_production_camera,
                     client::sync_water_material_medium,
                     pause::toggle_pause,
-                    pause::sync_pause_overlay,
                     surface::apply_surface_actions,
-                    pause::apply_settings_surface_actions,
-                    pause::sync_cursor_capture,
-                    pause::sync_pause_menu_page,
-                    settings_view::sync_settings_page,
-                    settings_view::sync_settings_page_visibility,
-                    pause::sync_settings_control_focus_visuals,
                     hud::activate_workbench_from_target,
                     surface::select_hotbar_from_surface,
-                    hud::capture_item_browser_search,
-                    hud::sync_inventory_overlay,
-                    hud::sync_workbench_overlay,
-                    hud::sync_slot_pickable,
-                    hud::sync_hand_recipe_list,
-                    hud::sync_workbench_recipe_list,
-                    hud::sync_item_browser,
                 )
                     .chain()
                     .run_if(is_interactive_client)
@@ -490,18 +469,17 @@ impl Plugin for ProductionHostPlugin {
             )
             .add_systems(
                 Update,
-                (
-                    hud::sync_production_inspect_hud,
-                    hud::sync_production_working_set_hud,
-                    mining_ring::sync_mining_ring,
-                    hud::sync_production_status_hud,
-                    hud::sync_production_hotbar_hud,
-                    hud::sync_production_inventory_hud,
-                )
+                (mining_ring::sync_mining_ring,)
                     .chain()
-                    .after(hud::sync_item_browser)
+                    .after(surface::apply_surface_actions)
                     .run_if(is_interactive_client)
                     .run_if(resource_exists::<ProductionSpine>),
+            )
+            .add_systems(
+                Update,
+                pause::sync_cursor_capture
+                    .after(surface::apply_surface_actions)
+                    .run_if(is_interactive_client),
             )
             .add_systems(
                 FixedFirst,
@@ -889,10 +867,8 @@ pub(super) struct InProcessPlayEntity;
 #[cfg(feature = "client")]
 pub(super) fn spawn_play_presentation(world: &mut bevy::prelude::World) {
     use bevy::ecs::system::RunSystemOnce;
-    let _ = world.run_system_once(voxel_icon::build_production_voxel_icons);
     let _ = world.run_system_once(spawn_production_hud_if_client);
     let _ = world.run_system_once(client::spawn_production_client_view);
-    let _ = world.run_system_once(pause::spawn_pause_overlay_if_client);
     let _ = world.run_system_once(attach_initial_chunk_meshes);
 }
 

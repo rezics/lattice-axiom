@@ -1,0 +1,63 @@
+{
+  "schema": "latticeaxiom:schema/settings-catalog-fragment@1",
+  "owner": "@latticeaxiom/inspect",
+  "settings": [
+    {
+      "id": "latticeaxiom:setting/inspect/enabled",
+      "declared_by": "@latticeaxiom/inspect",
+      "schema_version": 1,
+      "value_type": {
+        "type": "bool"
+      },
+      "default": true,
+      "allowed_scopes": [
+        "session",
+        "user"
+      ],
+      "default_scope": "user",
+      "authority": "local-user",
+      "apply_impact": "immediate",
+      "category": "latticeaxiom:setting-category/inspect",
+      "order": 10,
+      "label_key": "latticeaxiom.inspect.enabled.label",
+      "description_key": "latticeaxiom.inspect.enabled.description",
+      "visibility": null,
+      "enabled_when": null,
+      "sensitivity": "ordinary",
+      "replacement": null
+    },
+    {
+      "id": "latticeaxiom:setting/inspect/anchor",
+      "declared_by": "@latticeaxiom/inspect",
+      "schema_version": 1,
+      "value_type": {
+        "type": "enum",
+        "values": [
+          "top-center",
+          "top-left",
+          "top-right"
+        ]
+      },
+      "default": "top-center",
+      "allowed_scopes": [
+        "session",
+        "user"
+      ],
+      "default_scope": "user",
+      "authority": "local-user",
+      "apply_impact": "immediate",
+      "category": "latticeaxiom:setting-category/inspect",
+      "order": 20,
+      "label_key": "latticeaxiom.inspect.anchor.label",
+      "description_key": "latticeaxiom.inspect.anchor.description",
+      "visibility": null,
+      "enabled_when": {
+        "op": "equals",
+        "setting": "latticeaxiom:setting/inspect/enabled",
+        "value": true
+      },
+      "sensitivity": "ordinary",
+      "replacement": null
+    }
+  ]
+}

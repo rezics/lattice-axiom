@@ -11,7 +11,11 @@ use wry::{
 const LOCAL_URL: &str = "lattice://localhost/index.html";
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; frame-ancestors 'none'";
 
-pub(crate) struct NativeView(WebView);
+pub(crate) struct NativeView {
+    // Destroy the child before restoring its parent's original clipping policy.
+    view: WebView,
+    _parent_composition: crate::parent_composition::ParentCompositionGuard,
+}
 
 impl NativeView {
     pub(crate) fn attach(
@@ -81,15 +85,20 @@ impl NativeView {
             .with_url(LOCAL_URL)
             .build_as_child(window)
             .map_err(native_error)?;
-        Ok(Self(view))
+        let parent_composition =
+            crate::parent_composition::ParentCompositionGuard::attach(view.hwnd())?;
+        Ok(Self {
+            view,
+            _parent_composition: parent_composition,
+        })
     }
 
     pub(crate) fn evaluate(&self, javascript: &str) -> Result<(), BridgeError> {
-        self.0.evaluate_script(javascript).map_err(native_error)
+        self.view.evaluate_script(javascript).map_err(native_error)
     }
 
     pub(crate) fn resize(&self, width: u32, height: u32) -> Result<(), BridgeError> {
-        self.0
+        self.view
             .set_bounds(bounds(width, height))
             .map_err(native_error)
     }
@@ -98,24 +107,24 @@ impl NativeView {
     // rest of this package and all product code retain the unsafe-code deny lint.
     #[allow(unsafe_code)]
     pub(crate) fn set_interactive(&self, interactive: bool) -> Result<(), BridgeError> {
-        // SAFETY: hwnd() is the live child owned by self.0; this !Send value is
+        // SAFETY: hwnd() is the live child owned by self.view; this !Send value is
         // only used on its creating window thread and the HWND is not retained.
         // EnableWindow returns previous enabled state, not success/failure.
         unsafe {
             let _ = windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
-                self.0.hwnd(),
+                self.view.hwnd(),
                 interactive,
             );
         }
         if interactive {
-            self.0.focus().map_err(native_error)
+            self.view.focus().map_err(native_error)
         } else {
-            self.0.focus_parent().map_err(native_error)
+            self.view.focus_parent().map_err(native_error)
         }
     }
 
     pub(crate) fn set_visible(&self, visible: bool) -> Result<(), BridgeError> {
-        self.0.set_visible(visible).map_err(native_error)
+        self.view.set_visible(visible).map_err(native_error)
     }
 
     #[allow(unsafe_code)]
@@ -124,7 +133,7 @@ impl NativeView {
         // SAFETY: hwnd() belongs to this live main-thread WebView. Both calls
         // query OS-owned window identity without retaining or dereferencing it.
         unsafe {
-            let root = GetAncestor(self.0.hwnd(), GA_ROOT);
+            let root = GetAncestor(self.view.hwnd(), GA_ROOT);
             !root.is_invalid() && root == GetForegroundWindow()
         }
     }
@@ -135,6 +144,27 @@ fn bounds(width: u32, height: u32) -> Rect {
         position: PhysicalPosition::new(0, 0).into(),
         size: PhysicalSize::new(width.max(1), height.max(1)).into(),
     }
+}
+
+#[allow(unsafe_code)]
+pub(crate) fn window_has_focus(window: &impl HasWindowHandle) -> bool {
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::{
+            Input::KeyboardAndMouse::GetFocus,
+            WindowsAndMessaging::{GA_ROOT, GetAncestor, GetForegroundWindow},
+        },
+    };
+    let Ok(handle) = window.window_handle() else {
+        return false;
+    };
+    let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return false;
+    };
+    let window = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+    // SAFETY: HasWindowHandle guarantees a valid HWND during this call. Queries
+    // are made on the caller's window thread and retain no native references.
+    unsafe { GetFocus() == window && GetForegroundWindow() == GetAncestor(window, GA_ROOT) }
 }
 
 // `Result::map_err` consumes the upstream error at this conversion boundary.

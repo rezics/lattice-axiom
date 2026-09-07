@@ -27,17 +27,44 @@ pub(crate) struct ShellExitContext {
     workspace: PathBuf,
     shell_lock: latticeaxiom_core::CanonicalHash,
     handoff: crate::host::ShellHandoffState,
+    active_session:
+        std::sync::Arc<std::sync::Mutex<Option<crate::host::persistent::PersistentGameSession>>>,
 }
 
 impl ShellExitContext {
+    pub(crate) fn set_active_session(
+        &self,
+        session: Option<crate::host::persistent::PersistentGameSession>,
+    ) -> Result<(), String> {
+        *self
+            .active_session
+            .lock()
+            .map_err(|error| error.to_string())? = session;
+        Ok(())
+    }
+
     pub(crate) fn workspace_path(&self) -> PathBuf {
         self.workspace.clone()
     }
 
     pub(crate) fn finish(&self, clean: bool) -> Result<(), String> {
-        if std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").is_some()
-            || self.handoff.0.load(std::sync::atomic::Ordering::Acquire)
-        {
+        if self.handoff.0.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
+        let capture = std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").is_some();
+        if clean && (!capture || std::env::var_os("LATTICEAXIOM_CAPTURE_SAVE").is_some()) {
+            // The client entered the world after EngineInstance::run captured
+            // this shell context. Follow its shared live session on OS close.
+            let session = self
+                .active_session
+                .lock()
+                .map_err(|error| error.to_string())?
+                .clone();
+            if let Some(session) = session {
+                session.finish()?;
+            }
+        }
+        if capture {
             return Ok(());
         }
         let Some(root) = std::env::var_os(crate::supervisor::ENV_LAUNCH_ROOT).map(PathBuf::from)
@@ -234,6 +261,11 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
     let active_lock = images.product_lock_hash();
     let compiled = crate::input::compile_lock_selected_input(&images, &profile)?;
     let selects_shell = ProductionMemoryStart::lock_graph_selects_shell(images.images().graph())?;
+    let web_images = if selects_shell {
+        load_lock_verified_images(workspace)?
+    } else {
+        images.clone()
+    };
     let disk =
         latticeaxiom_world_db::DiskWorldStore::open(&workspace.join("run/worlds/worlds.redb"))
             .map_err(|error| ProductionClientError::Persistence {
@@ -279,6 +311,8 @@ pub fn run_client_host_from_workspace(workspace: &Path) -> Result<(), Production
         (instance, proof)
     };
     crate::resource_packs::install_client_resource_packs(&mut instance, workspace)?;
+    crate::host::web::install_settings(instance.app.world_mut(), workspace, &web_images)
+        .map_err(|reason| crate::settings::HostSettingsError::CatalogUnavailable { reason })?;
     if selects_shell {
         install_shell_exit_context(&mut instance, workspace, active_lock)?;
     }
@@ -333,6 +367,7 @@ fn install_shell_exit_context(
         workspace: workspace.to_owned(),
         shell_lock: active_lock,
         handoff,
+        active_session: Default::default(),
     });
     Ok(())
 }

@@ -1,0 +1,34 @@
+{
+  "schema": "latticeaxiom:schema/settings-catalog-fragment@1",
+  "owner": "@latticeaxiom/observability",
+  "settings": [
+    {
+      "id": "latticeaxiom:setting/observability/detail",
+      "declared_by": "@latticeaxiom/observability",
+      "schema_version": 1,
+      "value_type": {
+        "type": "enum",
+        "values": [
+          "compact",
+          "detailed"
+        ]
+      },
+      "default": "compact",
+      "allowed_scopes": [
+        "session",
+        "user"
+      ],
+      "default_scope": "user",
+      "authority": "local-user",
+      "apply_impact": "immediate",
+      "category": "latticeaxiom:setting-category/observability",
+      "order": 10,
+      "label_key": "latticeaxiom.observability.detail.label",
+      "description_key": "latticeaxiom.observability.detail.description",
+      "visibility": null,
+      "enabled_when": null,
+      "sensitivity": "ordinary",
+      "replacement": null
+    }
+  ]
+}
