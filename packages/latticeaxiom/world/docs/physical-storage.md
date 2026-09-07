@@ -1,5 +1,37 @@
 # Physical world publication
 
+## Incremental live-world records (2026-09-07)
+
+`DiskWorldStore::load_indexed` opens a small world head and reads individual
+`world-wire` chunk records on demand. One redb Immediate transaction publishes
+the changed records, persistent-entity index, head, catalog revision and any
+explicit checkpoint. The page cache is capped at 64 MiB. Ordinary reads capture
+a redb snapshot independently of background media synchronization; explicitly
+unflushed `Written` transactions retain their coherent bounded overlay.
+
+Opening a legacy image copies its records and checkpoints into versioned tables
+transactionally. The original legacy image is retained unchanged for recovery.
+Normal opens do not decode all terrain or retained checkpoint images. Explicit
+full exports/checkpoints retain their existing bounded portable format and may
+reject worlds exceeding that export format's limits; this does not limit lazy
+chunk reads or incremental world growth.
+
+Physical I/O errors require reopen/reconciliation. A failed or uncertain write
+never authorizes eviction. Corrupt records are errors, not generation misses.
+Crash verification streams the physical records and cross-checks the entity
+index without retaining a full-world payload map. The resident transaction
+kernel releases a copy only when the caller supplies its exact saved revision.
+
+Validation: 28 storage-kernel and 32 world-db library tests pass. The new physical
+tests cover 48 separately persisted chunks, old read-view isolation, zero retained
+disk-layer chunk payloads, independent reopen, complete explicit export, unchanged
+legacy recovery input, retained checkpoints, failed publication, corrupt-record
+rejection and exact-revision cache release. Client traversal and native acceptance
+are tracked in `docs/world-storage-and-presentation-delivery.md`.
+
+The sections below document the original image adapter and remain relevant to
+legacy exports and the deterministic conformance backend.
+
 `DiskWorldStore` uses redb **4.2.0**, pinned in Cargo.lock, to atomically publish
 a portable world image and its small catalog record. Only a successful
 `Durability::Immediate` commit acknowledges physical persistence. An error is

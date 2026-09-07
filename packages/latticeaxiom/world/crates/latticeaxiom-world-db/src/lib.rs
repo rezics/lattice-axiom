@@ -17,6 +17,7 @@ mod disk;
 mod durable;
 mod error;
 mod header;
+mod indexed;
 mod keyspace;
 mod memory;
 mod model;

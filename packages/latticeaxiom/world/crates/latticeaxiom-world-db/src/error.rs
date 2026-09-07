@@ -17,13 +17,22 @@ pub type WorldDbResult<T> = Result<T, WorldDbError>;
 /// Typed rejection from a world-storage contract or backend operation.
 ///
 /// Database publication and sidecar publication are intentionally separate.
-/// A failure returned here means the requested authoritative operation was
-/// rejected before its database publication point. A database-ahead/header-
+/// Reference-backend failures reject the operation before publication.
+/// [`Self::PhysicalStorage`] instead requires reopening and reconciling an
+/// uncertain physical outcome; it must never be interpreted as rollback.
+/// A database-ahead/header-
 /// behind state is instead represented by the successful operation's header
 /// status.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum WorldDbError {
+    /// Physical I/O failed. The session must stop writes until explicit reopen
+    /// and reconciliation; an ambiguous commit is never treated as rollback.
+    #[error("physical storage requires reconciliation: {reason}")]
+    PhysicalStorage {
+        /// Database diagnostic retained for the recovery UI.
+        reason: String,
+    },
     /// A `SemVer` value used by authoritative metadata was malformed.
     #[error("invalid SemVer in {field} `{value}`: {reason}")]
     InvalidSemver {

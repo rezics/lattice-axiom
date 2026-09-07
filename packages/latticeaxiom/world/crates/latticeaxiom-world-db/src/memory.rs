@@ -8,9 +8,12 @@
 //! proved without a physical `RocksDB` adapter.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use latticeaxiom_core::{CanonicalHash, StableId, WorldId};
@@ -117,6 +120,7 @@ struct StoredWorld {
     chunks: Arc<BTreeMap<ChunkKey, PersistedChunkV1>>,
     records: Arc<BTreeMap<Vec<u8>, Vec<u8>>>,
     entity_index: BTreeMap<PersistentEntityId, ChunkKey>,
+    removed_entities: BTreeSet<PersistentEntityId>,
     receipts: BTreeMap<TransactionId, RetainedReceipt>,
     receipt_order: VecDeque<TransactionId>,
     checkpoints: BTreeMap<CheckpointId, CheckpointReceiptV1>,
@@ -132,6 +136,8 @@ struct RetainedCheckpoint {
 }
 
 struct FakeDatabase {
+    indexed: Option<crate::DiskWorldStore>,
+    indexed_failed: bool,
     worlds: BTreeMap<WorldId, StoredWorld>,
     checkpoints: BTreeMap<(WorldId, CheckpointId), RetainedCheckpoint>,
     active_writers: BTreeMap<WorldId, u128>,
@@ -145,6 +151,8 @@ struct FakeDatabase {
 impl Default for FakeDatabase {
     fn default() -> Self {
         Self {
+            indexed: None,
+            indexed_failed: false,
             worlds: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
             active_writers: BTreeMap::new(),
@@ -158,6 +166,9 @@ impl Default for FakeDatabase {
 }
 
 struct StorageInner {
+    indexed: OnceLock<crate::DiskWorldStore>,
+    indexed_failed: AtomicBool,
+    unflushed_written: AtomicBool,
     record_owner: StableId,
     wire_limits: WorldWireLimits,
     limits: WorldStorageLimitsV1,
@@ -184,12 +195,63 @@ impl fmt::Debug for DeterministicWorldStorage {
     }
 }
 impl DeterministicWorldStorage {
+    /// Whether chunk payloads are held in the incremental physical keyspace.
+    #[must_use]
+    pub fn is_indexed(&self) -> bool {
+        self.inner.indexed.get().is_some()
+    }
+
+    pub(crate) fn attach_indexed(&self, disk: crate::DiskWorldStore) -> WorldDbResult<()> {
+        let mut db = self.lock("attach indexed backend")?;
+        let world = db
+            .worlds
+            .keys()
+            .next()
+            .copied()
+            .ok_or_else(|| crate::indexed::physical("no world to attach"))?;
+        let root = disk
+            .indexed_head(world)
+            .map_err(crate::indexed::physical)?
+            .ok_or_else(|| crate::indexed::physical("indexed head absent"))?;
+        let stored =
+            restore_stored_world(&self.inner, root.world(), disk.checkpoint_receipts(world)?)?;
+        db.worlds.insert(world, stored);
+        db.durable_root = Some(root.encode()?);
+        db.checkpoints.clear();
+        let _ = self.inner.indexed.set(disk.clone());
+        self.inner.indexed_failed.store(false, Ordering::Release);
+        self.inner.unflushed_written.store(false, Ordering::Release);
+        db.indexed = Some(disk);
+        db.indexed_failed = false;
+        Ok(())
+    }
+
+    /// Reconciles an uncertain physical write after the database is reopened.
+    /// Pending gameplay changes remain owned by the client's writeback queue.
+    ///
+    /// # Errors
+    /// Returns corruption or physical I/O errors; never regenerates bad records.
+    pub fn reconcile_indexed(&self) -> WorldDbResult<()> {
+        let disk = self.lock("capture indexed backend")?.indexed.clone();
+        if let Some(disk) = disk {
+            self.attach_indexed(disk)?;
+        }
+        Ok(())
+    }
+
     /// Exports the last synchronized logical image for a physical storage adapter.
     ///
     /// # Errors
     /// Returns a storage error when no durable image is available or it is corrupt.
     pub fn export_durable_image(&self) -> WorldDbResult<crate::DurableWorldImageV1> {
         self.require_durable("export durable image")?;
+        let indexed = {
+            let db = self.lock("capture export backend")?;
+            db.indexed.clone().zip(db.worlds.keys().next().copied())
+        };
+        if let Some((disk, world)) = indexed {
+            return disk.export_indexed(world);
+        }
         let (bytes, digest) = self
             .lock("exporting durable image")?
             .durable_root
@@ -272,6 +334,9 @@ impl DeterministicWorldStorage {
     ) -> Self {
         Self {
             inner: Arc::new(StorageInner {
+                indexed: OnceLock::new(),
+                indexed_failed: AtomicBool::new(false),
+                unflushed_written: AtomicBool::new(false),
                 record_owner,
                 wire_limits,
                 limits,
@@ -726,6 +791,7 @@ impl WorldStorage for DeterministicWorldStorage {
             chunks: Arc::new(BTreeMap::new()),
             records: Arc::new(BTreeMap::new()),
             entity_index: BTreeMap::new(),
+            removed_entities: BTreeSet::new(),
             receipts: BTreeMap::new(),
             receipt_order: VecDeque::new(),
             checkpoints: BTreeMap::new(),
@@ -813,16 +879,43 @@ impl WorldStorage for DeterministicWorldStorage {
     }
 
     fn begin_read(&self, world: WorldId) -> WorldDbResult<Box<dyn WorldReadView>> {
-        let stored = self
-            .lock("capturing read snapshot")?
+        if self.inner.indexed_failed.load(Ordering::Acquire) {
+            return Err(crate::indexed::physical(
+                "reconcile failed indexed write first",
+            ));
+        }
+        if let Some(disk) = self.inner.indexed.get()
+            && !self.inner.unflushed_written.load(Ordering::Acquire)
+        {
+            return disk.current_indexed_view(
+                world,
+                self.inner.record_owner.clone(),
+                self.inner.wire_limits,
+            );
+        }
+        let database = self.lock("capturing read snapshot")?;
+        if database.indexed_failed {
+            return Err(crate::indexed::physical(
+                "reconcile failed indexed write first",
+            ));
+        }
+        let stored = database
             .worlds
             .get(&world)
-            .cloned()
             .ok_or(WorldDbError::WorldNotFound { world })?;
+        if let Some(disk) = &database.indexed {
+            return disk.indexed_view(
+                world,
+                stored.frontier,
+                stored.records.clone(),
+                self.inner.record_owner.clone(),
+                self.inner.wire_limits,
+            );
+        }
         Ok(Box::new(DeterministicReadView {
             world,
             frontier: stored.frontier,
-            records: stored.records,
+            records: stored.records.clone(),
             record_owner: self.inner.record_owner.clone(),
             wire_limits: self.inner.wire_limits,
         }))
@@ -879,6 +972,17 @@ impl WorldStorage for DeterministicWorldStorage {
     ) -> WorldDbResult<CheckpointReceiptV1> {
         self.require_durable("physical checkpoint verification")?;
         let database = self.lock("verifying independent checkpoint")?;
+        if let Some(disk) = &database.indexed {
+            let (image, receipt) = disk.indexed_checkpoint(world, checkpoint)?;
+            let retained = RetainedCheckpoint {
+                store_id: image.store_id().clone(),
+                image,
+                world,
+                receipt,
+            };
+            verify_checkpoint_image(&self.inner, &retained)?;
+            return Ok(retained.receipt);
+        }
         let retained = database
             .checkpoints
             .get(&(world, checkpoint))
@@ -898,6 +1002,9 @@ impl WorldStorage for DeterministicWorldStorage {
             return Err(WorldDbError::WriterAlreadyActive { world });
         }
         validate_frontier(&stored)?;
+        if let Some(disk) = &database.indexed {
+            disk.verify_indexed_records(world, &self.inner.record_owner, self.inner.wire_limits)?;
+        }
         restore_chunks_and_index(&self.inner, &mut stored)?;
         stored.recovery_verified = true;
         let receipt = Self::operation_receipt(&stored, durability_of_frontier(&stored.frontier));
@@ -1089,6 +1196,43 @@ fn preflight_commit_request(
     }
     Ok(())
 }
+fn hydrate_indexed_mutations(
+    inner: &StorageInner,
+    disk: &crate::DiskWorldStore,
+    current: &mut StoredWorld,
+    transaction: &latticeaxiom_storage::WorldTransaction,
+) -> WorldDbResult<()> {
+    let view = disk.indexed_view(
+        current.world,
+        current.frontier,
+        current.records.clone(),
+        inner.record_owner.clone(),
+        inner.wire_limits,
+    )?;
+    let chunks = Arc::make_mut(&mut current.chunks);
+    for mutation in transaction.mutations() {
+        if !chunks.contains_key(mutation.key())
+            && let Some(chunk) = view.load_chunk(mutation.key())?
+        {
+            chunks.insert(mutation.key().clone(), chunk);
+        }
+        if let Some(chunk) = chunks.get(mutation.key()) {
+            for id in chunk.data().persistent_entities().keys() {
+                current.removed_entities.insert(*id);
+                current.entity_index.insert(*id, mutation.key().clone());
+            }
+        }
+        for id in mutation.data().persistent_entities().keys() {
+            if !current.entity_index.contains_key(id)
+                && let Some(key) = disk.indexed_entity(current.world, *id)?
+            {
+                current.entity_index.insert(*id, key);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn commit_world(
     writer: &mut DeterministicWriter,
     request: &WorldCommitRequestV1,
@@ -1115,7 +1259,7 @@ fn commit_world(
         .storage
         .lock("committing authoritative transaction")?;
     writer.validate_lease(&database)?;
-    let current =
+    let mut current =
         database
             .worlds
             .get(&writer.world)
@@ -1123,6 +1267,14 @@ fn commit_world(
             .ok_or(WorldDbError::WorldNotFound {
                 world: writer.world,
             })?;
+    if database.indexed_failed {
+        return Err(crate::indexed::physical(
+            "reconcile failed indexed write first",
+        ));
+    }
+    if let Some(disk) = &database.indexed {
+        hydrate_indexed_mutations(&writer.storage.inner, disk, &mut current, transaction)?;
+    }
     if let Some(retained) = current.receipts.get(&transaction.id()) {
         if retained.fingerprint != fingerprint {
             return Err(WorldDbError::TransactionIdReuse {
@@ -1141,6 +1293,13 @@ fn commit_world(
     let prepared = writer.storage.prepare_header(&staged)?;
     staged.expected_header_hash = prepared.projection_hash();
     consume_fault(&mut database, DatabaseFaultPointV1::BeforeBatchPublication)?;
+    if database.indexed.is_some() && request.durability() == CommitDurabilityV1::Written {
+        writer
+            .storage
+            .inner
+            .unflushed_written
+            .store(true, Ordering::Release);
+    }
     database.worlds.insert(writer.world, staged.clone());
     if matches!(request.durability(), CommitDurabilityV1::Durable) {
         persist_durable_root(&writer.storage, &mut database, &staged)?;
@@ -1634,7 +1793,14 @@ fn checkpoint_world(
         });
     }
 
-    let image = capture_store_image(&current)?;
+    let image = if let Some(disk) = &database.indexed {
+        let exported = disk.export_indexed(current.world)?;
+        DurableRootImageV1::decode(&exported.bytes, exported.digest)?
+            .world()
+            .clone()
+    } else {
+        capture_store_image(&current)?
+    };
     let physical_bytes = usize_to_u64(
         postcard::to_allocvec(&image)
             .map_err(|error| WorldDbError::postcard_encode("durable store image v1", &error))?
@@ -1816,7 +1982,7 @@ fn verify_checkpoint_records(
     Ok(())
 }
 
-fn decode_record(
+pub(crate) fn decode_record(
     key: &ChunkKey,
     records: &BTreeMap<Vec<u8>, Vec<u8>>,
     record_owner: &StableId,
@@ -1930,6 +2096,60 @@ fn persist_durable_root(
     if !storage.is_durable() {
         return Ok(());
     }
+    if let Some(disk) = database.indexed.clone() {
+        if database.indexed_failed {
+            return Err(crate::indexed::physical(
+                "reconcile failed indexed write first",
+            ));
+        }
+        let expected = database
+            .durable_root
+            .as_ref()
+            .map(|(bytes, digest)| DurableRootImageV1::decode(bytes, *digest))
+            .transpose()?
+            .ok_or_else(|| crate::indexed::physical("indexed durable head missing"))?
+            .world()
+            .metadata_epoch()
+            .get();
+        let mut metadata = capture_store_image(world)?;
+        metadata.records.clear();
+        match disk.commit_indexed(
+            metadata,
+            &world.records,
+            &world.removed_entities,
+            &world.entity_index,
+            expected,
+            &database
+                .checkpoints
+                .iter()
+                .filter(|((owner, _), _)| *owner == world.world)
+                .map(|((_, id), checkpoint)| {
+                    (*id, (checkpoint.image.clone(), checkpoint.receipt.clone()))
+                })
+                .collect(),
+        ) {
+            Ok(head) => {
+                storage
+                    .inner
+                    .unflushed_written
+                    .store(false, Ordering::Release);
+                database.durable_root = Some(head);
+                database.checkpoints.clear();
+                if let Some(stored) = database.worlds.get_mut(&world.world) {
+                    stored.chunks = Arc::new(BTreeMap::new());
+                    stored.records = Arc::new(BTreeMap::new());
+                    stored.entity_index.clear();
+                    stored.removed_entities.clear();
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                storage.inner.indexed_failed.store(true, Ordering::Release);
+                database.indexed_failed = true;
+                return Err(error);
+            }
+        }
+    }
     let mut checkpoints = BTreeMap::new();
     for ((owner, id), retained) in &database.checkpoints {
         if *owner == world.world {
@@ -1962,6 +2182,7 @@ fn restore_stored_world(
         chunks: Arc::new(BTreeMap::new()),
         records: Arc::new(image.records().clone()),
         entity_index: BTreeMap::new(),
+        removed_entities: BTreeSet::new(),
         receipts: BTreeMap::new(),
         receipt_order: VecDeque::new(),
         checkpoints,

@@ -55,7 +55,7 @@ fn fixture_metadata() -> AuthoritativeMetadataInputV1 {
     AuthoritativeMetadataInputV1::new(lock, closure)
 }
 
-fn fixture_data(seed: u8) -> ChunkData {
+pub(super) fn fixture_data(seed: u8) -> ChunkData {
     let schema = SchemaId::from_str("latticeaxiom:schema/chunk-voxels@1")
         .expect("property payload schema is canonical");
     let version =
@@ -77,7 +77,7 @@ fn fixture_data(seed: u8) -> ChunkData {
     ChunkData::new(voxels, entities, continuations, provenance)
 }
 
-fn fixture_key(world: WorldId, coordinate: ChunkCoordinate) -> ChunkKey {
+pub(super) fn fixture_key(world: WorldId, coordinate: ChunkCoordinate) -> ChunkKey {
     ChunkKey::new(
         world,
         DimensionId::from_str("terrenia:dimension/terrenia")
@@ -86,7 +86,7 @@ fn fixture_key(world: WorldId, coordinate: ChunkCoordinate) -> ChunkKey {
     )
 }
 
-fn sealed_activation(world: WorldId, permit: ActivationPermitV1) -> WriterActivationV1 {
+pub(super) fn sealed_activation(world: WorldId, permit: ActivationPermitV1) -> WriterActivationV1 {
     let binding = SealedActivationBindingV1 {
         store_id: permit.store_id().clone(),
         metadata_epoch: permit.metadata_epoch().get(),

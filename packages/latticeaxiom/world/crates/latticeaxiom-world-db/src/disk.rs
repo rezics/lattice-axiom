@@ -15,7 +15,8 @@ use thiserror::Error;
 
 use crate::{DeterministicWorldStorage, DigestV1, DisplayName, WorldDbError};
 
-const CATALOG: TableDefinition<'static, &str, &[u8]> = TableDefinition::new("world-catalog-v1");
+pub(crate) const CATALOG: TableDefinition<'static, &str, &[u8]> =
+    TableDefinition::new("world-catalog-v1");
 const IMAGES: TableDefinition<'static, &str, &[u8]> = TableDefinition::new("world-images-v1");
 const PREVIOUS: TableDefinition<'static, &str, &[u8]> =
     TableDefinition::new("previous-world-images-v1");
@@ -79,14 +80,14 @@ pub enum DiskWorldError {
     Identity,
 }
 
-fn database_error(error: impl std::fmt::Display) -> DiskWorldError {
+pub(crate) fn database_error(error: impl std::fmt::Display) -> DiskWorldError {
     DiskWorldError::Database(error.to_string())
 }
 
 /// Process-exclusive physical repository with atomic catalog/image publication.
 #[derive(Clone, Debug)]
 pub struct DiskWorldStore {
-    database: Arc<Mutex<Option<Database>>>,
+    pub(crate) database: Arc<Mutex<Option<Arc<Database>>>>,
     path: PathBuf,
 }
 
@@ -100,10 +101,12 @@ impl DiskWorldStore {
             std::fs::create_dir_all(parent)?;
         }
         let existing = path.exists();
+        let mut builder = Database::builder();
+        builder.set_cache_size(64 * 1024 * 1024);
         let database = if existing {
-            Database::open(path)
+            builder.open(path)
         } else {
-            Database::create(path)
+            builder.create(path)
         }
         .map_err(database_error)?;
         if !existing {
@@ -117,7 +120,7 @@ impl DiskWorldStore {
             transaction.commit().map_err(database_error)?;
         }
         Ok(Self {
-            database: Arc::new(Mutex::new(Some(database))),
+            database: Arc::new(Mutex::new(Some(Arc::new(database)))),
             path: path.to_owned(),
         })
     }
@@ -129,7 +132,12 @@ impl DiskWorldStore {
     pub fn reopen(&self) -> Result<(), DiskWorldError> {
         let mut guard = self.database.lock().map_err(database_error)?;
         drop(guard.take());
-        *guard = Some(Database::open(&self.path).map_err(database_error)?);
+        *guard = Some(Arc::new(
+            Database::builder()
+                .set_cache_size(64 * 1024 * 1024)
+                .open(&self.path)
+                .map_err(database_error)?,
+        ));
         Ok(())
     }
 
@@ -159,6 +167,16 @@ impl DiskWorldStore {
     /// # Errors
     /// Returns [`DiskWorldError`] when the world is absent or its envelope is invalid.
     pub fn load(&self, world: WorldId) -> Result<DurableWorldImageV1, DiskWorldError> {
+        if self.indexed_head(world)?.is_some() {
+            return self.export_indexed(world).map_err(DiskWorldError::from);
+        }
+        self.load_legacy(world)
+    }
+
+    pub(crate) fn load_legacy(
+        &self,
+        world: WorldId,
+    ) -> Result<DurableWorldImageV1, DiskWorldError> {
         let guard = self.database.lock().map_err(database_error)?;
         let database = guard
             .as_ref()
@@ -191,6 +209,9 @@ impl DiskWorldStore {
         storage: &DeterministicWorldStorage,
         entry: &DiskWorldEntryV1,
     ) -> Result<(), DiskWorldError> {
+        if storage.is_indexed() {
+            return self.publish_indexed_catalog(storage, entry);
+        }
         let image = storage.export_durable_image()?;
         if image.world != entry.world {
             return Err(DiskWorldError::Identity);

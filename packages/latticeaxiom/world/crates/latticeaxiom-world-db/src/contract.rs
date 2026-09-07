@@ -140,7 +140,9 @@ pub trait WorldWriter: Send {
     ///
     /// Returns a typed pre-publication error for conflicts, limits, malformed
     /// data, writer mismatch, or an injected database failure. It never returns
-    /// an ordinary error after authoritative publication.
+    /// an ordinary error after authoritative publication. A physical backend
+    /// can return [`crate::WorldDbError::PhysicalStorage`] when I/O leaves the
+    /// outcome uncertain; callers must reconcile before retrying or evicting.
     fn commit(&mut self, request: WorldCommitRequestV1) -> WorldDbResult<WorldCommitOutcomeV1>;
 
     /// Synchronizes the complete written frontier and publishes its header.

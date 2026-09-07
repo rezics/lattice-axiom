@@ -59,6 +59,81 @@ pub struct MemoryTransactionKernel {
 impl crate::storage::sealed::Sealed for MemoryTransactionKernel {}
 
 impl MemoryTransactionKernel {
+    /// Checks scheduled work without cloning voxel payloads.
+    ///
+    /// # Errors
+    /// Returns a lock failure.
+    pub fn has_continuation(
+        &self,
+        key: &ChunkKey,
+        id: crate::ContinuationId,
+    ) -> StorageResult<bool> {
+        Ok(self
+            .read_state("inspect continuation")?
+            .worlds
+            .get(&key.world)
+            .and_then(|world| world.chunks.get(key))
+            .is_some_and(|chunk| chunk.data.continuations().contains_key(&id)))
+    }
+    /// Releases a resident copy after its owner has acknowledged physical
+    /// persistence. A concurrently changed revision is retained. This changes
+    /// cache residency only; it must never be used as world-data deletion.
+    ///
+    /// # Errors
+    /// Returns a lock failure without releasing data.
+    pub fn release_persisted_copy(
+        &self,
+        key: &ChunkKey,
+        revision: ChunkRevision,
+    ) -> StorageResult<bool> {
+        let mut state = self.write_state("release persisted resident copy")?;
+        let Some(world) = state.worlds.get_mut(&key.world) else {
+            return Ok(false);
+        };
+        if world
+            .chunks
+            .get(key)
+            .is_none_or(|chunk| chunk.revision != revision)
+        {
+            return Ok(false);
+        }
+        if let Some(chunk) = world.chunks.remove(key) {
+            for entity in chunk.data.persistent_entities().keys() {
+                world.entity_locations.remove(entity);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Captures only the requested resident chunks at one coherent revision.
+    ///
+    /// # Errors
+    /// Returns a lock failure. Missing resident copies are omitted.
+    pub fn capture_chunks(
+        &self,
+        world: WorldId,
+        keys: &[ChunkKey],
+    ) -> StorageResult<Vec<StoredChunk>> {
+        let state = self.read_state("capture bounded resident chunks")?;
+        Ok(state.worlds.get(&world).map_or_else(Vec::new, |stored| {
+            keys.iter()
+                .filter(|key| key.world == world)
+                .filter_map(|key| stored.chunks.get(key).cloned())
+                .collect()
+        }))
+    }
+
+    /// Number of resident payloads, excluding physically stored cold chunks.
+    #[must_use]
+    pub fn resident_chunk_count(&self, world: WorldId) -> usize {
+        self.state.read().map_or(0, |state| {
+            state
+                .worlds
+                .get(&world)
+                .map_or(0, |world| world.chunks.len())
+        })
+    }
+
     /// Creates an empty instance with non-normative reference safety limits.
     #[must_use]
     pub fn new() -> Self {
@@ -745,6 +820,34 @@ mod tests {
     #[test]
     fn conforms_to_materialized_chunk_transaction_kernel() {
         conformance::run_all(MemoryTransactionKernel::new);
+    }
+
+    #[test]
+    fn releasing_a_persisted_copy_requires_the_exact_revision_and_keeps_snapshots_owned() {
+        let storage = MemoryTransactionKernel::new();
+        let transaction = conformance::sample_create_transaction(190);
+        let world = transaction.world();
+        let key = transaction.mutations()[0].key().clone();
+        storage.publish(transaction).expect("publication");
+        let captured = storage
+            .capture_chunks(world, std::slice::from_ref(&key))
+            .expect("bounded snapshot");
+        assert_eq!(captured.len(), 1);
+        let revision = captured[0].revision();
+        assert!(
+            !storage
+                .release_persisted_copy(&key, ChunkRevision::ZERO)
+                .expect("stale release")
+        );
+        assert_eq!(storage.resident_chunk_count(world), 2);
+        assert!(
+            storage
+                .release_persisted_copy(&key, revision)
+                .expect("acknowledged release")
+        );
+        assert_eq!(storage.resident_chunk_count(world), 1);
+        assert!(storage.read_chunk(&key).expect("cold cache miss").is_none());
+        assert!(!captured[0].data().voxels().bytes().is_empty());
     }
 
     #[test]
