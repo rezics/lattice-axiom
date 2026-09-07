@@ -25,7 +25,7 @@ use crate::EngineProfile;
 
 /// Marks the camera driven by the local production-host player.
 #[derive(Component, Debug, Default)]
-pub(super) struct ProductionCamera;
+pub(crate) struct ProductionCamera;
 
 /// Authoritative fluid medium occupied by the production camera eye.
 #[derive(Clone, Copy, Component, Debug, Default, Eq, PartialEq)]
@@ -82,6 +82,8 @@ pub(super) fn spawn_production_client_view(
     spine: Res<'_, ProductionSpine>,
     mut standard_materials: ResMut<'_, Assets<StandardMaterial>>,
     mut water_materials: ResMut<'_, Assets<WaterMaterial>>,
+    mut terrain_materials: ResMut<'_, Assets<super::terrain_material::TerrainMaterial>>,
+    mut grass_materials: ResMut<'_, Assets<super::foliage::GrassMaterial>>,
     mut images: ResMut<'_, Assets<Image>>,
     presentation: (
         ResMut<'_, ProductionTerrainPalette>,
@@ -100,12 +102,29 @@ pub(super) fn spawn_production_client_view(
     atlas_image.sampler = nearest_clamp_sampler();
     let atlas = images.add(atlas_image);
     let water_normal_map = images.add(water_normal_image());
-    commands.insert_resource(ProductionTerrainMaterials::from_atlas(
+    let mut terrain = ProductionTerrainMaterials::from_atlas(
         &mut standard_materials,
         &mut water_materials,
         &atlas,
         &water_normal_map,
-    ));
+    );
+    let mut array_image = palette.array_image();
+    #[cfg(feature = "development")]
+    if std::env::var_os("LATTICEAXIOM_CAPTURE_PATH").is_some() {
+        array_image.texture_descriptor.usage |=
+            bevy::render::render_resource::TextureUsages::COPY_SRC;
+    }
+    let array_texture = images.add(array_image);
+    #[cfg(feature = "development")]
+    super::chunk_mesh::audit_array_upload(&mut commands, array_texture.clone(), &palette);
+    terrain.install_array(&mut terrain_materials, array_texture);
+    terrain.install_grass(&mut grass_materials);
+    if let Some(style) = resources.material("terrenia:fluid/water")
+        && let Some(mut water) = water_materials.get_mut(terrain.far_water_handle())
+    {
+        water.base.base_color = Color::srgb_u8(style.color[0], style.color[1], style.color[2]);
+    }
+    commands.insert_resource(terrain);
     commands.insert_resource(FarTerrainRolePalette::from_blocks(
         &spine.far_terrain_role_blocks(),
         resources,
@@ -114,6 +133,7 @@ pub(super) fn spawn_production_client_view(
         Name::new("Production Camera"),
         super::InProcessPlayEntity,
         ProductionCamera,
+        bevy::ui::IsDefaultUiCamera,
         CameraMediumV1::Air,
         ProductionCameraViewRangeV1::default(),
         Camera3d::default(),
@@ -157,12 +177,16 @@ pub(super) fn sync_water_material_medium(
     let Some(medium) = cameras.iter().next() else {
         return;
     };
-    let Some(mut material) = water_materials.get_mut(terrain_materials.water_handle()) else {
-        return;
-    };
-    material
-        .extension
-        .set_camera_underwater(matches!(medium, CameraMediumV1::Water));
+    for handle in [
+        terrain_materials.water_handle(),
+        terrain_materials.far_water_handle(),
+    ] {
+        if let Some(mut material) = water_materials.get_mut(handle) {
+            material
+                .extension
+                .set_camera_underwater(matches!(medium, CameraMediumV1::Water));
+        }
+    }
 }
 
 /// Synchronizes the production camera with the local player's eye pose.

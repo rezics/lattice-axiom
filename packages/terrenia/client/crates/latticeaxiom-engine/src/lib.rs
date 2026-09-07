@@ -26,6 +26,8 @@ mod cursor_capture;
 #[cfg(feature = "client")]
 mod frame_monitor;
 mod host;
+#[cfg(feature = "client")]
+pub use host::item_models::{ProceduralItemBuilder, ProceduralItemPart};
 mod input;
 mod instance;
 #[cfg(feature = "development")]

@@ -13,6 +13,7 @@ default-run = "latticeaxiom-engine"
 # default features for a statically linked distributable build.
 default = ["client", "development"]
 client = [
+  "dep:png",
   "dep:latticeaxiom-webview",
   "latticeaxiom-client-ui/bevy-ui",
   "dep:bevy_framepace",
@@ -56,6 +57,7 @@ path = "src/bin/latticeaxiom_play.rs"
 required-features = ["client"]
 
 [dependencies]
+png = { workspace = true, optional = true }
 latticeaxiom-webview = { workspace = true, optional = true }
 latticeaxiom-host.workspace = true
 accesskit.workspace = true

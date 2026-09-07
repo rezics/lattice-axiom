@@ -21,6 +21,7 @@ use latticeaxiom_voxel_mesh::{
     Aabb, Face, FluidMeshFlow, LayerMergeKey, MeshAlphaMode, MeshBuffer, MeshGroup, Quad,
 };
 
+use super::terrain_material::{TerrainMaterial, TerrainMaterialExtension};
 use super::water_material::{WaterMaterial, production_water_material};
 
 /// Pixel edge length of one color-block atlas tile.
@@ -33,9 +34,11 @@ const FALLBACK_COLOR: [f32; 4] = [0.38, 0.41, 0.43, 1.0];
 #[derive(Clone, Debug, Resource)]
 pub(super) struct ProductionTerrainMaterials {
     standard_handles: [Option<Handle<StandardMaterial>>; MeshGroup::ALL.len()],
+    array_handles: [Option<Handle<TerrainMaterial>>; MeshGroup::ALL.len()],
+    grass_handle: Option<Handle<super::foliage::GrassMaterial>>,
     water_handle: Handle<WaterMaterial>,
+    far_water_handle: Handle<WaterMaterial>,
     far_solid_handle: Handle<StandardMaterial>,
-    far_water_handle: Handle<StandardMaterial>,
 }
 
 impl ProductionTerrainMaterials {
@@ -53,6 +56,10 @@ impl ProductionTerrainMaterials {
             atlas.clone(),
             water_normal_map.clone(),
         ));
+        let mut far_water = production_water_material(atlas.clone(), water_normal_map.clone());
+        far_water.base.base_color_texture = None;
+        far_water.base.base_color = bevy::prelude::Color::srgb_u8(51, 127, 165);
+        let far_water_handle = water_materials.add(far_water);
         let far_solid_handle = standard_materials.add(StandardMaterial {
             base_color: bevy::prelude::Color::WHITE,
             perceptual_roughness: 0.95,
@@ -61,20 +68,13 @@ impl ProductionTerrainMaterials {
             cull_mode: None,
             ..StandardMaterial::default()
         });
-        let far_water_handle = standard_materials.add(StandardMaterial {
-            base_color: bevy::prelude::Color::srgba(0.12, 0.38, 0.72, 0.72),
-            perceptual_roughness: 0.18,
-            reflectance: 0.35,
-            alpha_mode: AlphaMode::Blend,
-            double_sided: true,
-            cull_mode: None,
-            ..StandardMaterial::default()
-        });
         Self {
             standard_handles,
+            array_handles: std::array::from_fn(|_| None),
+            grass_handle: None,
             water_handle,
-            far_solid_handle,
             far_water_handle,
+            far_solid_handle,
         }
     }
 
@@ -82,15 +82,55 @@ impl ProductionTerrainMaterials {
         self.standard_handles[group.index()].clone()
     }
 
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "Owned texture handle is shared across per-group assets"
+    )]
+    pub(super) fn install_array(
+        &mut self,
+        assets: &mut Assets<TerrainMaterial>,
+        texture: Handle<Image>,
+    ) {
+        for group in MeshGroup::ALL {
+            if group == MeshGroup::Water {
+                continue;
+            }
+            let Some(mut base) = standard_group_material(Handle::default(), group) else {
+                continue;
+            };
+            base.base_color_texture = None;
+            if group == MeshGroup::Cutout {
+                base.cull_mode = None;
+                base.double_sided = true;
+            }
+            self.array_handles[group.index()] = Some(assets.add(TerrainMaterial {
+                base,
+                extension: TerrainMaterialExtension {
+                    texture: texture.clone(),
+                    settings: bevy::prelude::Vec4::new(
+                        f32::from(u8::from(group == MeshGroup::Cutout)),
+                        0.0,
+                        0.0,
+                        0.0,
+                    ),
+                },
+            }));
+        }
+    }
+
     pub(super) fn water_handle(&self) -> &Handle<WaterMaterial> {
         &self.water_handle
+    }
+
+    pub(super) fn install_grass(&mut self, assets: &mut Assets<super::foliage::GrassMaterial>) {
+        self.grass_handle = Some(assets.add(super::foliage::material()));
     }
 
     pub(super) fn far_solid_handle(&self) -> &Handle<StandardMaterial> {
         &self.far_solid_handle
     }
 
-    pub(super) fn far_water_handle(&self) -> &Handle<StandardMaterial> {
+    pub(super) fn far_water_handle(&self) -> &Handle<WaterMaterial> {
         &self.far_water_handle
     }
 }
@@ -133,16 +173,36 @@ pub(super) struct ProductionTerrainPalette {
     atlas_height: u32,
     layer_table: Option<CompiledTerrainLayerTableV1>,
     layer_tiles: BTreeMap<StableId, AtlasTile>,
+    foliage: BTreeMap<u16, super::foliage::FoliageStyle>,
 }
 
 /// One 16×16 atlas tile in UV space, inset by half a texel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AtlasTile {
+    index: u32,
+    surface: f32,
     min: [f32; 2],
     size: [f32; 2],
 }
 
 impl ProductionTerrainPalette {
+    pub(super) fn foliage_style(
+        &self,
+        key: &LayerMergeKey,
+    ) -> Option<super::foliage::FoliageStyle> {
+        self.foliage.get(&key.layer_index()).copied()
+    }
+    pub(super) fn model_face_layers(&self, content: &str) -> Option<[String; 6]> {
+        let row = self
+            .layer_table
+            .as_ref()?
+            .rows()
+            .iter()
+            .find(|row| row.content().as_str() == content)?;
+        Some(std::array::from_fn(|index| {
+            row.faces().layer(TerrainFaceV1::ALL[index]).to_string()
+        }))
+    }
     pub(super) fn from_ids(ids: &[BlockId]) -> Self {
         let colors: Vec<[f32; 4]> = ids.iter().map(|id| block_color(id.as_str())).collect();
         let tile_count = colors.len().max(1);
@@ -185,6 +245,7 @@ impl ProductionTerrainPalette {
             atlas_height,
             layer_table: None,
             layer_tiles: BTreeMap::new(),
+            foliage: BTreeMap::new(),
         }
     }
 
@@ -208,6 +269,37 @@ impl ProductionTerrainPalette {
         table: CompiledTerrainLayerTableV1,
         resources: &latticeaxiom_render_contracts::ResolvedResourcePacks,
     ) -> Self {
+        let foliage = table
+            .rows()
+            .iter()
+            .filter_map(|row| {
+                let decorative = row.content().path() == "grass";
+                let provider = resources
+                    .model(row.content().as_str())
+                    .map(|model| model.provider.path());
+                if !decorative && !matches!(provider, Some("grass-tuft" | "fern" | "reed")) {
+                    return None;
+                }
+                let rgb = resources
+                    .material(row.content().as_str())
+                    .map_or([74, 112, 60], |style| style.color);
+                let linear = bevy::prelude::Color::srgb_u8(rgb[0], rgb[1], rgb[2]).to_linear();
+                Some((
+                    row.table_index(),
+                    super::foliage::FoliageStyle {
+                        color: [linear.red, linear.green, linear.blue],
+                        height: if decorative {
+                            0.45
+                        } else if provider == Some("reed") {
+                            1.25
+                        } else {
+                            0.85
+                        },
+                        decorative,
+                    },
+                ))
+            })
+            .collect();
         let mut layer_ids = BTreeSet::new();
         for row in table.rows() {
             for face in TerrainFaceV1::ALL {
@@ -260,16 +352,26 @@ impl ProductionTerrainPalette {
                             .any(|face| candidate.faces().layer(*face) == layer)
                     })
                     .map(|row| row.content().as_str());
-                let tile_pixels = material.and_then(|id| resources.material(id)).map_or_else(
-                    || solid_tile(material.map_or(FALLBACK_COLOR, block_color)),
-                    |style| {
-                        (0..TILE_PX)
-                            .flat_map(|y| (0..TILE_PX).flat_map(move |x| style.texel(x, y)))
-                            .collect()
-                    },
-                );
+                let tile_pixels = material
+                    .and_then(|id| resources.material_for_layer(id, layer.as_str()))
+                    .map_or_else(
+                        || solid_tile(material.map_or(FALLBACK_COLOR, block_color)),
+                        |style| {
+                            (0..TILE_PX)
+                                .flat_map(|y| (0..TILE_PX).flat_map(move |x| style.texel(x, y)))
+                                .collect()
+                        },
+                    );
                 blit_tile(&mut atlas_rgba, atlas_width, col, row, &tile_pixels);
-                let tile = atlas_tile(tile_index, columns, atlas_width, atlas_height);
+                let mut tile = atlas_tile(tile_index, columns, atlas_width, atlas_height);
+                if let Some(style) =
+                    material.and_then(|id| resources.material_for_layer(id, layer.as_str()))
+                {
+                    tile.surface = f32::from(
+                        u16::from(style.roughness.unwrap_or(242))
+                            + u16::from(style.metallic.unwrap_or(0)) * 256,
+                    );
+                }
                 tiles.push(tile);
                 layer_tiles.insert(layer.clone(), tile);
             }
@@ -285,6 +387,7 @@ impl ProductionTerrainPalette {
             atlas_height,
             layer_table: Some(table),
             layer_tiles,
+            foliage,
         }
     }
 
@@ -372,6 +475,91 @@ impl ProductionTerrainPalette {
         image.sampler = nearest_clamp_sampler();
         image
     }
+
+    /// Each face is an independent repeatable array layer with its own mip chain.
+    pub(super) fn array_image(&self) -> Image {
+        use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
+        let count = u32::try_from(self.tiles.len().max(1)).unwrap_or(u32::MAX);
+        let columns = self.atlas_width / TILE_PX;
+        let mut bytes = Vec::new();
+        for layer in 0..count {
+            let mut pixels = Vec::with_capacity((TILE_PX * TILE_PX * 4) as usize);
+            for y in 0..TILE_PX {
+                let start = (((layer / columns) * TILE_PX + y) * self.atlas_width
+                    + (layer % columns) * TILE_PX) as usize
+                    * 4;
+                pixels.extend_from_slice(&self.atlas_rgba[start..start + TILE_PX as usize * 4]);
+            }
+            let mut edge = TILE_PX as usize;
+            loop {
+                bytes.extend_from_slice(&pixels);
+                if edge == 1 {
+                    break;
+                }
+                let mut next = vec![0; edge / 2 * (edge / 2) * 4];
+                for y in 0..edge / 2 {
+                    for x in 0..edge / 2 {
+                        for channel in 0..4 {
+                            let sum = [0, 1]
+                                .into_iter()
+                                .flat_map(|dy| [0, 1].into_iter().map(move |dx| (dy, dx)))
+                                .map(|(dy, dx)| {
+                                    u16::from(
+                                        pixels[((y * 2 + dy) * edge + x * 2 + dx) * 4 + channel],
+                                    )
+                                })
+                                .sum::<u16>();
+                            next[(y * (edge / 2) + x) * 4 + channel] =
+                                u8::try_from(sum / 4).unwrap_or(255);
+                        }
+                    }
+                }
+                edge /= 2;
+                pixels = next;
+            }
+        }
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: TILE_PX,
+                height: TILE_PX,
+                depth_or_array_layers: count,
+            },
+            TextureDimension::D2,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        image.texture_descriptor.mip_level_count = TILE_PX.ilog2() + 1;
+        image.data_order = bevy::render::render_resource::TextureDataOrder::LayerMajor;
+        image.texture_view_descriptor = Some(TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        image.data = Some(bytes);
+        image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            mag_filter: ImageFilterMode::Nearest,
+            min_filter: ImageFilterMode::Linear,
+            mipmap_filter: ImageFilterMode::Linear,
+            ..Default::default()
+        });
+        image
+    }
+
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Compiled face-layer indices are bounded far below f32's exact integer range"
+    )]
+    fn array_layer(&self, key: LayerMergeKey, face: Face) -> [f32; 2] {
+        self.layer_table
+            .as_ref()
+            .and_then(|table| table.rows().get(key.layer_index() as usize))
+            .and_then(|row| {
+                self.layer_tiles
+                    .get(row.faces().layer(TerrainFaceV1::ALL[face.index()]))
+            })
+            .map_or([0.0, 242.0], |tile| [tile.index as f32, tile.surface])
+    }
 }
 
 /// Nearest-filtered, clamp-to-edge sampler for voxel color-block textures.
@@ -391,6 +579,7 @@ pub(super) fn nearest_clamp_sampler() -> ImageSampler {
 #[derive(Clone, Component, Debug)]
 pub(super) struct ChunkGpuMesh {
     groups: [Option<Entity>; MeshGroup::ALL.len()],
+    foliage: Option<Entity>,
 }
 
 /// Child entity presenting one [`MeshGroup`] of a chunk.
@@ -410,12 +599,16 @@ pub(super) fn apply_chunk_mesh(
     palette: &ProductionTerrainPalette,
     entity: Entity,
     geometry: &MeshBuffer<LayerMergeKey>,
+    coordinate: latticeaxiom_storage::ChunkCoordinate,
     bounds: Option<Aabb>,
     existing: Option<&ChunkGpuMesh>,
 ) {
     if let Some(existing) = existing {
         for child in existing.groups.into_iter().flatten() {
             commands.entity(child).despawn();
+        }
+        if let Some(entity) = existing.foliage {
+            commands.entity(entity).despawn();
         }
     }
     let mut groups = [None; MeshGroup::ALL.len()];
@@ -431,6 +624,16 @@ pub(super) fn apply_chunk_mesh(
                     Transform::IDENTITY,
                     Mesh3d(handle),
                     MeshMaterial3d(materials.water_handle().clone()),
+                    ChunkGroupMesh(group),
+                    terrain_visibility_range(),
+                ))
+                .id()
+        } else if let Some(material) = &materials.array_handles[group.index()] {
+            commands
+                .spawn((
+                    Transform::IDENTITY,
+                    Mesh3d(handle),
+                    MeshMaterial3d(material.clone()),
                     ChunkGroupMesh(group),
                     terrain_visibility_range(),
                 ))
@@ -456,11 +659,27 @@ pub(super) fn apply_chunk_mesh(
         groups[group.index()] = Some(child_entity);
         spawned = spawned.saturating_add(1);
     }
-    if spawned == 0 {
+    let foliage = materials.grass_handle.as_ref().and_then(|material| {
+        let mesh = super::foliage::chunk_mesh(geometry, palette, coordinate)?;
+        let child = commands
+            .spawn((
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(material.clone()),
+                Transform::IDENTITY,
+                VisibilityRange::abrupt(0.0, 72.0),
+                bevy::light::NotShadowCaster,
+            ))
+            .id();
+        commands.entity(entity).add_child(child);
+        Some(child)
+    });
+    if spawned == 0 && foliage.is_none() {
         commands.entity(entity).remove::<ChunkGpuMesh>();
         return;
     }
-    commands.entity(entity).insert(ChunkGpuMesh { groups });
+    commands
+        .entity(entity)
+        .insert(ChunkGpuMesh { groups, foliage });
 }
 
 fn terrain_visibility_range() -> VisibilityRange {
@@ -474,18 +693,24 @@ fn mesh_from_group(
     palette: &ProductionTerrainPalette,
     group: MeshGroup,
 ) -> Option<Mesh> {
-    let cpu = adapter_cpu_mesh_from_group(
+    let cpu = emit_adapter_mesh(
         geometry,
-        group,
+        [group],
         // The atlas already carries the authored/fallback color.  Keeping
         // vertex colors white avoids multiplying the same tint a second time
         // in StandardMaterial's texture * vertex-color path.
         |_| [1.0, 1.0, 1.0, 1.0],
         |key, face, quad| palette.layer_uvs(*key, face, quad),
+        |key| {
+            !palette
+                .foliage_style(key)
+                .is_some_and(|style| !style.decorative)
+        },
     )?;
     if cpu.group_count == 0 {
         return None;
     }
+    let vertex_count = cpu.positions.len();
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
@@ -493,9 +718,33 @@ fn mesh_from_group(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, cpu.positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, cpu.normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, cpu.colors);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, cpu.uvs);
     if matches!(group, MeshGroup::Water) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, cpu.uvs);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, cpu.flow_uvs);
+    } else {
+        let mut uvs = Vec::with_capacity(vertex_count);
+        let mut layers = Vec::with_capacity(vertex_count);
+        for face in Face::ALL {
+            for quad in geometry.group(group, face) {
+                if palette
+                    .foliage_style(quad.merge_key())
+                    .is_some_and(|style| !style.decorative)
+                {
+                    continue;
+                }
+                let layer = palette.array_layer(*quad.merge_key(), face);
+                for p in quad.positions(face) {
+                    uvs.push(match face {
+                        Face::PosX | Face::NegX => [p[2], p[1]],
+                        Face::PosZ | Face::NegZ => [p[0], p[1]],
+                        Face::PosY | Face::NegY => [p[0], p[2]],
+                    });
+                    layers.push(layer);
+                }
+            }
+        }
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, layers);
     }
     mesh.insert_indices(Indices::U32(cpu.indices));
     Some(mesh)
@@ -523,16 +772,7 @@ fn adapter_cpu_mesh_from_buffer<K>(
     color_of: impl FnMut(&K) -> [f32; 4],
     uv_of: impl FnMut(&K, Face, &Quad<K>) -> [[f32; 2]; 4],
 ) -> Option<AdapterCpuMesh> {
-    emit_adapter_mesh(geometry, MeshGroup::ALL, color_of, uv_of)
-}
-
-fn adapter_cpu_mesh_from_group(
-    geometry: &MeshBuffer<LayerMergeKey>,
-    group: MeshGroup,
-    color_of: impl FnMut(&LayerMergeKey) -> [f32; 4],
-    uv_of: impl FnMut(&LayerMergeKey, Face, &Quad<LayerMergeKey>) -> [[f32; 2]; 4],
-) -> Option<AdapterCpuMesh> {
-    emit_adapter_mesh(geometry, [group], color_of, uv_of)
+    emit_adapter_mesh(geometry, MeshGroup::ALL, color_of, uv_of, |_| true)
 }
 
 fn emit_adapter_mesh<K, const N: usize>(
@@ -540,6 +780,7 @@ fn emit_adapter_mesh<K, const N: usize>(
     groups: [MeshGroup; N],
     mut color_of: impl FnMut(&K) -> [f32; 4],
     mut uv_of: impl FnMut(&K, Face, &Quad<K>) -> [[f32; 2]; 4],
+    visible: impl Fn(&K) -> bool,
 ) -> Option<AdapterCpuMesh> {
     if geometry.is_empty() {
         return None;
@@ -556,6 +797,9 @@ fn emit_adapter_mesh<K, const N: usize>(
         let mut group_has_quads = false;
         for face in Face::ALL {
             for quad in geometry.group(group, face) {
+                if !visible(quad.merge_key()) {
+                    continue;
+                }
                 let Ok(base) = u32::try_from(positions.len()) else {
                     break;
                 };
@@ -668,6 +912,8 @@ fn atlas_tile(index: usize, columns: u32, atlas_width: u32, atlas_height: u32) -
     let tile = TILE_PX as f32;
     let inset = 0.5;
     AtlasTile {
+        index,
+        surface: 242.0,
         min: [
             (col as f32 * tile + inset) / atlas_w,
             (row as f32 * tile + inset) / atlas_h,
@@ -740,6 +986,57 @@ fn blit_tile(atlas: &mut [u8], atlas_width: u32, col: u32, row: u32, tile: &[u8]
     }
 }
 
+#[cfg(feature = "development")]
+pub(super) fn audit_array_upload(
+    commands: &mut Commands<'_, '_>,
+    texture: Handle<Image>,
+    palette: &ProductionTerrainPalette,
+) {
+    use bevy::render::gpu_readback::{Readback, ReadbackComplete};
+    let Some(path) = std::env::var_os("LATTICEAXIOM_CAPTURE_PATH") else {
+        return;
+    };
+    if !std::path::Path::new(".latticeaxiom-qa").is_file() {
+        return;
+    }
+    let Some(directory) = std::path::Path::new(&path)
+        .parent()
+        .map(std::path::Path::to_path_buf)
+    else {
+        return;
+    };
+    let expected = palette.atlas_rgba.clone();
+    let width = palette.atlas_width;
+    let height = palette.atlas_height;
+    let count = palette.tiles.len();
+    let indices = palette
+        .layer_tiles
+        .iter()
+        .map(|(id, tile)| (id.to_string(), tile.index))
+        .collect::<BTreeMap<_, _>>();
+    commands.spawn((Readback::texture(texture), super::InProcessPlayEntity)).observe(move |event: bevy::prelude::On<'_, '_, ReadbackComplete>, mut commands: Commands<'_, '_>| {
+        if event.data.len() < count * 16 * 256 { return; }
+        let mut actual = expected.clone();
+        for layer in 0..count {
+            let mut tile = Vec::with_capacity(1024);
+            for row in 0..16 { let start = (layer * 16 + row) * 256; tile.extend_from_slice(&event.data[start..start+64]); }
+            let layer = u32::try_from(layer).unwrap_or(0);
+            blit_tile(&mut actual, width, layer % (width / 16), layer / (width / 16), &tile);
+        }
+        let mismatched_bytes = actual.iter().zip(&expected).filter(|(a,b)| a != b).count();
+        let report = serde_json::json!({"layers": count,"width":width,"height":height,"mismatched_bytes":mismatched_bytes,"readback_bytes":event.data.len(),"indices":indices});
+        if let Ok(bytes) = serde_json::to_vec_pretty(&report) { let _ = std::fs::write(directory.join("terrain-array-upload.json"), bytes); }
+        for (name, pixels) in [("terrain-array-gpu.png", &actual), ("terrain-array-cpu.png", &expected)] {
+            if let Ok(file) = std::fs::File::create(directory.join(name)) {
+                let mut encoder = png::Encoder::new(file, width, height);
+                encoder.set_color(png::ColorType::Rgba); encoder.set_depth(png::BitDepth::Eight);
+                if let Ok(mut writer) = encoder.write_header() { let _ = writer.write_image_data(pixels); }
+            }
+        }
+        commands.entity(event.entity).despawn();
+    });
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
@@ -790,10 +1087,10 @@ mod tests {
         assert!(materials.standard_handle(MeshGroup::Water).is_none());
         assert!(water_assets.get(materials.water_handle()).is_some());
         assert!(standard_assets.get(materials.far_solid_handle()).is_some());
-        assert!(standard_assets.get(materials.far_water_handle()).is_some());
+        assert!(water_assets.get(materials.far_water_handle()).is_some());
         assert_ne!(
-            materials.far_solid_handle(),
-            materials.far_water_handle(),
+            materials.far_solid_handle().id().untyped(),
+            materials.far_water_handle().id().untyped(),
             "solid and water retain separate render-material ownership"
         );
         for group in MeshGroup::ALL {

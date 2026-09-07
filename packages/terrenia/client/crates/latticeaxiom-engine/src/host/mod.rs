@@ -14,14 +14,20 @@ mod catalog;
 mod chunk_mesh;
 #[cfg(feature = "client")]
 mod client;
+#[cfg(feature = "client")]
+pub(crate) use client::ProductionCamera;
 mod display;
 #[cfg(feature = "client")]
 mod far_mesh;
 mod far_stream;
 mod fluid;
+#[cfg(feature = "client")]
+mod foliage;
 mod gameplay;
 #[cfg(feature = "client")]
 mod hud;
+#[cfg(feature = "client")]
+pub(crate) mod item_models;
 mod layers;
 #[cfg(feature = "client")]
 mod mining_ring;
@@ -44,6 +50,8 @@ mod spine;
 mod start;
 mod stream;
 mod surface;
+#[cfg(feature = "client")]
+mod terrain_material;
 #[cfg(feature = "client")]
 mod water_material;
 #[cfg(feature = "client")]
@@ -828,6 +836,9 @@ pub(super) fn install_production_schedule(
         persistent::add_save_systems(app);
         if !include_transform {
             water_material::install_water_material(app);
+            terrain_material::install(app);
+            item_models::install(app);
+            foliage::install(app);
             app.add_plugins(LeafwingInputAdapterPlugin);
         }
     }
@@ -1123,6 +1134,7 @@ fn sync_chunk_colliders(
             palette.as_ref(),
             entity,
             &update.geometry,
+            update.coordinate,
             update.bounds,
             gpu_meshes.get(entity).ok(),
         );
@@ -1184,6 +1196,7 @@ fn attach_chunk_mesh(
     palette: Option<&Res<'_, chunk_mesh::ProductionTerrainPalette>>,
     entity: Entity,
     geometry: &latticeaxiom_voxel_mesh::MeshBuffer<latticeaxiom_voxel_mesh::LayerMergeKey>,
+    coordinate: latticeaxiom_storage::ChunkCoordinate,
     bounds: Option<latticeaxiom_voxel_mesh::Aabb>,
     existing: Option<&chunk_mesh::ChunkGpuMesh>,
 ) {
@@ -1197,7 +1210,7 @@ fn attach_chunk_mesh(
         return;
     };
     chunk_mesh::apply_chunk_mesh(
-        commands, meshes, material, palette, entity, geometry, bounds, existing,
+        commands, meshes, material, palette, entity, geometry, coordinate, bounds, existing,
     );
 }
 
@@ -1222,6 +1235,7 @@ fn attach_initial_chunk_meshes(
             palette.as_ref(),
             entity,
             &geometry,
+            presentation.coordinate,
             geometry.bounds(),
             None,
         );

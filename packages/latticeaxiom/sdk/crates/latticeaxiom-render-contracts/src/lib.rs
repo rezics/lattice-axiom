@@ -16,8 +16,8 @@ mod registration;
 mod resource_pack;
 
 pub use resource_pack::{
-    MaterialPattern, ResolvedResourcePacks, ResourceMaterial, ResourcePackError, ResourcePackKind,
-    ResourcePackV1,
+    MaterialPattern, ResolvedResourcePacks, ResourceMaterial, ResourceModel, ResourcePackError,
+    ResourcePackKind, ResourcePackV1,
 };
 
 pub use command::{

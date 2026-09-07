@@ -90,6 +90,7 @@ impl crate::EngineInstance {
 
 /// Installs one browser host without taking over Bevy's event loop.
 pub(crate) fn install(app: &mut App) {
+    app.init_resource::<super::item_models::PreviewImages>();
     app.init_resource::<PackageEndpoints>();
     let boot = super::start::unix_now_ms().to_string();
     app.insert_resource(BridgeState {
@@ -235,14 +236,22 @@ fn pump(world: &mut World) {
         return;
     };
     if host.view.is_none() {
+        let generated = world
+            .resource::<super::item_models::PreviewImages>()
+            .0
+            .clone();
         let attached = bevy_winit::WINIT_WINDOWS.with_borrow(|windows| {
             let Some(native) = windows.get_window(entity) else {
                 return None;
             };
-            Some(
-                AssetBundle::discover()
-                    .and_then(|assets| WebViewHost::attach(&**native, assets, width, height)),
-            )
+            Some(AssetBundle::discover().and_then(|assets| {
+                WebViewHost::attach(
+                    &**native,
+                    assets.with_generated(generated.clone()),
+                    width,
+                    height,
+                )
+            }))
         });
         match attached {
             Some(Ok(view)) => {

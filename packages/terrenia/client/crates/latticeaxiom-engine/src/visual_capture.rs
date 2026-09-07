@@ -1,4 +1,4 @@
-//! Opt-in Bevy scene capture. Embedded WebView content is not captured.
+//! Opt-in Bevy scene capture. Embedded `WebView` content is not captured.
 //!
 //! These images cannot verify Web UI appearance, DOM interaction, or window
 //! composition. Output is never source content.
@@ -88,7 +88,7 @@ fn capture_scene_probe(
         '_,
         '_,
         (&bevy::prelude::Transform, &bevy::camera::Projection),
-        bevy::prelude::With<bevy::prelude::Camera3d>,
+        bevy::prelude::With<crate::host::ProductionCamera>,
     >,
     meshes: bevy::prelude::Query<
         '_,

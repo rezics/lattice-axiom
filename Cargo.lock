@@ -4615,6 +4615,7 @@ dependencies = [
  "latticeaxiom-world-db",
  "latticeaxiom-world-wire",
  "latticeaxiom-worldgen",
+ "png",
  "serde",
  "serde_json",
  "tempfile",

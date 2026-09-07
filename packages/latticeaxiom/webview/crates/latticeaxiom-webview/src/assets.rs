@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
@@ -17,6 +17,63 @@ const MAX_ASSET_COUNT: usize = 1024;
 #[derive(Clone, Debug)]
 pub struct AssetBundle {
     files: BTreeMap<String, Arc<[u8]>>,
+    generated: GeneratedImages,
+}
+
+/// Bounded runtime-only PNG previews shared with the local protocol handler.
+#[derive(Clone, Debug, Default)]
+pub struct GeneratedImages(Arc<Mutex<GeneratedImageCache>>);
+
+#[derive(Debug, Default)]
+struct GeneratedImageCache {
+    clock: u64,
+    images: BTreeMap<String, (Arc<[u8]>, u64)>,
+}
+
+impl GeneratedImages {
+    /// Publishes a content-addressed PNG into a 256-image, 32 MiB cache.
+    ///
+    /// # Errors
+    /// Rejects malformed keys, oversized images, or a poisoned cache lock.
+    pub fn publish(&self, key: &str, png: Vec<u8>) -> Result<(), BridgeError> {
+        if key.len() != 64 || !key.bytes().all(|c| c.is_ascii_hexdigit()) || png.len() > 128 * 1024
+        {
+            return Err(BridgeError::Assets("invalid generated image".into()));
+        }
+        let mut cache = self
+            .0
+            .lock()
+            .map_err(|_| BridgeError::Assets("preview cache lock failed".into()))?;
+        if cache.images.len() >= 256
+            && !cache.images.contains_key(key)
+            && let Some(oldest) = cache
+                .images
+                .iter()
+                .min_by_key(|(_, (_, age))| *age)
+                .map(|(key, _)| key.clone())
+        {
+            cache.images.remove(&oldest);
+        }
+        cache.clock = cache.clock.saturating_add(1);
+        let age = cache.clock;
+        cache.images.insert(key.to_owned(), (Arc::from(png), age));
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Option<Arc<[u8]>> {
+        let mut cache = self.0.lock().ok()?;
+        cache.clock = cache.clock.saturating_add(1);
+        let age = cache.clock;
+        let (image, used) = cache.images.get_mut(key)?;
+        *used = age;
+        Some(image.clone())
+    }
+
+    /// Checks and retains a visible preview in the bounded LRU cache.
+    #[must_use]
+    pub fn contains(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
 }
 
 impl AssetBundle {
@@ -78,7 +135,10 @@ impl AssetBundle {
                 "missing index.html; build the product's web UI first".into(),
             ));
         }
-        Ok(Self { files })
+        Ok(Self {
+            files,
+            generated: GeneratedImages::default(),
+        })
     }
 
     /// Find explicit override, executable-adjacent `client-ui`, or debug source.
@@ -107,7 +167,14 @@ impl AssetBundle {
         Err(BridgeError::Assets("no packaged client-ui/index.html found; set LATTICEAXIOM_WEB_UI_DIR to a built UI directory".into()))
     }
 
-    pub(crate) fn get(&self, request_path: &str) -> Option<(&[u8], &'static str)> {
+    /// Shares a product-owned preview cache with this immutable application bundle.
+    #[must_use]
+    pub fn with_generated(mut self, generated: GeneratedImages) -> Self {
+        self.generated = generated;
+        self
+    }
+
+    pub(crate) fn get(&self, request_path: &str) -> Option<(Arc<[u8]>, &'static str)> {
         let decoded = percent_encoding::percent_decode_str(request_path)
             .decode_utf8()
             .ok()?;
@@ -118,6 +185,12 @@ impl AssetBundle {
             return None;
         }
         let key = if path.is_empty() { "index.html" } else { path };
+        if let Some(key) = key
+            .strip_prefix("generated/")
+            .and_then(|key| key.strip_suffix(".png"))
+        {
+            return self.generated.get(key).map(|bytes| (bytes, "image/png"));
+        }
         let content_type = match key.rsplit('.').next()? {
             "html" => "text/html; charset=utf-8",
             "js" | "mjs" => "text/javascript; charset=utf-8",
@@ -131,7 +204,7 @@ impl AssetBundle {
         };
         self.files
             .get(key)
-            .map(|bytes| (bytes.as_ref(), content_type))
+            .map(|bytes| (bytes.clone(), content_type))
     }
 }
 
@@ -140,14 +213,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generated_images_keep_visible_entries_and_bound_retention() -> Result<(), BridgeError> {
+        let cache = GeneratedImages::default();
+        for number in 0..256 {
+            cache.publish(&format!("{number:064x}"), vec![1])?;
+        }
+        assert!(cache.contains(&format!("{:064x}", 0)));
+        cache.publish(&format!("{:064x}", 256), vec![2])?;
+        assert!(cache.contains(&format!("{:064x}", 0)));
+        assert!(!cache.contains(&format!("{:064x}", 1)));
+        assert!(cache.publish("../outside", vec![1]).is_err());
+        assert!(
+            cache
+                .publish(&format!("{:064x}", 257), vec![0; 128 * 1024 + 1])
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn snapshots_only_the_bundle_and_rejects_traversal() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         std::fs::write(root.path().join("index.html"), "original")?;
         let bundle = AssetBundle::from_directory(root.path())?;
         std::fs::write(root.path().join("index.html"), "changed")?;
         assert_eq!(
-            bundle.get("/").map(|(bytes, _)| bytes),
-            Some(b"original".as_slice())
+            bundle.get("/").map(|(bytes, _)| bytes.to_vec()),
+            Some(b"original".to_vec())
         );
         for path in [
             "/../secret",

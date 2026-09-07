@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "terrenia:resource-pack/textures-default",
   "kind": "textures",
   "priority": 0,
@@ -74,7 +74,7 @@
         83,
         57
       ],
-      "pattern": "grain"
+      "pattern": "soil"
     },
     "terrenia:block/coal-block": {
       "color": [
@@ -98,7 +98,7 @@
         83,
         57
       ],
-      "pattern": "grain"
+      "pattern": "coarse-soil"
     },
     "terrenia:block/cobblestone": {
       "color": [
@@ -154,7 +154,7 @@
         83,
         57
       ],
-      "pattern": "grain"
+      "pattern": "soil"
     },
     "terrenia:block/dripstone": {
       "color": [
@@ -222,11 +222,11 @@
     },
     "terrenia:block/grass": {
       "color": [
-        74,
-        112,
-        60
+        76,
+        118,
+        48
       ],
-      "pattern": "grain"
+      "pattern": "grass"
     },
     "terrenia:block/gravel": {
       "color": [
@@ -294,11 +294,12 @@
     },
     "terrenia:block/mud": {
       "color": [
-        115,
-        83,
-        57
+        76,
+        62,
+        45
       ],
-      "pattern": "grain"
+      "pattern": "mud",
+      "roughness": 120
     },
     "terrenia:block/oak-leaves": {
       "color": [
@@ -306,7 +307,7 @@
         112,
         60
       ],
-      "pattern": "grain"
+      "pattern": "leaves"
     },
     "terrenia:block/oak-log": {
       "color": [
@@ -314,7 +315,7 @@
         96,
         55
       ],
-      "pattern": "strata"
+      "pattern": "bark"
     },
     "terrenia:block/oak-planks": {
       "color": [
@@ -322,7 +323,7 @@
         96,
         55
       ],
-      "pattern": "grain"
+      "pattern": "wood"
     },
     "terrenia:block/obsidian": {
       "color": [
@@ -338,7 +339,7 @@
         83,
         57
       ],
-      "pattern": "grain"
+      "pattern": "soil"
     },
     "terrenia:block/pine-leaves": {
       "color": [
@@ -346,7 +347,7 @@
         112,
         60
       ],
-      "pattern": "grain"
+      "pattern": "needles"
     },
     "terrenia:block/pine-log": {
       "color": [
@@ -354,7 +355,7 @@
         96,
         55
       ],
-      "pattern": "strata"
+      "pattern": "bark"
     },
     "terrenia:block/pine-planks": {
       "color": [
@@ -362,7 +363,7 @@
         96,
         55
       ],
-      "pattern": "grain"
+      "pattern": "wood"
     },
     "terrenia:block/polished-granite": {
       "color": [
@@ -434,7 +435,7 @@
         83,
         57
       ],
-      "pattern": "grain"
+      "pattern": "rooted-soil"
     },
     "terrenia:block/sand": {
       "color": [
@@ -595,6 +596,169 @@
         27
       ],
       "pattern": "solid"
+    },
+    "terrenia:asset/layer-grass-top": {
+      "color": [
+        76,
+        118,
+        48
+      ],
+      "pattern": "grass"
+    },
+    "terrenia:asset/layer-grass-side": {
+      "color": [
+        116,
+        83,
+        53
+      ],
+      "pattern": "grass-side",
+      "accent": [
+        76,
+        118,
+        48
+      ]
+    },
+    "terrenia:asset/layer-grass-bottom": {
+      "color": [
+        116,
+        83,
+        53
+      ],
+      "pattern": "soil"
+    },
+    "terrenia:asset/layer-oak-log-top": {
+      "color": [
+        156,
+        118,
+        70
+      ],
+      "pattern": "end-grain"
+    },
+    "terrenia:asset/layer-oak-log-bottom": {
+      "color": [
+        156,
+        118,
+        70
+      ],
+      "pattern": "end-grain"
+    },
+    "terrenia:asset/layer-oak-log-side": {
+      "color": [
+        107,
+        79,
+        47
+      ],
+      "pattern": "bark"
+    },
+    "terrenia:asset/layer-pine-log-top": {
+      "color": [
+        156,
+        118,
+        70
+      ],
+      "pattern": "end-grain"
+    },
+    "terrenia:asset/layer-pine-log-bottom": {
+      "color": [
+        156,
+        118,
+        70
+      ],
+      "pattern": "end-grain"
+    },
+    "terrenia:asset/layer-pine-log-side": {
+      "color": [
+        107,
+        79,
+        47
+      ],
+      "pattern": "bark"
+    },
+    "terrenia:material/wood": {
+      "color": [
+        146,
+        103,
+        60
+      ],
+      "pattern": "wood"
+    },
+    "terrenia:material/stone": {
+      "color": [
+        114,
+        120,
+        124
+      ],
+      "pattern": "grain"
+    },
+    "terrenia:material/iron": {
+      "color": [
+        164,
+        173,
+        179
+      ],
+      "pattern": "grain",
+      "roughness": 95,
+      "metallic": 255
+    },
+    "terrenia:material/copper": {
+      "color": [
+        182,
+        107,
+        64
+      ],
+      "pattern": "grain",
+      "roughness": 95,
+      "metallic": 255
+    },
+    "terrenia:material/binding": {
+      "color": [
+        77,
+        60,
+        37
+      ],
+      "pattern": "wood"
+    }
+  },
+  "models": {
+    "terrenia:item/stick": {
+      "provider": "terrenia:model/stick",
+      "material": "terrenia:material/wood"
+    },
+    "terrenia:item/stone-axe": {
+      "provider": "terrenia:model/axe",
+      "material": "terrenia:material/stone"
+    },
+    "terrenia:item/stone-pickaxe": {
+      "provider": "terrenia:model/pickaxe",
+      "material": "terrenia:material/stone"
+    },
+    "terrenia:item/stone-shovel": {
+      "provider": "terrenia:model/shovel",
+      "material": "terrenia:material/stone"
+    },
+    "terrenia:item/wooden-axe": {
+      "provider": "terrenia:model/axe",
+      "material": "terrenia:material/wood"
+    },
+    "terrenia:item/wooden-pickaxe": {
+      "provider": "terrenia:model/pickaxe",
+      "material": "terrenia:material/wood"
+    },
+    "terrenia:item/wooden-shovel": {
+      "provider": "terrenia:model/shovel",
+      "material": "terrenia:material/wood"
+    },
+    "terrenia:block/tall-grass": {
+      "provider": "terrenia:model/grass-tuft",
+      "material": "terrenia:block/tall-grass"
+    },
+    "terrenia:block/fern": {
+      "provider": "terrenia:model/fern",
+      "material": "terrenia:block/fern"
+    },
+    "terrenia:block/reed": {
+      "provider": "terrenia:model/reed",
+      "material": "terrenia:block/reed"
     }
   }
 }

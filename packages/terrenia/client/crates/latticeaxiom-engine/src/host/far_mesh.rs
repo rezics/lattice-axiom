@@ -148,6 +148,10 @@ impl FarTerrainCpuMesh {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_UV_1,
+            vec![[0.5_f32, 0.5]; self.positions.len()],
+        );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);

@@ -232,23 +232,17 @@ const SlotButton = memo(function SlotButton({
             </span>
             {slot.item ? (
                 <>
-                    <ItemSwatch color={slot.color} name={slot.name} />
+                    <ItemSwatch preview={slot.preview} name={slot.name} />
                     <span className="slot-quantity">{slot.quantity}</span>
                 </>
             ) : null}
         </button>
     );
 });
-function ItemSwatch({ color, name }: { color: string; name: string }) {
-    return (
-        <span
-            className="item-swatch"
-            style={{ "--item-color": color } as React.CSSProperties}
-            aria-hidden="true"
-        >
-            <span>{name.slice(0, 2)}</span>
-        </span>
-    );
+function ItemSwatch({ preview, name }: { preview?: string | null; name: string }) {
+    return preview ? (
+        <img className="item-model" src={preview} alt="" title={name} draggable={false} decoding="async" />
+    ) : <span className="item-model item-model-pending" aria-hidden="true" />;
 }
 function Inventory({ game }: { game: GameState }) {
     const [selected, setSelected] = useState<number | null>(null);
@@ -406,6 +400,7 @@ function Inventory({ game }: { game: GameState }) {
                                         })
                                     }
                                 >
+                                    <ItemSwatch preview={recipe.preview} name={recipe.name} />
                                     <span>
                                         {recipe.name}
                                         <small>
@@ -554,7 +549,7 @@ function CatalogItem({ item, creative }: { item: Item; creative: boolean }) {
             }}
             title={`${item.name}\n${item.id}\n${creative ? "Add to inventory" : "View only in survival"}`}
         >
-            <ItemSwatch color={item.color} name={item.name} />
+            <ItemSwatch preview={item.preview} name={item.name} />
             <span>{item.name}</span>
         </button>
     );

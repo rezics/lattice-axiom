@@ -23,12 +23,14 @@ export interface Slot {
     name: string;
     quantity: number;
     color: string;
+    preview?: string | null;
 }
 export interface Item {
     id: string;
     name: string;
     category: string;
     color: string;
+    preview?: string | null;
 }
 export interface GameState {
     overlay: "none" | "inventory" | "workbench";
@@ -37,7 +39,7 @@ export interface GameState {
     hotbar: number;
     slots: Slot[];
     items: Item[];
-    recipes: { id: string; name: string; craftable: boolean }[];
+    recipes: { id: string; name: string; craftable: boolean; preview?: string | null }[];
     target: null | {
         name: string;
         id: string;

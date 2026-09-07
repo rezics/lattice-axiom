@@ -84,19 +84,19 @@ pub(super) fn refresh_catalog(world: &mut World) {
         }
         cache.recipes = catalog.recipes().iter().map(|(id, definition)| (id.clone(),json!({
             "id":id.as_str(),"name":recipe_name(&spine.content_display(id.as_str()).name),
-            "workstation":definition.workstation.as_ref().map(|id| id.as_str())
+            "workstation":definition.workstation.as_ref().map(|id| id.as_str()),"output":catalog.resolve_output(&definition.output).ok().map(|stack|stack.item().to_string())
         }))).collect();
     }
     cache.matching = (0..cache.items.len()).collect();
     cache.item_bytes = cache
         .items
         .iter()
-        .map(|item| item.row.to_string().len())
+        .map(|item| item.row.to_string().len() + 128)
         .collect();
     let recipe_bytes = cache
         .recipes
         .iter()
-        .map(|(_, row)| row.to_string().len() + 24)
+        .map(|(_, row)| row.to_string().len() + 152)
         .collect::<Vec<_>>();
     match partition_pages(
         &(0..cache.recipes.len()).collect::<Vec<_>>(),
@@ -238,7 +238,7 @@ pub(super) fn inventory_slots(world: &World) -> Value {
         let item = stack.as_ref().map(|stack|stack.item().as_str());
         let metadata = item.and_then(|id|cache.and_then(|cache|cache.by_id.get(id).and_then(|index|cache.items.get(*index))));
         json!({"index":index,"item":item,"name":metadata.map(|item|item.row["name"].as_str().unwrap_or_default()).unwrap_or_else(||item.unwrap_or_default()),
-            "quantity":stack.as_ref().map_or(0,|stack|stack.quantity()),"color":metadata.map(|item|item.row["color"].as_str().unwrap_or("#9aa7aa")).unwrap_or("#9aa7aa")})
+            "quantity":stack.as_ref().map_or(0,|stack|stack.quantity()),"preview":item.and_then(|id|super::item_models::preview_url(world,id)),"color":metadata.map(|item|item.row["color"].as_str().unwrap_or("#9aa7aa")).unwrap_or("#9aa7aa")})
     }).collect::<Vec<_>>()).unwrap_or_default())
 }
 
@@ -260,13 +260,13 @@ pub(super) fn game(world: &World, debug: bool) -> Option<Value> {
         cache.map_or((Vec::new(),Vec::new(),Value::Null),|cache| {
             let pages=cache.item_pages.len().max(1);
             let page=cache.page.min(pages-1);
-            let items=cache.item_pages.get(page).into_iter().flatten().map(|index|cache.items[*index].row.clone()).collect::<Vec<_>>();
+            let items=cache.item_pages.get(page).into_iter().flatten().map(|index| { let mut row=cache.items[*index].row.clone(); row["preview"]=json!(super::item_models::preview_url(world,row["id"].as_str().unwrap_or_default())); row }).collect::<Vec<_>>();
             let recipe_pages=cache.recipe_pages.len().max(1);
             let recipe_page=cache.recipe_page.min(recipe_pages-1);
             let workstation = (route.overlay()==GameOverlayV1::Workbench).then(super::hud::crafting_workstation);
             let recipes = cache.recipe_pages.get(recipe_page).into_iter().flatten().map(|index| {
                 let (id,row)=&cache.recipes[*index];
-                let mut row = row.clone(); row["craftable"]=json!(spine.recipe_is_craftable(id,workstation.as_ref())); row
+                let mut row = row.clone(); row["preview"]=json!(row["output"].as_str().and_then(|item| super::item_models::preview_url(world,item))); row["craftable"]=json!(spine.recipe_is_craftable(id,workstation.as_ref())); row
             }).collect::<Vec<_>>();
             (items,recipes,json!({"page":page,"pageSize":ITEM_PAGE_SIZE,"total":cache.matching.len(),"pages":pages,"query":cache.query,"category":if cache.category.is_empty(){"all"}else{cache.category.as_str()},"categories":cache.categories,
                 "recipePage":recipe_page,"recipePages":recipe_pages,"recipeTotal":cache.recipes.len(),"error":cache.error}))
@@ -327,6 +327,7 @@ fn debug_sections(world: &World, spine: &ProductionSpine) -> Vec<Value> {
             {"label":"Resident / visible","value":format!("{} / {}",diagnostics.resident(),diagnostics.visible())},
             {"label":"Active / in flight","value":format!("{} / {}",diagnostics.active(),diagnostics.in_flight())},
             {"label":"Edited chunks","value":diagnostics.dirty().to_string()},
+            {"label":"Cached / pending save","value":format!("{} / {}",spine.cached_chunk_count(),spine.pending_persistence_count())},
             {"label":"Reserved / budget MiB","value":format!("{} / {}",diagnostics.reserved_bytes()/1048576,diagnostics.byte_budget()/1048576)},
             {"label":"Render / full detail","value":format!("{} / {} chunks",spine.target_render_distance(),spine.full_detail_distance())}
         ]}));

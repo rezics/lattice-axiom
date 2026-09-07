@@ -11,7 +11,7 @@ mod native;
 #[cfg(target_os = "windows")]
 mod parent_composition;
 
-pub use assets::AssetBundle;
+pub use assets::{AssetBundle, GeneratedImages};
 pub use endpoints::{
     EndpointHandler, EndpointMetadata, EndpointRegistrationError, EndpointRegistry,
 };

@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--seconds', type=int, default=60)
     parser.add_argument('--timings-only', action='store_true', help='Use the existing lifecycle driver; compatible with the baseline client.')
     parser.add_argument('--overview', action='store_true', help='Fixed elevated camera over the streamed player region.')
+    parser.add_argument('--held-item', help='Seed one catalog item into the disposable capture world.')
     parser.add_argument('--render-distance', type=int, choices=range(2, 33))
     args = parser.parse_args()
     if not 15 <= args.seconds <= 60:
@@ -63,6 +64,8 @@ def main():
                            LATTICEAXIOM_CAPTURE_SECONDS=str(args.seconds), LATTICEAXIOM_CAPTURE_SIZE='1280x720')
         if args.overview:
             environment['LATTICEAXIOM_CAPTURE_OVERVIEW'] = '1'
+        if args.held_item:
+            environment['LATTICEAXIOM_CAPTURE_ITEM'] = args.held_item
     rust_lib = subprocess.check_output(['rustc', '--print', 'target-libdir'], text=True).strip()
     environment['PATH'] = os.pathsep.join((str(args.deps.resolve(strict=True)), rust_lib, environment['PATH']))
     started = time.monotonic()
@@ -76,6 +79,7 @@ def main():
             raise
     report = {'binary': str(binary), 'binary_sha256': digest(binary), 'world': args.world,
               'lock': args.lock, 'seconds': args.seconds, 'overview': args.overview,
+              'held_item': args.held_item,
               'render_distance': args.render_distance, 'exit_code': code,
               'wall_seconds': time.monotonic() - started, 'original_world_unchanged': digest(world_file) == before}
     (output / 'run.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
