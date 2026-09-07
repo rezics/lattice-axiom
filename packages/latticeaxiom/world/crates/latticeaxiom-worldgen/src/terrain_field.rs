@@ -57,12 +57,22 @@ impl DrainageFieldV3 {
     }
 
     pub(crate) fn sample(&self, x: i64, z: i64) -> DrainageSampleV3 {
+        self.sample_scaled(x, z, 4)
+    }
+
+    /// Distance for connected channels before the legacy valley-width reduction.
+    /// Legacy terrain fields retain their previous sampling convention.
+    pub(crate) fn channel_sample(&self, x: i64, z: i64) -> DrainageSampleV3 {
+        self.sample_scaled(x, z, 1)
+    }
+
+    fn sample_scaled(&self, x: i64, z: i64, width_scale: i64) -> DrainageSampleV3 {
         let potential = fractal_noise(self.seed, x, z, self.edge.saturating_mul(2), 3)
             .abs()
             .min(FIELD_UNIT);
         let distance = potential
             .saturating_mul(self.edge)
-            .div_euclid(FIELD_UNIT.saturating_mul(4));
+            .div_euclid(FIELD_UNIT.saturating_mul(width_scale));
         DrainageSampleV3 {
             cell_x: x.div_euclid(self.edge),
             cell_z: z.div_euclid(self.edge),

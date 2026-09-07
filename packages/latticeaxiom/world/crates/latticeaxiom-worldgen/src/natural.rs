@@ -438,6 +438,21 @@ impl SurfaceMaterialPolicyV1 {
 }
 
 impl NaturalSamplerV1 {
+    pub(crate) fn continuous_river_sample(&self, x: i64, z: i64) -> RiverSampleV1 {
+        let drainage = self.drainage.channel_sample(x, z);
+        RiverSampleV1 {
+            basin: RiverBasinIdV1::from_hash(domain_hash(
+                BASIN_DOMAIN,
+                &[
+                    self.seed_root.as_bytes(),
+                    &drainage.cell_x.to_be_bytes(),
+                    &drainage.cell_z.to_be_bytes(),
+                ],
+            )),
+            in_channel: drainage.distance_voxels <= u32::from(self.config.river_width_voxels),
+            distance_voxels: drainage.distance_voxels,
+        }
+    }
     #[allow(
         clippy::too_many_arguments,
         reason = "natural-layer compilation keeps hash inputs explicit"

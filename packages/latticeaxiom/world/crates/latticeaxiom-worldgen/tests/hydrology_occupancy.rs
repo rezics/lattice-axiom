@@ -382,6 +382,60 @@ fn occupancy_plan(seed: i64, reverse: bool) -> GenerationPlanV1 {
     occupancy_plan_with_config(seed, reverse, HydrologyOccupancyConfigV1::default())
 }
 
+#[test]
+fn bank_constrained_channels_match_far_water_and_stay_below_adjacent_dry_banks() {
+    let config = HydrologyOccupancyConfigV1 {
+        bank_constrained_channels: true,
+        ..Default::default()
+    };
+    let first = occupancy_plan_with_config(42, false, config);
+    let reversed = occupancy_plan_with_config(42, true, config);
+    assert_eq!(
+        first.generation_input_hash(),
+        reversed.generation_input_hash()
+    );
+    assert_ne!(
+        first.generation_input_hash(),
+        occupancy_plan(42, false).generation_input_hash()
+    );
+    let mut shores = 0;
+    for z in (-64..64).step_by(3) {
+        for x in (-64..64).step_by(3) {
+            if !first
+                .river_sample(x, z)
+                .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel)
+            {
+                continue;
+            }
+            let water = first.surface_water_level(x, z).expect("river water level");
+            let far = first.far_terrain_surface_sample(x, z).expect("far surface");
+            assert_eq!(far.water_y(), Some(water));
+            assert_eq!(
+                water,
+                reversed.surface_water_level(x, z).expect("same river")
+            );
+            for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                if first
+                    .river_sample(x + dx, z + dz)
+                    .is_some_and(latticeaxiom_worldgen::RiverSampleV1::in_channel)
+                {
+                    continue;
+                }
+                let bank = first
+                    .far_terrain_surface_sample(x + dx, z + dz)
+                    .expect("dry bank");
+                assert!(
+                    water < bank.solid_y(),
+                    "water {water} exceeds bank {} at ({x},{z})",
+                    bank.solid_y()
+                );
+                shores += 1;
+            }
+        }
+    }
+    assert!(shores > 0, "corpus must actually cross river banks");
+}
+
 fn occupancy_plan_with_config(
     seed: i64,
     reverse: bool,

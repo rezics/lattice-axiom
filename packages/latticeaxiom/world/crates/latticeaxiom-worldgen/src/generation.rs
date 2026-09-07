@@ -856,6 +856,27 @@ impl GenerationPlanV1 {
             }
             (None, _) => None,
         };
+        if let Some(layer) = hydrology
+            .as_ref()
+            .filter(|layer| layer.bank_constrained_channels())
+        {
+            // This policy modifies the solid river bed, so it belongs in the
+            // generation identity as well as the fluid occupancy identity.
+            // Legacy occupancy-only plans retain their exact old hashes.
+            let hydrology_hash = layer.occupancy_hash();
+            generation_input_hash = GenerationInputHashV1::from_hash(concatenated_hash(
+                GENERATION_INPUT_DOMAIN,
+                &[generation_input_hash.as_bytes(), hydrology_hash.as_bytes()],
+            ));
+            generation_provenance_hash = GenerationProvenanceHashV1::from_hash(concatenated_hash(
+                GENERATION_PROVENANCE_DOMAIN,
+                &[generation_input_hash.as_bytes(), locked_bytes.as_slice()],
+            ));
+            generation_epoch = GenerationEpochIdV1::from_hash(concatenated_hash(
+                GENERATION_EPOCH_DOMAIN,
+                &[generation_epoch.as_bytes(), hydrology_hash.as_bytes()],
+            ));
+        }
         let material_seed = hash_u64(MATERIAL_DOMAIN, &[seed_root.as_bytes()]);
         let tree_seed = hash_u64(TREE_DOMAIN, &[seed_root.as_bytes()]);
         let ground_cover_seed = hash_u64(GROUND_COVER_DOMAIN, &[seed_root.as_bytes()]);
@@ -1119,6 +1140,13 @@ impl GenerationPlanV1 {
     /// Samples height, macro family, and standing water with one terrain-field evaluation.
     #[must_use]
     pub fn terrain_column(&self, x: i64, z: i64) -> TerrainColumnSampleV2 {
+        if self.bank_constrained_channels() && self.semantic_terrain_at(x, z).is_none() {
+            let column = self.generation_column(x, z);
+            let mut terrain = self.territory.terrain_column(x, z);
+            terrain.height = column.height;
+            terrain.surface_water_y = column.surface_water_y;
+            return terrain;
+        }
         if let Some(semantic) = self.semantic_terrain_at(x, z) {
             return semantic
                 .terrain_column(x, z)
@@ -1131,7 +1159,7 @@ impl GenerationPlanV1 {
         sample
     }
 
-    /// Returns the inclusive standing-water level of an inland lake basin.
+    /// Returns the inclusive standing-water level of an inland basin or channel.
     #[must_use]
     pub fn surface_water_level(&self, x: i64, z: i64) -> Option<i32> {
         self.terrain_column(x, z).surface_water_y()
@@ -1179,7 +1207,7 @@ impl GenerationPlanV1 {
         Ok(crate::FarTerrainSurfaceSampleV1::new(
             solid_y,
             role,
-            column.surface_water_y,
+            self.visible_water_level(column, solid_y),
         ))
     }
 
@@ -1227,9 +1255,13 @@ impl GenerationPlanV1 {
         if self.semantic_terrain_at(x, z).is_some() {
             return None;
         }
-        self.natural
-            .as_ref()
-            .map(|natural| natural.river_sample(x, z))
+        self.natural.as_ref().map(|natural| {
+            if self.bank_constrained_channels() {
+                natural.continuous_river_sample(x, z)
+            } else {
+                natural.river_sample(x, z)
+            }
+        })
     }
 
     /// Returns the queryable geologic sample at world `(x, y, z)`.
@@ -1791,23 +1823,111 @@ impl GenerationPlanV1 {
         }
         let terrain = self.territory.terrain_column(x, z);
         let territory = self.territory.sample(x, z);
-        let river = self
-            .natural
-            .as_ref()
-            .map(|natural| natural.river_sample(x, z));
-        let height = self.natural.as_ref().map_or(terrain.height, |natural| {
+        let river = self.river_sample(x, z);
+        let mut height = self.natural.as_ref().map_or(terrain.height, |natural| {
             natural.adjust_height_for_channel(
                 terrain.height,
                 river.is_some_and(RiverSampleV1::in_channel),
             )
         });
+        let mut surface_water_y = terrain.surface_water_y;
+        if self.bank_constrained_channels() && river.is_some_and(RiverSampleV1::in_channel) {
+            let water = self.bank_limited_river_level(x, z, terrain.height);
+            if let Some(natural) = &self.natural {
+                height = water.saturating_sub(i32::from(natural.config().river_incision_voxels));
+            }
+            surface_water_y = Some(surface_water_y.map_or(water, |level| level.max(water)));
+        }
         ColumnSampleV1 {
             height,
             material_style: self.territory.choose_material_style(x, z, territory),
             river,
-            surface_water_y: terrain.surface_water_y,
+            surface_water_y,
             semantic_field: None,
         }
+    }
+
+    fn bank_constrained_channels(&self) -> bool {
+        self.hydrology
+            .as_ref()
+            .is_some_and(HydrologySamplerV1::bank_constrained_channels)
+    }
+
+    fn visible_water_level(&self, column: ColumnSampleV1, solid_y: i32) -> Option<i32> {
+        if !self.bank_constrained_channels() {
+            return column.surface_water_y;
+        }
+        column
+            .surface_water_y
+            .into_iter()
+            .chain(
+                self.hydrology
+                    .as_ref()
+                    .and_then(HydrologySamplerV1::sea_level_y),
+            )
+            .max()
+            .filter(|level| *level > solid_y)
+    }
+
+    /// Eight bounded cross-bank probes use final density/cave support, not the
+    /// preliminary height field. One voxel of freeboard prevents static water
+    /// from hanging above an adjacent dry bank. Every query uses world coordinates.
+    fn bank_limited_river_level(&self, x: i64, z: i64, original_height: i32) -> i32 {
+        let Some(natural) = &self.natural else {
+            return original_height.saturating_sub(1);
+        };
+        let radius = i64::from(
+            natural
+                .config()
+                .river_width_voxels
+                .saturating_add(2)
+                .clamp(2, 12),
+        );
+        let mut level = original_height.saturating_sub(1);
+        for (dx, dz) in [
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ] {
+            for distance in 1..=radius {
+                let nx = x.saturating_add(dx * distance);
+                let nz = z.saturating_add(dz * distance);
+                let river = natural.continuous_river_sample(nx, nz);
+                if river.in_channel() {
+                    continue;
+                }
+                let terrain = self.territory.terrain_column(nx, nz);
+                let territory = self.territory.sample(nx, nz);
+                let column = ColumnSampleV1 {
+                    height: terrain.height,
+                    material_style: self.territory.choose_material_style(nx, nz, territory),
+                    river: Some(river),
+                    surface_water_y: terrain.surface_water_y,
+                    semantic_field: None,
+                };
+                let density = self.prepare_semantic_density_column(nx, nz, column);
+                if let Some(bank) = self.final_surface_y_for_column(
+                    nx,
+                    nz,
+                    column,
+                    density.as_ref(),
+                    &mut WorkCountersV1::default(),
+                ) {
+                    level = level.min(i32::try_from(bank).unwrap_or(i32::MIN).saturating_sub(1));
+                }
+                break;
+            }
+        }
+        level.max(
+            self.config
+                .world_floor_y
+                .saturating_add(i32::from(natural.config().river_incision_voxels)),
+        )
     }
 
     fn prepare_semantic_density_column(

@@ -97,9 +97,10 @@ pub(super) fn compile_plan(
         natural_offers,
     ))
     .with_cave_topology_layer(catalog.cave_topology_layer(&config)?)
-    .with_hydrology_occupancy(
-        catalog.hydrology_occupancy(hydrology_occupancy_config_for(&terrain_config))?,
-    );
+    .with_hydrology_occupancy(catalog.hydrology_occupancy(HydrologyOccupancyConfigV1 {
+        bank_constrained_channels: catalog.bank_constrained_channels,
+        ..hydrology_occupancy_config_for(&terrain_config)
+    })?);
     Ok(GenerationPlanV1::compile(input)?)
 }
 

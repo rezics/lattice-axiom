@@ -144,6 +144,7 @@ pub(super) struct HostWorldgenCatalog {
     pub(super) worldgen_package: Option<LockedPackage>,
     pub(super) geology_algorithm_revision: u32,
     pub(super) terrain_transition_algorithm_revision: u32,
+    pub(super) bank_constrained_channels: bool,
     pub(super) cave: HostCaveBindings,
     pub(super) hydrology: HostHydrologyBindings,
 }
@@ -435,12 +436,15 @@ pub(super) fn host_worldgen_catalog(
         geology_algorithm_revision: generation_policy.geology_algorithm_revision,
         terrain_transition_algorithm_revision: generation_policy
             .terrain_transition_algorithm_revision,
+        bank_constrained_channels: generation_policy.bank_constrained_channels,
     })
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GenerationPolicy {
+    #[serde(default)]
+    bank_constrained_channels: bool,
     geology_algorithm_revision: u32,
     #[serde(default = "legacy_transition_revision")]
     terrain_transition_algorithm_revision: u32,
@@ -463,6 +467,7 @@ fn locked_generation_policy(
 fn parse_generation_policy(bytes: Option<&[u8]>) -> Result<GenerationPolicy, ProductionHostError> {
     let Some(bytes) = bytes else {
         return Ok(GenerationPolicy {
+            bank_constrained_channels: false,
             geology_algorithm_revision: 3,
             terrain_transition_algorithm_revision: 8,
         });

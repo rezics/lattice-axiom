@@ -27,6 +27,10 @@ const CANDIDATE_SCHEMA: &str = "latticeaxiom:hydrology-occupancy-candidate@1";
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HydrologyOccupancyConfigV1 {
+    /// Constrain surface channels to sampled final banks. Omitted in legacy
+    /// canonical records so their generation identities remain unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bank_constrained_channels: bool,
     /// Inclusive global surface-water level, or `None` for no ocean fill.
     pub sea_level_y: Option<i32>,
     /// Coarse aquifer basin cell edge in voxels.
@@ -50,6 +54,7 @@ pub struct HydrologyOccupancyConfigV1 {
 impl Default for HydrologyOccupancyConfigV1 {
     fn default() -> Self {
         Self {
+            bank_constrained_channels: false,
             sea_level_y: None,
             aquifer_cell_edge_voxels: 32,
             aquifer_depth_voxels: 12,
@@ -659,6 +664,13 @@ impl HydrologyColumnV1 {
 }
 
 impl HydrologySamplerV1 {
+    pub(crate) const fn bank_constrained_channels(&self) -> bool {
+        self.config.bank_constrained_channels
+    }
+
+    pub(crate) const fn sea_level_y(&self) -> Option<i32> {
+        self.sea_level_y
+    }
     pub(crate) fn compile(
         seed_root: WorldgenSeedRootV2,
         spine: &WorldgenConfigV1,
