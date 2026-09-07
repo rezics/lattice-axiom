@@ -4,6 +4,14 @@ This is the unified implementation repository. The user has authorized the
 package-first rebuild and a Conventional Commit after every verified slice.
 Do not ask for repeated commit approval during this rebuild.
 
+- Follow `docs/ecosystem-direction.md` and
+  `packages/latticeaxiom/sdk/docs/package-interfaces.md` for ecosystem/interface
+  design. Packages may own
+  APIs and frameworks consumed by other packages; do not restrict the ecosystem
+  to host-defined gameplay concepts or the portable row-kernel subset.
+- Preserve first-party-equivalent source extension and independent game
+  distribution paths. Separate reusable library imports from world activation,
+  and distinguish exact locks from behavioral and saved-state compatibility.
 - All project-owned Rust crates live in `packages/<scope>/<package>/crates/`.
   Each crate has exactly one Lattice package owner. Third-party vendored source
   remains under `third_party/` with its existing license.

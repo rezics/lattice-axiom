@@ -1,5 +1,12 @@
 # Package-owned native sources
 
+This document describes the current native source/build path. The accepted
+[ecosystem direction](../../../../docs/ecosystem-direction.md) and
+[package interface design](../../sdk/docs/package-interfaces.md) extend its
+objectives to reusable libraries, author-owned APIs and independent games.
+General multi-version package resolution and portable module loading remain
+separate pending gates; a successful frozen source build does not prove them.
+
 Lattice package manifests own implementation identity and build dependencies:
 
 ```toml

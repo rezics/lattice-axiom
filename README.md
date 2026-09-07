@@ -1,7 +1,16 @@
 # Lattice Axiom
 
-A package-composed voxel game built with Bevy. This repository owns the game,
-its implementation packages, independent resource-pack contracts and tooling.
+A package-composed voxel game and the foundation for an open game-development
+ecosystem, built with Bevy. Terrenia is the current playable product. The intended
+ecosystem lets authors publish libraries and frameworks, deeply extend or replace
+systems, and compose independently distributed games, including commercial works
+under the applicable licenses.
+
+The [ecosystem direction](docs/ecosystem-direction.md) records this objective,
+compatibility goals and pending acceptance gates. The
+[package interface design](packages/latticeaxiom/sdk/docs/package-interfaces.md)
+describes author-owned APIs and supported extension paths. These are architectural
+commitments, not a claim that a general dynamic-mod ecosystem is already delivered.
 
 ## Structure
 
@@ -11,6 +20,7 @@ its implementation packages, independent resource-pack contracts and tooling.
   and text definitions are versioned here; binary art assets are not committed.
 - `profiles/`: current shell/world/headless composition inputs.
 - `products/`: native application roots, implementation build features and launch targets.
+- `docs/`: cross-package direction; implementation design stays with its package owner.
 - `tools/`, `scripts/`: repository checks, build and acceptance entry points.
 - `third_party/`: explicitly vendored upstream source and licenses.
 

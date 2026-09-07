@@ -2,6 +2,14 @@
 
 日期：2026-09-05。状态：已获用户批准，按阶段实施并自主提交。
 
+> Direction update, 2026-09-07: this remains the historical repository-rebuild
+> proposal. The accepted [ecosystem direction](docs/ecosystem-direction.md) and
+> [package interface design](packages/latticeaxiom/sdk/docs/package-interfaces.md)
+> now govern product and interface planning: author-owned APIs, deep extension,
+> manageable composition/upgrades and independent game distribution. This
+> documentation update does not implement those pending capabilities or change
+> the existing package, resource, saved-world or licensing boundaries.
+
 ## 已批准的补充约束
 
 - 纹理、光影及其他呈现资源包独立于游戏规则 package，可独立选择和替换。

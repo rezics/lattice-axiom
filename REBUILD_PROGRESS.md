@@ -7,6 +7,11 @@ Historical execution notes below retain the branch names used at the time.
 The user's resource-pack and text-only commit amendments take precedence over
 the original proposal's asset delivery and future asset-management suggestions.
 
+The accepted [ecosystem direction](docs/ecosystem-direction.md) and
+[package interface design](packages/latticeaxiom/sdk/docs/package-interfaces.md)
+were recorded on 2026-09-07. Their E1-E5 gates are additional pending ecosystem
+acceptance; the historical rebuild checkmarks below do not establish them.
+
 ## Recovery baseline
 
 - Documentation source: `57c37e2334ea019521fcd85237cb8dba47d51d24`.
