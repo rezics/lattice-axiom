@@ -82,6 +82,39 @@ def package_graph(root: Path = ROOT) -> dict[str, set[str]]:
     return graph
 
 
+def source_package_manifests(root: Path = ROOT) -> dict[str, tuple[Path, dict]]:
+    """Discover declared web source owners without inventing Cargo packages."""
+    packages = package_manifests(root)
+    for path in sorted((root / 'packages').glob('*/*/latticeaxiom-package.toml')):
+        manifest = read_toml(path)
+        if 'web' not in manifest:
+            continue
+        name = manifest['name']
+        if name in packages and packages[name][0] != path:
+            raise ValueError(f'duplicate Lattice source package: {name}')
+        packages[name] = (path, manifest)
+    return packages
+
+
+def source_package_graph(root: Path = ROOT) -> dict[str, set[str]]:
+    """Validate Cargo ownership first, then merge pinned web source edges."""
+    graph = package_graph(root)
+    packages = source_package_manifests(root)
+    for name, (_, manifest) in packages.items():
+        edges = graph.setdefault(name, set())
+        web = manifest.get('web', {})
+        if 'rust' not in manifest and not web.get('entry'):
+            raise ValueError(f'{name}: web source owner requires an entry')
+        for target, version in web.get('dependencies', {}).items():
+            if target not in packages or not packages[target][1].get('web', {}).get('entry'):
+                raise ValueError(f'{name}: unknown Web source owner {target}')
+            if version != '=' + packages[target][1]['version']:
+                raise ValueError(f'{name}: Web dependency {target} must pin its source version')
+            edges.add(target)
+    dependency_order(graph)
+    return graph
+
+
 def dependency_order(graph: dict[str, set[str]]) -> list[str]:
     try:
         return list(TopologicalSorter({key: sorted(value) for key, value in sorted(graph.items())}).static_order())
@@ -93,7 +126,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
-    graph = package_graph()
+    graph = source_package_graph()
     order = dependency_order(graph)
     if args.json:
         print(json.dumps({'packages': {key: sorted(value) for key, value in sorted(graph.items())}, 'build_order': order}, indent=2))

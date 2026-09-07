@@ -23,6 +23,7 @@ members = ["crates/latticeaxiom-engine/Cargo.toml"]
 binaries = ["latticeaxiom-engine", "latticeaxiom-play"]
 
 [rust.dependencies]
+"@latticeaxiom/webview" = "=0.1.0"
 "@latticeaxiom/client-ui" = "=0.1.0"
 "@latticeaxiom/front-end" = "=0.1.0"
 "@latticeaxiom/gameplay" = "=0.1.0"
@@ -36,3 +37,6 @@ binaries = ["latticeaxiom-engine", "latticeaxiom-play"]
 "@latticeaxiom/world" = "=0.1.0"
 "@latticeaxiom/world-library" = "=0.1.0"
 "@terrenia/worldgen" = "=0.1.0"
+
+[web.dependencies]
+"@latticeaxiom/web-ui" = "=0.1.0"

@@ -24,9 +24,11 @@ Do not ask for repeated commit approval during this rebuild.
   artifacts, archives, or base64/byte-array copies of those assets. Editable
   resource references and procedural drawing/shader code are allowed. Dedicated
   art-asset management is deferred by the user.
-- Use Bevy's existing App, ECS, scheduler, rendering, UI, assets and task pools.
-  Use native Flexbox/Grid, text, colors, borders and gradients for UI. Keep
-  keyboard focus visible, controls readable and layout scalable.
+- Use Bevy's existing App, ECS, scheduler, rendering, assets and task pools.
+  Desktop menus, settings, inventory and HUD use an embedded WebView. Prefer
+  native rendering for the crosshair, mining progress and world-space visuals.
+  Web packages own executable UI; resource packs remain presentation-only.
+  Keep keyboard focus visible, controls readable and layout scalable.
 - Study current upstream APIs before implementing reusable infrastructure.
   Pin dependencies; keep engine upgrades separate from the rebuild.
 - Use typed IDs and stable iteration across persistence/ABI boundaries. Static

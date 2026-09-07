@@ -60,9 +60,22 @@ tasks:
       - python tools/native_product.py --profile "{{.PRODUCT}}" --prepare-only
 
   native:build:
-    desc: Build both product processes from frozen package sources
+    desc: Build product binaries and local Web UI from frozen package sources
     cmds:
       - python tools/native_product.py --profile "{{.PRODUCT}}"
+
+  web:build:
+    desc: Install pinned frontend dependencies and build local Web UI assets
+    dir: packages/latticeaxiom/web-ui
+    cmds:
+      - npm ci --no-audit --no-fund
+      - npm run build
+
+  web:test:
+    desc: Validate the Web UI source and protocol tests
+    dir: packages/latticeaxiom/web-ui
+    cmds:
+      - npm test
 
   dev:client:
     internal: true

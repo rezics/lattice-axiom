@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 import subprocess
 import tomllib
-from package_graph import dependency_order, package_graph
+from package_graph import dependency_order, source_package_graph
 
 ROOT = Path(__file__).resolve().parents[1]
 MEDIA = frozenset('.png .jpg .jpeg .webp .gif .bmp .ico .ktx .ktx2 .dds .exr .hdr .blend .glb .fbx .aseprite .psd .wav .ogg .mp3 .flac .ttf .otf .woff .woff2 .zip .7z .exe .dll .pdb'.split())
@@ -48,7 +48,7 @@ def check_layout(root: Path) -> list[str]:
         if (manifest.parent / 'Cargo.toml').exists():
             errors.append(f'{manifest.parent}: package root must not be a Cargo package/workspace')
     try:
-        dependency_order(package_graph(root))
+        dependency_order(source_package_graph(root))
     except ValueError as error:
         errors.append(str(error))
     return errors

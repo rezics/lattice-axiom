@@ -1,0 +1,26 @@
+schema_version = 1
+name = "@latticeaxiom/web-ui"
+version = "0.1.0"
+domains = ["client"]
+trust = "trusted-native"
+
+[realizations.native-static]
+id = "native-static"
+kind = "native-static"
+domains = ["client"]
+artifact = { kind = "source-build" }
+trust = "trusted-native"
+
+[nickel_public_entrypoints]
+default = "package.ncl"
+
+[source_inclusion]
+include = ["src", "tests", "examples", "index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "README.md", "latticeaxiom-package.toml", "package.ncl"]
+
+[web]
+entry = "index.html"
+package = "package.json"
+lock = "package-lock.json"
+output = "dist"
+
+[web.dependencies]

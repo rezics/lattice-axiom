@@ -1,7 +1,7 @@
-"""Freeze manifest-selected native packages into an independent Cargo product workspace.
+"""Freeze manifest-selected native and Web packages into an independent product.
 
 This is build tooling, not an ECS/plugin runtime or an OS sandbox. Admitted Cargo
-build scripts retain producer authority. Runtime gameplay/resource locks are
+and npm build scripts retain producer authority. Runtime gameplay/resource locks are
 verified separately by the selected application.
 """
 from __future__ import annotations
@@ -12,14 +12,16 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
-from package_graph import ROOT, dependency_order, package_graph, package_manifests, read_toml
+from package_graph import ROOT, dependency_order, read_toml, source_package_graph, source_package_manifests
 from repository_check import text_error
 
 SCHEMA = 'latticeaxiom.native-product.v1'
-RESERVED = {'.git', 'target', '.standalone', '__pycache__'}
+RESERVED = {'.git', 'target', '.standalone', '__pycache__', 'node_modules', '.vite'}
 
 
 def digest(data: bytes) -> str:
@@ -85,8 +87,8 @@ def prepare(repository: Path, profile_path: Path, cache: Path) -> tuple[Path, di
         raise ValueError('invalid product name')
     if profile['build_profile'] not in ('dev', 'release'):
         raise ValueError('unsupported Cargo build profile')
-    packages = package_manifests(repository)
-    selected = source_closure(package_graph(repository), profile['root'])
+    packages = source_package_manifests(repository)
+    selected = source_closure(source_package_graph(repository), profile['root'])
     root_manifest_path, root_manifest = packages[profile['root']]
     entry = confined(root_manifest_path.parent, root_manifest['rust']['entry'])
     cargo_entry = read_toml(entry)
@@ -107,7 +109,7 @@ def prepare(repository: Path, profile_path: Path, cache: Path) -> tuple[Path, di
                 raise ValueError(error)
             files[relative] = data
 
-    members = []
+    members, web_sources = [], []
     for name in selected:
         path, manifest = packages[name]
         native = manifest.get('realizations', {}).get('native-static', {})
@@ -116,11 +118,30 @@ def prepare(repository: Path, profile_path: Path, cache: Path) -> tuple[Path, di
             raise ValueError(f'{name}: native compilation must be explicitly declared and trusted')
         for include in manifest['source_inclusion']['include']:
             capture(confined(path.parent, include))
-        for member in sorted(manifest['rust']['members']):
+        for member in sorted(manifest.get('rust', {}).get('members', [])):
             cargo_manifest = confined(path.parent, member).relative_to(repository)
             if cargo_manifest.as_posix() not in files:
                 raise ValueError(f'{name}: source inclusion omits {member}')
             members.append(cargo_manifest.parent.as_posix())
+        if web := manifest.get('web', {}):
+            if not web.get('entry'):
+                continue
+            required_web = {'entry', 'package', 'lock', 'output'}
+            if not required_web <= set(web):
+                raise ValueError(f'{name}: Web sources require entry, package, lock and output')
+            for field in ('entry', 'package', 'lock'):
+                relative = confined(path.parent, web[field]).relative_to(repository).as_posix()
+                if relative not in files:
+                    raise ValueError(f'{name}: source inclusion omits Web {field}')
+            output = Path(web['output'])
+            if output.is_absolute() or '..' in output.parts or not output.parts or output == Path('.'):
+                raise ValueError(f'{name}: non-local Web build output')
+            if any(relative.startswith(path.parent.relative_to(repository).as_posix() + '/' + output.as_posix() + '/') for relative in files):
+                raise ValueError(f'{name}: generated Web output must not be a frozen source input')
+            if web['package'] != 'package.json' or web['lock'] != 'package-lock.json':
+                raise ValueError(f'{name}: npm builds require package.json and package-lock.json')
+            web_sources.append({'name': name, 'path': path.parent.relative_to(repository).as_posix(),
+                                'entry': web['entry'], 'output': output.as_posix()})
     for registry in cargo.get('patch', {}).values():
         for patch in registry.values():
             if 'path' in patch:
@@ -137,7 +158,15 @@ def prepare(repository: Path, profile_path: Path, cache: Path) -> tuple[Path, di
     files['Cargo.toml'] = workspace_manifest(
         (repository / 'Cargo.toml').read_text(encoding='utf-8'), sorted(members),
         entry.parent.relative_to(repository).as_posix())
+    web_root = root_manifest.get('web', {})
+    direct_web = list(web_root.get('dependencies', {}))
+    application = web_root.get('application')
+    if application is None and len(direct_web) == 1:
+        application = direct_web[0]
+    if web_sources and application not in {entry['name'] for entry in web_sources}:
+        raise ValueError('native product must select one declared Web application')
     plan = {'schema': SCHEMA, 'profile': profile, 'packages': selected,
+            'web_sources': web_sources, 'web_application': application,
             'cargo_package': cargo_entry['package']['name'], 'binaries': binaries,
             'inputs': {name: digest(data) for name, data in sorted(files.items())}}
     plan_hash = digest(canonical(plan))
@@ -231,6 +260,72 @@ def cargo_arguments(source_root: Path, plan: dict, target: Path, action: str) ->
     return arguments
 
 
+def publish_web_assets(source: Path, destination: Path) -> dict:
+    """Replace only a previously receipted bundle, refusing unrelated files."""
+    files = {file.relative_to(source).as_posix(): file.read_bytes() for file in regular_files(source)}
+    if 'index.html' not in files or len(files) > 1024 or sum(map(len, files.values())) > 32 * 1024 * 1024:
+        raise ValueError('Web build must contain index.html within the runtime bundle limits')
+    if any(len(data) > 8 * 1024 * 1024 for data in files.values()):
+        raise ValueError('Web build exceeds the runtime per-file limit')
+    marker = destination.parent / (destination.name + '.manifest.json')
+    if destination.exists():
+        if not marker.is_file():
+            raise ValueError('refusing to overwrite an unreceipted client-ui directory')
+        previous = json.loads(marker.read_bytes())
+        actual = {file.relative_to(destination).as_posix(): digest(file.read_bytes()) for file in regular_files(destination)}
+        if actual != previous['files']:
+            raise ValueError('packaged Web assets were modified outside the product build')
+        for relative in actual.keys() - files.keys():
+            confined(destination, relative).unlink()
+    destination.mkdir(parents=True, exist_ok=True)
+    for relative, data in sorted(files.items()):
+        output = destination / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(data)
+    receipt = {'files': {name: digest(data) for name, data in sorted(files.items())}}
+    receipt['sha256'] = digest(canonical(receipt['files']))
+    marker.write_bytes(canonical(receipt))
+    return {'path': str(destination), **receipt}
+
+
+def build_web(snapshot: Path, plan: dict, destination: Path) -> dict | None:
+    """Install/build a frozen source copy; Node is never required at runtime."""
+    if not plan.get('web_sources'):
+        return None
+    npm = shutil.which('npm.cmd' if os.name == 'nt' else 'npm')
+    node = shutil.which('node')
+    if not npm or not node:
+        raise ValueError('Web product build requires Node.js and npm on PATH')
+    verify_sources(snapshot, plan)
+    with tempfile.TemporaryDirectory(prefix='web-build-', dir=snapshot.parent) as directory:
+        work = Path(directory).resolve()
+        if not work.is_relative_to(snapshot.parent.resolve()):
+            raise ValueError('Web build directory escaped its product cache')
+        prefixes = tuple(row['path'] + '/' for row in plan['web_sources'])
+        for relative in plan['inputs']:
+            if relative.startswith(prefixes):
+                output = work / relative
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes((snapshot / relative).read_bytes())
+        for row in plan['web_sources']:
+            package = work / row['path']
+            metadata = json.loads((package / 'package.json').read_bytes())
+            for section in ('dependencies', 'devDependencies', 'optionalDependencies'):
+                for value in metadata.get(section, {}).values():
+                    if value.startswith(('file:', 'link:')):
+                        linked = (package / value.split(':', 1)[1]).resolve()
+                        if linked not in {work / item['path'] for item in plan['web_sources']}:
+                            raise ValueError('npm local imports must name a declared Web source owner')
+            subprocess.run([npm, 'ci', '--no-audit', '--no-fund'], cwd=package, check=True)
+            subprocess.run([npm, 'run', 'build'], cwd=package, check=True)
+        application = next(row for row in plan['web_sources'] if row['name'] == plan['web_application'])
+        result = publish_web_assets(confined(work / application['path'], application['output']), destination)
+    verify_sources(snapshot, plan)
+    return {**result, 'application': plan['web_application'],
+            'node': subprocess.check_output([node, '--version'], text=True).strip(),
+            'npm': subprocess.check_output([npm, '--version'], text=True).strip()}
+
+
 def build(source_root: Path, plan: dict, target: Path) -> dict:
     snapshot = source_root
     source_root = materialize_for_build(snapshot, plan)
@@ -268,14 +363,15 @@ def build(source_root: Path, plan: dict, target: Path) -> dict:
     for name in plan['binaries']:
         file = target / profile / (name + ('.exe' if os.name == 'nt' else ''))
         artifacts[name] = {'path': str(file), 'sha256': digest(file.read_bytes())}
+    web_assets = build_web(snapshot, plan, target / profile / 'client-ui')
     receipt = {'schema': SCHEMA, 'plan_sha256': digest(canonical(plan)), 'cargo_lock_sha256': lock_hash,
                'snapshot': str(snapshot), 'materialized_source': str(source_root),
                'rustc': subprocess.check_output(['rustc', '-vV'], text=True),
                'cargo': subprocess.check_output(['cargo', '-Vv'], text=True),
                'build_environment_sha256': digest(canonical(dict(sorted(os.environ.items())))),
-               'authority': 'trusted build scripts; declared source containment; no OS sandbox',
+               'authority': 'trusted Cargo/npm build scripts; declared source containment; no OS sandbox',
                'cache_files': sorted(cache_files), 'build_outputs': sorted(build_outputs),
-               'artifacts': artifacts}
+               'artifacts': artifacts, 'web_assets': web_assets}
     (snapshot.parent / 'build-receipt.json').write_bytes(canonical(receipt))
     return receipt
 

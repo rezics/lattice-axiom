@@ -4,6 +4,7 @@ members = [
   "packages/latticeaxiom/host/crates/latticeaxiom-host",
   "packages/latticeaxiom/sdk/crates/latticeaxiom-abi",
   "packages/latticeaxiom/client-ui/crates/latticeaxiom-client-ui",
+  "packages/latticeaxiom/webview/crates/latticeaxiom-webview",
   "packages/latticeaxiom/kernel/crates/latticeaxiom-compose",
   "packages/latticeaxiom/gameplay/crates/latticeaxiom-content",
   "packages/latticeaxiom/kernel/crates/latticeaxiom-core",
@@ -60,6 +61,7 @@ hex = "0.4.3"
 leafwing-input-manager = { version = "=0.21.0", default-features = false }
 latticeaxiom-abi = { path = "packages/latticeaxiom/sdk/crates/latticeaxiom-abi" }
 latticeaxiom-client-ui = { path = "packages/latticeaxiom/client-ui/crates/latticeaxiom-client-ui" }
+latticeaxiom-webview = { path = "packages/latticeaxiom/webview/crates/latticeaxiom-webview" }
 latticeaxiom-compose = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-compose" }
 latticeaxiom-core = { path = "packages/latticeaxiom/kernel/crates/latticeaxiom-core" }
 latticeaxiom-engine = { path = "packages/terrenia/client/crates/latticeaxiom-engine", default-features = false }

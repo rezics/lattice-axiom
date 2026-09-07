@@ -13,6 +13,7 @@ default-run = "latticeaxiom-engine"
 # default features for a statically linked distributable build.
 default = ["client", "development"]
 client = [
+  "dep:latticeaxiom-webview",
   "latticeaxiom-client-ui/bevy-ui",
   "dep:bevy_framepace",
   "dep:bevy_winit",
@@ -55,6 +56,7 @@ path = "src/bin/latticeaxiom_play.rs"
 required-features = ["client"]
 
 [dependencies]
+latticeaxiom-webview = { workspace = true, optional = true }
 latticeaxiom-host.workspace = true
 accesskit.workspace = true
 avian3d = { workspace = true, default-features = false, features = ["3d", "default-collider", "f32", "parallel", "parry-f32"] }
